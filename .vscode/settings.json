@@ -1,0 +1,25 @@
+{
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true,
+        "editor.formatOnPaste": true,
+        "editor.formatOnType": true
+    },
+    "rust-analyzer.linkedProjects": [
+        "Cargo.toml"
+    ],
+    "rust-analyzer.rustfmt.extraArgs": [],
+    "slint.includePaths": [
+        "./frontend/ui",
+        "./frontend"
+    ],
+    "[slint]": {
+        "editor.formatOnSave": true,
+        "editor.formatOnPaste": true,
+        "editor.formatOnType": true
+    },
+    "cSpell.words": [
+        "cmdsettings",
+        "slint"
+    ],
+}

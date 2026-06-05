@@ -1,0 +1,27 @@
+{
+"name": "evanalyzer",
+    "dockerFile": "Dockerfile",
+    "runArgs": [
+        "--privileged",
+        "--network=host",
+        "--ipc=host", // Essential for X11 shared memory
+        "-e", "DISPLAY=:1" // Use your host's specific display number
+    ],
+    "containerEnv": {
+        "SLINT_BACKEND": "software",
+        "QT_X11_NO_MITSHM": "1"
+    },
+    "customizations": {
+        "settings": {
+            "terminal.integrated.shell.linux": "/bin/bash"
+        },
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "ChrisBeard.rustdocstring",
+                "slint.slint"
+            ]
+        }
+    }
+}

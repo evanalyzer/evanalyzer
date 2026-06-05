@@ -1,0 +1,166 @@
+import { VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Theme } from "style.slint";
+import { GlobalAppState, DialogType } from "state.slint";
+import { ToolbarState } from "toolbar.slint";
+
+component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon: @image-url(""); // Default to empty
+    callback clicked;
+
+    height: 26px;
+    background: m-touch.has-hover ? Theme.hover : transparent;
+    border-radius: 4px;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        alignment: start;
+
+        if (root.icon.width > 0 && root.icon.height > 0): Image {
+            source: root.icon;
+            width: 12px;
+            height: 12px;
+            vertical-alignment: center;
+            y: (parent.height - self.height) / 2;
+        }
+        if (root.icon.width <= 0 || root.icon.height <= 0): Rectangle {
+            width: 12px;
+            height: 12px;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.text;
+            vertical-alignment: center;
+            font-size: 13px;
+        }
+    }
+
+    m-touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component MenuSeparator inherits Rectangle {
+    height: 1px;
+    background: Theme.border-soft;
+}
+
+component MenuContainer inherits Rectangle {
+    background: Theme.bg;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: 8px;
+    VerticalBox {
+        padding: 4px;
+        spacing: 4px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        @children
+    }
+}
+
+export component CustomMenuBar inherits Rectangle {
+    height: 28px;
+
+    HorizontalLayout {
+        padding-left: 3px;
+        spacing: 8px;
+        alignment: start;
+
+        // --- MENU: FILE ---
+        file-item := Rectangle {
+            width: file-text.preferred-width + 16px;
+            background: file-touch.has-hover ? Theme.hover : transparent;
+            border-radius: 3px;
+            file-text := Text {
+                text: "File";
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+
+            file-touch := TouchArea {
+                clicked => {
+                    file-menu.show();
+                }
+            }
+
+            file-menu := PopupWindow {
+                y: parent.height;
+                width: 160px;
+                MenuContainer {
+                    MenuItem {
+                        text: "Open…";
+                        icon: @image-url("icons/duotone-black/folder-open-duotone.svg");
+                        clicked => {
+                            ToolbarState.open_file_clicked();
+                            file-menu.close();
+                        }
+                    }
+
+                    MenuSeparator { }
+
+                    MenuItem {
+                        text: "Save";
+                        icon: @image-url("icons/regular-black/floppy-disk.svg");
+                        clicked => {
+                            ToolbarState.save_file_clicked();
+                            file-menu.close();
+                        }
+                    }
+
+                    MenuItem {
+                        text: "Save As…";
+                        clicked => {
+                            ToolbarState.save_as_file_clicked();
+                            file-menu.close();
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- MENU: HELP ---
+        help-item := Rectangle {
+            width: help-text.preferred-width + 16px;
+            background: help-touch.has-hover ? Theme.hover : transparent;
+            border-radius: 3px;
+            help-text := Text {
+                text: "Help";
+                vertical-alignment: center;
+            }
+
+            help-touch := TouchArea {
+                clicked => {
+                    help-menu.show();
+                }
+            }
+
+            help-menu := PopupWindow {
+                y: parent.height;
+                width: 160px;
+                MenuContainer {
+                    MenuItem {
+                        text: "About";
+                        icon: @image-url("icons/duotone-black/info-duotone.svg");
+                        clicked => {
+                            GlobalAppState.active-dialog = DialogType.about;
+                            help-menu.close();
+                        }
+                    }
+
+                    MenuItem {
+                        text: "evanalyzer.org";
+                        clicked => {
+                            ToolbarState.open_website();
+                            help-menu.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

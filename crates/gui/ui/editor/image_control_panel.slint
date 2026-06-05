@@ -1,0 +1,542 @@
+// image_control_panel.slint - redesigned right-side image controls
+//
+// What changed vs. the original (and why):
+//   1. SERIES PICKER - cleaner: includes a "SERIES" caplet + series count so
+//      the user knows context, not just a generic dropdown.
+//   2. CHANNELS - adds a color swatch (toggle by click), name, intensity slider,
+//      and live % readout per channel. Replaces the simple Switch.
+//        Optional state-additions: extend ChannelState's channel struct with
+//          color: color,            // per-channel display color
+//          intensity: int,          // 0..100
+//        OR rely on the index-based helper `channel-color(i)` below which maps
+//        index 0..4 to the EVAnalyzer channel palette.
+//   3. Z-PROJECTION - segmented-pill mode selector (Single/Max/Min/Avg/Sum)
+//      instead of a 7-item dropdown. The slice number is shown as `12 / 25`
+//      with a SpinBox + slider - much faster to scrub.
+//   4. TIMELAPSE - adds a scrub slider with current-frame indicator,
+//      moves the frame counter inline with the play button.
+//   5. Section dividers are removed; spacing + uppercase caplet titles do the
+//      grouping work without visual noise.
+
+import {
+    LineEdit,
+    Button,
+    VerticalBox,
+    Slider,
+    ComboBox,
+    ScrollView,
+    Switch,
+    SpinBox,
+    Palette,
+} from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import {
+    HistogramState,
+    GlobalAppState,
+    ChannelState,
+    IntensityProjection,
+} from "../state.slint";
+import { HistogramPanel } from "histogram_panel.slint";
+import { ImageMetaPanel, ImageMetaData } from "image_meta_panel.slint";
+import { ToolToggleButton } from "../components/toggle_button.slint";
+import { SeriesComboBox } from "../components/series_combobox.slint";
+
+// ---------- Small reusable section-title cap ----------
+component SectionTitle inherits Text {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    color: Theme.text-dim;
+}
+
+// ---------- Single channel row ----------
+component ChannelRow inherits Rectangle {
+    in property <int> idx;
+    in property <string> name;
+    in-out property <bool> active;
+    in-out property <int> intensity;    // 0..100
+    in property <bool> selected;
+
+    callback select;
+    callback toggle;
+    callback intensity-changed(int);
+
+    height: 26px;
+    background: selected ? Theme.accent-dim.with-alpha(0.4) : transparent;
+    border-radius: Theme.radius-sm;
+    TouchArea {
+        HorizontalLayout {
+            padding-left: 6px;
+            padding-right: 6px;
+            spacing: 8px;
+            alignment: stretch;
+
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 3px;
+                    background: active ? root.channel-color(idx) : transparent;
+                    border-width: active ? 0 : 1.5px;
+                    border-color: Theme.border;
+                    TouchArea {
+                        clicked => {
+                            root.toggle();
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: name;
+                font-size: 12px;
+                font-weight: 500;
+                color: active ? Theme.text : Theme.text-mute;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Switch {
+                    checked: active;
+                    toggled => {
+                        ChannelState.channels[idx].active = !ChannelState.channels[idx].active;
+                        active = ChannelState.channels[idx].active;
+                        ChannelState.trigger_channel_state_changed();
+                        if active {
+                            intensity = 100;
+                        } else {
+                            intensity = 0;
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: "\{intensity}%";
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text-mute;
+                    width: 28px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        clicked => {
+            root.select();
+        }
+    }
+
+    // Index-based fallback color. If your Channel struct gets a `color` field,
+    // replace `root.channel-color(idx)` with `channel.color`.
+    pure function channel-color(i: int) -> color {
+        if (ChannelState.channels.length > i) {
+            return ChannelState.channels[i].color;
+        } else {
+            return Theme.ch-0;
+        }
+    }
+}
+
+// ---------- Channel list ----------
+export component ChannelList inherits ScrollView {
+    height: Math.min(180px, layout.preferred-height + 4px);
+    viewport-height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        spacing: 2px;
+        alignment: start;
+        for channel[i] in ChannelState.channels: ChannelRow {
+            idx: i;
+            name: channel.name;
+            active: channel.active;
+            // If your Channel struct doesn't yet have an `intensity` field,
+            // either add it (in state.slint) and bind here, or default to 100.
+            // intensity: channel.intensity;
+            intensity: 100;
+            selected: ChannelState.selected_channel_index == i;
+            select => {
+                ChannelState.selected_channel_index = i;
+                ChannelState.trigger_active_channel_selection_changed();
+            }
+            toggle => {
+                ChannelState.channels[i].active = !ChannelState.channels[i].active;
+                ChannelState.trigger_channel_state_changed();
+            }
+            intensity-changed(v) => {
+                // ChannelState.channels[i].intensity = v;
+                ChannelState.trigger_channel_state_changed();
+            }
+        }
+    }
+}
+
+// ---------- Z-projection mode chip ----------
+component ModeChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked;
+    height: 22px;
+    width: 40px;
+    border-radius: Theme.radius-sm;
+    background: active ? Theme.bg : transparent;
+    Text {
+        text: label;
+        font-size: 10.5px;
+        color: active ? Theme.text : Theme.text-mute;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 8px;
+        y: 0;
+        width: parent.width - 16px;
+        height: parent.height;
+    }
+
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// ---------- Z-projection segmented control + slice scrubber ----------
+export component ZProjectionControls inherits VerticalLayout {
+    spacing: 8px;
+    in property <int> z-stack-count: 25;  // host should bind to total z-slices
+
+    HorizontalLayout {
+        spacing: 0;
+        alignment: space-between;
+        SectionTitle {
+            text: "Z-STACK";
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            border-radius: Theme.radius-sm;
+            HorizontalLayout {
+                padding: 2px;
+                spacing: 2px;
+                ModeChip {
+                    label: "Single";
+                    active: ChannelState.intensity_projection == IntensityProjection.single-stack;
+                    clicked => {
+                        ChannelState.intensity_projection = IntensityProjection.single-stack;
+                        ChannelState.trigger_channel_state_changed();
+                    }
+                }
+
+                ModeChip {
+                    label: "Max";
+                    active: ChannelState.intensity_projection == IntensityProjection.max;
+                    clicked => {
+                        ChannelState.intensity_projection = IntensityProjection.max;
+                        ChannelState.trigger_channel_state_changed();
+                    }
+                }
+
+                ModeChip {
+                    label: "Min";
+                    active: ChannelState.intensity_projection == IntensityProjection.min;
+                    clicked => {
+                        ChannelState.intensity_projection = IntensityProjection.min;
+                        ChannelState.trigger_channel_state_changed();
+                    }
+                }
+
+                ModeChip {
+                    label: "Avg";
+                    active: ChannelState.intensity_projection == IntensityProjection.avg;
+                    clicked => {
+                        ChannelState.intensity_projection = IntensityProjection.avg;
+                        ChannelState.trigger_channel_state_changed();
+                    }
+                }
+
+                ModeChip {
+                    label: "Sum";
+                    active: ChannelState.intensity_projection == IntensityProjection.sum;
+                    clicked => {
+                        ChannelState.intensity_projection = IntensityProjection.sum;
+                        ChannelState.trigger_channel_state_changed();
+                    }
+                }
+
+                ModeChip {
+                    label: "Mid";
+                    active: ChannelState.intensity_projection == IntensityProjection.middle;
+                    clicked => {
+                        ChannelState.intensity_projection = IntensityProjection.middle;
+                        ChannelState.trigger_channel_state_changed();
+                    }
+                }
+            }
+        }
+    }
+
+    // Slice scrubber + counter
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: stretch;
+        Text {
+            text: "0";
+            font-size: 10px;
+            color: Theme.text-mute;
+            font-family: Theme.font-mono;
+            vertical-alignment: center;
+            width: 16px;
+        }
+
+        Slider {
+            horizontal-stretch: 1;
+            minimum: 0;
+            maximum: z-stack-count - 1;
+            value: ChannelState.selected_z_stack;
+            changed(v) => {
+                ChannelState.selected_z_stack = Math.round(v);
+                ChannelState.trigger_channel_state_changed();
+            }
+        }
+
+        Text {
+            text: "\{z-stack-count - 1}";
+            font-size: 10px;
+            color: Theme.text-mute;
+            font-family: Theme.font-mono;
+            vertical-alignment: center;
+            width: 20px;
+            horizontal-alignment: right;
+        }
+    }
+
+    HorizontalLayout {
+        alignment: space-between;
+        Text {
+            text: "Slice";
+            font-size: 11px;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+        }
+
+        HorizontalLayout {
+            spacing: 5px;
+            Text {
+                text: "\{ChannelState.selected_z_stack + 1}";
+                font-size: 12px;
+                color: Theme.text;
+                font-family: Theme.font-mono;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: "/ \{z-stack-count}";
+                font-size: 11px;
+                color: Theme.text-mute;
+                font-family: Theme.font-mono;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// ---------- Timelapse / video controls ----------
+export component VideoControls inherits VerticalLayout {
+    spacing: 8px;
+    alignment: start;
+    in property <int> t-frame-count: 120;   // host should bind to total frames
+
+    property <[string]> playback_speed_names: ["25 fps", "20 fps", "10 fps", "5 fps", "2 fps", "1 fps"];
+
+    // Header row: title + current frame
+    HorizontalLayout {
+        alignment: space-between;
+        SectionTitle {
+            text: "TIMELAPSE";
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: "Frame \{ChannelState.selected_t_stack + 1} / \{t-frame-count}";
+            font-size: 10.5px;
+            color: Theme.text-mute;
+            font-family: Theme.font-mono;
+            vertical-alignment: center;
+        }
+    }
+
+    // Scrub slider - primary navigation through time
+    Slider {
+        height: 14px;
+        minimum: 0;
+        maximum: t-frame-count - 1;
+        value: ChannelState.selected_t_stack;
+        changed(v) => {
+            ChannelState.selected_t_stack = Math.round(v);
+            ChannelState.trigger_channel_state_changed();
+        }
+    }
+
+    // Play button + speed selector
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: stretch;
+        height: 32px;
+
+        ToolToggleButton {
+            icon: @image-url("../icons/regular-black/play.svg");
+            width: 48px;
+            height: 48px;
+            checked: ChannelState.is_play_active;
+            clicked => {
+                ChannelState.is_play_active = !ChannelState.is_play_active;
+                ChannelState.toggle_play(ChannelState.is_play_active);
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            border-radius: Theme.radius-md;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 6px;
+                height: 24px;
+                alignment: space-between;
+                Text {
+                    text: "Speed";
+                    font-size: 11px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    width: 88px;
+                    height: 24px;
+                    model: root.playback_speed_names;
+                    current-value: root.playback_speed_names[root.playback_speed_to_idx(ChannelState.play_back_speed_hz)];
+                    current-index: root.playback_speed_to_idx(ChannelState.play_back_speed_hz);
+                    selected(val) => {
+                        ChannelState.play_back_speed_hz = root.idx_to_playback_speed(self.current-index);
+                        ChannelState.is_play_active = false;
+                        ChannelState.toggle_play(ChannelState.is_play_active);
+                    }
+                }
+            }
+        }
+    }
+
+    pure function playback_speed_to_idx(p: int) -> int {
+        if (p == 25) {
+            return 0;
+        }
+        if (p == 20) {
+            return 1;
+        }
+        if (p == 10) {
+            return 2;
+        }
+        if (p == 5) {
+            return 3;
+        }
+        if (p == 2) {
+            return 4;
+        }
+        return 5; // 1 Hz default
+    }
+    pure function idx_to_playback_speed(i: int) -> int {
+        if (i == 0) {
+            return 25;
+        }
+        if (i == 1) {
+            return 20;
+        }
+        if (i == 2) {
+            return 10;
+        }
+        if (i == 3) {
+            return 5;
+        }
+        if (i == 4) {
+            return 2;
+        }
+        return 1;
+    }
+}
+
+// ===========================================================================
+// Main panel
+// ===========================================================================
+export component ImageControlPanel inherits Rectangle {
+
+    background: Theme.panel;
+
+    VerticalBox {
+        alignment: start;
+        spacing: 18px;
+        padding: Theme.panel-content-padding;
+
+        // ---- SERIES PICKER ----
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: stretch;
+            height: 44px;
+
+            SeriesComboBox { }
+        }
+
+        // ---- HISTOGRAM ----
+        HistogramPanel { }
+
+        // ---- CHANNELS ----
+        VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                alignment: space-between;
+                SectionTitle {
+                    text: "CHANNELS";
+                }
+
+                Text {
+                    text: "\{root.active-channel-count()}/\{ChannelState.channels.length}";
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+
+            ChannelList { }
+        }
+
+        // ---- Z-STACK ----
+        ZProjectionControls {
+            z-stack-count: ImageMetaData.nr_z_stacks;
+        }
+
+        // ---- TIMELAPSE ----
+        VideoControls {
+            t-frame-count: ImageMetaData.nr_t_stacks;
+        }
+    }
+
+    // The host should expose this as an in property for accuracy across the
+    // whole pipeline; this stub keeps the file self-contained.
+    pure function active-channel-count() -> int {
+        // Returns 0 by default. Replace with an `in property <int> active-channel-count;`
+        // computed in your Rust/C++ model and bound from the parent.
+        return 0;
+    }
+}

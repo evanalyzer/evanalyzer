@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/*",
+    "crates/gui/ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Joachim Danmayr"]
+license = "AGPL-3.0"
+
+
+[profile.release]
+strip = true        # Removes all debug symbols/names
+lto = "thin"
+codegen-units = 16
+debug = false

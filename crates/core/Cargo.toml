@@ -1,0 +1,57 @@
+[package]
+name = "evanalyzer_core"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+macros = { path = "./macros" }
+evanalyzer_cfg = { path = "../cfg" }
+kornia-tensor = { git = "https://github.com/kornia/kornia-rs" }
+kornia-tensor-ops = { git = "https://github.com/kornia/kornia-rs" }
+kornia-io = { git = "https://github.com/kornia/kornia-rs" }
+kornia-image = { git = "https://github.com/kornia/kornia-rs" }
+kornia-imgproc = { git = "https://github.com/kornia/kornia-rs" }
+kornia-3d = { git = "https://github.com/kornia/kornia-rs" }
+kornia-apriltag = { git = "https://github.com/kornia/kornia-rs" }
+#kornia-vlm = "0.1"
+#kornia-nn = { git = "https://github.com/kornia/kornia-rs" }
+kornia-algebra = { git = "https://github.com/kornia/kornia-rs" }
+image = "0.24"   
+log = "0.4"        
+jni = {version = "0.21", features = ["invocation"]}
+libloading = "0.8"
+quick-xml = "0.39"
+ndarray = "0.17.2"
+rayon = "1.10"
+serde = {version = "1.0.228", features = ["derive","rc"]}
+thiserror = "2.0.18"
+indexmap = {version ="2.13.0",features = ["serde","rayon"]}
+pathdiff = "0.2"
+human-sort = "0.2.2"
+bitvec = {version = "1.0.1", features = ["serde", "alloc","atomic","std"]}
+csv = "1.4.0"
+
+duckdb = { version = "1.1.3" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+duckdb = { version = "1.1.3", features = ["bundled"] }
+
+[dev-dependencies]
+approx = "0.5"
+env_logger = "0.11"
+tempfile = "3.27.0"
+
+
+[build-dependencies]
+syn = "2.0"
+quote = "1.0"
+proc-macro2 = "1.0"
+indexmap = {version ="2.13.0",features = ["serde"]}
+
+
+
+[lib]
+name = "evanalyzer_core"
+doctest = false

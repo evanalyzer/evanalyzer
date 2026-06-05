@@ -1,0 +1,30 @@
+[package]
+name = "evanalyzer_app"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+evanalyzer_core = { path = "../core" }
+evanalyzer_cfg = { path = "../cfg" }
+
+log = "0.4"
+env_logger = "0.11"
+indexmap = "2.13.0"
+arc-swap = "1.9.0"
+bitvec = "1.0.1"
+pathdiff = "0.2.3"
+rayon = "1.12.0"
+human-sort = "0.2"
+serde_json = "1.0.149"
+csv = "1"
+rust_xlsxwriter = "0"
+
+
+
+
+[lib]
+name = "evanalyzer_app"
+path = "src/lib.rs"
+doctest = false

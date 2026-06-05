@@ -1,0 +1,73 @@
+import { HorizontalBox } from "std-widgets.slint";
+import { GlobalAppState, HistogramState } from "state.slint";
+import { ViewportState, ViewportRoiState } from "editor/viewport_state.slint";
+
+
+export component StatusBar inherits Rectangle {
+    // Properties to be set from Rust
+    in property <string> status: "Ready";
+    in property <int> objects: 0;
+    in property <string> resolution: "0x0";
+    in property <string> timing: "0ms";
+
+    height: 38px;
+
+    pure function get_state(is_ready: bool, is_drawing: bool) -> string {
+        if is-drawing {
+            return "Draw";
+        }
+        if !is-ready {
+            return "Busy";
+        }
+        return root.status;
+    }
+
+    HorizontalBox {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        // Status Message
+        Text {
+            text: get_state(ViewportState.high_res_ready, ViewportRoiState.is_drawing);
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+
+        // Flex Spacer
+        Rectangle { }
+
+        // Object Count with icon-like color
+        Text {
+            text: "Objects: \{root.objects}";
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+
+        // Vertical Separator
+        Rectangle {
+            width: 1px;
+            height: 14px;
+        }
+
+        // Image Details
+        Text {
+            text: root.resolution;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+
+        // Vertical Separator
+        Rectangle {
+            width: 1px;
+            height: 14px;
+        }
+
+        // Execution Timing
+        Text {
+            text: root.timing;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+    }
+}

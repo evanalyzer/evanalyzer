@@ -1,0 +1,63 @@
+import { Palette } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+export component ToolToggleButtonLabeled inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> checked;
+    in property <bool> primary;
+    callback clicked;
+
+    // Let the button size to its content; height stays fixed for visual rhythm
+    height: 32px;
+    min-width: 36px;
+    border-radius: 6px;
+
+    // Dynamic background
+    background: root.checked ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.bg);
+    animate background { duration: 100ms; }
+
+    // Dynamic border
+    border-width: 1px;
+    border-color: root.checked ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.bg);
+    animate border-color { duration: 100ms; }
+
+    // Icon + label, centered as a single group
+    HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+        padding-left: 8px;
+        padding-right: 10px;
+
+        // Center the icon vertically inside the row
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 16px;
+                height: 16px;
+                colorize: Theme.text;
+                animate colorize { duration: 150ms; }
+            }
+        }
+
+        // Center the label vertically too
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.text;
+                color: Theme.text;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

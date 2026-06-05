@@ -1,0 +1,143 @@
+import { GlobalAppState, DialogType } from "../state.slint";
+import { ClassificationState } from "../editor/classification_panel.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+
+export component ConfirmAutoAddClassesDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 500px;
+        height: 280px;
+        background: Theme.panel;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        clip: true;
+
+        VerticalLayout {
+            spacing: 0;
+
+            Rectangle {
+                height: 56px;
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: stretch;
+
+                    Text {
+                        text: "Auto add classes";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 5px;
+                        background: close-ta.has-hover ? Theme.raised : transparent;
+                        Text {
+                            text: "✕";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-ta := TouchArea {
+                            clicked => {
+                                GlobalAppState.active-dialog = DialogType.none;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg;
+
+                VerticalLayout {
+                    padding: 24px;
+                    spacing: 12px;
+
+                    Text {
+                        text: "New classes will be added based on image metadata. Would you like to replace your current list with these new definitions, or merge them into your existing?";
+                        wrap: word-wrap;
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 500;
+                    }
+
+                    Text {
+                        text: "Merge automatically added classes or replace existing?";
+                        wrap: word-wrap;
+                        color: Theme.text-dim;
+                        font-size: 12px;
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 56px;
+                background: Theme.bg;
+                border-color: Theme.border-soft;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: end;
+
+                    AppButton {
+                        text: "Cancel";
+                        clicked => {
+                            GlobalAppState.active-dialog = DialogType.none;
+                        }
+                    }
+
+                    AppButton {
+                        text: "Replace";
+                        clicked => {
+                            ClassificationState.class_auto_add_and_replace();
+                            GlobalAppState.active-dialog = DialogType.none;
+                        }
+                    }
+
+                    AppButton {
+                        text: "Merge";
+                        primary: true;
+                        clicked => {
+                            ClassificationState.class_auto_add_and_merge();
+                            GlobalAppState.active-dialog = DialogType.none;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

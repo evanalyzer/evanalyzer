@@ -1,0 +1,37 @@
+import { Theme } from "../style.slint";
+
+export component ScaleBar inherits Rectangle {
+    in property <length> bar_width;
+    in property <string> unit_text;
+    horizontal_stretch: 0;
+    vertical_stretch: 0;
+    width: bar_width + 20px; // Padding
+    height: 40px;
+
+    VerticalLayout {
+        alignment: end;
+        spacing: 4px;
+        padding_left: 10px;
+        padding_bottom: 10px;
+
+        Text {
+            text: unit_text;
+            color: Theme.text-scalebar;
+            font-size: 14px;
+            horizontal-alignment: center;
+            // Add a slight shadow effect for visibility on bright images
+            stroke: Theme.game-ink;
+            stroke-width: 0.5px;
+        }
+
+        Rectangle {
+            width: bar_width;
+            height: 4px;
+            background: Theme.text-scalebar;
+            border-radius: 1px;
+            // Border to make it pop against white image areas
+            border-width: 1px;
+            border-color: Theme.game-ink;
+        }
+    }
+}

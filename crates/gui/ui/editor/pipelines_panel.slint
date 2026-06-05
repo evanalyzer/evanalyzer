@@ -1,0 +1,2457 @@
+// pipelines_panel.slint
+// EVAnalyzer - Pipelines panel.
+// Owns N pipelines; each pipeline is a flat, ordered list of commands.
+// Category is a property of each step (colored stripe), not a hard bucket.
+
+import {
+    ScrollView,
+    Button,
+    LineEdit,
+    ComboBox,
+    Slider,
+    CheckBox,
+    Palette,
+} from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ClassificationState, ClassItemData } from "classification_panel.slint";
+
+// ----------------------------------------------------------
+// Data model
+
+export enum StepCategory { preprocess, segment, object, measure, classify }
+export enum PipelineStatus { idle, queued, running, done, error }
+export enum ParamType { number, text, dropdown, toggle, slider, spinner, group, obj-class, seg-class, multi-obj-class, multi-seg-class, pixel-units, size-units, label }
+
+export struct LeafParam {
+    name: string,
+    display-name: string,
+    description: string,
+    value: string,
+    param-type: ParamType,
+    options: [string],
+    min: float,
+    max: float,
+    step: float,
+}
+
+export struct GroupItem {
+    fields: [LeafParam],
+}
+
+export struct CommandParameter {
+    name: string,
+    display-name: string,
+    description: string,
+    value: string,
+    param-type: ParamType,
+    options: [string],
+    min: float,
+    max: float,
+    step: float,
+    group-items: [GroupItem],
+}
+
+export struct PipelineCommand {
+    id: int,
+    name: string,
+    category: StepCategory,
+    summary: string,        // "σ = 2.0 · per channel"
+    enabled: bool,
+    expanded: bool,
+    parameters: [CommandParameter],
+}
+
+export struct Pipeline {
+    id: int,
+    name: string,
+    image-source: string,
+    enabled: bool,                 // included in "Run all"
+    dirty: bool,                   // unsaved changes
+    status: PipelineStatus,
+    total-step-count: int,         // pre-computed in host
+    enabled-step-count: int,       // pre-computed in host
+}
+
+// ----------------------------------------------------------
+// Helpers - category & status
+
+global Cat {
+    public pure function color(c: StepCategory) -> color {
+        if c == StepCategory.preprocess {
+            return Theme.cat-preprocess;
+        }
+        if c == StepCategory.segment {
+            return Theme.cat-segment;
+        }
+        if c == StepCategory.object {
+            return Theme.cat-object;
+        }
+        if c == StepCategory.measure {
+            return Theme.cat-measure;
+        }
+        return Theme.cat-classify;
+    }
+    public pure function tint(c: StepCategory) -> color {
+        return Cat.color(c).with-alpha(0.15);
+    }
+    public pure function name(c: StepCategory) -> string {
+        if c == StepCategory.preprocess {
+            return "Preprocess";
+        }
+        if c == StepCategory.segment {
+            return "Segment";
+        }
+        if c == StepCategory.object {
+            return "Object";
+        }
+        if c == StepCategory.measure {
+            return "Measure";
+        }
+        return "Classify";
+    }
+}
+
+global Status {
+    public pure function color(s: PipelineStatus) -> color {
+        if s == PipelineStatus.running {
+            return Theme.warn;
+        }
+        if s == PipelineStatus.queued {
+            return Theme.accent;
+        }
+        if s == PipelineStatus.done {
+            return Theme.ok;
+        }
+        if s == PipelineStatus.error {
+            return Theme.err;
+        }
+        return Theme.text-faint;
+    }
+    public pure function name(s: PipelineStatus) -> string {
+        if s == PipelineStatus.running {
+            return "RUN";
+        }
+        if s == PipelineStatus.queued {
+            return "QUEUED";
+        }
+        if s == PipelineStatus.done {
+            return "DONE";
+        }
+        if s == PipelineStatus.error {
+            return "ERR";
+        }
+        return "IDLE";
+    }
+}
+
+// ----------------------------------------------------------
+// Reusable bits
+
+// Square ghost icon button.
+component GhostIconBtn inherits Rectangle {
+    in property <image> icon;
+    in property <length> sz: 22px;
+    in property <length> icon-sz: 12px;
+    in property <bool> enabled: true;
+    in property <color> tint: Theme.text-dim;
+    callback clicked;
+
+    width: sz;
+    height: sz;
+    border-radius: 4px;
+    opacity: root.enabled ? 1.0 : 0.4;
+    background: ta.has-hover && root.enabled ? Theme.raised : transparent;
+    animate background { duration: 100ms; }
+
+    Image {
+        source: root.icon;
+        width: root.icon-sz;
+        height: root.icon-sz;
+        colorize: ta.has-hover && root.enabled ? Theme.text : root.tint;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// 14×14 square checkbox (used for pipeline-include-in-run toggle).
+component SquareCheck inherits Rectangle {
+    in property <bool> checked;
+    callback toggled;
+
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    background: root.checked ? Theme.accent : transparent;
+    border-width: root.checked ? 0px : 1.5px;
+    border-color: Theme.border;
+    animate background { duration: 100ms; }
+
+    if root.checked: Image {
+        source: @image-url("../icons/regular-white/check.svg");
+        width: 10px;
+        height: 10px;
+        colorize: #ffffff;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+}
+
+// Small mono dot (5–6 px) used for status / dirty markers.
+component DotPx inherits Rectangle {
+    in property <length> sz: 6px;
+    in property <color> fill;
+    width: sz;
+    height: sz;
+    border-radius: sz / 2;
+    background: fill;
+}
+
+// ----------------------------------------------------------
+// Pipeline tab row
+
+component PipelineTab inherits Rectangle {
+    in property <Pipeline> pipeline;
+    in property <bool> active;
+    callback selected;
+    callback toggled;
+    callback more-clicked;
+    callback move-up;
+    callback move-down;
+
+    height: 46px;
+    border-radius: 5px;
+    background: root.active ? Theme.raised : (ta.has-hover ? Theme.raised.with-alpha(0.5) : transparent);
+    border-width: 1px;
+    border-color: root.active ? Theme.border : transparent;
+    opacity: pipeline.enabled ? 1.0 : 0.55;
+    animate background { duration: 80ms; }
+
+    // 3px accent bar on the left (only when active)
+    if root.active: Rectangle {
+        x: 0px;
+        y: 6px;
+        width: 3px;
+        height: parent.height - 12px;
+        background: Theme.accent;
+        border-radius: 1.5px;
+    }
+
+    // Declared first so the HorizontalLayout (buttons) renders on top and receives clicks first.
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.selected();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 6px;
+        spacing: 9px;
+        alignment: stretch;
+
+        // Run-toggle
+        VerticalLayout {
+            alignment: center;
+            SquareCheck {
+                checked: pipeline.enabled;
+                toggled => {
+                    root.toggled();
+                }
+            }
+        }
+
+        // Name + meta
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            horizontal-stretch: 1;
+
+            HorizontalLayout {
+                spacing: 5px;
+                alignment: start;
+                Text {
+                    text: pipeline.name;
+                    font-size: 12px;
+                    font-weight: 500;
+                    color: root.active ? Theme.text : Theme.text-dim;
+                    overflow: elide;
+                }
+
+                if pipeline.dirty: VerticalLayout {
+                    alignment: center;
+                    DotPx {
+                        sz: 5px;
+                        fill: Theme.warn;
+                    }
+                }
+            }
+
+            Text {
+                text: pipeline.image-source + " · " + pipeline.total-step-count + " steps · " + pipeline.enabled-step-count + " on";
+                font-size: 10px;
+                font-family: Theme.font-mono;
+                color: Theme.text-mute;
+                overflow: elide;
+            }
+        }
+
+        // Status pill
+     /*
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 5px;
+                alignment: end;
+                VerticalLayout {
+                    alignment: center;
+                    DotPx {
+                        sz: 5px;
+                        fill: Status.color(pipeline.status);
+                    }
+                }
+
+                Text {
+                    text: Status.name(pipeline.status);
+                    font-size: 9.5px;
+                    letter-spacing: 0.4px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+*/
+        // Move + more buttons (visible on hover)
+        VerticalLayout {
+            alignment: center;
+            padding-right: 2px;
+            HorizontalLayout {
+                spacing: 0px;
+                opacity: ta.has-hover || root.active ? 1.0 : 0.0;
+                animate opacity { duration: 100ms; }
+                GhostIconBtn {
+                    icon: @image-url("../icons/regular-white/arrow-up.svg");
+                    sz: 20px;
+                    icon-sz: 10px;
+                    clicked => {
+                        root.move-up();
+                    }
+                }
+
+                GhostIconBtn {
+                    icon: @image-url("../icons/regular-white/arrow-down.svg");
+                    sz: 20px;
+                    icon-sz: 10px;
+                    clicked => {
+                        root.move-down();
+                    }
+                }
+
+                GhostIconBtn {
+                    icon: @image-url("../icons/regular-white/dots-three.svg");
+                    clicked => {
+                        root.more-clicked();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Class-dropdown helpers
+
+global ClassHelper {
+    pure public function zeropad2(n: int) -> string {
+        n < 10 ? "0\{n}" : "\{n}"
+    }
+    pure public function label(val: string, prefix: string) -> string {
+        val == "-1" ? "Unset" : val == "4294967295" ? "Manual annotation" : val == "0" ? "Background" : prefix + " class " + ClassHelper.zeropad2(round(val.to-float()))
+    }
+}
+
+// Dropdown for ObjectClass (prefix "Obj.") and SegmentationClass (prefix "Seg.").
+// Special items at top: Manual annotation (4294967295) and Background (0),
+// followed by named classes from ClassificationState.
+component ClassDropdown inherits Rectangle {
+    in property <bool> is-seg: false;
+    in-out property <string> value: "0";
+    callback changed(string);
+
+    property <string> prefix: root.is-seg ? "Seg." : "Obj.";
+
+    height: 26px;
+    border-radius: 4px;
+
+    trigger-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            popup.show();
+        }
+
+        Rectangle {
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            background: trigger-ta.has-hover ? Theme.raised : Theme.bg;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+                spacing: 0px;
+                Text {
+                    text: ClassHelper.label(root.value, root.prefix);
+                    font-size: 11px;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                // Single wrapper per class - color + name together, only the matching one is visible
+                for cls in ClassificationState.classes_list: HorizontalLayout {
+                        property <bool> is-selected: cls.id == round(root.value.to-float()) && root.value != "0" && root.value != "4294967295";
+                        visible: is-selected;
+                        spacing: is-selected ? 4px : 0px;
+                        padding-left: is-selected ? 6px : 0px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 10px;
+                                height: 10px;
+                                border-radius: 2px;
+                                background: cls.color;
+                            }
+                        }
+
+                        Text {
+                            text: "(" + cls.name + ")";
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: "▾";
+                    font-size: 9px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: max(root.width, 220px);
+        height: 300px;
+
+        Rectangle {
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 6px;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #000000.with-alpha(0.4);
+            clip: true;
+
+            ScrollView {
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 1px;
+
+                    // Unset (-1)
+                    unset-ta := TouchArea {
+                        height: 26px;
+                        clicked => {
+                            root.value = "-1";
+                            root.changed("-1");
+                            popup.close();
+                        }
+                        Rectangle {
+                            border-radius: 3px;
+                            background: unset-ta.has-hover ? Theme.raised : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                Text {
+                                    text: "Unset";
+                                    font-size: 11px;
+                                    color: Theme.text-mute;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Separator
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border-soft;
+                    }
+
+                    // Manual annotation (0xFFFFFFFF = 4294967295)
+                    manual-ta := TouchArea {
+                        height: 26px;
+                        clicked => {
+                            root.value = "4294967295";
+                            root.changed("4294967295");
+                            popup.close();
+                        }
+                        Rectangle {
+                            border-radius: 3px;
+                            background: manual-ta.has-hover ? Theme.raised : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                Text {
+                                    text: "Manual annotation";
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Separator
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border-soft;
+                    }
+
+                    // Background (0)
+                    bg-ta := TouchArea {
+                        height: 26px;
+                        clicked => {
+                            root.value = "0";
+                            root.changed("0");
+                            popup.close();
+                        }
+                        Rectangle {
+                            border-radius: 3px;
+                            background: bg-ta.has-hover ? Theme.raised : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                Text {
+                                    text: "Background";
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Separator
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border-soft;
+                    }
+
+                    // Fixed 32 numbered entries; color/name appear only when a class is defined for that id
+                    for i in 32: num-ta := TouchArea {
+                        height: 26px;
+                        clicked => {
+                            root.value = "\{i + 1}";
+                            root.changed("\{i + 1}");
+                            popup.close();
+                        }
+                        Rectangle {
+                            border-radius: 3px;
+                            background: num-ta.has-hover ? Theme.raised : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 0px;
+                                Text {
+                                    text: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                }
+
+                                Rectangle {
+                                // Single wrapper per class: color + name together
+                                for cls in ClassificationState.classes-list: HorizontalLayout {
+                                        visible: cls.id == i + 1;
+                                        spacing: cls.id == i + 1 ? 5px : 0px;
+                                        padding-left: cls.id == i + 1 ? 8px : 0px;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 10px;
+                                                height: 10px;
+                                                border-radius: 2px;
+                                                background: cls.color;
+                                            }
+                                        }
+
+                                        Text {
+                                            text: "(" + cls.name + ")";
+                                            font-size: 11px;
+                                            color: Theme.text-dim;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Multi-select class dropdown - fires changed("toggle:N") on each row click.
+// selection-flags is a 33-element [string] ("1"/"0") for classes 0–32,
+// populated by the generator via to_parameters() and kept live by the controller.
+component MultiClassDropdown inherits Rectangle {
+    in property <bool> is-seg: false;
+    in-out property <string> value: "";
+    in property <[string]> selection-flags: [];
+    callback changed(string);
+
+    property <string> prefix: root.is-seg ? "Seg." : "Obj.";
+
+    height: 26px;
+    border-radius: 4px;
+
+    trigger-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            popup.show();
+        }
+
+        Rectangle {
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            background: trigger-ta.has-hover ? Theme.raised : Theme.bg;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                // spacing: 0px - gap between chips is baked into each slot's 46px width
+                spacing: 0px;
+                alignment: start;
+
+                // Placeholder when nothing is selected
+                if root.value == "": Text {
+                    text: "None selected";
+                    font-size: 11px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                // i=0 → BG (flags[0]), i=1..32 → class i (flags[i]).
+                // width:0px collapses unselected slots; clip:true prevents overflow.
+                // Each selected slot is 46px: 43px chip + 3px trailing gap.
+ 
+                    for i in 33: Rectangle {
+                    width: root.selection-flags[i] == "1" ? 46px : 0px;
+                    height: 18px;
+                    clip: true;
+
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: 43px;
+                        height: 18px;
+                        border-radius: 3px;
+                        background: Theme.accent.with-alpha(0.12);
+                        border-width: 1px;
+                        border-color: Theme.accent.with-alpha(0.35);
+
+                        property <bool> has-custom-name: false;
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 3px;
+                            padding-left: 4px;
+                            padding-right: 4px;
+
+                            if i == 0: Text {
+                                text: "BG";
+                                font-size: 9px;
+                                font-family: Theme.font-mono;
+                                color: Theme.text;
+                                vertical-alignment: center;
+                            }
+
+                            if i != 0 && !parent.has-custom-name: Text {
+                                text: ClassHelper.zeropad2(i);
+                                font-size: 9px;
+                                color: Theme.text;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        for cls in ClassificationState.classes-list: Rectangle {
+                            visible: cls.id == i && cls.name != "";
+
+                            init => {
+                                if (cls.id == i && cls.name != "") {
+                                    has-custom-name = true;
+                                }
+                            }
+
+                            width: parent.width;
+                            height: parent.height;
+                            background: Theme.accent.with-alpha(0.12);
+
+                            HorizontalLayout {
+                                alignment: center;
+                                spacing: 3px;
+                                padding-left: 4px;
+                                padding-right: 4px;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 6px;
+                                        height: 6px;
+                                        border-radius: 2px;
+                                        background: cls.color;
+                                    }
+                                }
+
+                                Text {
+                                    text: cls.name;
+                                    font-size: 9px;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: "▾";
+                    font-size: 9px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: max(root.width, 220px);
+        height: 300px;
+        close-policy: no-auto-close;
+
+        Rectangle {
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 6px;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #000000.with-alpha(0.4);
+            clip: true;
+
+            VerticalLayout {
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 4px;
+                        spacing: 1px;
+
+                        // Background class (id = 0) - flags[0]
+                        bg-ta := TouchArea {
+                            height: 26px;
+                            clicked => {
+                                root.changed("toggle:0");
+                            }
+                            Rectangle {
+                                border-radius: 3px;
+                                background: bg-ta.has-hover ? Theme.raised : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 12px;
+                                            height: 12px;
+                                            border-radius: 3px;
+                                            background: root.selection-flags[0] == "1" ? Theme.accent : transparent;
+                                            border-width: root.selection-flags[0] == "1" ? 0px : 1.5px;
+                                            border-color: Theme.border;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Background";
+                                        font-size: 11px;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        // Classes 1–32 - flags[i+1] (i is 0-based loop index)
+                        for i in 32: num-ta := TouchArea {
+                            height: 26px;
+                            clicked => {
+                                root.changed("toggle:\{i + 1}");
+                            }
+                            Rectangle {
+                                border-radius: 3px;
+                                background: num-ta.has-hover ? Theme.raised : transparent;
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 12px;
+                                            height: 12px;
+                                            border-radius: 3px;
+                                            background: root.selection-flags[i + 1] == "1" ? Theme.accent : transparent;
+                                            border-width: root.selection-flags[i + 1] == "1" ? 0px : 1.5px;
+                                            border-color: Theme.border;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: root.prefix + " class " + ClassHelper.zeropad2(i + 1);
+                                        font-size: 11px;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+
+                                    Rectangle {
+                                        for cls in ClassificationState.classes-list: HorizontalLayout {
+                                            visible: cls.id == i + 1;
+                                            spacing: 4px;
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 8px;
+                                                    height: 8px;
+                                                    border-radius: 2px;
+                                                    background: cls.color;
+                                                }
+                                            }
+
+                                            Text {
+                                                text: "(" + cls.name + ")";
+                                                font-size: 11px;
+                                                color: Theme.text-dim;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+
+                done-ta := TouchArea {
+                    height: 28px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        popup.close();
+                    }
+
+                    Rectangle {
+                        background: done-ta.has-hover ? Theme.raised : transparent;
+
+                        HorizontalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Done";
+                                font-size: 11px;
+                                color: Theme.accent;
+                                font-weight: 500;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Spinner input: integer value with − / + step buttons
+
+component SpinnerInput inherits HorizontalLayout {
+    in property <float> value;
+    in property <float> step: 1;
+    in property <float> min: 0;
+    in property <float> max: 100;
+    callback changed(string);
+
+    spacing: 2px;
+    height: 26px;
+
+    // Pattern: Rectangle with explicit size → Text (visual) → TouchArea LAST (no children,
+    // so Slint auto-sizes it to fill the Rectangle, and being last it sits on top and
+    // receives events while text remains visible underneath it).
+    Rectangle {
+        width: 26px;
+        height: 26px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: dec.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
+        Text {
+            text: "−";
+            font-size: 13px;
+            font-weight: 700;
+            color: Theme.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        dec := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.changed(root.value - root.step >= root.min ? "\{root.value - root.step}" : "\{root.min}");
+            }
+        }
+    }
+
+    LineEdit {
+        horizontal-stretch: 1;
+        text: "\{root.value}";
+        font-size: 11px;
+        edited(t) => {
+            root.changed(t);
+        }
+    }
+
+    Rectangle {
+        width: 26px;
+        height: 26px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: inc.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
+        Text {
+            text: "+";
+            font-size: 13px;
+            font-weight: 700;
+            color: Theme.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        inc := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.changed(root.value + root.step <= root.max ? "\{root.value + root.step}" : "\{root.max}");
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Leaf parameter row (used inside group items)
+
+component LeafParamRow inherits VerticalLayout {
+    in property <LeafParam> p;
+    callback changed(string);
+
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        Text {
+            text: p.display-name == "" ? p.name : p.display-name;
+            font-size: 10px;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+        }
+
+        if p.description != "": leaf-help-btn := Rectangle {
+            width: 13px;
+            height: 13px;
+            border-radius: 7px;
+            background: leaf-help-ta.has-hover ? Theme.accent.with-alpha(0.3) : Theme.border-soft;
+            animate background { duration: 100ms; }
+            Text {
+                text: "?";
+                font-size: 8px;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            leaf-help-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    leaf-help-popup.show();
+                }
+            }
+
+            leaf-help-popup := PopupWindow {
+                x: 0px;
+                y: parent.height + 3px;
+                width: 230px;
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 6px;
+                    drop-shadow-blur: 10px;
+                    drop-shadow-color: #000000.with-alpha(0.35);
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 0px;
+                        Text {
+                            text: p.description;
+                            font-size: 11px;
+                            color: Theme.text;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if p.param-type == ParamType.number || p.param-type == ParamType.text:
+    LineEdit {
+        height: 24px;
+        text: p.value;
+        font-size: 11px;
+        edited(t) => {
+            root.changed(t);
+        }
+    }
+
+    if p.param-type == ParamType.label: Text {
+        text: p.value;
+        font-size: 11px;
+        font-family: Theme.font-mono;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+    }
+
+    if p.param-type == ParamType.spinner:
+    SpinnerInput {
+        value: p.value.to-float();
+        step: p.step;
+        min: p.min;
+        max: p.max;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.dropdown:
+    ComboBox {
+        model: p.options;
+        current-value: p.value;
+        selected(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.slider: HorizontalLayout {
+        spacing: 8px;
+        Slider {
+            minimum: p.min;
+            maximum: p.max;
+            value: p.value.to-float();
+            horizontal-stretch: 1;
+            changed(v) => {
+                root.changed("\{v}");
+            }
+        }
+
+        Text {
+            text: p.value;
+            font-size: 11px;
+            font-family: Theme.font-mono;
+            color: Theme.text;
+            vertical-alignment: center;
+            width: 36px;
+            horizontal-alignment: right;
+        }
+    }
+
+    if p.param-type == ParamType.toggle: HorizontalLayout {
+        CheckBox {
+            checked: p.value == "true";
+            toggled => {
+                root.changed(self.checked ? "true" : "false");
+            }
+        }
+    }
+
+    if p.param-type == ParamType.obj-class:
+    ClassDropdown {
+        is-seg: false;
+        value: p.value;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.seg-class:
+    ClassDropdown {
+        is-seg: true;
+        value: p.value;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.multi-obj-class:
+    MultiClassDropdown {
+        is-seg: false;
+        value: p.value;
+        selection-flags: p.options;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.multi-seg-class:
+    MultiClassDropdown {
+        is-seg: true;
+        value: p.value;
+        selection-flags: p.options;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units:
+    ComboBox {
+        model: p.options;
+        current-value: p.value;
+        selected(v) => {
+            root.changed(v);
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Parameter row
+
+component ParamRow inherits VerticalLayout {
+    in property <CommandParameter> p;
+    callback changed(string);
+    callback item-field-changed(int, string, string);
+    callback add-item();
+    callback remove-item(int);
+
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        Text {
+            text: p.display-name == "" ? p.name : p.display-name;
+            font-size: 11px;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+        }
+
+        if p.description != "": help-btn := Rectangle {
+            width: 14px;
+            height: 14px;
+            border-radius: 7px;
+            background: help-ta.has-hover ? Theme.accent.with-alpha(0.3) : Theme.border-soft;
+            animate background { duration: 100ms; }
+            Text {
+                text: "?";
+                font-size: 8px;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            help-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    help-popup.show();
+                }
+            }
+
+            help-popup := PopupWindow {
+                x: 0px;
+                y: parent.height + 3px;
+                width: 240px;
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 6px;
+                    drop-shadow-blur: 10px;
+                    drop-shadow-color: #000000.with-alpha(0.35);
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 0px;
+                        Text {
+                            text: p.description;
+                            font-size: 11px;
+                            color: Theme.text;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if p.param-type == ParamType.number || p.param-type == ParamType.text:
+    LineEdit {
+        height: 26px;
+        text: p.value;
+        font-size: 11px;
+        edited(t) => {
+            root.changed(t);
+        }
+    }
+
+    if p.param-type == ParamType.label: Text {
+        text: p.value;
+        font-size: 11px;
+        font-family: Theme.font-mono;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+    }
+
+    if p.param-type == ParamType.spinner:
+    SpinnerInput {
+        value: p.value.to-float();
+        step: p.step;
+        min: p.min;
+        max: p.max;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.dropdown:
+    ComboBox {
+        model: p.options;
+        current-value: p.value;
+        selected(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.slider: HorizontalLayout {
+        spacing: 8px;
+        Slider {
+            minimum: p.min;
+            maximum: p.max;
+            value: p.value.to-float();
+            horizontal-stretch: 1;
+            changed(v) => {
+                root.changed("\{v}");
+            }
+        }
+
+        Text {
+            text: p.value;
+            font-size: 11px;
+            font-family: Theme.font-mono;
+            color: Theme.text;
+            vertical-alignment: center;
+            width: 36px;
+            horizontal-alignment: right;
+        }
+    }
+
+    if p.param-type == ParamType.toggle: HorizontalLayout {
+        CheckBox {
+            checked: p.value == "true";
+            toggled => {
+                root.changed(self.checked ? "true" : "false");
+            }
+        }
+    }
+
+    if p.param-type == ParamType.obj-class:
+    ClassDropdown {
+        is-seg: false;
+        value: p.value;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.seg-class:
+    ClassDropdown {
+        is-seg: true;
+        value: p.value;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.multi-obj-class:
+    MultiClassDropdown {
+        is-seg: false;
+        value: p.value;
+        selection-flags: p.options;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.multi-seg-class:
+    MultiClassDropdown {
+        is-seg: true;
+        value: p.value;
+        selection-flags: p.options;
+        changed(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.pixel-units || p.param-type == ParamType.size-units:
+    ComboBox {
+        model: p.options;
+        current-value: p.value;
+        selected(v) => {
+            root.changed(v);
+        }
+    }
+
+    if p.param-type == ParamType.group: VerticalLayout {
+        spacing: 4px;
+        for item[i] in p.group-items: Rectangle {
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            background: Theme.bg;
+            VerticalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                spacing: 6px;
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "#" + (i + 1);
+                        font-size: 9.5px;
+                        font-family: Theme.font-mono;
+                        color: Theme.text-mute;
+                        vertical-alignment: center;
+                    }
+
+                    GhostIconBtn {
+                        icon: @image-url("../icons/regular-white/trash-simple.svg");
+                        sz: 18px;
+                        icon-sz: 10px;
+                        tint: Theme.err.with-alpha(0.6);
+                        clicked => {
+                            root.remove-item(i);
+                        }
+                    }
+                }
+
+                for field in item.fields: LeafParamRow {
+                    p: field;
+                    changed(v) => {
+                        root.item-field-changed(i, field.name, v);
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: 26px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: add-item-ta.has-hover ? Theme.raised : transparent;
+            animate background { duration: 100ms; }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 5px;
+                Image {
+                    source: @image-url("../icons/regular-white/plus.svg");
+                    width: 10px;
+                    height: 10px;
+                    colorize: Theme.text-dim;
+                    y: 8px;
+                }
+
+                Text {
+                    text: "Add item";
+                    font-size: 10.5px;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+            }
+
+            add-item-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.add-item();
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Step row
+
+component StepRow inherits Rectangle {
+    in property <PipelineCommand> step;
+    in property <int> idx;
+    in property <int> pipeline-id;
+    callback toggle-enabled;
+    callback toggle-expanded;
+    callback remove;
+    callback duplicate;
+    callback param-changed(string, string);
+    callback toggle-breakpoint;
+
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: step.expanded ? Cat.color(step.category) : (head-ta.has-hover ? Theme.border : Theme.border-soft);
+    border-radius: 6px;
+    clip: true;
+    opacity: step.enabled ? 1.0 : 0.55;
+    animate border-color { duration: 100ms; }
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // -- Header row --
+        Rectangle {
+            height: 40px;
+            head-ta := TouchArea {
+                clicked => {
+                    root.toggle-expanded();
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 0px;
+                alignment: stretch;
+
+                // 3px category stripe
+                Rectangle {
+                    width: 3px;
+                    background: Cat.color(step.category);
+                }
+
+                // Grip
+                VerticalLayout {
+                    alignment: center;
+                    padding-left: 6px;
+                    padding-right: 2px;
+                    Image {
+                        source: @image-url("../icons/regular-white/dots-six-vertical.svg");
+                        width: 10px;
+                        height: 10px;
+                        colorize: Theme.text-mute;
+                    }
+                }
+
+                // Number chip
+                VerticalLayout {
+                    alignment: center;
+                    padding-right: 8px;
+                    Rectangle {
+                        width: 20px;
+                        height: 18px;
+                        border-radius: 4px;
+                        background: Theme.bg;
+                        border-width: 1px;
+                        border-color: Theme.border-soft;
+                        Text {
+                            text: idx + 1;
+                            color: Theme.text-dim;
+                            font-size: 10px;
+                            font-weight: 600;
+                            font-family: Theme.font-mono;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Name + mono summary
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    horizontal-stretch: 1;
+                    padding-right: 8px;
+
+                    Text {
+                        text: step.name;
+                        color: Theme.text;
+                        font-size: 12px;
+                        font-weight: 500;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: step.summary;
+                        color: Theme.text-mute;
+                        font-size: 10px;
+                        font-family: Theme.font-mono;
+                        overflow: elide;
+                    }
+                }
+
+                // Controls
+                VerticalLayout {
+                    alignment: center;
+                    padding-right: 6px;
+                    HorizontalLayout {
+                        spacing: 2px;
+
+                        // Breakpoint dot: gray=off, red=Stop, orange=Snapshot
+                        // Click cycles: off → stop → snapshot → off
+                        bp-btn := Rectangle {
+                            // 0=off, 1=stop, 2=snapshot for this specific step
+                            property <int> bp-state: (
+                                PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id
+                                && PipelinesPanelState.breakpoint-step-id == root.step.id
+                            ) ? PipelinesPanelState.breakpoint-mode : 0;
+                            width: 22px;
+                            height: 22px;
+                            border-radius: 4px;
+                            background: bp-btn-ta.has-hover ? Theme.raised : transparent;
+                            animate background { duration: 100ms; }
+                            Rectangle {
+                                width: 10px;
+                                height: 10px;
+                                border-radius: 5px;
+                                background: bp-btn.bp-state == 1 ? #e53e3e
+                                          : bp-btn.bp-state == 2 ? #ed8936
+                                          : Theme.text-faint;
+                                border-width: bp-btn.bp-state == 0 ? 1.5px : 0px;
+                                border-color: Theme.text-faint;
+                            }
+                            bp-btn-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.toggle-breakpoint();
+                                }
+                            }
+                        }
+
+                        GhostIconBtn {
+                            icon: step.enabled ? @image-url("../icons/regular-white/eye.svg") : @image-url("../icons/regular-white/eye-slash.svg");
+                            icon-sz: 13px;
+                            tint: step.enabled ? Theme.text-dim : Theme.text-faint;
+                            clicked => {
+                                root.toggle-enabled();
+                            }
+                        }
+
+                        GhostIconBtn {
+                            icon: step.expanded ? @image-url("../icons/regular-white/caret-up.svg") : @image-url("../icons/regular-white/caret-down.svg");
+                            icon-sz: 12px;
+                            clicked => {
+                                root.toggle-expanded();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // -- Expanded body --
+        if step.expanded: Rectangle {
+            background: Theme.bg;
+
+            // Top hairline separator inside the card
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 10px;
+
+                for p in step.parameters: ParamRow {
+                    p: p;
+                    changed(v) => {
+                        root.param-changed(p.name, v);
+                    }
+                    item-field-changed(item_idx, field_name, v) => {
+                        root.param-changed("\{p.name}.\{item_idx}.\{field_name}", v);
+                    }
+                    add-item => {
+                        PipelinesPanelState.add-group-item(step.id, p.name);
+                    }
+                    remove-item(idx) => {
+                        PipelinesPanelState.remove-group-item(step.id, p.name, idx);
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    padding-top: 2px;
+
+                    Rectangle {
+                        height: 26px;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        background: dup-ta.has-hover ? Theme.raised : transparent;
+                        animate background { duration: 100ms; }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 5px;
+                            alignment: center;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    source: @image-url("../icons/regular-white/copy.svg");
+                                    width: 11px;
+                                    height: 11px;
+                                    colorize: Theme.text-dim;
+                                }
+                            }
+
+                            Text {
+                                text: "Duplicate";
+                                font-size: 11px;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        dup-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.duplicate();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        height: 26px;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: Theme.err.with-alpha(0.3);
+                        background: rm-ta.has-hover ? Theme.err.with-alpha(0.1) : transparent;
+                        animate background { duration: 100ms; }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 5px;
+                            alignment: center;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    source: @image-url("../icons/regular-white/trash-simple.svg");
+                                    width: 11px;
+                                    height: 11px;
+                                    colorize: Theme.err;
+                                }
+                            }
+
+                            Text {
+                                text: "Remove";
+                                font-size: 11px;
+                                color: Theme.err;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        rm-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.remove();
+                            }
+                        }
+                    }
+                }
+
+                // YODA
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Insertion point between rows
+
+component InsertPoint inherits Rectangle {
+    callback insert;
+    height: 16px;
+
+    // hairline
+    Rectangle {
+        x: 12px;
+        y: (parent.height - 1px) / 2;
+        width: parent.width - 24px;
+        height: 1px;
+        background: Theme.border-soft;
+    }
+
+    // round + button
+    Rectangle {
+        x: (parent.width - 18px) / 2;
+        y: (parent.height - 18px) / 2;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: ta.has-hover ? Theme.accent : Theme.panel;
+        border-width: 1px;
+        border-color: ta.has-hover ? Theme.accent : Theme.border;
+        animate background { duration: 100ms; }
+
+        Image {
+            source: @image-url("../icons/regular-white/plus.svg");
+            width: 10px;
+            height: 10px;
+            colorize: ta.has-hover ? #ffffff : Theme.text-mute;
+        }
+
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.insert();
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// Category filter chip
+
+/*
+component CategoryChip inherits Rectangle {
+    in property <StepCategory> category;
+    in property <int> count;
+    in property <bool> active;
+    callback clicked;
+
+    height: 24px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: root.active ? Cat.color(category) : Theme.border-soft;
+    background: root.active ? Cat.tint(category) : transparent;
+    animate background { duration: 100ms; }
+
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        spacing: 5px;
+        alignment: center;
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 1.5px;
+                background: Cat.color(category);
+            }
+        }
+
+        Text {
+            text: Cat.name(category);
+            color: root.active ? Cat.color(category) : Theme.text-dim;
+            font-size: 10.5px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: count;
+            color: Theme.text-mute;
+            font-size: 10.5px;
+            font-family: Theme.font-mono;
+            vertical-alignment: center;
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+    */
+
+// ══════════════════════════════════════════════════════════
+// Main panel
+export global PipelinesPanelState {
+    in property <[Pipeline]> pipelines: [];
+    in property <[PipelineCommand]> active-commands:[];
+    in property <string> active-pipeline-name;
+    in property <string> active-pipeline-image-source;
+    in property <int> enabled-pipeline-count;
+    in property <int> total-enabled-steps;
+    in property <string> eta-seconds-per-image: "0.00";
+    in property <int> cat-count-preprocess;
+    in property <int> cat-count-segment;
+    in property <int> cat-count-classify;
+    in property <int> cat-count-measure;
+
+    // -- User selection state --
+    in-out property <int> active-pipeline-id;
+    in-out property <int> selected-step-id;
+    in-out property <int> filter-category: -1;
+
+    // -- Breakpoint state (-1 / 0 = none) --
+    in-out property <int> breakpoint-pipeline-id: -1;
+    in-out property <int> breakpoint-step-id: -1;
+    // 0 = off, 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
+    in-out property <int> breakpoint-mode: 0;
+    // True while the viewport shows the breakpoint image instead of the original.
+    in-out property <bool> show-breakpoint-image: false;
+    // True once a breakpoint image has been captured (enables the toggle).
+    in-out property <bool> has-breakpoint-image: false;
+
+    // -- Outbound callbacks --
+    // mode: 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
+    callback set-breakpoint(int, int, int);   // pipeline-id, step-id, mode
+    callback clear-breakpoint();
+    // Fired whenever the breakpoint-image toggle changes so Rust can
+    // switch the viewport worker between original and breakpoint rendering.
+    callback show-breakpoint-image-changed(bool);
+    callback select-pipeline(int);
+    callback toggle-pipeline(int);
+    callback move-pipeline-up(int);
+    callback move-pipeline-down(int);
+    callback new-pipeline();
+    callback duplicate-pipeline(int);
+    callback delete-pipeline(int);
+    callback pipeline-more(int);
+
+    callback toggle-step(int);
+    callback expand-step(int);
+    callback remove-step(int);
+    callback duplicate-step(int);
+    callback insert-step(int, int);          // pipeline-id, after-idx
+    callback param-changed(int, string, string);
+    callback add-group-item(int, string);    // step-id, param-name
+    callback remove-group-item(int, string, int); // step-id, param-name, item-idx
+
+    callback run-all();
+    callback dry-run();
+    callback save();
+}
+
+
+
+
+export component PipelinesPanel inherits Rectangle {
+
+    background: Theme.panel;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // --- 1. Header ---
+        Rectangle {
+            height: 38px;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                alignment: space-between;
+
+                Text {
+                    text: "Pipelines";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: PipelinesPanelState.enabled-pipeline-count + " / " + PipelinesPanelState.pipelines.length;
+                    font-size: 11px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // --- 2. Pipeline tabs ---
+        VerticalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-bottom: 10px;
+            spacing: 3px;
+
+            for p in PipelinesPanelState.pipelines: PipelineTab {
+                pipeline: p;
+                active: p.id == PipelinesPanelState.active-pipeline-id;
+                selected => {
+                    PipelinesPanelState.active-pipeline-id = p.id;
+                    PipelinesPanelState.select-pipeline(p.id);
+                }
+                toggled => {
+                    PipelinesPanelState.toggle-pipeline(p.id);
+                }
+                move-up => {
+                    PipelinesPanelState.move-pipeline-up(p.id);
+                }
+                move-down => {
+                    PipelinesPanelState.move-pipeline-down(p.id);
+                }
+                more-clicked => {
+                    PipelinesPanelState.pipeline-more(p.id);
+                }
+            }
+
+            // New pipeline button
+            Rectangle {
+                height: 36px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: np-ta.has-hover ? Theme.raised.brighter(0.06) : Theme.raised;
+                animate background { duration: 80ms; }
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    Image {
+                        source: @image-url("../icons/regular-white/plus.svg");
+                        width: 12px;
+                        height: 12px;
+                        colorize: Theme.text;
+                        y: 12px;
+                    }
+
+                    Text {
+                        text: "New pipeline";
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+
+                np-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        PipelinesPanelState.new-pipeline();
+                    }
+                }
+            }
+        }
+
+        // --- 3. Editing-context bar ---
+        Rectangle {
+            height: 46px;
+            background: Theme.bg;
+
+            // top + bottom hairlines (faked with absolutely-positioned 1px rects)
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
+            Rectangle {
+                x: 0px;
+                y: parent.height - 1px;
+                width: 100%;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 8px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "EDITING";
+                            color: Theme.text-mute;
+                            font-size: 9.5px;
+                            letter-spacing: 0.5px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        Text {
+                            text: PipelinesPanelState.active-pipeline-name;
+                            color: Theme.text;
+                            font-size: 12px;
+                            font-weight: 500;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: PipelinesPanelState.active-pipeline-image-source;
+                            font-size: 10px;
+                            font-family: Theme.font-mono;
+                            color: Theme.text-mute;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 3px;
+                        GhostIconBtn {
+                            icon: @image-url("../icons/regular-white/pencil-simple.svg");
+                            clicked => {
+                                PipelinesPanelState.pipeline-more(PipelinesPanelState.active-pipeline-id);
+                            }
+                        }
+
+                        GhostIconBtn {
+                            icon: @image-url("../icons/regular-white/copy.svg");
+                            clicked => {
+                                PipelinesPanelState.duplicate-pipeline(PipelinesPanelState.active-pipeline-id);
+                            }
+                        }
+
+                        GhostIconBtn {
+                            icon: @image-url("../icons/regular-white/trash-simple.svg");
+                            tint: Theme.text-mute;
+                            clicked => {
+                                PipelinesPanelState.delete-pipeline(PipelinesPanelState.active-pipeline-id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 4. Category filter chips ---
+       /*
+        Rectangle {
+            height: 62px;
+            GridLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 8px;
+                padding-bottom: 6px;
+                spacing: 4px;
+
+                Row {
+                    CategoryChip {
+                        category: StepCategory.preprocess;
+                        count: PipelinesPanelState.cat-count-preprocess;
+                        active: PipelinesPanelState.filter-category == 0;
+                        clicked => {
+                            PipelinesPanelState.filter-category = PipelinesPanelState.filter-category == 0 ? -1 : 0;
+                        }
+                    }
+
+                    CategoryChip {
+                        category: StepCategory.segment;
+                        count: PipelinesPanelState.cat-count-segment;
+                        active: PipelinesPanelState.filter-category == 1;
+                        clicked => {
+                            PipelinesPanelState.filter-category = PipelinesPanelState.filter-category == 1 ? -1 : 1;
+                        }
+                    }
+                }
+
+                Row {
+                    CategoryChip {
+                        category: StepCategory.classify;
+                        count: PipelinesPanelState.cat-count-classify;
+                        active: PipelinesPanelState.filter-category == 2;
+                        clicked => {
+                            PipelinesPanelState.filter-category = PipelinesPanelState.filter-category == 2 ? -1 : 2;
+                        }
+                    }
+
+                    CategoryChip {
+                        category: StepCategory.measure;
+                        count: PipelinesPanelState.cat-count-measure;
+                        active: PipelinesPanelState.filter-category == 3;
+                        clicked => {
+                            PipelinesPanelState.filter-category = PipelinesPanelState.filter-category == 3 ? -1 : 3;
+                        }
+                    }
+                }
+            }
+        }
+*/
+        // --- 5. Step list (scrolling) ---
+        Rectangle {
+            vertical-stretch: 1;
+
+            ScrollView {
+                VerticalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-bottom: 4px;
+                    padding-top: 8px;
+                    spacing: 0px;
+
+                    // -- EMPTY STATE --
+                    if PipelinesPanelState.active-commands.length == 0: Rectangle {
+                        height: 180px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 10px;
+                            padding: 16px;
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 48px;
+                                    height: 48px;
+                                    border-radius: 10px;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    Image {
+                                        source: @image-url("../icons/regular-white/flow-arrow.svg");
+                                        width: 20px;
+                                        height: 20px;
+                                        colorize: Theme.text-faint;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: PipelinesPanelState.pipelines.length == 0 ? "No pipelines yet" : "This pipeline is empty";
+                                font-size: 12px;
+                                color: Theme.text-dim;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: PipelinesPanelState.pipelines.length == 0 ? "Create a pipeline above, then add\nsteps to run on every image." : "Add a step below to start chaining\noperations.";
+                                font-size: 11px;
+                                color: Theme.text-mute;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    // -- STEP ROWS --
+                    if PipelinesPanelState.active-commands.length > 0: InsertPoint {
+                        insert => {
+                            PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, -1);
+                        }
+                    }
+
+                    for cmd[i] in PipelinesPanelState.active-commands: VerticalLayout {
+                        spacing: 0px;
+                        StepRow {
+                            step: cmd;
+                            idx: i;
+                            pipeline-id: PipelinesPanelState.active-pipeline-id;
+                            toggle-enabled => {
+                                PipelinesPanelState.toggle-step(cmd.id);
+                            }
+                            toggle-expanded => {
+                                if cmd.expanded == true {
+                                    cmd.expanded = false;
+                                } else {
+                                    cmd.expanded = true;
+                                }
+                                PipelinesPanelState.expand-step(cmd.id);
+                            }
+                            remove => {
+                                PipelinesPanelState.remove-step(cmd.id);
+                            }
+                            duplicate => {
+                                PipelinesPanelState.duplicate-step(cmd.id);
+                            }
+                            param-changed(n, v) => {
+                                PipelinesPanelState.param-changed(cmd.id, n, v);
+                            }
+                            toggle-breakpoint => {
+                                if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id
+                                        && PipelinesPanelState.breakpoint-step-id == cmd.id {
+                                    if PipelinesPanelState.breakpoint-mode == 1 {
+                                        // Stop → Snapshot (capture image, pipeline continues)
+                                        PipelinesPanelState.breakpoint-mode = 2;
+                                        PipelinesPanelState.show-breakpoint-image = false;
+                                        PipelinesPanelState.show-breakpoint-image-changed(false);
+                                        PipelinesPanelState.has-breakpoint-image = false;
+                                        PipelinesPanelState.set-breakpoint(PipelinesPanelState.active-pipeline-id, cmd.id, 2);
+                                    } else {
+                                        // Snapshot → Off; captured image remains available.
+                                        PipelinesPanelState.breakpoint-pipeline-id = -1;
+                                        PipelinesPanelState.breakpoint-step-id = -1;
+                                        PipelinesPanelState.breakpoint-mode = 0;
+                                        PipelinesPanelState.clear-breakpoint();
+                                    }
+                                } else {
+                                    // Off → Stop (pipeline halts at step)
+                                    PipelinesPanelState.breakpoint-pipeline-id = PipelinesPanelState.active-pipeline-id;
+                                    PipelinesPanelState.breakpoint-step-id = cmd.id;
+                                    PipelinesPanelState.breakpoint-mode = 1;
+                                    PipelinesPanelState.show-breakpoint-image = false;
+                                    PipelinesPanelState.show-breakpoint-image-changed(false);
+                                    PipelinesPanelState.has-breakpoint-image = false;
+                                    PipelinesPanelState.set-breakpoint(PipelinesPanelState.active-pipeline-id, cmd.id, 1);
+                                }
+                            }
+                        }
+
+                        if i < PipelinesPanelState.active-commands.length - 1: InsertPoint {
+                            insert => {
+                                PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, i);
+                            }
+                        }
+                        if i >= PipelinesPanelState.active-commands.length - 1: Rectangle {
+                            height: 8px;
+                        }
+                    }
+
+                    // -- ADD STEP - only when there is at least one pipeline --
+                    if PipelinesPanelState.pipelines.length > 0: Rectangle {
+                        height: 34px;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        background: add-ta.has-hover ? Theme.raised : transparent;
+                        animate background { duration: 100ms; }
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            Image {
+                                source: @image-url("../icons/regular-white/plus.svg");
+                                width: 12px;
+                                height: 12px;
+                                colorize: Theme.text-dim;
+                                y: 10px;
+                            }
+
+                            Text {
+                                text: "Add step";
+                                color: Theme.text-dim;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        add-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                PipelinesPanelState.insert-step(PipelinesPanelState.active-pipeline-id, PipelinesPanelState.active-commands.length);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 6. Run bar ---
+        Rectangle {
+            height: PipelinesPanelState.has-breakpoint-image ? 114px : 76px;
+
+            // Top hairline
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 100%;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: PipelinesPanelState.enabled-pipeline-count + " pipelines · " + PipelinesPanelState.total-enabled-steps + " steps total";
+                        color: Theme.text-mute;
+                        font-size: 10.5px;
+                        font-family: Theme.font-mono;
+                        vertical-alignment: center;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Image {
+                            source: @image-url("../icons/regular-white/clock.svg");
+                            width: 11px;
+                            height: 11px;
+                            colorize: Theme.text-mute;
+                        }
+
+                        Text {
+                            text: "~" + PipelinesPanelState.eta-seconds-per-image + "s/image";
+                            color: Theme.text-mute;
+                            font-size: 10.5px;
+                            font-family: Theme.font-mono;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Breakpoint image toggle (only shown when a breakpoint image is available)
+                if PipelinesPanelState.has-breakpoint-image: Rectangle {
+                    height: 30px;
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: PipelinesPanelState.show-breakpoint-image ? #e53e3e.with-alpha(0.6) : Theme.border;
+                    background: PipelinesPanelState.show-breakpoint-image ? #e53e3e.with-alpha(0.12) : (bp-view-ta.has-hover ? Theme.raised : transparent);
+                    animate background { duration: 100ms; }
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: #e53e3e;
+                            y: 11px;
+                        }
+                        Text {
+                            text: PipelinesPanelState.show-breakpoint-image ? "Breakpoint image" : "Original image";
+                            font-size: 11px;
+                            color: PipelinesPanelState.show-breakpoint-image ? #e53e3e : Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+                    bp-view-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            PipelinesPanelState.show-breakpoint-image = !PipelinesPanelState.show-breakpoint-image;
+                            PipelinesPanelState.show-breakpoint-image-changed(PipelinesPanelState.show-breakpoint-image);
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    // Run all - primary
+                    Rectangle {
+                        height: 34px;
+                        border-radius: 6px;
+                        background: run-ta.has-hover ? Theme.accent.brighter(0.1) : Theme.accent;
+                        horizontal-stretch: 1;
+                        animate background { duration: 100ms; }
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            Image {
+                                y: 10px;
+                                source: @image-url("../icons/regular-white/lightning.svg");
+                                width: 13px;
+                                height: 13px;
+                                colorize: #ffffff;
+                            }
+
+                            Text {
+                                text: "Run all";
+                                color: #ffffff;
+                                font-size: 12px;
+                                font-weight: 500;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        run-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                PipelinesPanelState.run-all();
+                            }
+                        }
+                    }
+
+                    GhostIconBtn {
+                        sz: 34px;
+                        icon-sz: 14px;
+                        icon: @image-url("../icons/regular-white/bug.svg");
+                        clicked => {
+                            PipelinesPanelState.dry-run();
+                        }
+                    }
+
+                    GhostIconBtn {
+                        sz: 34px;
+                        icon-sz: 14px;
+                        icon: @image-url("../icons/regular-white/floppy-disk.svg");
+                        clicked => {
+                            PipelinesPanelState.save();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

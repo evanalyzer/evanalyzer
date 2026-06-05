@@ -1,0 +1,57 @@
+import { BaseDialog } from "dialog_base.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { ClassificationState } from "../editor/classification_panel.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+
+export component ConfirmDeleteClassDialog inherits BaseDialog {
+    title-text: "Delete class";
+    icon: "⚠️";
+    main-height: 260px;
+    main-width: 440px;
+
+    VerticalLayout {
+        spacing: 12px;
+        Text {
+            text: "This action cannot be undone. Deleting a class breaks existing annotations and pipeline steps. Ensure you are not using this class before proceeding.";
+            wrap: word-wrap;
+            color: Theme.text;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        Text {
+            text: "Delete class \{ClassificationState.selected_class_name}?";
+            wrap: word-wrap;
+            color: Theme.text-dim;
+            font-size: 13px;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: end;
+
+            AppButton {
+                text: "Cancel";
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.none;
+                }
+            }
+
+            AppButton {
+                text: "Delete";
+                danger: true;
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.none;
+                    ClassificationState.class_delete(ClassificationState.selected_class_id);
+                    ClassificationState.selected_class_id = -1;
+                    ClassificationState.selected_class_name = "";
+                }
+            }
+        }
+    }
+}

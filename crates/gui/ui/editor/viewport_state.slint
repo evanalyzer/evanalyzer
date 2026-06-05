@@ -1,0 +1,90 @@
+export enum ToolState {
+    Move,
+    Select,
+    PaintRectangle,
+    PaintOval,
+    PaintPolygon,
+    PaintMarker,
+}
+
+export struct MarkerData {
+    image-x: float,
+    image-y: float,
+    label: string,
+}
+
+//
+// Viewport
+//
+export global ViewportState {
+    in-out property <length> offset_x: 0;
+    in-out property <length> offset_y: 0;
+
+    in-out property <length> tile_width: 800px;
+    in-out property <length> tile_height: 800px;
+    in-out property <length> display_x: 0;
+    in-out property <length> display_y: 0;
+
+    in-out property <length> tile_width_ghost: 0;
+    in-out property <length> tile_height_ghost: 0;
+    in-out property <length> display_x_ghost: 0;
+    in-out property <length> display_y_ghost: 0;
+
+    in-out property <bool> high_res_ready: false;
+    in-out property <bool> roi_ready: false;
+
+    in-out property <float> zoom_factor: 1.0;
+    callback report_viewport_size(float, float);
+    callback report_viewport_moved(float, float);
+    callback report_viewport_zoomed(float, float, float);
+    callback report_mouse_moved(length, length);
+
+    // Scale bar
+    in-out property <length> scale_bar_width;
+    in-out property <string> scale_bar_text;
+
+    // Navigator
+    in-out property <float> nav_x: 0;
+    in-out property <float> nav_y: 0;
+    in-out property <float> nav_width: 0;
+    in-out property <float> nav_height: 0;
+
+}
+
+struct PointSlint {
+    x: length,
+    y: length,
+}
+
+export global ViewportRoiState {
+    callback roi_paint_finished([PointSlint], ToolState, int);
+    callback roi_transparency_changed(float);
+    callback viewport_clicked(length, length);
+    callback marker-placed(length, length);
+    callback marker-remove-at(length, length);
+
+    in-out property <[MarkerData]> markers: [];
+    in-out property <ToolState> act_tool_state:  ToolState.Move;
+    in-out property <bool> is_drawing: false;
+    in-out property <int> poly_idx:0;
+    in-out property <float> roi_transparency: 0.8;
+    in-out property <bool> show_rois: true;
+    in-out property <[PointSlint]> polygon_points: [
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+        { x: 0px, y: 0px },
+    ];
+}

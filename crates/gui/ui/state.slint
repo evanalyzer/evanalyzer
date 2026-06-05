@@ -1,0 +1,122 @@
+//
+// Global app state
+//
+export enum DialogType { none, about, missing_images, project_settings, classification_confirm_delete,classification_confirm_auto_add_dialog, classification_edit_class_dialog, roi_confirm_delete, command_selection_dialog, pipeline_edit, pipeline_delete_confirm, pipeline_running, preview_rendering, warning  }
+
+
+export global GlobalAppState {
+    // Global internal state
+    in-out property <bool> show_image_tools: true;
+    in-out property <int> sidebar_left_active_tab: 0;
+    in-out property <int> sidebar_right_active_tab: 0;
+
+    in-out property <DialogType> active_dialog: DialogType.none;
+}
+
+//
+// Generic warning dialog state. Set `message` (and optionally `title`) then
+// switch GlobalAppState.active_dialog to DialogType.warning to show it.
+//
+export global WarningState {
+    in-out property <string> title: "Cannot start analysis";
+    in-out property <string> message: "";
+}
+
+
+//
+// Histogram
+//
+export struct HistogramData {
+    path: string,
+    color: color,
+}
+
+export global HistogramState {
+    // Histogram
+    callback histogram_adjusted(float, float, float, float);
+    callback auto_adjust_clicked();
+
+    // These are the histogram values how to use in the application
+    in-out property <float> histogram_min_val_abs: 0.0;
+    in-out property <float> histogram_max_val_abs: 1.0;
+
+    // These are the histogram settings on the slider in range from 0-1
+    in-out property <float> histogram_min_val: 0.0;
+    in-out property <float> histogram_max_val: 1.0;
+
+    // These are the histogram limits
+    in-out property <float> histogram_min_lim: 0.0;
+    in-out property <float> histogram_max_lim: 1.0;
+
+    in-out property <string> histogram_min_lim_txt: "0.0";
+    in-out property <string> histogram_max_lim_txt: "1.0";
+
+    // Histogram data
+    in-out property <[HistogramData]> histogram_svg_path: [
+      //  { path: "M 0 100 L 10 50 100 100 Z", color: #007acc },
+      //  { path: "M 0 100 L 20 20 100 100 Z", color: #ff4444 },
+    ];
+}
+
+//
+// Channel settings
+//
+export enum IntensityProjection {
+    single_stack,
+    all_stacks,
+    max,
+    min,
+    avg,
+    sum,
+    middle
+}
+
+export struct ChannelInfo { name: string, color: color, active: bool, idx: int}
+
+export global ChannelState {
+
+    in-out property <[ChannelInfo]> channels: [
+        { name: "CH0", color: #FF0000, active: true, idx: 0 },
+        { name: "CH1", color: #FF0000, active: true, idx: 1 },
+        { name: "CH2", color: #FF0000, active: true, idx: 2 },
+        { name: "CH3", color: #FF0000, active: true, idx: 3 },
+        { name: "CH4", color: #FF0000, active: true, idx: 4 },
+        { name: "CH5", color: #FF0000, active: true, idx: 5 },
+    ];
+
+    in-out property <int> selected_series: 0;
+    in-out property <int> selected_z_stack: 0;
+    in-out property <int> selected_t_stack: 0;
+    in-out property <bool> is_play_active: false;
+    in-out property <int> play_back_speed_hz: 1;
+    in-out property <IntensityProjection> intensity_projection: IntensityProjection.single-stack;
+    in-out property <int> selected_channel_index: 0;
+
+    // Callback sends the updated array to Rust
+    callback channel_state_changed([ChannelInfo], int, int, int, IntensityProjection, int, int);
+    callback active_channel_changed(int);
+    callback active_series_changed(int);
+    callback toggle_play(bool);
+
+    public function trigger_channel_state_changed() {
+        channel_state_changed(root.channels, root.selected_series, root.selected_z_stack, root.selected_t_stack, root.intensity_projection, root.selected_channel_index, root.play_back_speed_hz);
+    }
+
+    public function trigger_active_channel_selection_changed() {
+        active_channel_changed(root.selected_channel_index);
+    }
+
+    public function trigger_active_series_changed() {
+        active_series_changed(root.selected_series);
+    }
+}
+
+
+
+//
+// Image pixel info
+//
+export global ImagePixelInfo {
+    in-out property <string> mouse_pos;
+    in-out property <string> pixel_value;
+}

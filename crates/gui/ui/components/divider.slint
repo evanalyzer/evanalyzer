@@ -1,0 +1,15 @@
+import { Theme } from "../style.slint";
+export component VerticalDivider inherits Rectangle {
+    width: 5px;
+    HorizontalLayout {
+        alignment: center;
+        width: 100%;
+        padding-left: 5px;
+        padding-right: 5px;
+        height: 30px;
+        Rectangle {
+            width: 2px;
+            background: Theme.border;
+        }
+    }
+}

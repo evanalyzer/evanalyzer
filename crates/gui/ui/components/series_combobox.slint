@@ -1,0 +1,117 @@
+import { ScrollView } from "std-widgets.slint";
+import {
+    ImageMetaPanel,
+    ImageMetaData,
+} from "../editor/image_meta_panel.slint";
+import { Theme } from "../style.slint";
+import { ChannelState } from "../state.slint";
+
+
+export component SeriesComboBox {
+    // We wrap it in a TouchArea so clicking it opens the dropdown
+    ta := TouchArea {
+        clicked => {
+            popup.show();
+        }
+
+        Rectangle {
+            background: ta.has-hover ? Theme.hover : Theme.raised;
+            border-color: Theme.border;
+            border-width: 1px;
+            border-radius: 4px;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 12px;
+
+                // Your exact requested text layout
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: "SERIES \{ChannelState.selected_series + 1} OF \{ImageMetaData.nr_series}";
+                        font-size: 9.5px;
+                        letter-spacing: 0.5px;
+                        color: Theme.text-mute;
+                    }
+
+                    Text {
+                        text: "Series \{ChannelState.selected_series}";
+                        font-size: 12px;
+                        font-weight: 500;
+                        color: Theme.text;
+                    }
+                }
+
+                // Small arrow indicator on the right side
+                Text {
+                    text: "▼";
+                    font-size: 10px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // 3. The Dropdown Popup overlay
+    popup := PopupWindow {
+        x: 0;
+        y: ta.height + 4px; // Position right below the box
+        width: ta.width;
+        // Adjust height based on how many items you expect to show
+        height: Math.min(200px, ImageMetaData.nr_series * 45px);
+
+        Rectangle {
+            background: Theme.raised;
+            border-color: Theme.border;
+            border-width: 1px;
+            border-radius: 4px;
+
+            ScrollView {
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+
+                    // Loop over your series array to fill the menu options
+                    // Slint uses conditional loops over numbers or models
+                    for index in ImageMetaData.nr_series: item-ta := TouchArea {
+                        height: 40px;
+                        clicked => {
+                            ChannelState.selected_series = index;
+                            ChannelState.trigger_active_series_changed();
+                            popup.close();
+                        }
+
+                        Rectangle {
+                            background: item-ta.has-hover ? Theme.hover : Colors.transparent;
+                            border-radius: 2px;
+
+                            // Re-render the exact text breakdown inside the menu items too!
+                            VerticalLayout {
+                                padding-left: 8px;
+                                alignment: center;
+                                spacing: 1px;
+
+                                Text {
+                                    text: "SERIES \{index + 1} OF \{ImageMetaData.nr_series}";
+                                    font-size: 8.5px;
+                                    letter-spacing: 0.5px;
+                                    color: Theme.text-mute;
+                                }
+
+                                Text {
+                                    text: "Series \{index}";
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,93 @@
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    // -- Mode switch ----------------------------------------------------------
+    in-out property <bool> dark-mode: Palette.color-scheme == ColorScheme.dark;
+
+    // -- Surface layers -------------------------------------------------------
+    out property <color> bg:          dark-mode ? #0E0F12 : #F4F5F7;
+    out property <color> bg-viewport:          dark-mode ? #0E0F12 : #0E0F12;
+    out property <color> panel:       dark-mode ? #16181D : #FFFFFF;
+    out property <color> raised:      dark-mode ? #1C1F25 : #EBEBED;
+    out property <color> rail:        dark-mode ? #0B0C0F : #E0E0E2;
+
+    // -- Strokes / dividers ---------------------------------------------------
+    out property <color> border:      dark-mode ? #23262C : #D0D2D8;
+    out property <color> border-soft: dark-mode ? #1B1D22 : #E5E5E8;
+
+    // -- Text -----------------------------------------------------------------
+    out property <color> text-bright: dark-mode ? #FFFFFF : #000000;
+    out property <color> text:        dark-mode ? #E4E6EB : #1A1A1E;
+    out property <color> text-dim:    dark-mode ? #9CA0AB : #5A5E6A;
+    out property <color> text-mute:   dark-mode ? #6A6E78 : #888C98;
+    out property <color> text-faint:  dark-mode ? #4A4D55 : #B0B3BD;
+
+    out property <color> text-pixel-info: dark-mode ? #FFFFFF : #FFFFFF;
+    out property <color> text-scalebar: dark-mode ? #FFFFFF : #FFFFFF;
+
+    // -- Accent + semantics ---------------------------------------------------
+    out property <color> accent:      dark-mode ? #4D8DFF : #2A6BDF;
+    out property <color> accent-dim:  dark-mode ? #1E3866 : #DDEEFF;
+    out property <color> ok:          dark-mode ? #34D399 : #1A8A5A;
+    out property <color> warn:        dark-mode ? #F59E0B : #C07800;
+    out property <color> err:         dark-mode ? #F87171 : #D03030;
+
+    // -- Modal / overlay ------------------------------------------------------
+    out property <color> modal-overlay: #000000AA;          // dialog backdrop dim
+    out property <color> modal-dim:     #00000055;          // lighter backdrop
+    out property <color> overlay-scrim: dark-mode ? #0E0F12.with-alpha(0.6) : #F4F5F7.with-alpha(0.7);
+    out property <color> shadow:        #00000088;          // drop-shadow base
+
+    // -- Sidebar / Pipeline view ----------------------------------------------
+    out property <color> sidebar:             dark-mode ? #1a1a1c : #F0F0F2;
+    out property <color> sidebar-list:        dark-mode ? #252528 : #E8E8EA;
+    out property <color> sidebar-step-active: dark-mode ? #2a2a30 : #D8DCF8;
+    out property <color> sidebar-step-idle:   dark-mode ? #212124 : #EFEFEF;
+
+    // -- Status indicators (pipeline steps) -----------------------------------
+    out property <color> status-done: dark-mode ? #4CAF50 : #2E8B40;
+    out property <color> status-idle: dark-mode ? #444444 : #CCCCCC;
+
+    // -- Icon badge backgrounds ------------------------------------------------
+    out property <color> icon-bg-default: #ffcc0022;
+    out property <color> icon-bg-info:    #517891;
+
+    // -- Game / BioRunner (warm paper palette - intentionally theme-independent)
+    out property <color> game-paper:    #F0EDD6;
+    out property <color> game-ink:      #2a2a2a;
+    out property <color> game-title:    #C8C0A4;
+    out property <color> game-subtitle: #C0BAA0;
+    out property <color> game-green:    #4aaa55;
+
+    // -- Category palette (pipeline step type stripes) ------------------------
+    out property <color> cat-preprocess: #22D3EE;
+    out property <color> cat-segment:    #E879F9;
+    out property <color> cat-object:     #F97316;
+    out property <color> cat-measure:    #FACC15;
+    out property <color> cat-classify:   #34D399;
+
+    // -- Channel palette (multi-channel image overlay) ------------------------
+    out property <color> ch-0: #22D3EE;
+    out property <color> ch-1: #E879F9;
+    out property <color> ch-2: #FACC15;
+    out property <color> ch-3: #34D399;
+    out property <color> ch-4: #F87171;
+
+    // -- Spacing / sizing -----------------------------------------------------
+    out property <length> panel-content-padding: 14px;
+    out property <length> radius-sm: 4px;
+    out property <length> radius-md: 6px;
+    out property <length> radius-lg: 10px;
+
+    // -- Interactive ----------------------------------------------------------
+    in-out property <color> hover: dark-mode ? #3e3e42 : #E0E0E8;
+
+    // -- Tables / Lists -------------------------------------------------------
+    out property <length> list-row-height: 40px;
+    out property <color> list-select-row-bg:           dark-mode ? #1E3866 : #DDEEFF;
+    out property <color> list-select-row-border-color: dark-mode ? #4D8DFF : #2A6BDF;
+
+    // -- Typography -----------------------------------------------------------
+    out property <string> font-sans: "IBM Plex Sans";
+    out property <string> font-mono: "IBM Plex Mono";
+}

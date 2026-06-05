@@ -1,0 +1,564 @@
+import { LineEdit, ComboBox, ScrollView } from "std-widgets.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+import { GlobalAppState, DialogType, ChannelState } from "../state.slint";
+
+// -- Global state --------------------------------------------
+
+export global PipelineEditState {
+    in property <int> pipeline-id: 0;
+    in-out property <string> pipeline-name: "";
+    // 0 = Scratchpad · 1 = Memory (PipelineContext slot) · 2 = Channel
+    in-out property <int> source-type: 0;
+    in-out property <int> source-slot: 1;
+    in-out property <int> source-channel: 0;
+    callback confirm();
+    callback cancel();
+}
+
+// -- Inline radio-option row ----------------------------------
+
+component SourceOption inherits Rectangle {
+    in property <string> label;
+    in property <string> description;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 42px;
+    border-radius: 6px;
+    background: selected ? Theme.accent.with-alpha(0.12) : (ta.has-hover ? Theme.raised : transparent);
+    border-width: 1px;
+    border-color: selected ? Theme.accent.with-alpha(0.5) : Theme.border-soft;
+    animate background, border-color { duration: 80ms; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        alignment: start;
+
+        // Radio circle
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border-width: 1.5px;
+                border-color: selected ? Theme.accent : Theme.border;
+                background: transparent;
+                if selected: Rectangle {
+                    x: 4px;
+                    y: 4px;
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: Theme.accent;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: label;
+                font-size: 12px;
+                font-weight: selected ? 600 : 400;
+                color: selected ? Theme.text : Theme.text-dim;
+            }
+
+            Text {
+                text: description;
+                font-size: 10px;
+                color: Theme.text-mute;
+                overflow: elide;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// -- Field label + input row ----------------------------------
+
+component LabeledInput inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <string> placeholder;
+    callback edited(string);
+
+    spacing: 5px;
+    Text {
+        text: label;
+        font-size: 11px;
+        color: Theme.text-dim;
+    }
+
+    LineEdit {
+        height: 30px;
+        text: value;
+        placeholder-text: placeholder;
+        font-size: 12px;
+        edited(t) => {
+            root.edited(t);
+        }
+    }
+}
+
+// -- Channel picker -------------------------------------------
+// Popup channel picker - iterates ChannelState.channels (color + name from state.slint)
+
+component ChannelPicker inherits Rectangle {
+    in-out property <int> value: 0;
+    callback changed(int);
+
+    height: 45px;
+
+    trigger-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            popup.show();
+        }
+
+        Rectangle {
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            background: trigger-ta.has-hover ? Theme.raised : Theme.bg;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 6px;
+                spacing: 0px;
+                Text {
+                    text: "Channel " + root.value;
+                    font-size: 12px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+
+                // Single wrapper per channel: color + name together, only matching one visible
+                Rectangle {
+                    for ch in ChannelState.channels: HorizontalLayout {
+                        visible: ch.idx == root.value;
+                        spacing: ch.idx == root.value ? 5px : 0px;
+                        padding-left: ch.idx == root.value ? 8px : 0px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 10px;
+                                height: 10px;
+                                border-radius: 2px;
+                                background: ch.color;
+                            }
+                        }
+
+                        Text {
+                            text: ch.name;
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+
+                Text {
+                    text: "▾";
+                    font-size: 9px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: max(root.width, 200px);
+        height: 10 * 26px + 8px;
+
+        Rectangle {
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 6px;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: Theme.shadow;
+            clip: true;
+
+            VerticalLayout {
+                padding: 4px;
+                spacing: 1px;
+
+                // Always show channels 0-9; color + name appear for defined channels
+                for index in 10: ch-ta := TouchArea {
+                    height: 45px;
+                    clicked => {
+                        root.value = index;
+                        root.changed(index);
+                        popup.close();
+                    }
+                    Rectangle {
+                        border-radius: 3px;
+                        background: ch-ta.has-hover ? Theme.raised : transparent;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 0px;
+                            Text {
+                                text: "Channel " + index;
+                                font-size: 11px;
+                                font-family: Theme.font-mono;
+                                color: Theme.text;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                            // Single wrapper: color + name; invisible for undefined channels
+                            for ch in ChannelState.channels: HorizontalLayout {
+                                    visible: ch.idx == index;
+                                    spacing: ch.idx == index ? 5px : 0px;
+                                    padding-left: ch.idx == index ? 8px : 0px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 10px;
+                                            height: 10px;
+                                            border-radius: 2px;
+                                            background: ch.color;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: ch.name;
+                                        font-size: 11px;
+                                        color: Theme.text-dim;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -- Dialog component -----------------------------------------
+
+export component PipelineEditDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    // Click outside = cancel
+    TouchArea {
+        clicked => {
+            PipelineEditState.cancel();
+        }
+    }
+
+    // Centered card
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        // Eat clicks inside so scrim doesn't fire
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 18px;
+
+            // -- Title --
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "Edit Pipeline";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: close-ta.has-hover ? Theme.raised : transparent;
+                    animate background { duration: 80ms; }
+                    Text {
+                        text: "✕";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            PipelineEditState.cancel();
+                        }
+                    }
+                }
+            }
+
+            // -- Name --
+            LabeledInput {
+                label: "Pipeline name";
+                value: PipelineEditState.pipeline-name;
+                placeholder: "e.g. Cell detection";
+                edited(t) => {
+                    PipelineEditState.pipeline-name = t;
+                }
+            }
+
+            // -- Image source --
+            VerticalLayout {
+                spacing: 8px;
+                Text {
+                    text: "Image source";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+
+                    SourceOption {
+                        label: "Scratchpad";
+                        description: "Pipeline's own internal scratchpad image";
+                        selected: PipelineEditState.source-type == 0;
+                        clicked => {
+                            PipelineEditState.source-type = 0;
+                        }
+                    }
+
+                    SourceOption {
+                        label: "Memory slot";
+                        description: "Read from a pipeline context memory slot";
+                        selected: PipelineEditState.source-type == 1;
+                        clicked => {
+                            PipelineEditState.source-type = 1;
+                        }
+                    }
+
+                    if PipelineEditState.source-type == 1: HorizontalLayout {
+                        padding-left: 26px;
+                        padding-top: 2px;
+                        padding-bottom: 4px;
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "Slot";
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                            width: 30px;
+                        }
+
+                        ComboBox {
+                            width: 80px;
+                            model: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+                            current-index: PipelineEditState.source-slot;
+                            selected(v) => {
+                                PipelineEditState.source-slot = round(v.to-float());
+                            }
+                        }
+                    }
+
+                    SourceOption {
+                        label: "Channel";
+                        description: "Read directly from an image channel (0-based)";
+                        selected: PipelineEditState.source-type == 2;
+                        clicked => {
+                            PipelineEditState.source-type = 2;
+                        }
+                    }
+
+                    if PipelineEditState.source-type == 2: HorizontalLayout {
+                        padding-left: 26px;
+                        padding-top: 2px;
+                        padding-bottom: 4px;
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "Channel";
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                            width: 52px;
+                        }
+
+                        ChannelPicker {
+                            width: 250px;
+                            value: PipelineEditState.source-channel;
+                            changed(v) => {
+                                PipelineEditState.source-channel = v;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // -- Footer --
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        PipelineEditState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Save";
+                    primary: true;
+                    clicked => {
+                        PipelineEditState.confirm();
+                    }
+                }
+            }
+        }
+
+        // Height = content height
+        height: layout.preferred-height;
+    }
+}
+
+// -- Delete-pipeline confirm dialog ---------------------------
+
+export global PipelineDeleteConfirmState {
+    in property <int> pipeline-id: 0;
+    in property <string> pipeline-name: "";
+    callback confirm();
+    callback cancel();
+}
+
+export component PipelineDeleteConfirmDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+    TouchArea {
+        clicked => {
+            PipelineDeleteConfirmState.cancel();
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.err.with-alpha(0.4);
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+
+        TouchArea { }
+
+        inner-layout := VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            // Icon + title
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 8px;
+                    background: Theme.err.with-alpha(0.14);
+                    Text {
+                        text: "🗑";
+                        font-size: 16px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: "Delete pipeline?";
+                        font-size: 15px;
+                        font-weight: 700;
+                        color: Theme.text;
+                    }
+                }
+            }
+
+            // Message
+            Text {
+                text: "\"" + PipelineDeleteConfirmState.pipeline-name + "\" and all its steps will be permanently removed.";
+                font-size: 12px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+
+            // Buttons
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        PipelineDeleteConfirmState.cancel();
+                    }
+                }
+
+                Rectangle {
+                    height: 34px;
+                    width: del-layout.preferred-width + 24px;
+                    border-radius: 6px;
+                    background: del-ta.has-hover ? Theme.err : Theme.err.with-alpha(0.85);
+                    animate background { duration: 80ms; }
+                    del-layout := HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        alignment: center;
+                        Text {
+                            text: "Delete";
+                            font-size: 12.5px;
+                            font-weight: 600;
+                            color: #ffffff;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    del-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            PipelineDeleteConfirmState.confirm();
+                        }
+                    }
+                }
+            }
+        }
+
+        height: inner-layout.preferred-height;
+    }
+}

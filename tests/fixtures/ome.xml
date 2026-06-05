@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OME
+	xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" Creator="OME Bio-Formats 5.2.2" UUID="urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a" xsi:schemaLocation="http://www.openmicroscopy.org/Schemas/OME/2016-06 http://www.openmicroscopy.org/Schemas/OME/2016-06/ome.xsd">
+	<Image ID="Image:0" Name="multi-channel-4D-series.ome.tif">
+		<Pixels BigEndian="true" DimensionOrder="XYZCT" ID="Pixels:0" Interleaved="false" SignificantBits="8" SizeC="3" SizeT="7" SizeX="439" SizeY="167" SizeZ="5" Type="int8">
+			<Channel ID="Channel:0:0" SamplesPerPixel="1">
+				<LightPath/>
+			</Channel>
+			<Channel ID="Channel:0:1" SamplesPerPixel="1">
+				<LightPath/>
+			</Channel>
+			<Channel ID="Channel:0:2" SamplesPerPixel="1">
+				<LightPath/>
+			</Channel>
+			<TiffData FirstC="0" FirstT="0" FirstZ="0" IFD="0" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="0" FirstZ="1" IFD="1" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="0" FirstZ="2" IFD="2" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="0" FirstZ="3" IFD="3" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="0" FirstZ="4" IFD="4" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="0" FirstZ="0" IFD="5" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="0" FirstZ="1" IFD="6" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="0" FirstZ="2" IFD="7" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="0" FirstZ="3" IFD="8" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="0" FirstZ="4" IFD="9" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="0" FirstZ="0" IFD="10" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="0" FirstZ="1" IFD="11" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="0" FirstZ="2" IFD="12" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="0" FirstZ="3" IFD="13" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="0" FirstZ="4" IFD="14" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="1" FirstZ="0" IFD="15" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="1" FirstZ="1" IFD="16" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="1" FirstZ="2" IFD="17" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="1" FirstZ="3" IFD="18" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="1" FirstZ="4" IFD="19" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="1" FirstZ="0" IFD="20" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="1" FirstZ="1" IFD="21" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="1" FirstZ="2" IFD="22" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="1" FirstZ="3" IFD="23" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="1" FirstZ="4" IFD="24" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="1" FirstZ="0" IFD="25" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="1" FirstZ="1" IFD="26" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="1" FirstZ="2" IFD="27" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="1" FirstZ="3" IFD="28" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="1" FirstZ="4" IFD="29" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="2" FirstZ="0" IFD="30" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="2" FirstZ="1" IFD="31" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="2" FirstZ="2" IFD="32" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="2" FirstZ="3" IFD="33" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="2" FirstZ="4" IFD="34" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="2" FirstZ="0" IFD="35" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="2" FirstZ="1" IFD="36" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="2" FirstZ="2" IFD="37" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="2" FirstZ="3" IFD="38" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="2" FirstZ="4" IFD="39" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="2" FirstZ="0" IFD="40" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="2" FirstZ="1" IFD="41" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="2" FirstZ="2" IFD="42" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="2" FirstZ="3" IFD="43" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="2" FirstZ="4" IFD="44" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="3" FirstZ="0" IFD="45" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="3" FirstZ="1" IFD="46" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="3" FirstZ="2" IFD="47" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="3" FirstZ="3" IFD="48" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="3" FirstZ="4" IFD="49" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="3" FirstZ="0" IFD="50" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="3" FirstZ="1" IFD="51" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="3" FirstZ="2" IFD="52" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="3" FirstZ="3" IFD="53" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="3" FirstZ="4" IFD="54" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="3" FirstZ="0" IFD="55" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="3" FirstZ="1" IFD="56" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="3" FirstZ="2" IFD="57" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="3" FirstZ="3" IFD="58" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="3" FirstZ="4" IFD="59" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="4" FirstZ="0" IFD="60" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="4" FirstZ="1" IFD="61" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="4" FirstZ="2" IFD="62" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="4" FirstZ="3" IFD="63" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="4" FirstZ="4" IFD="64" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="4" FirstZ="0" IFD="65" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="4" FirstZ="1" IFD="66" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="4" FirstZ="2" IFD="67" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="4" FirstZ="3" IFD="68" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="4" FirstZ="4" IFD="69" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="4" FirstZ="0" IFD="70" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="4" FirstZ="1" IFD="71" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="4" FirstZ="2" IFD="72" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="4" FirstZ="3" IFD="73" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="4" FirstZ="4" IFD="74" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="5" FirstZ="0" IFD="75" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="5" FirstZ="1" IFD="76" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="5" FirstZ="2" IFD="77" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="5" FirstZ="3" IFD="78" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="5" FirstZ="4" IFD="79" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="5" FirstZ="0" IFD="80" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="5" FirstZ="1" IFD="81" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="5" FirstZ="2" IFD="82" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="5" FirstZ="3" IFD="83" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="5" FirstZ="4" IFD="84" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="5" FirstZ="0" IFD="85" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="5" FirstZ="1" IFD="86" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="5" FirstZ="2" IFD="87" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="5" FirstZ="3" IFD="88" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="5" FirstZ="4" IFD="89" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="6" FirstZ="0" IFD="90" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="6" FirstZ="1" IFD="91" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="6" FirstZ="2" IFD="92" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="6" FirstZ="3" IFD="93" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="0" FirstT="6" FirstZ="4" IFD="94" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="6" FirstZ="0" IFD="95" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="6" FirstZ="1" IFD="96" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="6" FirstZ="2" IFD="97" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="6" FirstZ="3" IFD="98" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="1" FirstT="6" FirstZ="4" IFD="99" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="6" FirstZ="0" IFD="100" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="6" FirstZ="1" IFD="101" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="6" FirstZ="2" IFD="102" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="6" FirstZ="3" IFD="103" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+			<TiffData FirstC="2" FirstT="6" FirstZ="4" IFD="104" PlaneCount="1">
+				<UUID FileName="multi-channel-4D-series.ome.tif">urn:uuid:f4cb338e-1a6f-40a9-911c-8a5dc678c97a</UUID>
+			</TiffData>
+		</Pixels>
+	</Image>
+</OME>
+<JODA
+	xmlns="https://www.imagec.org/" SeriesCount="1">
+	<Series idx="0" ResolutionCount="1">
+		<PyramidResolution idx="0" width="439" height="167" TileWidth="439" TileHeight="1" BitsPerPixel="8" RGBChannelCount="1" IsInterleaved="0" IsLittleEndian="0"/>
+	</Series>
+</JODA>

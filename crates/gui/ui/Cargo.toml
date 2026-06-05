@@ -1,0 +1,26 @@
+[package]
+name = "evanalyzer_gui_slint"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+# For Linux/macOS: Use Skia
+[target.'cfg(not(target_os = "windows"))'.dependencies.slint]
+version = "1.15"
+features = ["renderer-skia"]
+
+# For Windows: Use Software Renderer (No Skia/VC++ requirement)
+[target.'cfg(target_os = "windows")'.dependencies.slint]
+version = "1.15"
+default-features = false
+features = [
+    "std",
+    "compat-1-2",
+    "renderer-software",
+    "backend-winit",
+]
+
+[build-dependencies]
+slint-build = "1.15"

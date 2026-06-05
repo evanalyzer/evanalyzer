@@ -1,0 +1,67 @@
+import { Palette } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+export component BaseDialog inherits Rectangle {
+    // Properties to customize the shell
+    in property <length> main-width: 400px;
+    in property <length> main-height: 300px;
+    in property <string> title-text: "Dialog Title";
+    in property <string> icon: "ℹ️";
+    in property <color> icon-bg-color: Theme.icon-bg-default;
+    in property <color> drop-shadow-color-in: Theme.shadow;
+
+    // Dimmed background
+    background: Theme.modal-overlay;
+    
+    // Block clicks to the main app
+    TouchArea { }
+
+    Rectangle {
+        width: root.main-width;
+        height: root.main-height;
+        background: Palette.background;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: Palette.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: drop-shadow-color-in;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 0;
+
+            // Header Section
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: icon-bg-color;
+                    border-radius: 16px;
+                    Text {
+                        text: root.icon;
+                        font-size: 16px;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: root.title-text;
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: Palette.foreground;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                height: 20px;
+            }
+
+            // Any content you put inside BaseDialog {} will appear here.
+            @children
+        }
+    }
+}

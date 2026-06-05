@@ -1,0 +1,385 @@
+import {
+    LineEdit,
+    ComboBox,
+    SpinBox,
+    Palette,
+    ScrollView,
+} from "std-widgets.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+
+export struct ProjectSettingsSlint {
+    well_rows: int,
+    well_columns: int,
+    project_name: string,
+    author_name: string,
+    organization_name: string,
+    grouping_mode: int,
+    custom_regex: string,
+    well_size_index: int,
+    well_values: [int]
+}
+
+export global ProjectSettingsState {
+    in-out property <ProjectSettingsSlint> settings: {
+        well_rows: 4,
+        well_columns: 4,
+        project_name: "",
+        author_name: "",
+        organization_name: "",
+        custom_regex: "",
+        well_size_index: 0,
+        well_values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    };
+
+    callback project_settings_changed(ProjectSettingsSlint);
+    callback project_settings_canceled();
+    callback well_value_changed(int, int);
+    callback well_dims_changed(int, int);
+
+    public function trigger_project_settings_accepted() {
+        project_settings_changed(root.settings);
+    }
+}
+
+export component ProjectSettingsDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+    private property <length> well_size: (ProjectSettingsState.settings.well_rows > 5 || ProjectSettingsState.settings.well_columns > 5) ? 30px : 45px;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 620px;
+        height: 780px;
+        background: Theme.panel;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        clip: true;
+
+        VerticalLayout {
+            spacing: 0;
+
+            Rectangle {
+                height: 56px;
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: stretch;
+
+                    Text {
+                        text: "Project Settings";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 5px;
+                        background: close-ta.has-hover ? Theme.raised : transparent;
+                        Text {
+                            text: "✕";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-ta := TouchArea {
+                            clicked => {
+                                ProjectSettingsState.project_settings_canceled();
+                                GlobalAppState.active-dialog = DialogType.none;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg;
+
+                ScrollView {
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 20px;
+
+                        VerticalLayout {
+                            spacing: 12px;
+                            Text {
+                                text: "Identification";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Project Name:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                LineEdit {
+                                    placeholder-text: "Enter project name...";
+                                    text <=> ProjectSettingsState.settings.project_name;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Author Name:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                LineEdit {
+                                    placeholder-text: "Charles Darwin";
+                                    text <=> ProjectSettingsState.settings.author_name;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Organization:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                LineEdit {
+                                    placeholder-text: "University / Company";
+                                    text <=> ProjectSettingsState.settings.organization_name;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        VerticalLayout {
+                            spacing: 12px;
+                            Text {
+                                text: "Analyze settings";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Grouping:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                group_mode := ComboBox {
+                                    model: [
+                                        "No grouping",
+                                        "Foldername [group_name/image_01.tif]",
+                                        "Filename [group_name_03.tif]",
+                                        "Filename well [image_B99_01.tif]",
+                                        "Custom regex"
+                                    ];
+                                    current-index <=> ProjectSettingsState.settings.grouping_mode;
+                                }
+                            }
+
+                            if (group_mode.current-index == 4): HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Regex:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                LineEdit {
+                                    placeholder-text: "(.)([0-9]+))_([0-9]+)";
+                                    text <=> ProjectSettingsState.settings.custom_regex;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Plate size:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                ComboBox {
+                                    model: [
+                                        "1 Well (1 x 1)",
+                                        "6 Well (2 x 3)",
+                                        "8 Well (2 x 4)",
+                                        "12 Well (2 x 6)",
+                                        "12 Well (3 x 4)",
+                                        "15 Well (3 x 5)",
+                                        "18 Well (3 x 6)",
+                                        "24 Well (4 x 6)",
+                                        "48 Well (6 x 8)",
+                                        "96 Well (8 x 12)",
+                                        "384 Well (16 x 24)",
+                                        "1536 Well (32 x 48)",
+                                        "3456 Well (48 x 72)"
+                                    ];
+                                    current-index <=> ProjectSettingsState.settings.well_size_index;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text {
+                                    text: "Well Rows/Cols:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                SpinBox {
+                                    value: ProjectSettingsState.settings.well_rows;
+                                    minimum: 0;
+                                    maximum: 8;
+                                    edited => {
+                                        ProjectSettingsState.settings.well_rows = self.value;
+                                        ProjectSettingsState.well_dims_changed(self.value, ProjectSettingsState.settings.well_columns);
+                                    }
+                                }
+
+                                SpinBox {
+                                    value: ProjectSettingsState.settings.well_columns;
+                                    minimum: 0;
+                                    maximum: 8;
+                                    edited => {
+                                        ProjectSettingsState.settings.well_columns = self.value;
+                                        ProjectSettingsState.well_dims_changed(ProjectSettingsState.settings.well_rows, self.value);
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        VerticalLayout {
+                            spacing: 12px;
+                            Text {
+                                text: "Images in well";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            Text {
+                                text: "Define the image acquisition order within each well (press Enter to confirm a change).";
+                                color: Theme.text-dim;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                            }
+
+                            GridLayout {
+                                spacing: 2px;
+                                for val[i] in ProjectSettingsState.settings.well_values: Rectangle {
+                                    row: i / ProjectSettingsState.settings.well_columns;
+                                    col: mod(i, ProjectSettingsState.settings.well_columns);
+                                    width: root.well_size;
+                                    height: root.well_size * 0.8;
+                                    background: Theme.panel;
+                                    border-width: 1px;
+                                    border-color: Theme.border-soft;
+                                    border-radius: 3px;
+
+                                    TextInput {
+                                        text: val;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        width: 100%;
+                                        height: 100%;
+                                        color: Theme.text;
+                                        font-size: 11px;
+                                        accepted => {
+                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
+                                        }
+                                        edited => {
+                                            ProjectSettingsState.well_value_changed(i, round(self.text.to-float()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 56px;
+                background: Theme.bg;
+                border-color: Theme.border-soft;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: end;
+
+                    AppButton {
+                        text: "Cancel";
+                        clicked => {
+                            ProjectSettingsState.project_settings_canceled();
+                            GlobalAppState.active-dialog = DialogType.none;
+                        }
+                    }
+
+                    AppButton {
+                        text: "Apply Settings";
+                        primary: true;
+                        clicked => {
+                            ProjectSettingsState.trigger_project_settings_accepted();
+                            GlobalAppState.active-dialog = DialogType.none;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

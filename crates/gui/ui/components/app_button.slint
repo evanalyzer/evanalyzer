@@ -1,0 +1,43 @@
+import { Theme } from "../style.slint";
+
+// -- AppButton ----------------------------------------------------------------
+// Uniform button matching the pipeline-progress-dialog Cancel style.
+//   default  - raised, bordered  (cancel / secondary actions)
+//   primary  - accent-filled     (confirm / primary actions)
+//   danger   - red-filled        (destructive actions)
+
+export component AppButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> danger:  false;
+    callback clicked;
+
+    height: 36px;
+    min-width: 90px;
+    border-radius: 8px;
+    border-width: (primary || danger) ? 0px : 1px;
+    border-color: Theme.border;
+    background: danger ? (ta.has-hover ? Theme.err : Theme.err.with-alpha(0.85)) : primary ? (ta.has-hover ? Theme.accent.brighter(0.12) : Theme.accent) : (ta.has-hover ? Theme.raised.brighter(0.06) : Theme.raised);
+    animate background { duration: 80ms; }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        alignment: center;
+        Text {
+            text: root.text;
+            font-size: 13px;
+            font-weight: 600;
+            color: (root.primary || root.danger) ? Theme.text-bright : Theme.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

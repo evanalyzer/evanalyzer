@@ -1,0 +1,58 @@
+import { StandardListView, VerticalBox } from "std-widgets.slint";
+import { GlobalAppState } from "state.slint";
+import { ImageControlPanel } from "editor/image_control_panel.slint";
+import { NavIconRight } from "components/navicon_right.slint";
+import { Theme } from "style.slint";
+import { RoiListPanel } from "editor/roi_list_panel.slint";
+import { ClassificationPanel } from "editor/classification_panel.slint";
+
+export component SidebarRight inherits HorizontalLayout {
+    spacing: 0;
+
+    // --- DYNAMIC PANEL AREA ---
+    Rectangle {
+        width: parent.width - 48px;
+        background: Theme.panel;
+        if (GlobalAppState.sidebar_right_active_tab == 0): ImageControlPanel { }
+        if (GlobalAppState.sidebar_right_active_tab == 1): RoiListPanel { }
+        if (GlobalAppState.sidebar_right_active_tab == 2): ClassificationPanel { }
+    }
+
+    // --- SLIM ACTIVITY BAR (Far Right) ---
+    Rectangle {
+        width: 48px;
+        background: Theme.panel;
+        border-width: 1px;
+        border-color: Theme.border;
+        VerticalBox {
+            width: 48px;
+            padding: 4px;
+            alignment: start;
+            spacing: 8px;
+
+            NavIconRight {
+                icon: @image-url("icons/regular-black/sliders-horizontal.svg");
+                active: GlobalAppState.sidebar_right_active_tab == 0;
+                clicked => {
+                    GlobalAppState.sidebar_right_active_tab = 0;
+                }
+            }
+
+            NavIconRight {
+                icon: @image-url("icons/regular-black/tag.svg");
+                active: GlobalAppState.sidebar_right_active_tab == 2;
+                clicked => {
+                    GlobalAppState.sidebar_right_active_tab = 2;
+                }
+            }
+
+            NavIconRight {
+                icon: @image-url("icons/regular-black/bounding-box.svg");
+                active: GlobalAppState.sidebar_right_active_tab == 1;
+                clicked => {
+                    GlobalAppState.sidebar_right_active_tab = 1;
+                }
+            }
+        }
+    }
+}
