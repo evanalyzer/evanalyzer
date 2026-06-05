@@ -1,0 +1,50 @@
+[package]
+name = "evanalyzer_gui"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+evanalyzer_core = { path = "../core" }
+evanalyzer_app = { path = "../app" }
+evanalyzer_cfg = { path = "../cfg" }
+evanalyzer_gui_slint = { path = "ui" }
+
+rfd = "0.17"
+copypasta = "0.10"
+log = "0.4"
+env_logger = "0.11"
+rayon = "1.10"
+kornia-image = { git = "https://github.com/kornia/kornia-rs" }
+kornia-imgproc = { git = "https://github.com/kornia/kornia-rs" }
+bitflags = "2.11.0"
+enumset = "1.1.10"
+clru = "0.6.3"
+indexmap = "2.13.0"
+arc-swap = "1.9.0"
+use = "0.0.1-pre.0"
+bitvec = "1.0.1"
+petname = "3.0.0"
+chrono = "0.4.44"
+serde_json = "1.0"
+
+
+
+# For Linux/macOS: Use Skia
+[target.'cfg(not(target_os = "windows"))'.dependencies.slint]
+version = "1.15"
+features = ["renderer-skia"]
+
+# For Windows: Use Software Renderer (No Skia/VC++ requirement)
+[target.'cfg(target_os = "windows")'.dependencies.slint]
+version = "1.15"
+default-features = false
+features = [
+    "std",               
+    "compat-1-2", 
+    "renderer-software",
+    "backend-winit",
+]
+
+

@@ -1,0 +1,132 @@
+import { Palette } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { BioRunner } from "../components/bio_runner.slint";
+import { AppButton } from "../components/app_button.slint";
+
+// -- Global progress state -----------------------------------------------------
+
+export global PipelineRunningState {
+    in-out property <int> processed: 0;
+    in-out property <int> total: 0;
+    in-out property <bool> done: false;
+    in-out property <bool> has-error: false;
+    in-out property <string> status-message: "";
+    callback cancel();
+    callback close();
+}
+
+
+// -- Dialog --------------------------------------------------------------------
+
+export component PipelineRunningDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea { }
+
+    Rectangle {
+        width: 440px;
+        height: 320px;
+        background: Palette.background;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: Palette.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+
+            // Header
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+
+                Text {
+                    text: "Analyzing Images";
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: Palette.foreground;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Progress label
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: PipelineRunningState.total > 0 ? (PipelineRunningState.processed + " of " + PipelineRunningState.total + " images processed") : "Starting…";
+                    font-size: 13px;
+                    color: Theme.text-dim;
+                }
+
+                Text {
+                    text: PipelineRunningState.total > 0 ? ((PipelineRunningState.processed * 100 / PipelineRunningState.total) + "%") : "";
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: Theme.accent;
+                }
+            }
+
+            // Progress bar
+            Rectangle {
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.raised;
+
+                Rectangle {
+                    x: 0;
+                    width: PipelineRunningState.total > 0 ? parent.width * (PipelineRunningState.processed * 1.0 / PipelineRunningState.total) : 0px;
+                    height: parent.height;
+                    border-radius: 4px;
+                    background: Theme.accent;
+                    animate width {
+                        duration: 350ms;
+                        easing: ease-out;
+                    }
+                }
+            }
+
+            // Divider
+            Rectangle {
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
+            // Bio-dino runner
+            BioRunner { paused: PipelineRunningState.done; }
+
+            // Status message (shown when done)
+            Rectangle {
+                height: PipelineRunningState.done ? 20px : 0px;
+                clip: true;
+                animate height { duration: 200ms; easing: ease-out; }
+                Text {
+                    text: PipelineRunningState.status-message;
+                    font-size: 12px;
+                    color: PipelineRunningState.status-message == "Analysis completed successfully." ? Theme.accent : Theme.text-dim;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+
+            // Cancel / Close button
+            HorizontalLayout {
+                alignment: end;
+                AppButton {
+                    text: PipelineRunningState.done ? "Close" : "Cancel";
+                    clicked => {
+                        if (PipelineRunningState.done) {
+                            PipelineRunningState.close();
+                        } else {
+                            PipelineRunningState.cancel();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

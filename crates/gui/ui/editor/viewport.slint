@@ -1,0 +1,362 @@
+import { Theme } from "../style.slint";
+import {
+    GlobalAppState,
+    HistogramState,
+    ImagePixelInfo,
+} from "../state.slint";
+import { ScaleBar } from "viewport_scalebar.slint";
+import { Navigator } from "viewport_navigator.slint";
+import {
+    ViewportState,
+    ViewportRoiState,
+    ToolState,
+    MarkerData,
+} from "viewport_state.slint";
+
+
+
+export component Viewport inherits Rectangle {
+    property <length> last_mouse_x: 0;
+    property <length> last_mouse_y: 0;
+    in-out property <image> display_image;
+    in-out property <image> ghost_image;
+    in-out property <image> roi_image;
+    in property <bool> enabled;
+    property <duration> last-click-time: 0ms;
+
+    background: Theme.bg-viewport;
+    clip: true;
+
+    pure function get_polyg_path(offset_x: length, offset_y: length) -> string {
+        get_polyg_segment(offset_x, offset_y, 0, "M") + get_polyg_segment(offset_x, offset_y, 1, " L") + get_polyg_segment(offset_x, offset_y, 2, " L") + get_polyg_segment(offset_x, offset_y, 3, " L") + get_polyg_segment(offset_x, offset_y, 4, " L") + get_polyg_segment(offset_x, offset_y, 5, " L") + get_polyg_segment(offset_x, offset_y, 6, " L") + get_polyg_segment(offset_x, offset_y, 7, " L") + get_polyg_segment(offset_x, offset_y, 8, " L") + get_polyg_segment(offset_x, offset_y, 9, " L") + get_polyg_segment(offset_x, offset_y, 10, " L") + get_polyg_segment(offset_x, offset_y, 11, " L") + get_polyg_segment(offset_x, offset_y, 12, " L") + get_polyg_segment(offset_x, offset_y, 13, " L") + get_polyg_segment(offset_x, offset_y, 14, " L") + get_polyg_segment(offset_x, offset_y, 15, " L") + (ViewportRoiState.polygon_points.length > 0 ? " Z" : "")
+    }
+
+    pure function get_polyg_segment(offset_x: length, offset_y: length, idx: int, prefix: string) -> string {
+        idx <= ViewportRoiState.poly_idx ? prefix + " " + ((ViewportRoiState.polygon_points[idx].x - offset_x) / 1px) + " " + ((ViewportRoiState.polygon_points[idx].y - offset_y) / 1px) : ""
+    }
+
+    pure function get_rect_path(offset_x: length, offset_y: length) -> string {
+        let min_x = (min(ViewportRoiState.polygon_points[0].x, ViewportRoiState.polygon_points[1].x) - offset-x) / 1px;
+        let min_y = (min(ViewportRoiState.polygon_points[0].y, ViewportRoiState.polygon_points[1].y) - offset-y) / 1px;
+        let max_x = (max(ViewportRoiState.polygon_points[0].x, ViewportRoiState.polygon_points[1].x) - offset-x) / 1px;
+        let max_y = (max(ViewportRoiState.polygon_points[0].y, ViewportRoiState.polygon_points[1].y) - offset-y) / 1px;
+        return "M " + min_x + " " + min_y + " L " + max_x + " " + min_y + " L " + max_x + " " + max_y + " L " + min_x + " " + max_y + " Z";
+    }
+
+    pure function get_oval_path(offset_x: length, offset_y: length) -> string {
+        get_oval_path_impl(
+        (min(ViewportRoiState.polygon_points[0].x, ViewportRoiState.polygon_points[1].x) - offset-x) / 1px,
+        (min(ViewportRoiState.polygon_points[0].y, ViewportRoiState.polygon_points[1].y) - offset-y) / 1px,
+        (max(ViewportRoiState.polygon_points[0].x, ViewportRoiState.polygon_points[1].x) - offset-x) / 1px,
+        (max(ViewportRoiState.polygon_points[0].y, ViewportRoiState.polygon_points[1].y) - offset-y) / 1px)
+    }
+
+    pure function get_oval_path_impl(min_x: float, min_y: float, max_x: float, max_y: float) -> string {
+    // Center and radii
+    // cx = (min_x + max_x) / 2,  cy = (min_y + max_y) / 2
+    // rx = (max_x - min_x) / 2,  ry = (max_y - min_y) / 2
+    // Approximation factor for circle via cubic bezier: k ≈ 0.5523
+    // Control point offset: kx = rx * k,  ky = ry * k
+
+    // 4-point bezier oval, starting from top-center, going clockwise:
+    // M  cx,        cy - ry
+    // C  cx + kx,   cy - ry,   cx + rx,  cy - ky,   cx + rx,  cy
+    // C  cx + rx,   cy + ky,   cx + kx,  cy + ry,   cx,       cy + ry
+    // C  cx - kx,   cy + ry,   cx - rx,  cy + ky,   cx - rx,  cy
+    // C  cx - rx,   cy - ky,   cx - kx,  cy - ry,   cx,       cy - ry
+    // Z
+
+    "M " + ((min_x + max_x) / 2) + " " + (min_y) + " C " + ((min_x + max_x) / 2 + (max_x - min_x) / 2 * 0.5523) + " " + (min_y) + " " + (max_x) + " " + ((min_y + max_y) / 2 - (max_y - min_y) / 2 * 0.5523) + " " + (max_x) + " " + ((min_y + max_y) / 2) + " C " + (max_x) + " " + ((min_y + max_y) / 2 + (max_y - min_y) / 2 * 0.5523) + " " + ((min_x + max_x) / 2 + (max_x - min_x) / 2 * 0.5523) + " " + (max_y) + " " + ((min_x + max_x) / 2) + " " + (max_y) + " C " + ((min_x + max_x) / 2 - (max_x - min_x) / 2 * 0.5523) + " " + (max_y) + " " + (min_x) + " " + ((min_y + max_y) / 2 + (max_y - min_y) / 2 * 0.5523) + " " + (min_x) + " " + ((min_y + max_y) / 2) + " C " + (min_x) + " " + ((min_y + max_y) / 2 - (max_y - min_y) / 2 * 0.5523) + " " + ((min_x + max_x) / 2 - (max_x - min_x) / 2 * 0.5523) + " " + (min_y) + " " + ((min_x + max_x) / 2) + " " + (min_y) + " Z"
+    }
+
+    i_container := Rectangle {
+
+        // Layer 1: The Blurry Overview (always fills the container)
+        Image {
+            source: root.ghost_image;
+            image-fit: fill;
+            //opacity: 0.9;
+            x: ViewportState.display_x_ghost;
+            y: ViewportState.display_y_ghost;
+            width: ViewportState.tile_width_ghost;
+            height: ViewportState.tile_height_ghost;
+        }
+
+        // Layer 2: The High-Res Detail (shows on top when ready).
+        // In breakpoint mode the viewport worker renders the breakpoint image
+        // into display_image directly, so no separate property is needed here.
+        Image {
+            source: root.display_image;
+            visible: ViewportState.high_res_ready;
+            image-fit: fill;
+            x: ViewportState.display_x;
+            y: ViewportState.display_y;
+            width: ViewportState.tile_width;
+            height: ViewportState.tile_height;
+        }
+
+        // Layer 3: The region of interests
+        // The buffer is viewport-sized and already in screen coordinates, so it
+        // covers the viewport directly - no stretching or offset needed here.
+        Image {
+            source: root.roi_image;
+            image-fit: fill;
+            visible: ViewportRoiState.show_rois && ViewportState.roi_ready;
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        // Layer 4: Markers
+        for marker[i] in ViewportRoiState.markers: Rectangle {
+            property <length> sx: marker.image-x * ViewportState.zoom_factor * 1px + ViewportState.offset_x;
+            property <length> sy: marker.image-y * ViewportState.zoom_factor * 1px + ViewportState.offset_y;
+            x: sx - 8px;
+            y: sy - 8px;
+            width: 8px + 6px + 240px;  // crosshair + gap + label budget
+            height: 16px;
+            clip: false;
+
+            // Horizontal bar
+            Rectangle {
+                x: 0px;
+                y: 7px;
+                width: 16px;
+                height: 2px;
+                background: #ffff00;
+            }
+            // Vertical bar
+            Rectangle {
+                x: 7px;
+                y: 0px;
+                width: 2px;
+                height: 16px;
+                background: #ffff00;
+            }
+            // Centre dot
+            Rectangle {
+                x: 6px;
+                y: 6px;
+                width: 4px;
+                height: 4px;
+                border-radius: 2px;
+                background: #ff4444;
+            }
+            // Label - dark shadow then bright text
+            Text {
+                x: 19px;
+                y: 1px;
+                text: marker.label;
+                font-size: 10px;
+                font-family: Theme.font-mono;
+                color: #000000;
+            }
+
+            Text {
+                x: 18px;
+                y: 0px;
+                text: marker.label;
+                font-size: 10px;
+                font-family: Theme.font-mono;
+                color: #ffff00;
+            }
+        }
+
+        // Layer 5: Drawing layer
+        Rectangle {
+            x: ViewportState.display_x;
+            y: ViewportState.display_y;
+            width: ViewportState.tile_width;
+            height: ViewportState.tile_height;
+            visible: ViewportRoiState.poly_idx > 0;
+            Path {
+                stroke: Theme.accent;
+                viewbox-width: ViewportState.tile_width / 1px;
+                viewbox-height: ViewportState.tile_height / 1px;
+                stroke-width: 2px;
+                commands: ViewportRoiState.act_tool_state == ToolState.PaintOval ? get_oval_path(ViewportState.display_x,ViewportState.display_y) : ViewportRoiState.act_tool_state == ToolState.PaintRectangle ? get_rect_path(ViewportState.display_x,ViewportState.display_y) : get_polyg_path(ViewportState.display_x,ViewportState.display_y);
+            }
+        }
+
+        ScaleBar {
+            x: 0;
+            y: parent.height - self.height;
+            bar_width: ViewportState.scale_bar_width;
+            unit_text: ViewportState.scale_bar_text;
+        }
+    }
+
+    Rectangle {
+        x: 10px;
+        y: 10px;
+
+        hud_layout := VerticalLayout {
+            spacing: 2px;
+
+            // --- Position Line ---
+            Rectangle {
+                // The Rectangle will shrink-wrap the text
+                width: pos_label.width + 1px;
+                height: pos_label.height + 1px;
+
+                // Shadow (drawn first = bottom)
+                Text {
+                    x: 1px;
+                    y: 1px;
+                    text: "Position: " + ImagePixelInfo.mouse_pos;
+                    color: Theme.text;
+                    font-size: 12px;
+                }
+                // Main Text (drawn second = top)
+                pos_label := Text {
+                    x: 0px;
+                    y: 0px;
+                    text: "Position: " + ImagePixelInfo.mouse_pos;
+                    color: Theme.text-pixel-info;
+                    font-size: 12px;
+                }
+            }
+
+            // --- Value Line ---
+            Rectangle {
+                width: val_label.width + 1px;
+                height: val_label.height + 1px;
+
+                // Shadow
+                Text {
+                    x: 1px;
+                    y: 1px;
+                    text: "Value: " + ImagePixelInfo.pixel_value;
+                    color: Theme.text;
+                    font-size: 12px;
+                }
+                // Main Text
+                val_label := Text {
+                    x: 0px;
+                    y: 0px;
+                    text: "Value: " + ImagePixelInfo.pixel_value;
+                    color: Theme.text-pixel-info;
+                    font-size: 12px;
+                }
+            }
+        }
+    }
+
+    Navigator {
+        // Position it in the bottom right corner
+        x: parent.width - self.width - 15px;
+        y: parent.height - self.height - 15px;
+
+        // Bind to your ViewportState properties
+        view_x: ViewportState.nav_x;
+        view_y: ViewportState.nav_y;
+        view_width: ViewportState.nav_width;
+        view_height: ViewportState.nav_height;
+    }
+
+    changed width => {
+        ViewportState.report_viewport_size(root.width / 1px, root.height / 1px);
+    }
+    changed height => {
+        ViewportState.report_viewport_size(root.width / 1px, root.height / 1px);
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        width: 100%;
+        height: 100%;
+        pointer-event(evt) => {
+            if (evt.kind == PointerEventKind.down) {
+                root.last_mouse_x = self.mouse-x;
+                root.last_mouse_y = self.mouse-y;
+
+                // Object selection
+                if (ViewportRoiState.act_tool_state == ToolState.Select) {
+                    ViewportRoiState.viewport_clicked(root.last_mouse_x, root.last_mouse_y);
+                }
+
+                // Marker tool
+                if (ViewportRoiState.act_tool_state == ToolState.PaintMarker) {
+                    if (evt.button == PointerEventButton.left) {
+                        ViewportRoiState.marker-placed(root.last_mouse_x, root.last_mouse_y);
+                    }
+                    if (evt.button == PointerEventButton.right) {
+                        ViewportRoiState.marker-remove-at(root.last_mouse_x, root.last_mouse_y);
+                    }
+                }
+
+                // Paint object
+                if (ViewportRoiState.act_tool_state != ToolState.Move && ViewportRoiState.act_tool_state != ToolState.Select && ViewportRoiState.act_tool_state != ToolState.PaintMarker) {
+                    if (ViewportRoiState.act_tool_state != ToolState.PaintPolygon) {
+                        if (!ViewportRoiState.is_drawing) {
+                            ViewportRoiState.is_drawing = true;
+                            ViewportRoiState.polygon_points[0] = { x: self.mouse-x, y: self.mouse-y };
+                            ViewportRoiState.polygon_points[1] = { x: self.mouse-x, y: self.mouse-y };
+                            ViewportRoiState.poly_idx = 1;
+                        } else {
+                            ViewportRoiState.roi_paint_finished(ViewportRoiState.polygon_points,ViewportRoiState.act_tool_state, ViewportRoiState.poly_idx);
+                            ViewportRoiState.is_drawing = false;
+                            ViewportRoiState.poly_idx = 0;
+                        }
+                    } else {
+                        if (!ViewportRoiState.is_drawing) {
+                            ViewportRoiState.is_drawing = true;
+                        }
+                        if (animation-tick() - last-click-time) < 300ms {
+                            ViewportRoiState.roi_paint_finished(ViewportRoiState.polygon_points,ViewportRoiState.act_tool_state, ViewportRoiState.poly_idx);
+                            ViewportRoiState.is_drawing = false;
+                            ViewportRoiState.poly_idx = 0;
+                        } else {
+                            ViewportRoiState.polygon_points[ViewportRoiState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                            ViewportRoiState.poly_idx = ViewportRoiState.poly_idx + 1;
+                            ViewportRoiState.polygon_points[ViewportRoiState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                        }
+                        last-click-time = animation-tick();
+                    }
+                }
+            }
+            if (evt.kind == PointerEventKind.move) {
+                if (ViewportRoiState.act_tool_state != ToolState.Move && ViewportRoiState.is_drawing) {
+                    ViewportRoiState.polygon_points[ViewportRoiState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                } else {
+                    ViewportState.report_mouse_moved(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+
+        moved => {
+            if ViewportRoiState.act_tool_state == ToolState.Move {
+                if (self.pressed) {
+                    ViewportState.offset_x += self.mouse-x - root.last_mouse_x;
+                    ViewportState.offset_y += self.mouse-y - root.last_mouse_y;
+                    root.last_mouse_x = self.mouse-x;
+                    root.last_mouse_y = self.mouse-y;
+                    ViewportState.report_viewport_moved(ViewportState.offset_x / 1px, ViewportState.offset_y / 1px);
+                }
+            }
+        }
+
+        scroll-event(event) => {
+            let raw_delta = event.delta-y / 1px;
+            let zoom_intensity = 0.0005;
+            let scale_factor = Math.pow(1 + zoom_intensity, raw_delta);
+            let old_zoom = ViewportState.zoom_factor;
+            let new_zoom = Math.max(0.005, ViewportState.zoom_factor * scale_factor);
+
+
+            // Zoom towards center of the viewport
+            // To zoom towards mouse, use self.mouse-x instead of root.width/2
+            let anchor_x = root.width / 2;
+            let anchor_y = root.height / 2;
+
+            // The Math: Adjust offset so the point under the anchor stays still
+            ViewportState.offset_x -= (anchor_x - ViewportState.offset_x) * (new_zoom / old_zoom - 1);
+            ViewportState.offset_y -= (anchor_y - ViewportState.offset_y) * (new_zoom / old_zoom - 1);
+            ViewportState.zoom_factor = new_zoom;
+            ViewportState.report_viewport_zoomed(ViewportState.zoom_factor, ViewportState.offset_x / 1px, ViewportState.offset_y / 1px);
+
+            accept
+        }
+    }
+}

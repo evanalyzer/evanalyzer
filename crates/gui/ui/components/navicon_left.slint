@@ -1,0 +1,59 @@
+import { Theme } from "../style.slint";
+
+export component NavIconLeft inherits Rectangle {
+    in property <image> icon;
+    in property <string> label:"Pipelines";
+    in property <bool> active;
+    callback clicked;
+
+    // Active indicator: vertical accent bar on the left edge
+   /*
+    if (root.active): Rectangle {
+        x: 2px;
+        y: (parent.height - 30px) / 2;
+        width: 3px;
+        height: 30px;
+        background: Theme.accent;
+        border-radius: 1.5px;
+    }*/
+    Rectangle {
+        animate background { duration: 100ms; }
+        background: root.active ? Theme.hover : ta.has-hover ? Theme.hover : transparent;
+        border-radius: 8px;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 4px;
+            padding: 6px;
+
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: root.icon;
+                    width: 22px;
+                    height: 22px;
+                    colorize: Theme.text;
+                    animate colorize { duration: 150ms; }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    text: root.label;
+                    color: Theme.text;
+                    font-size: 10px;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

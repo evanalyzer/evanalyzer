@@ -1,0 +1,178 @@
+import { Button, HorizontalBox, Slider } from "std-widgets.slint";
+import { GlobalAppState } from "state.slint";
+import { VerticalDivider } from "components/divider.slint";
+import { ToolToggleButton } from "components/toggle_button.slint";
+import { Theme } from "style.slint";
+import { ViewportState } from "editor/viewport_state.slint";
+import { DialogType } from "state.slint";
+import {
+    ViewportRoiState,
+    ToolState,
+} from "editor/viewport_state.slint";
+import { PipelinesPanelState } from "editor/pipelines_panel.slint";
+import { RoiListState } from "editor/roi_list_panel.slint";
+
+// Define the enum
+
+
+export global ToolbarState {
+    callback open_file_clicked();
+    callback save_file_clicked();
+    callback save_as_file_clicked();
+    callback open_website();
+    in-out property <bool> has_unsaved_changes: false;
+}
+
+export component Toolbar inherits Rectangle {
+    height: 48px;
+    background: Theme.bg;
+
+    HorizontalLayout {
+        padding-top: 5px;
+        padding-left: 4px;
+        padding-right: 8px;
+        padding-bottom: 5px;
+        spacing: 2px;
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/folder-open.svg");
+            clicked => {
+                ToolbarState.open_file_clicked();
+            }
+        }
+
+        Rectangle {
+            width: 36px;
+            height: 36px;
+            ToolToggleButton {
+                icon: @image-url("icons/regular-black/floppy-disk.svg");
+                clicked => {
+                    ToolbarState.save_file_clicked();
+                }
+            }
+
+            if ToolbarState.has_unsaved_changes: Rectangle {
+                x: parent.width - 8px;
+                y: 2px;
+                width: 7px;
+                height: 7px;
+                border-radius: 3.5px;
+                background: #ff4444;
+            }
+        }
+
+        VerticalDivider { }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/person-simple-run.svg");
+            clicked => {
+                PipelinesPanelState.run-all();
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/fediverse-logo.svg");
+            enabled: false;
+            clicked => {
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/gear.svg");
+            clicked => {
+                GlobalAppState.active_dialog = DialogType.project_settings;
+            }
+        }
+
+        VerticalDivider { }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/hand.svg");
+            checked: ViewportRoiState.act_tool_state == ToolState.Move;
+            clicked => {
+                ViewportRoiState.act_tool_state = ToolState.Move;
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/cursor.svg");
+            checked: ViewportRoiState.act_tool_state == ToolState.Select;
+            clicked => {
+                ViewportRoiState.act_tool_state = ToolState.Select;
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/crosshair.svg");
+            checked: ViewportRoiState.act_tool_state == ToolState.PaintMarker;
+            clicked => {
+                ViewportRoiState.act_tool_state = ToolState.PaintMarker;
+            }
+        }
+
+        VerticalDivider { }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-red/rectangle.svg");
+            checked: ViewportRoiState.act_tool_state == ToolState.PaintRectangle;
+            clicked => {
+                ViewportRoiState.act_tool_state = ToolState.PaintRectangle;
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-red/circle.svg");
+            checked: ViewportRoiState.act_tool_state == ToolState.PaintOval;
+            clicked => {
+                ViewportRoiState.act_tool_state = ToolState.PaintOval;
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-red/polygon.svg");
+            checked: ViewportRoiState.act_tool_state == ToolState.PaintPolygon;
+            clicked => {
+                ViewportRoiState.act_tool_state = ToolState.PaintPolygon;
+            }
+        }
+
+        VerticalDivider { }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/sliders-horizontal.svg");
+            checked: GlobalAppState.show_image_tools;
+            clicked => {
+                GlobalAppState.show_image_tools = !GlobalAppState.show_image_tools;
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/paint-bucket.svg");
+            checked: ViewportRoiState.show_rois;
+            clicked => {
+                ViewportRoiState.show_rois = !ViewportRoiState.show_rois;
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Slider {
+            width: 150px;
+            minimum: 0.0;
+            maximum: 0.8;
+            value: ViewportRoiState.roi_transparency;
+            changed(val) => {
+                ViewportRoiState.roi_transparency = val;
+                ViewportRoiState.roi_transparency_changed(ViewportRoiState.roi_transparency);
+            }
+        }
+
+        Text {
+            text: "Zoom: \{round(ViewportState.zoom_factor * 100)}%";
+            vertical-alignment: center;
+            font-size: 14px;
+        }
+    }
+}

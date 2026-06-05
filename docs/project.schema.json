@@ -1,0 +1,2430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProjectSettings",
+  "type": "object",
+  "properties": {
+    "classification": {
+      "$ref": "#/$defs/ClassificationSettings"
+    },
+    "images": {
+      "description": "The collection of images and their associated processing states.",
+      "$ref": "#/$defs/ImageSettings"
+    },
+    "metadata": {
+      "description": "Descriptive information about the project (name, version, etc.).",
+      "$ref": "#/$defs/ExperimantMetadata"
+    },
+    "pipelines": {
+      "description": "Pipelines to execute",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PipelineSettings"
+      }
+    },
+    "plate": {
+      "$ref": "#/$defs/PlateSettings"
+    }
+  },
+  "required": [
+    "metadata",
+    "classification",
+    "plate",
+    "images",
+    "pipelines"
+  ],
+  "$defs": {
+    "BlurSettings": {
+      "description": "Smooths an image by averaging pixel intensities within a local neighborhood.\n\n This algorithm applies a uniform box filter where every pixel within the moving\n window contributes equally to the final value. It is a computationally fast\n method used for general image smoothing, blending variations, and rapid noise\n suppression where edge precision is less critical.",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the blur matrix.\n\n Must be an odd number (e.g., 3, 5, 7)",
+          "type": "integer",
+          "format": "uint",
+          "default": 3,
+          "maximum": 27,
+          "minimum": 3
+        }
+      }
+    },
+    "ChannelSettings": {
+      "type": "object",
+      "properties": {
+        "emissionWaveLength": {
+          "type": "number",
+          "format": "float"
+        },
+        "histogram": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistogramSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "visible": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "emissionWaveLength"
+      ]
+    },
+    "Class": {
+      "type": "object",
+      "properties": {
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "measure": {
+          "type": "object",
+          "properties": {
+            "areaSize": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "circularity": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "distanceCenterToCenter": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "distanceCenterToSurfaceMax": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "distanceCenterToSurfaceMin": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "distanceSurfaceToSurfaceMax": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "distanceSurfaceToSurfaceMin": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "intensityAvg": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "intensityMax": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "intensityMin": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "intensitySum": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "intersecting": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "objectCount": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "perimeter": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            },
+            "position": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MeasurementStatistics"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "name": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "color",
+        "name",
+        "notes",
+        "measure"
+      ]
+    },
+    "ClassificationSettings": {
+      "type": "object",
+      "properties": {
+        "classes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Class"
+          }
+        }
+      },
+      "required": [
+        "classes"
+      ]
+    },
+    "ClassifyRoisSettings": {
+      "description": "Classifies ROIs based on morphological and intensity features.\n\n This command applies rule-based classification logic to assign object classes\n to extracted ROIs. Classification is performed using configurable criteria\n including area, shape descriptors, and intensity statistics.",
+      "type": "object",
+      "properties": {
+        "allowEdgeTouching": {
+          "description": "Whether ROI can touch image edge",
+          "type": "boolean",
+          "default": true
+        },
+        "intensityUnit": {
+          "description": "Unit used for the intensity value.\n\n bit: 0 - 255/65535\n %: 0 - 100.0\n rel: 0 - 1.0",
+          "$ref": "#/$defs/PixelUnits",
+          "default": "bit"
+        },
+        "maxArea": {
+          "description": "Maximum area size\n\n Maximum area size of the object in selected unit (px^2 or nm^2).",
+          "type": "number",
+          "format": "float",
+          "default": 2147483648.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "maxAspectRatio": {
+          "description": "Maximum proportional relationship between an object's width and its height\n\n This value is calculated by the object bounding box with and height and is defined with `a = with/height`.\n The value is without unit in the range of 0 to MAX_F32",
+          "type": "number",
+          "format": "float",
+          "default": 2147483648.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "maxCircularity": {
+          "description": "Circularity range: 0 = elongated, 1 = perfect circle\n\n Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\n A circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\n It is calculated with `4*Pi*AreaSize / Perimeter^2`",
+          "type": "number",
+          "format": "float",
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "maxEccentricity": {
+          "description": "Eccentricity: 0 = perfect circle, 1 = line\n\n Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.\n It imagines the shape as an ellipse and measures how far apart its focal points are.\n It is calculated with `sqrt(1-(b/a)^2)`",
+          "type": "number",
+          "format": "float",
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "maxFeret": {
+          "description": "Maximum feret diameter threshold in selected unit (px or nm)\n\n The absolute longest distance across the object at any angle.\n Used to measure elongation or the maximum length of a particle.\n\n In image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\n It mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\n When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.",
+          "type": "number",
+          "format": "float",
+          "default": 2147483648.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "maxMeanIntensity": {
+          "description": "The maximum average intensity an object is allowed to have in the selected image channel",
+          "type": "number",
+          "format": "float",
+          "default": 65535.0,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "maxSolidity": {
+          "description": "Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\n Solidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\n It compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\n often visualized as a rubber band stretched around the shape).\n\n Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\n Solidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.",
+          "type": "number",
+          "format": "float",
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "minArea": {
+          "description": "Minimum area size\n\n Minimum area size of the object in selected unit (px^2 or nm^2).",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "minAspectRatio": {
+          "description": "Minimum proportional relationship between an object's width and its height\n\n This value is calculated by the object bounding box with and height and is defined with `a = with/height`.\n The value is without unit in the range of 0 to MAX_F32",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "minCircularity": {
+          "description": "Circularity range: 0 = elongated, 1 = perfect circle\n\n Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\n A circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\n It is calculated with `4*Pi*AreaSize / Perimeter^2`",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "minEccentricity": {
+          "description": "Eccentricity: 0 = perfect circle, 1 = line\n\n Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.\n It imagines the shape as an ellipse and measures how far apart its focal points are.\n It is calculated with `sqrt(1-(b/a)^2)`",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "minFeret": {
+          "description": "Feret diameter threshold\n\n The absolute shortest parallel distance across the object.\n This represents the minimum sieve size a particle could pass through.\n\n In image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\n It mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\n When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 2147483600,
+          "minimum": 0
+        },
+        "minMeanIntensity": {
+          "description": "The minimum average intensity an object must have in the selected image channel",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "minSolidity": {
+          "description": "Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\n Solidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\n It compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\n often visualized as a rubber band stretched around the shape).\n\n Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\n Solidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "originClass": {
+          "description": "Apply only to objects with this given class",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "originSegmentation": {
+          "description": "Apply only to objects with this given segmentation class\n\n The segmentation class value is assigned to each pixel in the image\n after a Threshold, Pixel classifier or AI classifier.\n If no seg class is selected the criteria are applied to all objects.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SegmentationClass"
+          }
+        },
+        "sizeUnit": {
+          "description": "Unit to use for roi extraction",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "nm"
+        },
+        "targetClass": {
+          "description": "Target class for objects matching the chosen criteria.\n\n Objects with metrics matching the chosen criteria are labeled with this additional class.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "Unset"
+        }
+      }
+    },
+    "ColocalizationSettings": {
+      "description": "Calculates spatial colocalization and intersections between specified object classes.\n\n This command scans the ROI cache, groups objects by their designated classes,\n and performs spatial overlap analysis. It records colocalization relationships\n between intersecting entities and can optionally generate new child ROIs representing\n the precise intersection regions.",
+      "type": "object",
+      "properties": {
+        "allowMultiObjectColoc": {
+          "description": "If set one object is allowed to coloc with more than one other object",
+          "type": "boolean"
+        },
+        "classForOverlappingAreas": {
+          "description": "Class of the overlapping area if needed\n\n If defined the overlapping coloc area is added as new ROI and labeled with this class",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "classesToColoc": {
+          "description": "Theses are the classes the coloclization should be calculated for",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "filterClasses": {
+          "description": "Optional additional label filters.\n\n Only classes which matches all of these filters are used for coloc calculation",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "minColocArea": {
+          "description": "Minimum overlapping area size to count objects as coloc",
+          "type": "number",
+          "format": "float"
+        },
+        "sizeUnit": {
+          "$ref": "#/$defs/SizeUnits"
+        }
+      },
+      "required": [
+        "classesToColoc",
+        "filterClasses",
+        "classForOverlappingAreas",
+        "allowMultiObjectColoc",
+        "sizeUnit",
+        "minColocArea"
+      ]
+    },
+    "ColorFilterCommandSettings": {
+      "description": "A command that filters an image based on a specific HSV color range.\n\n Pixels falling outside the provided [`HsvRange`] are masked\n out by setting to black.\n\n # Examples\n\n ```\n # use imagec::backend::algos::{ColorFilterCommand, HsvRange};\n let range = HsvRange {\n     min_h: 0.0,   max_h: 30.0, // Red tones\n     min_s: 0.5,   max_s: 1.0,\n     min_v: 0.5,   max_v: 1.0,\n };\n\n let command = ColorFilterCommand { range };\n ```",
+      "type": "object",
+      "properties": {
+        "range": {
+          "description": "The HSV color bounds to be preserved by the filter.",
+          "$ref": "#/$defs/HsvRangeSettings"
+        }
+      },
+      "required": [
+        "range"
+      ]
+    },
+    "ConnectedComponentsSettings": {
+      "description": "Identifies and labels discrete objects within a binary or multi-class image.",
+      "type": "object"
+    },
+    "DistanceTransformSettings": {
+      "description": "A command that calculates the Euclidean Distance Map (EDM) of an f32 image.\n\n This algorithm identifies pixels below a threshold as \"background\" and\n calculates the distance of every \"foreground\" pixel to the nearest background pixel.",
+      "type": "object",
+      "properties": {
+        "edgesAreBackground": {
+          "description": "If true, the pixels outside the image boundary are treated as background.",
+          "type": "boolean"
+        },
+        "threshold": {
+          "description": "Values less than or equal to this are treated as background (distance = 0).",
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "threshold",
+        "edgesAreBackground"
+      ]
+    },
+    "EdgeDetectionCannySettings": {
+      "description": "Extracts structural boundaries and fine edges using the multi-stage Canny algorithm.\n\n This algorithm identifies optimal edge locations by calculating spatial intensity\n gradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,\n and applying a dual-threshold hysteresis loop to preserve weak edges connected\n to strong ones while completely rejecting isolated noise.\n\n # Examples\n\n ```\n # use imagec::backend::algos::EdgeDetectionCanny;\n let edges = EdgeDetectionCanny {\n     kernel_size: 3,\n     threshold_min: 0.1,\n     threshold_max: 0.3,\n };\n ```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "Size of the Gaussian smoothing kernel.\n\n Must be an odd number (e.g., 3, 5). Larger values reduce\n noise but can blur fine edge details.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "thresholdMax": {
+          "description": "Upper bound for hysteresis thresholding [0.0, 1.0].\n\n Edges with a gradient intensity above this value are considered\n \"strong\" and are automatically preserved.",
+          "type": "number",
+          "format": "float"
+        },
+        "thresholdMin": {
+          "description": "Lower bound for hysteresis thresholding [0.0, 1.0].\n\n Edges with a gradient intensity below this value are discarded.",
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "kernelSize",
+        "thresholdMin",
+        "thresholdMax"
+      ]
+    },
+    "EdgeDetectionSobelSettings": {
+      "description": "Extracts directional boundaries by computing spatial image intensity gradients.\n\n This algorithm applies localized 3x3 kernels to approximate the first derivative\n of pixel intensities across the horizontal and vertical axes. It highlights\n areas of sharp luminance changes, producing a continuous gradient map that\n emphasizes prominent structural edges and surface transitions.\n\n # Examples\n\n ```\n # use imagec::backend::algos::EdgeDetectionSobel;\n let filter = EdgeDetectionSobel { kernel_size: 3 };\n ```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the Sobel operator window.\n\n Typically 3. Larger values (5, 7) provide a more smoothed\n gradient but result in \"thicker\" edges. Must be an odd number.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kernelSize"
+      ]
+    },
+    "EnhanceContrastSettings": {
+      "description": "Configuration for contrast enhancement and histogram manipulation.\n\n This algorithm can perform linear contrast stretching, normalization,\n or histogram equalization to improve the dynamic range of an image.\n\n # Examples\n\n ```\n # use imagec::backend::algos::EnhanceContrast;\n let settings = EnhanceContrast {\n     saturated_pixels: 0.01,   // Clip 1% of outliers\n     normalize: true,          // Stretch to [0.0, 1.0]\n     equalize_histogram: false,\n };\n ```",
+      "type": "object",
+      "properties": {
+        "equalizeHistogram": {
+          "description": "Whether to apply Histogram Equalization.\n\n This redistributes pixel intensities to achieve a uniform distribution,\n which is highly effective for images with low contrast but high noise.",
+          "type": "boolean"
+        },
+        "normalize": {
+          "description": "Whether to linearly stretch the remaining pixel intensities to fill\n the full [0.0, 1.0] range.",
+          "type": "boolean"
+        },
+        "saturatedPixels": {
+          "description": "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\n Range: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels\n that would otherwise prevent effective contrast stretching.",
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "saturatedPixels",
+        "normalize",
+        "equalizeHistogram"
+      ]
+    },
+    "ExperimantMetadata": {
+      "type": "object",
+      "properties": {
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "organization": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "firstName",
+        "lastName",
+        "organization",
+        "name",
+        "notes"
+      ]
+    },
+    "ExtractRoisSettings": {
+      "description": "Represents a bounded region of interest extracted from a labeled image.\n A command to extract spatial statistics and bounding boxes from labeled objects.",
+      "type": "object",
+      "properties": {
+        "maxObjectsBeforeFail": {
+          "description": "Maximum allowed ROIs to extract.\n\n If this limit is exceeded the pipeline fails.\n This is a protection against memory overload.",
+          "type": "integer",
+          "format": "int32",
+          "default": 100000,
+          "maximum": 100000,
+          "minimum": 100000
+        }
+      }
+    },
+    "FiltersHessianHessianModeSettings": {
+      "description": "Specifies the feature extraction method for the Hessian matrix.\n\n The Hessian matrix describes the local second-order structure of an image,\n often used for blob detection (LoG) or ridge extraction.",
+      "oneOf": [
+        {
+          "description": "Computes the determinant: $det(H) = I_{xx}I_{yy} - I_{xy}^2$.\n\nHigh values typically indicate \"blob-like\" structures or corners.",
+          "type": "string",
+          "const": "determinant"
+        },
+        {
+          "description": "Extracts the first (larger) eigenvalue ($\\lambda_1$).\n\nUseful for detecting the maximum local curvature, identifying\nthe principal axis of a ridge.",
+          "type": "string",
+          "const": "eigenvaluesX"
+        },
+        {
+          "description": "Extracts the second (smaller) eigenvalue ($\\lambda_2$).\n\nHighlights secondary curvature; when both $\\lambda_1$ and $\\lambda_2$\nare large, it indicates a blob or interest point.",
+          "type": "string",
+          "const": "eigenvaluesY"
+        }
+      ]
+    },
+    "FiltersIntensityTransformIntensityTransformModeSettings": {
+      "description": "Specifies how intensity adjustments are calculated.",
+      "oneOf": [
+        {
+          "description": "Parameters are calculated based on image statistics (e.g., histogram analysis).",
+          "type": "string",
+          "const": "automatic"
+        },
+        {
+          "description": "Parameters are provided explicitly by the user.",
+          "type": "string",
+          "const": "manual"
+        }
+      ]
+    },
+    "FiltersRankFilterRankFilterTypeSettings": {
+      "description": "Specifies the statistical operation to perform on the local pixel neighborhood.",
+      "oneOf": [
+        {
+          "description": "Selects the middle value. Excellent for removing salt-and-pepper noise\nwhile preserving sharp edges.",
+          "type": "string",
+          "const": "median"
+        },
+        {
+          "description": "Selects the lowest intensity (Erosion). Shrinks bright regions and\nexpands dark regions.",
+          "type": "string",
+          "const": "min"
+        },
+        {
+          "description": "Selects the highest intensity (Dilation). Expands bright regions and\nshrinks dark regions.",
+          "type": "string",
+          "const": "max"
+        },
+        {
+          "description": "Computes the average value. Acts as a box blur, smoothing the image\nbut blurring edges.",
+          "type": "string",
+          "const": "mean"
+        },
+        {
+          "description": "Replaces a pixel only if it deviates from the neighborhood median\nby more than the specified threshold.",
+          "type": "object",
+          "properties": {
+            "outliers": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "outliers"
+          ]
+        }
+      ]
+    },
+    "FiltersRollingBallBallTypeSettings": {
+      "description": "The geometric shape used to probe the image intensity surface.",
+      "oneOf": [
+        {
+          "description": "A spherical cap.\n\nThis is the traditional ImageJ algorithm. Best for images with\ndistinct, round features like cells or particles.",
+          "type": "string",
+          "const": "ball"
+        },
+        {
+          "description": "A sliding parabolic surface.\n\nMathematically smoother at the edges than the Ball, often\nresulting in fewer artifacts on complex gradients.",
+          "type": "string",
+          "const": "paraboloid"
+        }
+      ]
+    },
+    "FiltersStructureTensorTensorModeSettings": {
+      "description": "The specific calculation to extract from the Structure Tensor.",
+      "oneOf": [
+        {
+          "description": "Extracts the first (primary) eigenvalue.\n\nRepresents the local image intensity variation in the direction\nperpendicular to the edge. Useful for edge detection.",
+          "type": "string",
+          "const": "eigenvaluesX"
+        },
+        {
+          "description": "Extracts the second (secondary) eigenvalue.\n\nRepresents the local image intensity variation along the edge.\nHigh values typically indicate corners or noise.",
+          "type": "string",
+          "const": "eigenvaluesY"
+        },
+        {
+          "description": "Computes the local anisotropy (coherence) of the image.\n\nMeasures how strongly the local neighborhood is oriented.\nRanges from 0 (isotropic/noise) to 1 (perfectly oriented/straight edge).",
+          "type": "string",
+          "const": "coherence"
+        }
+      ]
+    },
+    "GaussianBlurSettings": {
+      "description": "Smooths an image and reduces background noise using a Gaussian kernel.\n\n This algorithm applies a localized, bell-curve weighted blur that suppresses\n high-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\n or dust) while preserving structural features. It is commonly used as a\n preprocessing step to optimize thresholding and edge detection tasks.\n\n # Examples\n\n ```\n use imagec::backend::algos::GaussianBlur;\n\n let settings = GaussianBlur {\n     kernel_size: 5,\n     sigma: 2.0\n };\n ```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the blur matrix.\n\n Must be an odd number (e.g., 3, 5, 7).",
+          "type": "integer",
+          "format": "uint",
+          "default": 3,
+          "maximum": 27,
+          "minimum": 3
+        },
+        "sigma": {
+          "description": "The standard deviation of the Gaussian kernel.\n\n Higher values create a more significant blur effect.\n $$N \\approx 6\\sigma + 1$$",
+          "type": "number",
+          "format": "float",
+          "default": 0.3400000035762787,
+          "maximum": 5,
+          "minimum": 0.1
+        }
+      }
+    },
+    "GlobalImageSettings": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^-?\\d+$": {
+              "$ref": "#/$defs/ChannelSettings"
+            }
+          }
+        },
+        "pixelSizes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PixelSizeSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selectedChannel": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "tStack": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TStackSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zStack": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ZStackSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "channels"
+      ]
+    },
+    "GroupingMode": {
+      "type": "string",
+      "enum": [
+        "noGrouping",
+        "folderName",
+        "fileName"
+      ]
+    },
+    "HessianSettings": {
+      "description": "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.\n\n This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\n and intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\n between directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\n and flat regions, making it highly effective for curvilinear feature extraction.\n\n # Examples\n\n ```\n # use imagec::backend::algos::{Hessian, HessianMode};\n let detector = Hessian {\n     mode: HessianMode::Determinant,\n };\n ```",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Determines which component of the Hessian matrix structure to extract.\n\n Depending on the mode, this can highlight interest points (blobs)\n or directional features (ridges).",
+          "$ref": "#/$defs/FiltersHessianHessianModeSettings"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "HistogramSettings": {
+      "type": "object",
+      "properties": {
+        "max": {
+          "type": "number",
+          "format": "float"
+        },
+        "maxLimit": {
+          "type": "number",
+          "format": "float"
+        },
+        "min": {
+          "type": "number",
+          "format": "float"
+        },
+        "minLimit": {
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "min",
+        "max",
+        "minLimit",
+        "maxLimit"
+      ]
+    },
+    "HsvRangeSettings": {
+      "description": "Defines a range within the HSV (Hue, Saturation, Value) color space.\n\n This is commonly used for color-based filtering or \"chroma keying.\"\n\n # Examples\n\n ```\n use imagec::backend::algos::HsvRange;\n\n let green_filter = HsvRange {\n     min_h: 100.0, max_h: 140.0,\n     min_s: 0.2,   max_s: 1.0,\n     min_v: 0.2,   max_v: 1.0,\n };\n ```",
+      "type": "object",
+      "properties": {
+        "maxH": {
+          "description": "Maximum Hue angle in degrees [0.0, 360.0].",
+          "type": "number",
+          "format": "float"
+        },
+        "maxS": {
+          "description": "Maximum Saturation normalized [0.0, 1.0].",
+          "type": "number",
+          "format": "float"
+        },
+        "maxV": {
+          "description": "Maximum Value (Brightness) normalized [0.0, 1.0].",
+          "type": "number",
+          "format": "float"
+        },
+        "minH": {
+          "description": "Minimum Hue angle in degrees [0.0, 360.0].",
+          "type": "number",
+          "format": "float"
+        },
+        "minS": {
+          "description": "Minimum Saturation normalized [0.0, 1.0].",
+          "type": "number",
+          "format": "float"
+        },
+        "minV": {
+          "description": "Minimum Value (Brightness) normalized [0.0, 1.0].",
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "minH",
+        "maxH",
+        "minS",
+        "maxS",
+        "minV",
+        "maxV"
+      ]
+    },
+    "ImageAddress": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Scratchpad"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Memory": {
+              "$ref": "#/$defs/MemoryId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Memory"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Channel": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Channel"
+          ]
+        }
+      ]
+    },
+    "ImageCacheSettings": {
+      "description": "A filter that acts as a synchronization point between the pipeline and a storage backend.\n\n `ImageCache` allows the pipeline to branch or \"undo\" operations by saving\n states to a named address and reloading them as needed.\n\n # Examples\n\n ```\n use imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};\n let checkpoint = ImageCache {\n     mode: ImageCacheMode::Store,\n     address: ImageAddress::from(\"pre_processed_state\"),\n };\n ```",
+      "type": "object",
+      "properties": {
+        "address": {
+          "description": "The unique identifier or memory slot where the image is stored.",
+          "$ref": "#/$defs/ImageAddress"
+        },
+        "mode": {
+          "description": "Whether to save the current state to the cache or load a state from it.",
+          "$ref": "#/$defs/MathImageCacheImageCacheModeSettings"
+        }
+      },
+      "required": [
+        "mode",
+        "address"
+      ]
+    },
+    "ImageEntry": {
+      "type": "object",
+      "properties": {
+        "fileSize": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "relPath": {
+          "type": "string"
+        },
+        "selectedSeries": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "series": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^-?\\d+$": {
+              "$ref": "#/$defs/SeriesSettings"
+            }
+          }
+        }
+      },
+      "required": [
+        "relPath",
+        "fileSize",
+        "selectedSeries",
+        "series"
+      ]
+    },
+    "ImageMathSettings": {
+      "description": "A filter that performs pixel-wise mathematical operations between the current\n pipeline image and a secondary image stored in the cache.\n\n This command allows for complex image blending, masking, and comparison.\n\n # Examples\n\n ```\n use imagec::backend::algos::{ImageMath, Operand};\n let subtract_bg = ImageMath {\n     operand: Operand::Subtract,\n     second_image_address: ImageAddress::from(\"background\"),\n     swap_operands: false,\n };\n ```",
+      "type": "object",
+      "properties": {
+        "operand": {
+          "description": "The specific mathematical or logical operator to apply.",
+          "$ref": "#/$defs/MathImageMathOperandSettings"
+        },
+        "secondImageAddress": {
+          "description": "The address of the second image in the [`ImageCache`] to use for the operation.",
+          "$ref": "#/$defs/ImageAddress"
+        },
+        "swapOperands": {
+          "description": "If false, the calculation is `(Current Image OP Cached Image)`.\n If true, the calculation is `(Cached Image OP Current Image)`.\n\n This is critical for non-commutative operations like Subtraction or Division.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operand",
+        "secondImageAddress",
+        "swapOperands"
+      ]
+    },
+    "ImageSettings": {
+      "type": "object",
+      "properties": {
+        "list": {
+          "description": "Map of images where the key is the path relative to `root`.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ImageEntry"
+          }
+        },
+        "root": {
+          "description": "The absolute base path for all image resources.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settings": {
+          "description": "Project-wide render and display settings.",
+          "$ref": "#/$defs/GlobalImageSettings"
+        }
+      },
+      "required": [
+        "list",
+        "settings"
+      ]
+    },
+    "IntensitySettings": {
+      "type": "object",
+      "properties": {
+        "maxIntensity": {
+          "description": "Maximum pixel intensity in the ROI",
+          "type": "number",
+          "format": "float"
+        },
+        "medianIntensity": {
+          "description": "Median pixel intensity in the ROI",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "minIntensity": {
+          "description": "Minimum pixel intensity in the ROI",
+          "type": "number",
+          "format": "float"
+        },
+        "stdDev": {
+          "description": "Standard deviation of pixel intensities",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "sumIntensity": {
+          "description": "Sum of all pixel intensities in the ROI",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "sumIntensity",
+        "minIntensity",
+        "maxIntensity"
+      ]
+    },
+    "IntensityTransformationSettings": {
+      "description": "Configuration for adjusting image contrast and brightness.\n\n This transformation applies a linear mapping to pixel values.\n In [`Mode::Manual`], the output is typically calculated as:\n `output = input * contrast + brightness`.",
+      "type": "object",
+      "properties": {
+        "brightness": {
+          "description": "Brightness offset (bias).\n\n Only active in [`Mode::Manual`].\n Positive values brighten the image, negative values darken it.",
+          "type": "number",
+          "format": "float"
+        },
+        "contrast": {
+          "description": "Contrast multiplier (gain).\n\n Only active in [`Mode::Manual`].\n Values > 1.0 increase contrast, while values < 1.0 decrease it.",
+          "type": "number",
+          "format": "float"
+        },
+        "mode": {
+          "description": "Determines whether to use automated enhancement or user-defined values.",
+          "$ref": "#/$defs/FiltersIntensityTransformIntensityTransformModeSettings"
+        }
+      },
+      "required": [
+        "mode",
+        "contrast",
+        "brightness"
+      ]
+    },
+    "LaplacianSettings": {
+      "description": "Configuration for the Laplacian edge detection filter.\n\n The Laplacian is a second-order derivative operator used to find regions of\n rapid intensity change. It is particularly effective for detecting edges\n and fine details, though it is highly sensitive to noise.\n\n # Examples\n\n ```\n # use imagec::backend::algos::Laplacian;\n let filter = Laplacian { kernel_size: 3 };\n ```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the discrete Laplacian aperture.\n\n Typically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)\n more closely but are more computationally expensive. Must be an odd number.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kernelSize"
+      ]
+    },
+    "MathImageCacheImageCacheModeSettings": {
+      "description": "Defines the interaction type with the persistent image storage.",
+      "oneOf": [
+        {
+          "description": "Captures the current image from the pipeline and writes it to the cache.\n\nUsed for \"checkpointing\" results at a specific stage in the pipeline\nfor later comparison or retrieval.",
+          "type": "string",
+          "const": "store"
+        },
+        {
+          "description": "Retrieves a previously stored image from the cache and injects it\ninto the current pipeline context.\n\nThis effectively replaces the current working image with the cached version.",
+          "type": "string",
+          "const": "load"
+        }
+      ]
+    },
+    "MathImageMathOperandSettings": {
+      "description": "The mathematical or logical operation to perform between two images.",
+      "oneOf": [
+        {
+          "description": "No operation; typically used as a placeholder.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Unary operation: Negates the intensities of the primary image.",
+          "type": "string",
+          "const": "invert"
+        },
+        {
+          "description": "Arithmetic addition: `A + B`. (Clamped to the maximum pixel value).",
+          "type": "string",
+          "const": "add"
+        },
+        {
+          "description": "Arithmetic subtraction: `A - B`. (Clamped to zero).",
+          "type": "string",
+          "const": "subtract"
+        },
+        {
+          "description": "Arithmetic multiplication: `A * B`.",
+          "type": "string",
+          "const": "multiply"
+        },
+        {
+          "description": "Arithmetic division: `A / B`.",
+          "type": "string",
+          "const": "divide"
+        },
+        {
+          "description": "Bitwise AND operation.",
+          "type": "string",
+          "const": "aND"
+        },
+        {
+          "description": "Bitwise OR operation.",
+          "type": "string",
+          "const": "oR"
+        },
+        {
+          "description": "Bitwise XOR operation.",
+          "type": "string",
+          "const": "xOR"
+        },
+        {
+          "description": "Per-pixel minimum: `min(A, B)`. (Darkest Pixel).",
+          "type": "string",
+          "const": "mIN"
+        },
+        {
+          "description": "Per-pixel maximum: `max(A, B)`. (Brightest Pixel).",
+          "type": "string",
+          "const": "mAX"
+        },
+        {
+          "description": "Arithmetic mean: `(A + B) / 2`.",
+          "type": "string",
+          "const": "average"
+        },
+        {
+          "description": "Absolute difference: `|A - B|`. Useful for change detection.",
+          "type": "string",
+          "const": "differenceType"
+        }
+      ]
+    },
+    "MathSaveImageImageSourceSettings": {
+      "type": "string",
+      "enum": [
+        "image",
+        "instanceMap",
+        "segmentationMask"
+      ]
+    },
+    "MeasurementStatistics": {
+      "type": "string",
+      "enum": [
+        "val",
+        "avg",
+        "min",
+        "max",
+        "stdev",
+        "median",
+        "sum"
+      ]
+    },
+    "MedianSubtractSettings": {
+      "description": "A background subtraction filter that uses a median rank operator.\n\n This algorithm is highly effective for removing large-scale background\n variations while preserving small, high-contrast features. It works by\n estimating the background as the median intensity within a local radius.\n\n # Examples\n\n ```\n use imagec::backend::algos::MedianSubtract;\n let filter = MedianSubtract { radius: 10.0 };\n ```",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "description": "The radius of the neighborhood used to estimate the background.\n\n Features smaller than this radius will be preserved, while\n larger structures will be treated as background and removed.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "radius"
+      ]
+    },
+    "MemoryId": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "PipelineContext": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "PipelineContext"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ProjectCache": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "ProjectCache"
+          ]
+        }
+      ]
+    },
+    "MorphologicalCommandSettings": {
+      "description": "A filter that applies mathematical morphology to an image.\n\n Morphological operations use a structuring element (kernel) to probe\n and modify the shapes within an image.\n\n # Examples\n\n ```\n use imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};\n let clean_noise = MorphologicalCommand {\n     op: MorphOps::Open,\n     kernel_size: 3,\n     kernel_shape: KernelShapes::Ellipse,\n };\n ```",
+      "type": "object",
+      "properties": {
+        "kernelShape": {
+          "description": "The geometric profile of the structuring element.",
+          "$ref": "#/$defs/MorphologyMorphologicalTransformationKernelShapesSettings"
+        },
+        "kernelSize": {
+          "description": "The diameter of the structuring element in pixels.\n Must be an odd number (e.g., 3, 5, 7).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "op": {
+          "description": "The transformation type (e.g., Dilate, Erode).",
+          "$ref": "#/$defs/MorphologyMorphologicalTransformationMorphOpsSettings"
+        },
+        "useGrayscale": {
+          "description": "If set the grayscale image instead of the labeld image is taken to perform a morphological transform",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "op",
+        "kernelSize",
+        "kernelShape",
+        "useGrayscale"
+      ]
+    },
+    "MorphologyMorphologicalTransformationKernelShapesSettings": {
+      "description": "The geometric structure of the kernel (structuring element).",
+      "oneOf": [
+        {
+          "description": "A square/rectangular kernel. Dilates in all directions equally (8-connectivity).",
+          "type": "string",
+          "const": "box"
+        },
+        {
+          "description": "A rounded kernel. Best for preserving the natural, circular shape of objects.",
+          "type": "string",
+          "const": "ellipse"
+        },
+        {
+          "description": "A cross-shaped kernel. Only considers horizontal and vertical neighbors (4-connectivity).",
+          "type": "string",
+          "const": "cross"
+        }
+      ]
+    },
+    "MorphologyMorphologicalTransformationMorphOpsSettings": {
+      "description": "The specific morphological transformation to perform.\n\n Morphological operations process images based on shapes, typically used to\n remove noise, isolate individual elements, or join disparate elements.",
+      "oneOf": [
+        {
+          "description": "Expands the bright regions of an image. Useful for filling small holes.",
+          "type": "string",
+          "const": "dilate"
+        },
+        {
+          "description": "Shrinks the bright regions of an image. Useful for removing small noise.",
+          "type": "string",
+          "const": "erode"
+        },
+        {
+          "description": "An erosion followed by a dilation. Removes small bright spots (noise)\nwhile preserving the relative size of larger objects.",
+          "type": "string",
+          "const": "open"
+        },
+        {
+          "description": "A dilation followed by an erosion. Fills small dark gaps or cracks\nwithin bright objects.",
+          "type": "string",
+          "const": "close"
+        }
+      ]
+    },
+    "ObjectClass": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Unset"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Valid": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Valid"
+          ]
+        }
+      ]
+    },
+    "ObjectId": {
+      "type": "integer",
+      "format": "uint128",
+      "minimum": 0
+    },
+    "PipelineCommand": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "blur"
+            }
+          },
+          "$ref": "#/$defs/BlurSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "classifyRois"
+            }
+          },
+          "$ref": "#/$defs/ClassifyRoisSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "colocalization"
+            }
+          },
+          "$ref": "#/$defs/ColocalizationSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "colorFilterCommand"
+            }
+          },
+          "$ref": "#/$defs/ColorFilterCommandSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "connectedComponents"
+            }
+          },
+          "$ref": "#/$defs/ConnectedComponentsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "distanceTransform"
+            }
+          },
+          "$ref": "#/$defs/DistanceTransformSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "edgeDetectionCanny"
+            }
+          },
+          "$ref": "#/$defs/EdgeDetectionCannySettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "edgeDetectionSobel"
+            }
+          },
+          "$ref": "#/$defs/EdgeDetectionSobelSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "enhanceContrast"
+            }
+          },
+          "$ref": "#/$defs/EnhanceContrastSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "extractRois"
+            }
+          },
+          "$ref": "#/$defs/ExtractRoisSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "gaussianBlur"
+            }
+          },
+          "$ref": "#/$defs/GaussianBlurSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "hessian"
+            }
+          },
+          "$ref": "#/$defs/HessianSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "imageCache"
+            }
+          },
+          "$ref": "#/$defs/ImageCacheSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "imageMath"
+            }
+          },
+          "$ref": "#/$defs/ImageMathSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "intensityTransformation"
+            }
+          },
+          "$ref": "#/$defs/IntensityTransformationSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "laplacian"
+            }
+          },
+          "$ref": "#/$defs/LaplacianSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "medianSubtract"
+            }
+          },
+          "$ref": "#/$defs/MedianSubtractSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "morphologicalCommand"
+            }
+          },
+          "$ref": "#/$defs/MorphologicalCommandSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "rankFilter"
+            }
+          },
+          "$ref": "#/$defs/RankFilterSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "rollingBall"
+            }
+          },
+          "$ref": "#/$defs/RollingBallSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "saveImage"
+            }
+          },
+          "$ref": "#/$defs/SaveImageSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "structureTensor"
+            }
+          },
+          "$ref": "#/$defs/StructureTensorSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "threshold"
+            }
+          },
+          "$ref": "#/$defs/ThresholdSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "voronoi"
+            }
+          },
+          "$ref": "#/$defs/VoronoiSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "watershed"
+            }
+          },
+          "$ref": "#/$defs/WatershedSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "weightedDeviation"
+            }
+          },
+          "$ref": "#/$defs/WeightedDeviationSettings",
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "PipelineId": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "PipelineSettings": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Pipelines which are enabled are executed, pipelines, which are disabled are skipt during analysis.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Unique pipeline ID",
+          "$ref": "#/$defs/PipelineId"
+        },
+        "imageSource": {
+          "description": "This is the image which is used as initial image for this pipeline.\nUse Scratchpad if this is just a object manipulation pipeline",
+          "$ref": "#/$defs/ImageAddress"
+        },
+        "name": {
+          "description": "Display name of the pipeline",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "description": "The steps which are execute in the given order when the pipeline runs",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineStepSettings"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "imageSource",
+        "enabled",
+        "steps"
+      ]
+    },
+    "PipelineStepSettings": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "The pipeline command to execute in this step",
+          "$ref": "#/$defs/PipelineCommand"
+        },
+        "enabled": {
+          "description": "If enabled, the command is executed, if not enabled, this command is skiped during pipeline execution",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled",
+        "command"
+      ]
+    },
+    "PixelSizeSettings": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "format": "float"
+        },
+        "y": {
+          "type": "number",
+          "format": "float"
+        },
+        "z": {
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "PixelUnits": {
+      "type": "string",
+      "enum": [
+        "bit",
+        "%",
+        "rel"
+      ]
+    },
+    "PlateSettings": {
+      "type": "object",
+      "properties": {
+        "groupingMode": {
+          "$ref": "#/$defs/GroupingMode"
+        },
+        "groupingRegex": {
+          "type": "string"
+        },
+        "plateCols": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "plateRows": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "wellCols": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "wellImageOrder": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "wellRows": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "groupingMode",
+        "groupingRegex",
+        "plateCols",
+        "plateRows",
+        "wellCols",
+        "wellRows",
+        "wellImageOrder"
+      ]
+    },
+    "Range_of_int32": {
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "start": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ]
+    },
+    "RankFilterSettings": {
+      "description": "A filter that transforms pixels based on the statistical rank of their neighbors.\n\n Rank filters are non-linear operators used for noise reduction,\n morphological operations, and feature enhancement.\n\n This algorithm sorts (ranks) all pixel values within a local neighborhood\n window and assigns a specific percentile value to the center pixel. By selecting\n different ranks, it acts as a configurable operator: the minimum rank performs\n erosion, the maximum rank performs dilation, and the median rank (50th percentile)\n provides highly effective impulse noise suppression while preserving sharp structural edges.",
+      "type": "object",
+      "properties": {
+        "filterType": {
+          "description": "The specific ranking algorithm to apply to the neighborhood.",
+          "$ref": "#/$defs/FiltersRankFilterRankFilterTypeSettings"
+        },
+        "radius": {
+          "description": "The circular radius of the neighborhood to consider.\n\n A radius of 1.0 roughly corresponds to a 3x3 square, while larger\n values increase the effect's strength and computational cost.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "radius",
+        "filterType"
+      ]
+    },
+    "RoiSettings": {
+      "type": "object",
+      "properties": {
+        "area": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "bbox": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        "cStack": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          }
+        },
+        "colocalizedWith": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ObjectId"
+            }
+          }
+        },
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "intensities": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^-?\\d+$": {
+              "$ref": "#/$defs/IntensitySettings"
+            }
+          }
+        },
+        "maskData": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          }
+        },
+        "objectClass": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          },
+          "uniqueItems": true
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "segmentationClass": {
+          "$ref": "#/$defs/SegmentationClass"
+        },
+        "sumX": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sumX2": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sumXy": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sumY": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sumY2": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tStack": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "touchesEdge": {
+          "type": "boolean"
+        },
+        "track": {
+          "$ref": "#/$defs/TrackSettings"
+        },
+        "zStack": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "id",
+        "segmentationClass",
+        "objectClass",
+        "colocalizedWith",
+        "children",
+        "track",
+        "area",
+        "bbox",
+        "maskData",
+        "touchesEdge",
+        "sumX",
+        "sumY",
+        "sumX2",
+        "sumY2",
+        "sumXy",
+        "intensities",
+        "zStack",
+        "cStack",
+        "tStack"
+      ]
+    },
+    "RollingBallSettings": {
+      "description": "Removes non-uniform background illumination by calculating a local intensity baseline.\n\n This algorithm models the image as a 3D intensity landscape and conceptually rolls\n a sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\n intensity peaks (true signal objects) but follows the sweeping, lower-frequency\n curves of background variations. The path traced by the ball establishes a local\n baseline map that is subtracted from the original image to isolate foreground features.",
+      "type": "object",
+      "properties": {
+        "ballType": {
+          "description": "The geometric shape of the rolling structural element.",
+          "$ref": "#/$defs/FiltersRollingBallBallTypeSettings",
+          "default": "ball"
+        },
+        "preSmooth": {
+          "type": "boolean",
+          "default": false
+        },
+        "radius": {
+          "description": "The radius of the ball or paraboloid in pixels.\n\n This should be at least as large as the radius of the largest\n object in the image that is not part of the background.",
+          "type": "number",
+          "format": "double",
+          "default": 4.0,
+          "maximum": 64,
+          "minimum": 1
+        }
+      }
+    },
+    "SaveImageSettings": {
+      "description": "A command that exports the current image to a persistent file on disk.\n\n This is a **transparent command**: it does not modify the image data in the\n pipeline context, nor does it perform a buffer swap. It acts as a tap\n to view the state of the image at a specific point in the pipeline.\n\n # Examples\n\n ```\n use imagec::backend::algos::SaveImage;\n let saver = SaveImage {path:\"output/processed_cell.png\"};\n ```",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "The destination filesystem path where the image will be written.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/MathSaveImageImageSourceSettings"
+        }
+      },
+      "required": [
+        "path",
+        "source"
+      ]
+    },
+    "SegmentationClass": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "SegmentationThresholdThresholdMethodSettings": {
+      "description": "The mathematical strategy used to determine the optimal global threshold.\n\n Most methods analyze the image histogram to find a \"cut-off\" point that\n best separates the foreground from the background.",
+      "oneOf": [
+        {
+          "description": "No threshold applied; typically used for bypass logic.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Uses the user-provided `min_threshold` and `max_threshold` values directly.",
+          "type": "string",
+          "const": "manual"
+        },
+        {
+          "description": "Li's Minimum Cross Entropy method. Effective for images with varying backgrounds.",
+          "type": "string",
+          "const": "li"
+        },
+        {
+          "description": "An iterative version of Kittler and Illingworth's minimum error thresholding.",
+          "type": "string",
+          "const": "minError"
+        },
+        {
+          "description": "Zack's algorithm. Geometric method best for skewed histograms with a single clear peak.",
+          "type": "string",
+          "const": "triangle"
+        },
+        {
+          "description": "Tsai's method. Preserves the moments of the original image in the binary result.",
+          "type": "string",
+          "const": "moments"
+        },
+        {
+          "description": "Huang's fuzzy thresholding. Minimizes the measures of fuzziness.",
+          "type": "string",
+          "const": "huang"
+        },
+        {
+          "description": "Assumes a bimodal histogram and finds the average of two peaks.",
+          "type": "string",
+          "const": "intermodes"
+        },
+        {
+          "description": "Ridler-Calvard iterative clustering. Similar to Otsu but uses a different error metric.",
+          "type": "string",
+          "const": "isoData"
+        },
+        {
+          "description": "Kapur's method. Uses the entropy of the histogram to find the threshold.",
+          "type": "string",
+          "const": "maxEntropy"
+        },
+        {
+          "description": "Uses the average intensity of all pixels as the threshold.",
+          "type": "string",
+          "const": "mean"
+        },
+        {
+          "description": "Pre-smooths the histogram until there are only two peaks; finds the minimum between them.",
+          "type": "string",
+          "const": "minimum"
+        },
+        {
+          "description": "Most common method. Minimizes intra-class variance (maximizes inter-class variance).",
+          "type": "string",
+          "const": "otsu"
+        },
+        {
+          "description": "Assumes a fixed percentage of pixels belong to the foreground.",
+          "type": "string",
+          "const": "percentile"
+        },
+        {
+          "description": "Based on the Renyi entropy of the histogram; a generalization of MaxEntropy.",
+          "type": "string",
+          "const": "renyiEntropy"
+        },
+        {
+          "description": "An extension of Kapur's method using a different coefficient for entropy.",
+          "type": "string",
+          "const": "shanbhag"
+        },
+        {
+          "description": "Minimizes a cost function based on the discrepancy between two classes.",
+          "type": "string",
+          "const": "yen"
+        }
+      ]
+    },
+    "SeriesSettings": {
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^-?\\d+$": {
+              "$ref": "#/$defs/ChannelSettings"
+            }
+          }
+        },
+        "imageHeight": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "imageWidth": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pixelSizes": {
+          "$ref": "#/$defs/PixelSizeSettings"
+        },
+        "rois": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RoiSettings"
+          }
+        },
+        "selectedChannel": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "tStack": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TStackSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zStack": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ZStackSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "channels",
+        "imageWidth",
+        "imageHeight",
+        "pixelSizes",
+        "rois"
+      ]
+    },
+    "SizeUnits": {
+      "type": "string",
+      "enum": [
+        "nm",
+        "px"
+      ]
+    },
+    "StructureTensorSettings": {
+      "description": "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.\n\n This algorithm summarizes the predominant directions of the image gradient within a local\n neighborhood, smoothing the structural data with a Gaussian window. By evaluating the\n eigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\n near zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\n and complex corners or intersections (two large eigenvalues).\n\n # Examples\n\n ```\n use imagec::backend::algos::{StructureTensor, Mode};\n let settings = StructureTensor {\n     mode: Mode::Coherence,\n     kernel_size: 3,\n     sigma: 1.5\n };\n ```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the integration window used to average the local gradients.\n\n Larger windows provide more stability against noise but reduce\n spatial resolution.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "mode": {
+          "description": "The mathematical output to be produced by the algorithm.",
+          "$ref": "#/$defs/FiltersStructureTensorTensorModeSettings"
+        },
+        "sigma": {
+          "description": "The standard deviation for the Gaussian weighting of the integration window.\n\n Controls the spatial \"reach\" of the neighborhood analysis.",
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "mode",
+        "kernelSize",
+        "sigma"
+      ]
+    },
+    "TStackHandling": {
+      "type": "string",
+      "enum": [
+        "singleStack",
+        "allStacks"
+      ]
+    },
+    "TStackSettings": {
+      "type": "object",
+      "properties": {
+        "playbackSpeed": {
+          "type": "number",
+          "format": "float"
+        },
+        "stackHandling": {
+          "$ref": "#/$defs/TStackHandling"
+        },
+        "tStack": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "stackHandling",
+        "playbackSpeed",
+        "tStack"
+      ]
+    },
+    "ThresholdEntrySettings": {
+      "description": "Configuration for a single thresholding operation within a multi-threshold stack.",
+      "type": "object",
+      "properties": {
+        "maxThreshold": {
+          "description": "The upper intensity bound. Used directly in `Manual` mode, or as a\n ceiling for auto-methods.",
+          "type": "number",
+          "format": "float",
+          "default": 65535.0,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "method": {
+          "description": "The algorithm to use (Manual or Automatic).",
+          "$ref": "#/$defs/SegmentationThresholdThresholdMethodSettings",
+          "default": "none"
+        },
+        "minThreshold": {
+          "description": "The lower intensity bound. Used directly in `Manual` mode, or as a\n floor for auto-methods.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "objectClassId": {
+          "description": "The classification ID assigned to pixels falling within this threshold range.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 0
+        },
+        "unit": {
+          "description": "Unit used for the threshold value.\n\n bit: 0 - 255/65535\n %: 0 - 100.0\n rel: 0 - 1.0",
+          "$ref": "#/$defs/PixelUnits",
+          "default": "bit"
+        }
+      }
+    },
+    "ThresholdSettings": {
+      "description": "A filter that segments an image into discrete classes based on intensity.\n\n This supports \"Multi-Otsu\" style behavior by allowing a vector of\n [`ThresholdSettings`]. Each pixel is evaluated against the settings to\n determine which `object_class_id` it belongs to.\n\n # Examples\n\n ```\n use imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\n let binary = Threshold {\n     thresholds: vec![ThresholdSettings {\n         method: ThresholdMethod::Otsu,\n         min_threshold: 0.0,\n         max_threshold: 1.0,\n         object_class_id: ObjectLabel::Foreground,\n     }]\n };\n ```",
+      "type": "object",
+      "properties": {
+        "thresholds": {
+          "description": "A list of thresholding layers. Overlapping ranges are resolved\n by the order of the vector (last-in priority).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThresholdEntrySettings"
+          }
+        }
+      },
+      "required": [
+        "thresholds"
+      ]
+    },
+    "TrackId": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "TrackSettings": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/TrackId"
+        },
+        "parentTrack": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrackId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roiIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "roiIds"
+      ]
+    },
+    "VoronoiSettings": {
+      "description": "Computes a Voronoi tessellation from segmented seed objects.\n\n Each seed center expands outward until it reaches another region, the optional mask\n boundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\n with `output_class` and linked to their originating center object.",
+      "type": "object",
+      "properties": {
+        "centerFilterClasses": {
+          "description": "Additional label filters applied to center objects before tessellation.\n\n Only center objects that carry all listed classes pass the filter.\n Leave empty to include all objects of `centers`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "centers": {
+          "description": "Object class whose instances act as Voronoi seed points.",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "excludeAreasAtTheEdges": {
+          "description": "Discard Voronoi regions that touch the image border.",
+          "type": "boolean"
+        },
+        "excludeAreasWithNoCenter": {
+          "description": "Discard Voronoi regions whose originating center object was filtered out or missing.",
+          "type": "boolean"
+        },
+        "mask": {
+          "description": "Object class used to spatially constrain the Voronoi areas.\n\n Each computed Voronoi region is intersected with the union of all mask objects,\n discarding pixels that fall outside the mask. Set to `Unset` to expand\n to the full image boundary instead.",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "maskFilterClasses": {
+          "description": "Additional label filters applied to mask objects.\n\n Only mask objects that carry all listed classes pass the filter.\n Leave empty to include all objects of `mask`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "maxRadius": {
+          "description": "Maximum expansion radius for a Voronoi region.\n\n Pixels farther than this distance from the nearest seed center are excluded\n from the region. Use `0` or a negative value to disable the limit.",
+          "type": "number",
+          "format": "float"
+        },
+        "outputClass": {
+          "description": "Object class assigned to the resulting Voronoi region ROIs.",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "unit": {
+          "description": "Unit in which `max_radius` is expressed (e.g. pixels, nm, µm).",
+          "$ref": "#/$defs/SizeUnits"
+        }
+      },
+      "required": [
+        "centers",
+        "centerFilterClasses",
+        "mask",
+        "maskFilterClasses",
+        "outputClass",
+        "unit",
+        "maxRadius",
+        "excludeAreasAtTheEdges",
+        "excludeAreasWithNoCenter"
+      ]
+    },
+    "WatershedSettings": {
+      "description": "A morphological segmentation algorithm that splits touching objects using distance topography.\n\n The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).\n By analyzing the \"shape\" of an object via a Distance Transform, it identifies centers of mass\n and establishes boundaries at the narrowest points of connection.\n\n This implementation is adaptive:\n * It can **auto-detect** objects from grayscale intensity peaks.\n * It can **refine** existing segments if a `U32Label` image is provided as input.",
+      "type": "object",
+      "properties": {
+        "maximumFinderTolerance": {
+          "description": "The prominence threshold for peak detection.\n\n This value determines how \"deep\" the valley between two peaks must be to\n keep them as separate objects.\n\n * **Low values**: Sensitive to small variations; may cause over-segmentation (splitting one object into many).\n * **High values**: More robust to noise; may cause under-segmentation (failing to split touching objects).\n\n In an EDM (Euclidean Distance Map), this value directly corresponds to the\n pixel distance from the edge of the object.",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0.1
+        }
+      }
+    },
+    "WeightedDeviationSettings": {
+      "description": "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.\n\n Unlike a standard deviation filter which treats all pixels in a window equally,\n the Weighted Deviation uses a Gaussian kernel to give more importance to\n pixels closer to the center. This is particularly effective for edge-preserving\n noise analysis and local contrast enhancement.\n\n This algorithm evaluates local variance by calculating two distinct Gaussian-blurred\n baselines across the image: the weighted average of the pixel intensities, and the\n weighted average of the squared intensities. By subtracting the squared mean from\n the mean of squares, it yields a localized, smooth statistical variance map that\n highlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n # Examples\n\n ```\n use imagec::backend::algos::WeightedDeviation;\n let settings = WeightedDeviation {\n     kernel_size: 7,\n     sigma: 2.0,\n };\n ```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the local neighborhood window.\n\n Must be an odd number. Larger windows capture broader texture\n variations but increase computational load.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "sigma": {
+          "description": "The standard deviation for the Gaussian weighting function.\n\n Defines the \"softness\" of the neighborhood boundaries. A larger\n sigma includes more of the surrounding context in the deviation calculation.",
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "kernelSize",
+        "sigma"
+      ]
+    },
+    "ZStackHandling": {
+      "type": "string",
+      "enum": [
+        "singleStack",
+        "allStacks",
+        "maxIntensity",
+        "minIntensity",
+        "avgIntensity",
+        "sumIntensity",
+        "takeTheMiddle"
+      ]
+    },
+    "ZStackSettings": {
+      "type": "object",
+      "properties": {
+        "zProjection": {
+          "$ref": "#/$defs/ZStackHandling"
+        },
+        "zRange": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Range_of_int32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "zProjection"
+      ]
+    }
+  }
+}

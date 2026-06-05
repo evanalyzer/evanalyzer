@@ -1,0 +1,741 @@
+import { ListView, ScrollView, Spinner } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+// -- Data model ----------------------------------------------------------------
+
+export struct ResultsColumnDef {
+    id: string,
+    label: string,
+    visible: bool,
+    filterable: bool,
+}
+
+export struct ResultsRow {
+    roi_id: int,
+    values: [string],
+}
+
+export struct FilterItem {
+    label: string,
+    checked: bool,
+}
+
+export enum ResultsViewMode { table, chart }
+
+export global ResultsState {
+    in-out property <[ResultsColumnDef]> columns: [
+        { id: "roi_id", label: "ROI ID", visible: true, filterable: false },
+        { id: "image", label: "Image", visible: true, filterable: true },
+        { id: "class", label: "Class", visible: true, filterable: true },
+        { id: "area_px", label: "Area (px²)", visible: true, filterable: false },
+        { id: "area_nm2", label: "Area (nm²)", visible: true, filterable: false },
+        { id: "circularity", label: "Circularity", visible: true, filterable: false },
+    ];
+
+    in property <[ResultsRow]> rows: [
+        { roi_id: 1, values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92"] },
+        { roi_id: 2, values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71"] },
+        { roi_id: 3, values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88"] },
+        { roi_id: 4, values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43"] },
+    ];
+
+    in-out property <int> selected_roi_id:     0;
+    in-out property <int> scroll_to_row_index: -1;
+    in-out property <string> sort_column_id:      "";
+    in-out property <bool> sort_ascending:      true;
+    in-out property <bool> filter_active:       false;
+    in-out property <ResultsViewMode> view_mode:  ResultsViewMode.table;
+
+    // -- Image-column filter ---------------------------------------------------
+    in-out property <[FilterItem]> filter_image_items: [];
+    in-out property <[FilterItem]> filter_image_popup: [];
+    in-out property <bool> filter_image_active: false;
+    in-out property <bool> filter_image_all_popup_checked: true;
+
+    // -- Class-column filter ---------------------------------------------------
+    in-out property <[FilterItem]> filter_class_items: [];
+    in-out property <[FilterItem]> filter_class_popup: [];
+    in-out property <bool> filter_class_active: false;
+    in-out property <bool> filter_class_all_popup_checked: true;
+
+    callback roi_row_selected(int);
+    callback sort_requested(string, bool);
+    callback export_csv();
+    callback export_xlsx();
+    callback copy_to_clipboard();
+    callback filter_clicked();
+    callback column_visibility_toggled(string, bool);
+    callback clear_all_filters();
+    callback filter_apply();
+    callback load_more_rows();
+
+    in-out property <bool> loading_more:    false;
+    in-out property <bool> all_rows_loaded: false;
+    in-out property <int>  visible_column_count: 6;
+
+    callback image_filter_label_toggled(string);
+    callback image_filter_search_changed(string);
+    callback image_select_all();
+    callback image_clear_all();
+
+    callback class_filter_label_toggled(string);
+    callback class_filter_search_changed(string);
+    callback class_select_all();
+    callback class_clear_all();
+
+    // -- Column-visibility popup -------------------------------------------
+    in-out property <[FilterItem]> column_items: [];
+    in-out property <[FilterItem]> column_popup: [];
+    in-out property <bool> column_popup_all_checked: true;
+
+    callback column_label_toggled(string);
+    callback column_search_changed(string);
+    callback column_select_all();
+    callback column_clear_all();
+    callback column_filter_apply();
+}
+
+// -- Shared checkbox item used inside filter popups ----------------------------
+
+export component FilterCheckbox inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked: true;
+    in property <bool> bold: false;
+    callback toggled;
+
+    height: 24px;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    background: ta.has-hover ? Theme.hover.with-alpha(0.3) : transparent;
+    animate background { duration: 80ms; }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 7px;
+        alignment: start;
+
+        Rectangle {
+            width: 13px;
+            height: 13px;
+            border-radius: 2px;
+            border-width: 1.5px;
+            border-color: root.checked ? Theme.accent : Theme.border;
+            background: root.checked ? Theme.accent : transparent;
+
+            if root.checked: Image {
+                source: @image-url("../icons/regular-black/check.svg");
+                width: 9px;
+                height: 9px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: white;
+            }
+        }
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-family: Theme.font-mono;
+            font-weight: root.bold ? 600 : 400;
+            color: root.checked ? Theme.text-dim : Theme.text-mute;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+// -- Column header with inline Excel-style filter popup -----------------------
+
+component ResultsHeaderCell inherits Rectangle {
+    in property <string> label;
+    in property <string> col-id;
+    in property <bool> sorted:               false;
+    in property <bool> sort-asc:             true;
+    in property <bool> filterable:           false;
+    in property <bool> filter-active:        false;
+    in property <bool> all-popup-checked:    true;
+    in-out property <[FilterItem]> popup-items: [];
+    // Controls layout collapse — set to false for hidden columns.
+    // Using a custom in-property so the internal bindings below can reference it;
+    // external assignment to built-in min-width cannot override an internal binding.
+    in property <bool> col-visible: true;
+    property <bool> popup-open: false;
+    callback clicked;
+    callback filter-label-toggled(string);
+    callback filter-search-changed(string);
+    callback filter-select-all();
+    callback filter-clear-all();
+    callback filter-apply;
+
+    min-width: root.col-visible ? 100px : 0px;
+    max-width: root.col-visible ? 1000000px : 0px;
+    horizontal-stretch: root.col-visible ? 1 : 0;
+    height: 32px;
+    background: Theme.raised;
+
+    header-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Rectangle {
+        background: header-ta.has-hover ? Theme.hover.with-alpha(0.35) : transparent;
+        animate background { duration: 100ms; }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 4px;
+        spacing: 2px;
+        alignment: space-between;
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-family: Theme.font-mono;
+            font-weight: root.sorted ? 600 : 400;
+            color: root.sorted ? Theme.accent : Theme.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        if root.sorted: Image {
+            source: root.sort-asc ? @image-url("../icons/regular-black/sort-ascending.svg") : @image-url("../icons/regular-black/sort-descending.svg");
+            width: 11px;
+            height: 11px;
+            colorize: Theme.accent;
+        }
+
+        if root.filterable: TouchArea {
+            width: 22px;
+            height: parent.height;
+            mouse-cursor: pointer;
+            clicked => {
+                root.popup-open = true;
+                filter-popup.show();
+            }
+
+            Image {
+                source: @image-url("../icons/regular-black/funnel.svg");
+                width: 11px;
+                height: 11px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: root.filter-active ? Theme.accent : Theme.text-dim;
+                opacity: root.filter-active ? 1.0 : 0.55;
+            }
+        }
+    }
+
+    // Column divider
+    Rectangle {
+        x: parent.width - 1px;
+        y: 6px;
+        width: 1px;
+        height: parent.height - 12px;
+        background: Theme.border;
+    }
+
+    // Excel-style dropdown popup -----------------------------------------------
+    filter-popup := PopupWindow {
+        x: 0px;
+        y: root.height;
+        width: 230px;
+        height: 320px;
+        close-policy: no-auto-close;
+
+        Rectangle {
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000036;
+            drop-shadow-offset-y: 4px;
+            clip: true;
+
+            VerticalLayout {
+                spacing: 0px;
+
+                // -- Search field ------------------------------------------
+                Rectangle {
+                    height: 34px;
+                    background: Theme.bg;
+
+                    HorizontalLayout {
+                        padding: 4px;
+                        spacing: 4px;
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 26px;
+                            background: Theme.bg;
+                            border-radius: 3px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            clip: true;
+
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 4px;
+                                spacing: 5px;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("../icons/regular-black/magnifying-glass.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.text-mute;
+                                    }
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+
+                                    search-input := TextInput {
+                                        width: parent.width;
+                                        font-size: 11px;
+                                        font-family: Theme.font-mono;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        edited => {
+                                            root.filter-search-changed(self.text);
+                                        }
+                                    }
+
+                                    if search-input.text == "": Text {
+                                        x: 0px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "Search…";
+                                        font-size: 11px;
+                                        color: Theme.text-faint;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+
+                // -- (Select All) — TouchArea as root (MultiClassDropdown style)
+                sel-all-ta := TouchArea {
+                    height: 26px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (root.all-popup-checked) {
+                            root.filter-clear-all();
+                        } else {
+                            root.filter-select-all();
+                        }
+                    }
+
+                    Rectangle {
+                        background: sel-all-ta.has-hover ? Theme.raised : transparent;
+                        animate background { duration: 80ms; }
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 6px;
+                            spacing: 7px;
+                            alignment: start;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 13px;
+                                    height: 13px;
+                                    border-radius: 2px;
+                                    border-width: 1.5px;
+                                    border-color: root.all-popup-checked ? Theme.accent : Theme.border;
+                                    background: root.all-popup-checked ? Theme.accent : transparent;
+
+                                    if root.all-popup-checked: Image {
+                                        source: @image-url("../icons/regular-black/check.svg");
+                                        width: 9px;
+                                        height: 9px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: white;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "(Select All)";
+                                font-size: 11px;
+                                font-family: Theme.font-mono;
+                                font-weight: 600;
+                                color: root.all-popup-checked ? Theme.text-dim : Theme.text-mute;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+
+                // -- Item list — ScrollView + TouchArea root per item ----------
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 2px;
+                        spacing: 0px;
+
+                        for item in (root.popup-open ? root.popup-items : []): item-ta := TouchArea {
+                            height: 26px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.filter-label-toggled(item.label);
+                            }
+
+                            Rectangle {
+                                background: item-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 6px;
+                                    spacing: 7px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 13px;
+                                            height: 13px;
+                                            border-radius: 2px;
+                                            border-width: 1.5px;
+                                            border-color: item.checked ? Theme.accent : Theme.border;
+                                            background: item.checked ? Theme.accent : transparent;
+
+                                            if item.checked: Image {
+                                                source: @image-url("../icons/regular-black/check.svg");
+                                                width: 9px;
+                                                height: 9px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                colorize: white;
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: item.label;
+                                        font-size: 11px;
+                                        font-family: Theme.font-mono;
+                                        color: item.checked ? Theme.text-dim : Theme.text-mute;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // -- Done button -----------------------------------------------
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+
+                done-ta := TouchArea {
+                    height: 28px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.filter-apply();
+                        root.popup-open = false;
+                        filter-popup.close();
+                    }
+
+                    Rectangle {
+                        background: done-ta.has-hover ? Theme.raised : transparent;
+                        animate background { duration: 80ms; }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Done";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                color: Theme.accent;
+                                font-weight: 500;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -- Row components ------------------------------------------------------------
+
+component ResultsDataCell inherits Rectangle {
+    in property <string> value;
+    in property <bool> selected;
+    in property <bool> mono: false;
+    in property <bool> col-visible: true;
+
+    min-width: root.col-visible ? 100px : 0px;
+    max-width: root.col-visible ? 1000000px : 0px;
+    horizontal-stretch: root.col-visible ? 1 : 0;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+
+        Text {
+            text: root.value != "" ? root.value : "–";
+            font-size: 12px;
+            font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+            color: root.selected ? Theme.text : Theme.text-dim;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        height: 100%;
+        background: Theme.border-soft;
+    }
+}
+
+component ResultsDataRow inherits Rectangle {
+    in property <ResultsRow> data;
+    in property <bool> selected;
+    // Horizontal scroll offset supplied by the parent table component.
+    in property <length> h-offset: 0px;
+    callback row-clicked;
+
+    height: 32px;
+    clip: true;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.row-clicked();
+        }
+    }
+
+    background: root.selected ? Theme.list-select-row-bg : (ta.has-hover ? Theme.raised : transparent);
+
+    if root.selected: Rectangle {
+        x: 0px;
+        width: 3px;
+        height: parent.height;
+        background: Theme.list-select-row-border-color;
+    }
+
+    // Content is wider than the visible area when there are many columns.
+    // The clip above hides the overflow; h-offset pans the content.
+    HorizontalLayout {
+        x: -root.h-offset;
+        width: max(parent.width, ResultsState.visible_column_count * 100px);
+        for col[i] in ResultsState.columns: ResultsDataCell {
+            visible: col.visible;
+            col-visible: col.visible;
+            value: root.data.values.length > i ? root.data.values[i] : "";
+            selected: root.selected;
+            mono: i == 0;
+        }
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border-soft.with-alpha(0.6);
+    }
+}
+
+// -- Public export -------------------------------------------------------------
+
+export component ResultsTable inherits Rectangle {
+    VerticalLayout {
+        spacing: 0;
+
+        // -- Sticky column header (clips & follows horizontal scroll) ----------
+        Rectangle {
+            height: 32px;
+            clip: true;
+
+            HorizontalLayout {
+                x: h-scroll-view.viewport-x;
+                width: max(parent.width, ResultsState.visible_column_count * 100px);
+
+                for col in ResultsState.columns: ResultsHeaderCell {
+                    visible: col.visible;
+                    col-visible: col.visible;
+                    label: col.label;
+                    col-id: col.id;
+                    sorted: ResultsState.sort_column_id == col.id;
+                    sort-asc: ResultsState.sort_ascending;
+                    filterable: col.filterable;
+                    filter-active: col.id == "image" ? ResultsState.filter_image_active : ResultsState.filter_class_active;
+                    popup-items: col.filterable ? (col.id == "image" ? ResultsState.filter_image_popup : ResultsState.filter_class_popup) : [];
+                    all-popup-checked: col.id == "image" ? ResultsState.filter_image_all_popup_checked : ResultsState.filter_class_all_popup_checked;
+
+                    clicked => {
+                        if (ResultsState.sort_column_id == col.id) {
+                            ResultsState.sort_ascending = !ResultsState.sort_ascending;
+                        } else {
+                            ResultsState.sort_column_id = col.id;
+                            ResultsState.sort_ascending = true;
+                        }
+                        ResultsState.sort_requested(col.id, ResultsState.sort_ascending);
+                    }
+                    filter-label-toggled(lbl) => {
+                        if (col.id == "image") {
+                            ResultsState.image_filter_label_toggled(lbl);
+                        }
+                        if (col.id == "class") {
+                            ResultsState.class_filter_label_toggled(lbl);
+                        }
+                    }
+                    filter-search-changed(txt) => {
+                        if (col.id == "image") {
+                            ResultsState.image_filter_search_changed(txt);
+                        }
+                        if (col.id == "class") {
+                            ResultsState.class_filter_search_changed(txt);
+                        }
+                    }
+                    filter-select-all => {
+                        if (col.id == "image") {
+                            ResultsState.image_select_all();
+                        }
+                        if (col.id == "class") {
+                            ResultsState.class_select_all();
+                        }
+                    }
+                    filter-clear-all => {
+                        if (col.id == "image") {
+                            ResultsState.image_clear_all();
+                        }
+                        if (col.id == "class") {
+                            ResultsState.class_clear_all();
+                        }
+                    }
+                    filter-apply => {
+                        ResultsState.filter_apply();
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+
+        // -- Scrollable row list (horizontal + vertical) -----------------------
+        Rectangle {
+            vertical-stretch: 1;
+
+            property <int> scroll_trigger: ResultsState.scroll_to_row_index;
+            changed scroll_trigger => {
+                if (ResultsState.scroll_to_row_index >= 0) {
+                    table-scroll.viewport-y = Math.clamp(
+                        -(ResultsState.scroll_to_row_index * 32px) + table-scroll.height / 2 - 16px,
+                        table-scroll.height - table-scroll.viewport-height,
+                        0px);
+                }
+            }
+
+            // ListView virtualizes rows — only visible rows are rendered.
+            // No viewport-width set here: preserves Slint's virtualization.
+            // Horizontal scrolling is handled by clip+translate in each row.
+            table-scroll := ListView {
+                width: 100%;
+                height: 100%;
+                horizontal-scrollbar-policy: always-off;
+
+                changed viewport-y => {
+                    if (!ResultsState.all_rows_loaded && !ResultsState.loading_more && table-scroll.viewport-height + table-scroll.viewport-y - table-scroll.height < 3 * 32px) {
+                        ResultsState.load_more_rows();
+                    }
+                }
+
+                for data in ResultsState.rows: ResultsDataRow {
+                    data: data;
+                    selected: ResultsState.selected_roi_id == data.roi_id;
+                    h-offset: -h-scroll-view.viewport-x;
+                    row-clicked => {
+                        ResultsState.selected_roi_id = data.roi_id;
+                        ResultsState.roi_row_selected(data.roi_id);
+                    }
+                }
+            }
+
+            // Spinner shown while the next page is loading (overlays the list bottom).
+            if ResultsState.loading_more: Rectangle {
+                y: parent.height - 40px;
+                height: 40px;
+                VerticalLayout {
+                    alignment: center;
+                    Spinner {
+                        indeterminate: true;
+                        width: 20px;
+                        height: 20px;
+                    }
+                }
+            }
+
+            if ResultsState.rows.length == 0: Rectangle {
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+
+                    Image {
+                        source: @image-url("../icons/regular-black/table.svg");
+                        width: 32px;
+                        height: 32px;
+                        colorize: Theme.text-faint;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "No results yet. Run an analysis to populate this table.";
+                        font-size: 12px;
+                        color: Theme.text-faint;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        // Horizontal scrollbar — appears only when columns overflow the viewport.
+        // Rows clip their content and translate by viewport-x for smooth h-scroll.
+        h-scroll-view := ScrollView {
+            height: 14px;
+            horizontal-scrollbar-policy: as-needed;
+            vertical-scrollbar-policy: always-off;
+            viewport-width: max(self.width, ResultsState.visible_column_count * 100px);
+        }
+    }
+}

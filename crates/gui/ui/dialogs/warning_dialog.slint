@@ -1,0 +1,42 @@
+import { BaseDialog } from "dialog_base.slint";
+import { Button } from "std-widgets.slint";
+import { Palette } from "std-widgets.slint";
+import {
+    GlobalAppState,
+    DialogType,
+    WarningState,
+} from "../state.slint";
+
+export component WarningDialog inherits BaseDialog {
+    title-text: WarningState.title;
+    icon: "⚠️";
+    main-height: 220px;
+    main-width: 440px;
+
+    VerticalLayout {
+        spacing: 12px;
+        Text {
+            text: WarningState.message;
+            wrap: word-wrap;
+            color: Palette.foreground;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            Button {
+                text: "OK";
+                primary: true;
+                width: 100px;
+                clicked => {
+                    GlobalAppState.active_dialog = DialogType.none;
+                }
+            }
+        }
+    }
+}

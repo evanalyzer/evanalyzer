@@ -1,0 +1,80 @@
+import { ViewportState } from "viewport_state.slint";
+
+export component Navigator inherits Rectangle {
+    in property <float> view_x;
+    in property <float> view_y;
+    in property <float> view_width;
+    in property <float> view_height;
+    width: 150px;
+    height: 40px;
+
+    pure function skewed_path(nx: float, ny: float, nw: float, nh: float) -> string {
+        let w = root.width / 1px;
+        let h = root.height / 1px;
+        let lean_factor = 0.4;
+        let current_lean = lean_factor * w;
+
+        let x1 = (nx * w) + (nh * current_lean);
+        let y1 = ny * h;
+        let x4 = (nx + nw) * w;
+        let y4 = ny * h;
+
+        let x2 = (nx * w);
+        let x3 = ((nx + nw) * w) - (nh * current_lean);
+        let y_bot = (ny + nh) * h;
+
+        return "M \{x1} \{y1} L \{x2} \{y_bot} L \{x3} \{y_bot} L \{x4} \{y1} Z";
+    }
+
+    pure function skewed_path_moved(nx: float, ny: float, nw: float, nh: float) -> string {
+        let w = root.width / 1px;
+        let h = root.height / 1px;
+        let lean_factor = 0.4;
+        let current_lean = lean_factor * w;
+
+        let x1_fixed = current_lean;
+        let y1_fixed = 1;
+
+
+        // y = k*x+d
+        let pos_correct = x1_fixed - (nh * current_lean) - ny * current_lean - nx * current_lean;
+
+        let x1 = (nx * w) + (nh * current_lean) + pos_correct;
+        let y1 = ny * h;
+        let x4 = (nx + nw) * w + pos_correct;
+        let y4 = ny * h;
+
+        let x2 = (nx * w) + pos_correct;
+        let x3 = ((nx + nw) * w) - (nh * current_lean) + pos_correct;
+        let y_bot = (ny + nh) * h;
+
+        return "M \{x1} \{y1} L \{x2} \{y_bot} L \{x3} \{y_bot} L \{x4} \{y1} Z";
+    }
+
+    // 1. The FULL IMAGE Area (orange - FIXED)
+    Rectangle {
+        border-width: 0px;
+
+        Path {
+            commands: root.skewed_path(0, 0, 1, 1);
+            stroke: orange;
+            stroke-width: 1px;
+
+            viewbox-width: 150;
+            viewbox-height: 40;
+        }
+    }
+
+    // 2. The VIEWPORT (MOVING)
+        Path {
+        commands: root.skewed_path_moved(ViewportState.nav_x, ViewportState.nav_y, ViewportState.nav_width, ViewportState.nav_height);
+        stroke: white;
+        stroke-width: 1px;
+
+        viewbox-width: 150;
+        viewbox-height: 40;
+
+        //viewbox-width: 120;
+        //viewbox-height: 120;
+    }
+}

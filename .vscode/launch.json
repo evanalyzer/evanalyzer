@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'evanalyzer_gui'",
+            "cargo": {
+                "args": ["build", "--bin=evanalyzer_gui", "--package=evanalyzer_gui","--manifest-path=${workspaceFolder}/Cargo.toml"],
+                "filter": {
+                    "name": "evanalyzer_gui",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

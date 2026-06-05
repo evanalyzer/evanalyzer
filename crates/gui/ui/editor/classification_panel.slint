@@ -1,0 +1,424 @@
+import {
+    Button,
+    VerticalBox,
+    Palette,
+    ListView,
+    Spinner,
+} from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { ImagesListState } from "../editor/images_list_panel.slint";
+import {
+    ClassificationSettingsState,
+} from "../dialogs/classification_class_edit_dialog.slint";
+
+export struct ClassItemData {
+    id: int,
+    name: string,
+    color: color,
+    visible: bool,
+    count: int,
+}
+
+export global ClassificationState {
+    in-out property <bool> is_scanning: false;
+    in property <[ClassItemData]> classes_list: [];
+    in-out property <int> selected_class_id: -1;
+    in-out property <string> selected_class_name;
+    // Sum of `count` across visible classes - compute in Rust whenever
+    // classes_list changes, then push into the global.
+    in property <int> total_visible_objects: 0;
+
+    callback class_selected(int);
+    callback class_visibility_toggled(int);
+    callback class_auto_add_and_replace();
+    callback class_auto_add_and_merge();
+    callback class_copy(int);
+    callback class_edit(int);
+    callback class_delete(int);
+    callback class_move_up(int);
+    callback class_move_down(int);
+}
+
+// ----------------------------------------------------------
+// Small ghost icon button used in the footer toolbar
+component ActionButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
+    opacity: root.enabled ? 1.0 : 0.35;
+
+    background: root.enabled && ta.has-hover ? Theme.raised : transparent;
+    animate background { duration: 100ms; }
+
+    Image {
+        source: root.icon;
+        width: 13px;
+        height: 13px;
+        colorize: ta.has-hover && root.enabled ? Theme.text : Theme.text-dim;
+        animate colorize { duration: 100ms; }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// One row in the class list. Encapsulating it as its own
+// component keeps the `selected` flag, the hover state, and
+// the click handler all colocated.
+component ClassListRow inherits Rectangle {
+    in property <ClassItemData> data;
+    in property <bool> selected;
+    callback row_clicked;
+    callback visibility_clicked;
+
+    height: Theme.list-row-height;  // 40px from your theme
+
+    // Row-level click target defined first so it is behind every child.
+    // eye_ta (inside the inner card) is rendered later and therefore on top,
+    // so it wins inside its 22×22 box.
+    row_ta := TouchArea {
+        clicked => {
+            root.row_clicked();
+        }
+    }
+
+    // Inner card - slightly inset so the selection ring doesn't
+    // touch the list edges.
+    Rectangle {
+        x: 2px;
+        y: 1px;
+        width: parent.width - 4px;
+        height: parent.height - 2px;
+        border-radius: Theme.radius-md;
+
+        background: root.selected ? Theme.list-select-row-bg                       // #1E3866
+            : (row_ta.has-hover ? Theme.raised : transparent);
+        border-width: 1px;
+        border-color: root.selected ? Theme.list-select-row-border-color             // #4D8DFF
+            : transparent;
+        animate background { duration: 80ms; }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 8px;
+            alignment: stretch;
+
+            // Drag handle - fades in on hover or selected
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 10px;
+                    height: 16px;
+                    opacity: (row_ta.has-hover || root.selected) ? 1.0 : 0.0;
+                    animate opacity { duration: 100ms; }
+                    Image {
+                        // Phosphor "dots-six-vertical" - swap path if yours differs
+                        source: @image-url("../icons/regular-white/dots-six-vertical.svg");
+                        width: 10px;
+                        height: 10px;
+                        colorize: Theme.text-faint;
+                    }
+                }
+            }
+
+            // 16×16 color swatch with hairline inner stroke
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 16px;
+                    height: 16px;
+                    border-radius: 4px;
+                    background: root.data.color;
+                    border-width: 1px;
+                    border-color: rgba(255, 255, 255, 0.15);
+                    opacity: root.data.visible ? 1.0 : 0.35;
+                }
+            }
+
+            // Class name
+            Text {
+                text: root.data.name;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                font-size: 13px;
+                font-weight: root.selected ? 500 : 400;
+                color: root.data.visible ? Theme.text : Theme.text-mute;
+                overflow: elide;
+            }
+
+            // Mono object-count chip
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 18px;
+                    min-width: 32px;
+                    border-radius: 3px;
+                    background: root.selected ? rgba(255, 255, 255, 0.06) : transparent;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        Text {
+                            text: root.data.count;
+                            font-size: 11px;
+                            font-family: Theme.font-mono;
+                            color: Theme.text-mute;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+            }
+
+            // Eye toggle - its own TouchArea so it doesn't trigger selection
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: eye_ta.has-hover ? Theme.bg : transparent;
+                    animate background { duration: 100ms; }
+                    Image {
+                        source: root.data.visible ? @image-url("../icons/regular-white/eye.svg") : @image-url("../icons/regular-white/eye-slash.svg");
+                        width: 13px;
+                        height: 13px;
+                        colorize: root.data.visible ? Theme.text-dim : Theme.text-faint;
+                    }
+
+                    eye_ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.visibility_clicked();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+export component ClassificationPanel inherits Rectangle {
+
+    VerticalBox {
+        spacing: 12px;
+        padding: Theme.panel-content-padding;
+
+        // ----- HEADER -----
+        HorizontalLayout {
+            alignment: space-between;
+            Text {
+                text: "Classification";
+                font-size: 14px;
+                font-weight: 600;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: ClassificationState.classes_list.length == 1 ? "1 class" : ClassificationState.classes_list.length + " classes";
+                font-size: 11px;
+                font-family: Theme.font-mono;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
+        }
+
+        // ----- SUMMARY STRIP -----
+        Rectangle {
+            height: 32px;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            border-radius: Theme.radius-md;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                alignment: space-between;
+                Text {
+                    text: "Objects classified";
+                    font-size: 11px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: ClassificationState.total_visible_objects;
+                    font-size: 12px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ----- CLASS LIST -----
+        Rectangle {
+            vertical-stretch: 1;
+
+            ListView {
+                for data in ClassificationState.classes_list: ClassListRow {
+                    data: data;
+                    selected: ClassificationState.selected_class_id == data.id;
+
+                    row_clicked => {
+                        if (data.id == ClassificationState.selected_class_id) {
+                            ClassificationState.selected_class_name = "";
+                            ClassificationState.selected_class_id = -1;
+                            ClassificationState.class_selected(-1);
+                        } else {
+                            ClassificationState.selected_class_name = data.name;
+                            ClassificationState.selected_class_id = data.id;
+                            ClassificationState.class_selected(data.id);
+                        }
+                    }
+                    visibility_clicked => {
+                        ClassificationState.class_visibility_toggled(data.id);
+                    }
+                }
+            }
+
+            // Scanning overlay
+            if (ClassificationState.is_scanning): Rectangle {
+                background: Theme.overlay-scrim;
+                Spinner {
+                    indeterminate: true;
+                }
+
+                TouchArea { }
+            }
+        }
+
+        // ----- FOOTER TOOLBAR -----
+        Rectangle {
+            height: 38px;
+            background: Theme.bg;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            border-radius: Theme.radius-md;
+
+            HorizontalLayout {
+                padding-left: 4px;
+                padding-right: 4px;
+                spacing: 2px;
+                alignment: stretch;
+
+                // - group 1: CRUD
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-white/plus.svg");
+                        clicked => {
+                            ClassificationSettingsState.reset_to_zero();
+                            GlobalAppState.active_dialog = DialogType.classification-edit-class-dialog;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-white/copy-simple.svg");
+                        enabled: ClassificationState.selected_class_id > 0;
+                        clicked => {
+                            ClassificationState.class_copy(ClassificationState.selected_class_id);
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-white/trash-simple.svg");
+                        enabled: ClassificationState.selected_class_id > 0;
+                        clicked => {
+                            GlobalAppState.active_dialog = DialogType.classification_confirm_delete;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-white/pencil-simple.svg");
+                        enabled: ClassificationState.selected_class_id > 0;
+                        clicked => {
+                            ClassificationState.class_edit(ClassificationState.selected_class_id);
+                            GlobalAppState.active_dialog = DialogType.classification-edit-class-dialog;
+                        }
+                    }
+                }
+
+                // divider
+                VerticalLayout {
+                    alignment: center;
+                    padding-left: 4px;
+                    padding-right: 4px;
+                    Rectangle {
+                        width: 1px;
+                        height: 16px;
+                        background: Theme.border;
+                    }
+                }
+
+                // - group 2: reorder
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-white/arrow-up.svg");
+                        enabled: ClassificationState.selected_class_id > 0;
+                        clicked => {
+                            ClassificationState.class_move_up(ClassificationState.selected_class_id);
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    ActionButton {
+                        icon: @image-url("../icons/regular-white/arrow-down.svg");
+                        enabled: ClassificationState.selected_class_id > 0;
+                        clicked => {
+                            ClassificationState.class_move_down(ClassificationState.selected_class_id);
+                        }
+                    }
+                }
+
+                // pushes Auto to the right
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // - Auto (primary)
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: "Auto";
+                        primary: true;
+                        enabled: ImagesListState.images_list.length > 0;
+                        clicked => {
+                            if (ClassificationState.classes_list.length > 0) {
+                                GlobalAppState.active_dialog = DialogType.classification_confirm_auto_add_dialog;
+                            } else {
+                                ClassificationState.class_auto_add_and_replace();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

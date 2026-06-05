@@ -1,0 +1,233 @@
+import {
+    Button,
+    ComboBox,
+    VerticalBox,
+    HorizontalBox,
+    GroupBox,
+    Switch,
+    StandardListView,
+} from "std-widgets.slint";
+import {
+    HistogramState,
+    ChannelState,
+    ChannelInfo,
+    IntensityProjection,
+    HistogramData,
+    ImagePixelInfo,
+} from "state.slint";
+import { SidebarLeft } from "sidebar_left.slint";
+import { Toolbar, ToolbarState } from "toolbar.slint";
+import { Viewport } from "editor/viewport.slint";
+import { ToolState } from "editor/viewport_state.slint";
+import { StatusBar } from "status_bar.slint";
+import { AboutDialog } from "dialogs/about.slint";
+import { CustomMenuBar } from "menu_bar.slint";
+import { SidebarRight } from "sidebar_right.slint";
+import { ImageMetaData } from "editor/image_meta_panel.slint";
+import { Palette } from "std-widgets.slint";
+import { Theme } from "style.slint";
+import { ImageMissingDialog } from "dialogs/images_missing_dialog.slint";
+import { GlobalAppState, DialogType } from "state.slint";
+import {
+    ProjectSettingsDialog,
+    ProjectSettingsState,
+    ProjectSettingsSlint,
+} from "dialogs/project_settings_dialog.slint";
+import {
+    ImageItemData,
+    ImagesListState,
+} from "editor/images_list_panel.slint";
+
+import { ClassificationState } from "editor/classification_panel.slint";
+import {
+    ConfirmDeleteClassDialog,
+} from "dialogs/classification_confirm_delete.slint";
+
+import {
+    ConfirmAutoAddClassesDialog,
+}from "dialogs/classification_confirm_auto_add_dialog.slint";
+
+import {
+    ClassEditDialog,
+    ClassificationSettingsState,
+    ClassSettingsSlint,
+    MeasurementStateSlint,
+} from "dialogs/classification_class_edit_dialog.slint";
+
+import { RoiListState, RoiItemDataSlint } from "editor/roi_list_panel.slint";
+import { ViewportState, ViewportRoiState } from "editor/viewport_state.slint";
+import {
+    ConfirmDeleteRoiDialog,
+} from "dialogs/roi_list_confirm_delete_dialog.slint";
+import {
+    CommandSelectionDialog,
+    CommandPickerState,
+    CommandDef,
+    DefaultParamPreview,
+} from "dialogs/command_selection_dialog.slint";
+import {
+    PipelineEditDialog,
+    PipelineEditState,
+    PipelineDeleteConfirmDialog,
+    PipelineDeleteConfirmState,
+} from "dialogs/pipeline_edit_dialog.slint";
+import {
+    PipelineRunningDialog,
+    PipelineRunningState,
+} from "dialogs/pipeline_running_dialog.slint";
+import { PipelinesPanelState } from "editor/pipelines_panel.slint";
+import { PreviewRendering } from "dialogs/preview_rendering_dialog.slint";
+import { WarningDialog } from "dialogs/warning_dialog.slint";
+import { WarningState } from "state.slint";
+import {
+    ResultsWindow,
+    ResultsState,
+    ResultsColumnDef,
+    ResultsRow,
+    ResultsViewMode,
+} from "results/results_window.slint";
+import { ResultsListState } from "editor/results_list_panel.slint";
+
+export {GlobalAppState,ProjectSettingsSlint, ProjectSettingsState,
+        ImagePixelInfo,DialogType, HistogramState, ViewportState,
+        ChannelState, ChannelInfo, IntensityProjection, ImageMetaData,
+        ImagesListState, ImageItemData,ClassificationState, ClassificationSettingsState,
+        ClassSettingsSlint,MeasurementStateSlint,RoiListState,RoiItemDataSlint,
+        ToolbarState, ToolState, ViewportRoiState, PipelinesPanelState,
+        CommandPickerState, CommandDef, DefaultParamPreview,
+        PipelineEditState, PipelineDeleteConfirmState, PipelineRunningState,
+        ResultsListState, WarningState,
+        ResultsWindow, ResultsState, ResultsColumnDef, ResultsRow, ResultsViewMode  }
+
+
+export component AppWindow inherits Window {
+    title: "EVAnalyzer";
+    preferred-width: 1500px;
+    preferred-height: 900px;
+    min-width: 1500px;
+    min-height: 900px;
+    background: Theme.bg;
+
+    callback apply_math();
+    in property <image> display_image;
+    in property <image> ghost_image;
+    in property <image> roi_image;
+
+    init => {
+        Palette.color-scheme = ColorScheme.light;
+    }
+
+    VerticalBox {
+        padding: 0;
+        spacing: 0;
+
+        CustomMenuBar { }
+
+        Toolbar { }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+
+        HorizontalBox {
+            spacing: 0;
+            padding: 0;
+            Rectangle {
+                width: 364px;
+                SidebarLeft { }
+            }
+
+            Viewport {
+                display_image: root.display_image;
+                ghost_image: root.ghost_image;
+                roi_image: root.roi_image;
+                horizontal-stretch: 1;
+                enabled: GlobalAppState.active_dialog == DialogType.none;
+            }
+
+            // Image tools sidebar
+            if (GlobalAppState.show_image_tools): Rectangle {
+                width: 400px;
+                animate width {
+                    duration: 200ms;
+                    easing: ease-in-out;
+                }
+
+                SidebarRight { }
+            }
+        }
+
+        // Status Bar
+        StatusBar { }
+    }
+
+    // The "Overlay Manager"
+    if (GlobalAppState.active_dialog != DialogType.none): Rectangle {
+        width: 100%;
+        height: 100%;
+        if (GlobalAppState.active_dialog == DialogType.missing_images): ImageMissingDialog { }
+        if (GlobalAppState.active_dialog == DialogType.about): AboutDialog { }
+        if (GlobalAppState.active_dialog == DialogType.project_settings): ProjectSettingsDialog { }
+        if (GlobalAppState.active_dialog == DialogType.classification_confirm_delete): ConfirmDeleteClassDialog { }
+        if (GlobalAppState.active_dialog == DialogType.classification_confirm_auto_add_dialog): ConfirmAutoAddClassesDialog { }
+        if (GlobalAppState.active_dialog == DialogType.classification-edit-class-dialog): ClassEditDialog { }
+        if (GlobalAppState.active_dialog == DialogType.roi-confirm-delete): ConfirmDeleteRoiDialog { }
+        if (GlobalAppState.active_dialog == DialogType.command-selection-dialog): CommandSelectionDialog {
+            width: 100%;
+            height: 100%;
+            commands: CommandPickerState.all-commands;
+            target-pipeline: CommandPickerState.target-pipeline;
+            insert-after-idx: CommandPickerState.insert-after-idx;
+            total-steps: CommandPickerState.total-steps;
+            shown-preprocess: CommandPickerState.shown-preprocess;
+            shown-segment: CommandPickerState.shown-segment;
+            shown-object: CommandPickerState.shown-object;
+            shown-classify: CommandPickerState.shown-classify;
+            shown-measure: CommandPickerState.shown-measure;
+            detail: CommandPickerState.detail;
+            has-detail: CommandPickerState.has-detail;
+            total-shown: CommandPickerState.total-shown;
+            cat-count-pre: CommandPickerState.cat-count-pre;
+            cat-count-seg: CommandPickerState.cat-count-seg;
+            cat-count-obj: CommandPickerState.cat-count-obj;
+            cat-count-cls: CommandPickerState.cat-count-cls;
+            cat-count-mea: CommandPickerState.cat-count-mea;
+            query <=> CommandPickerState.query;
+            filter-category <=> CommandPickerState.filter-category;
+            selected-id <=> CommandPickerState.selected-id;
+            query-changed(t) => {
+                CommandPickerState.query-changed(t);
+            }
+            select(id) => {
+                CommandPickerState.select(id);
+            }
+            confirm(id) => {
+                CommandPickerState.confirm(id);
+            }
+            cancel => {
+                CommandPickerState.cancel();
+            }
+        }
+        if (GlobalAppState.active_dialog == DialogType.pipeline-edit): PipelineEditDialog {
+            width: 100%;
+            height: 100%;
+        }
+        if (GlobalAppState.active_dialog == DialogType.pipeline-delete-confirm): PipelineDeleteConfirmDialog {
+            width: 100%;
+            height: 100%;
+        }
+        if (GlobalAppState.active_dialog == DialogType.pipeline-running): PipelineRunningDialog {
+            width: 100%;
+            height: 100%;
+        }
+        if (GlobalAppState.active_dialog == DialogType.preview-rendering): PreviewRendering {
+            width: 100%;
+            height: 100%;
+        }
+        if (GlobalAppState.active_dialog == DialogType.warning): WarningDialog {
+            width: 100%;
+            height: 100%;
+        }
+    }
+}

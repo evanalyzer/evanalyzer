@@ -1,0 +1,86 @@
+{
+    "File Header Closes": {
+        "prefix": "comm-file-header-closed",
+        "body": [
+            "//! # $TM_FILENAME_BASE",
+            "//! ",
+            "//! **Author:** Joachim Danmayr",
+            "//! **Date:** $CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE",
+            "//! ",
+            "//! ## License",
+            "//! Copyright $CURRENT_YEAR Joachim Danmayr.",
+            "//! This software is licensed for **non-commercial** use only.",
+            "//! Educational, research, and personal use are permitted.",
+            "//! For **Commercial** use, please contact the copyright owner.",
+            ""
+        ],
+        "description": "Idiomatic Rust file-level header (Closed Source)"
+    },
+    "File Header Open": {
+        "prefix": "comm-file-header-open",
+        "body": [
+            "//! # $TM_FILENAME_BASE",
+            "//! ",
+            "//! **Author:** Joachim Danmayr",
+            "//! **Date:** $CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE",
+            "//! ",
+            "//! ## License",
+            "//! Copyright $CURRENT_YEAR Joachim Danmayr.",
+            "//! Licensed under the **AGPL-3.0**.",
+            ""
+        ],
+        "description": "Idiomatic Rust file-level header (Open Source)"
+    },
+    "Method Header": {
+        "prefix": "comm-method-header",
+        "body": [
+            "/// ${1:Brief summary of what the function does}.",
+            "///",
+            "/// ${2:Detailed explanation of logic if necessary}.",
+            "///",
+            "/// # Arguments",
+            "///",
+            "/// * `$3` - $4",
+            "///",
+            "/// # Returns",
+            "///",
+            "/// $5",
+            "///",
+            "/// # Errors",
+            "///",
+            "/// Returns [`${6:ErrorType}`] if $7"
+        ],
+        "description": "Standard Rustdoc function template"
+    },
+    "Struct/Trait Header": {
+        "prefix": "comm-type-header",
+        "body": [
+            "/// ${1:Summary of the type's purpose}.",
+            "///",
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// // $2",
+            "/// ```"
+        ],
+        "description": "Header for Structs, Enums, or Traits with example block"
+    },
+	"Separator": {
+		"prefix": "comm-test-sep",
+		"body": [
+			"",
+			"// --- Tests ------------------------------------------------------------------",
+			"",
+			"#[cfg(test)]",
+			"mod tests {",
+			"    use super::*;",
+			"",
+			"    #[test]",
+			"    fn ${1:test_name}() {",
+			"        $0",
+			"    }",
+			"}"
+		],
+		"description": "Standard Rust unit test module block"
+	}
+}

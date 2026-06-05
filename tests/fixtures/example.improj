@@ -1,0 +1,330 @@
+{
+  "metadata": {
+    "firstName": "Jane",
+    "lastName": "Doe",
+    "organization": "Biotech Research Institute",
+    "name": "EV Characterization Study 2024",
+    "notes": "Extracellular vesicle quantification from HEK293 cells. Three channels: DAPI (nuclei), FITC (cell membrane), Cy5 (EVs)."
+  },
+  "classification": {
+    "classes": [
+      {
+        "id": {
+          "Valid": 0
+        },
+        "color": "#4a90d9",
+        "name": "Nucleus",
+        "notes": "DAPI-stained cell nuclei",
+        "measure": {
+          "areaSize": [
+            "val",
+            "avg"
+          ],
+          "circularity": [
+            "val"
+          ],
+          "objectCount": [
+            "val"
+          ]
+        }
+      },
+      {
+        "id": {
+          "Valid": 1
+        },
+        "color": "#7ed321",
+        "name": "Cell",
+        "notes": "Full cell body including cytoplasm",
+        "measure": {
+          "areaSize": [
+            "val",
+            "avg"
+          ],
+          "intensityAvg": [
+            "val",
+            "avg"
+          ]
+        }
+      },
+      {
+        "id": {
+          "Valid": 2
+        },
+        "color": "#d0021b",
+        "name": "EV",
+        "notes": "Extracellular vesicles detected in Cy5 channel",
+        "measure": {
+          "areaSize": [
+            "val",
+            "avg",
+            "min",
+            "max"
+          ],
+          "objectCount": [
+            "val"
+          ],
+          "intensityAvg": [
+            "val",
+            "avg"
+          ]
+        }
+      }
+    ]
+  },
+  "plate": {
+    "groupingMode": "folderName",
+    "groupingRegex": "^(?P<well>[A-H]\\d{2})_",
+    "plateCols": 12,
+    "plateRows": 8,
+    "wellCols": 3,
+    "wellRows": 3,
+    "wellImageOrder": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ]
+  },
+  "images": {
+    "root": "/data/experiments/ev_study_2024",
+    "list": {
+      "A01/image_01.ome.tif": {
+        "relPath": "A01/image_01.ome.tif",
+        "fileSize": 52428800,
+        "selectedSeries": 0,
+        "series": {
+          "0": {
+            "selectedChannel": 0,
+            "channels": {
+              "0": {
+                "name": "DAPI",
+                "emissionWaveLength": 461.0,
+                "visible": true,
+                "histogram": null
+              },
+              "1": {
+                "name": "FITC",
+                "emissionWaveLength": 519.0,
+                "visible": true,
+                "histogram": null
+              },
+              "2": {
+                "name": "Cy5",
+                "emissionWaveLength": 670.0,
+                "visible": true,
+                "histogram": null
+              }
+            },
+            "imageWidth": 1024,
+            "imageHeight": 1024,
+            "pixelSizes": {
+              "x": 0.1625,
+              "y": 0.1625,
+              "z": 1.0
+            },
+            "zStack": null,
+            "tStack": null,
+            "selectedRoi": null,
+            "rois": []
+          }
+        }
+      }
+    },
+    "settings": {
+      "selectedChannel": 0,
+      "channels": {
+        "0": {
+          "name": "DAPI",
+          "emissionWaveLength": 461.0,
+          "visible": null,
+          "histogram": null
+        },
+        "1": {
+          "name": "FITC",
+          "emissionWaveLength": 519.0,
+          "visible": null,
+          "histogram": null
+        },
+        "2": {
+          "name": "Cy5",
+          "emissionWaveLength": 670.0,
+          "visible": null,
+          "histogram": null
+        }
+      },
+      "pixelSizes": null,
+      "zStack": null,
+      "tStack": null
+    }
+  },
+  "pipelines": [
+    {
+      "id": 2,
+      "name": null,
+      "imageSource": {
+        "Channel": 2
+      },
+      "enabled": true,
+      "steps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "medianSubtract",
+            "radius": 15.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "enhanceContrast",
+            "saturatedPixels": 0.01,
+            "normalize": true,
+            "equalizeHistogram": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "triangle",
+                "minThreshold": 0.0,
+                "maxThreshold": 1.0,
+                "objectClassId": 0,
+                "unit": "bit"
+              }
+            ]
+          }
+        },
+        {
+          "enabled": false,
+          "command": {
+            "type": "morphologicalCommand",
+            "op": "open",
+            "kernelSize": 3,
+            "kernelShape": "ellipse",
+            "useGrayscale": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [1],
+            "originClass": [],
+            "targetClass": { "Valid": 2 },
+            "sizeUnit": "px",
+            "intensityUnit": "rel",
+            "minArea": 1.0,
+            "maxArea": 200.0,
+            "minCircularity": 0.4,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.5,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.3,
+            "maxAspectRatio": 3.0,
+            "minMeanIntensity": 0.05,
+            "maxMeanIntensity": 1.0,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.5,
+            "maxFeret": 20.0,
+            "allowEdgeTouching": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois"
+          }
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "EV  detection",
+      "imageSource": {
+        "Channel": 4
+      },
+      "enabled": true,
+      "steps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "gaussianBlur",
+            "kernelSize": 57,
+            "sigma": 2.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "rollingBall",
+            "radius": 60.0,
+            "ballType": "paraboloid",
+            "preSmooth": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "otsu",
+                "minThreshold": 0.0,
+                "maxThreshold": 100.0,
+                "objectClassId": 0,
+                "unit": "%"
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [1],
+            "originClass": [],
+            "targetClass": { "Valid": 0 },
+            "sizeUnit": "px",
+            "intensityUnit": "rel",
+            "minArea": 50.0,
+            "maxArea": 5000.0,
+            "minCircularity": 0.6,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.8,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.5,
+            "maxAspectRatio": 2.0,
+            "minMeanIntensity": 0.1,
+            "maxMeanIntensity": 1.0,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 0.8,
+            "minFeret": 5.0,
+            "maxFeret": 80.0,
+            "allowEdgeTouching": false
+          }
+        }
+      ]
+    }
+  ]
+}

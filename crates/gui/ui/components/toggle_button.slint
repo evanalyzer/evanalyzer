@@ -1,0 +1,37 @@
+import { Palette } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+export component ToolToggleButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> checked;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+
+    // 1. DYNAMIC BACKGROUND
+    background: root.checked ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.bg);
+
+    // 2. DYNAMIC BORDER
+    border-width: 1px;
+    border-color: root.checked ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.bg);
+
+    Image {
+        source: root.icon;
+        width: 20px;
+        height: 20px;
+        colorize: Theme.text;
+        animate colorize { duration: 150ms; }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

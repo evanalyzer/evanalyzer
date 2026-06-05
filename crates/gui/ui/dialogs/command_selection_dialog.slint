@@ -1,0 +1,1271 @@
+// command_picker.slint
+// EVAnalyzer - Add-Step (command selection) dialog.
+//
+// Opens when the user clicks "+ Add step" in the Pipelines panel, or any of
+// the inline "+" insertion points between steps. Picks a single command from
+// the library, configures nothing here (params are edited inline in the step
+// row after insertion), and returns a category + algo-id to the host.
+//
+// Layout (1080 × 680, centered modal):
+//
+//   ┌------------------------------------------------------------------┐
+//   │  Add step               After step 4 of "Nucleus pipeline"   ✕   │   ← header strip (44)
+//   ├------------------------------------------------------------------┤
+//   │  🔍  Search commands…                              ⌘K            │   ← search (52)
+//   │                                                                  │
+//   │  All · Preprocess · Segment · Classify · Measure · Recents · ★   │   ← filter chips (40)
+//   ├----------------------------┬-------------------------------------┤
+//   │ PREPROCESS  ---------------│   Gaussian Blur                     │
+//   │ ▭ Gaussian Blur     σ ▸    │   ------------------------------    │
+//   │ ▭ Median Filter            │   Smooth an image with an isotropic │
+//   │ ▭ Background Subtract      │   Gaussian kernel. Reduces shot     │   ← list  +  detail
+//   │ SEGMENT     ---------------│   noise before thresholding.        │     pane (split)
+//   │ ▭ Threshold (Otsu)         │                                     │
+//   │ ▭ Watershed                │   DEFAULT PARAMETERS                │
+//   │ ▭ Cellpose            ★    │     σ              2.0  px          │
+//   │ MEASURE     ---------------│     Per channel    on               │
+//   │ ▭ Intensity Stats          │     Edge handling  reflect          │
+//   │ ▭ Area & Perimeter         │                                     │
+//   │                            │   Category   Preprocess             │
+//   │                            │   Source     skimage · v0.22        │
+//   ├----------------------------┴-------------------------------------┤
+//   │  ↑↓ navigate    ↵ add    ⎋ cancel             [ Add to pipeline ]│   ← footer (52)
+//   └------------------------------------------------------------------┘
+//
+// Host wires:
+//   - commands           : [CommandDef]   - the full library
+//   - recents / favorites: [int]          - ids of recently used / starred
+//   - target-pipeline    : string         - name of the pipeline being edited
+//   - insert-after-idx   : int            - 0-based slot; -1 means "append"
+//   confirm(int)  →  insert this command id at (target-pipeline, insert-after-idx)
+//   toggle-favorite(int), cancel().
+
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+import { StepCategory } from "../editor/pipelines_panel.slint";
+
+// ---------- Command library data ----------
+
+export struct DefaultParamPreview {
+    name: string,
+    value: string,    // pre-formatted ("2.0 px", "Otsu", "on")
+}
+
+export struct CommandDef {
+    id: int,
+    name: string,
+    summary: string,         // one-line ("Smooth with isotropic Gaussian")
+    description: string,     // 2–4 sentences for the detail pane
+    category: StepCategory,
+    icon-glyph: string,      // single unicode glyph; replace with `image` if you ship raster icons
+    keywords: string,        // space-separated, lowercased - host pre-computes this
+    source: string,          // "skimage · v0.22", "internal", …
+    favorite: bool,
+    recent: bool,
+    default-params: [DefaultParamPreview],
+}
+
+// ---------- Command picker global state ----------
+
+export global CommandPickerState {
+    in property <[CommandDef]> all-commands;
+    in property <string> target-pipeline;
+    in property <int> insert-after-idx: -1;
+    in property <int> pipeline-id: 0;
+    in property <int> total-steps;
+    in property <[CommandDef]> shown-preprocess;
+    in property <[CommandDef]> shown-segment;
+    in property <[CommandDef]> shown-object;
+    in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-measure;
+    in property <CommandDef> detail;
+    in property <bool> has-detail;
+    in property <int> total-shown;
+    in property <int> cat-count-pre;
+    in property <int> cat-count-seg;
+    in property <int> cat-count-obj;
+    in property <int> cat-count-cls;
+    in property <int> cat-count-mea;
+    /// -1 = no context (empty pipeline); 0..4 = display_order of the last step's category.
+    /// Used to auto-pre-select the filter chip for "what comes next".
+    in property <int> context-category: -1;
+
+    in-out property <string> query: "";
+    in-out property <int> filter-category: -1;
+    in-out property <int> selected-id: -1;
+
+    callback query-changed(string);
+    callback select(int);
+    callback confirm(int);
+    callback cancel();
+}
+
+// ---------- Local visual constants ----------
+
+global PickerStyle {
+    out property <length> modal-w: 1080px;
+    out property <length> modal-h: 680px;
+    out property <length> list-col-w: 440px;
+    out property <length> row-h: 44px;
+    out property <length> radius: 10px;
+
+    public pure function cat-color(c: StepCategory) -> color {
+        if c == StepCategory.preprocess {
+            return Theme.cat-preprocess;
+        }
+        if c == StepCategory.segment {
+            return Theme.cat-segment;
+        }
+        if c == StepCategory.object {
+            return Theme.cat-object;
+        }
+        if c == StepCategory.measure {
+            return Theme.cat-measure;
+        }
+        return Theme.cat-classify;
+    }
+    public pure function cat-name(c: StepCategory) -> string {
+        if c == StepCategory.preprocess {
+            return "Preprocess";
+        }
+        if c == StepCategory.segment {
+            return "Segment";
+        }
+        if c == StepCategory.object {
+            return "Object";
+        }
+        if c == StepCategory.measure {
+            return "Measure";
+        }
+        return "Classify";
+    }
+}
+
+// ---------- Filter chip ----------
+
+component FilterChip inherits Rectangle {
+    in property <string> label;
+    in property <int> count;
+    in property <color> tint: Theme.accent;
+    in property <bool> active: false;
+    in property <bool> tinted: true;   // false = neutral chip (All / Recents)
+    callback clicked;
+
+    height: 26px;
+    border-radius: 13px;
+    border-width: 1px;
+    border-color: active ? (tinted ? tint : Theme.accent) : Theme.border-soft;
+    background: active ? (tinted ? tint.with-alpha(0.14) : Theme.accent.with-alpha(0.14)) : (ta.has-hover ? Theme.raised : transparent);
+    animate background, border-color { duration: 100ms; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 6px;
+        alignment: center;
+
+        if tinted: Rectangle {
+            width: 6px;
+            height: 6px;
+            border-radius: 1.5px;
+            background: tint;
+            y: (parent.height - 6px) / 2;
+        }
+        Text {
+            text: label;
+            color: active ? (tinted ? tint : Theme.text) : Theme.text-dim;
+            font-size: 11px;
+            font-weight: active ? 600 : 400;
+            vertical-alignment: center;
+        }
+
+        if count > 0: Text {
+            text: "\{count}";
+            color: Theme.text-mute;
+            font-size: 10.5px;
+            font-family: Theme.font-mono;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// ---------- Section header within the list ----------
+
+component SectionHeader inherits Rectangle {
+    in property <StepCategory> category;
+    in property <int> count;
+    height: 28px;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 8px;
+        alignment: start;
+        Rectangle {
+            width: 3px;
+            height: 10px;
+            background: PickerStyle.cat-color(category);
+            border-radius: 1.5px;
+            y: (parent.height - 10px) / 2;
+        }
+
+        Text {
+            text: PickerStyle.cat-name(category);
+            color: PickerStyle.cat-color(category);
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: "\{count}";
+            color: Theme.text-mute;
+            font-size: 10px;
+            font-family: Theme.font-mono;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ---------- One row in the command list ----------
+
+component CommandRow inherits Rectangle {
+    in property <CommandDef> cmd;
+    in property <bool> selected: false;
+    callback clicked;
+    callback double-clicked;
+    callback toggle-favorite;
+
+    height: PickerStyle.row-h;
+    background: selected ? Theme.raised : (ta.has-hover ? Theme.bg.with-alpha(0.5) : transparent);
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: selected ? Theme.border : transparent;
+
+    // category stripe
+    Rectangle {
+        x: 4px;
+        y: 6px;
+        width: 3px;
+        height: parent.height - 12px;
+        background: PickerStyle.cat-color(cmd.category);
+        border-radius: 1.5px;
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 10px;
+        spacing: 10px;
+        alignment: stretch;
+
+        // icon glyph
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            y: (parent.height - 28px) / 2;
+            border-radius: 5px;
+            background: Theme.bg;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            Text {
+                text: cmd.icon-glyph;
+                color: PickerStyle.cat-color(cmd.category);
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // name + summary
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            horizontal-stretch: 1;
+            Text {
+                text: cmd.name;
+                color: Theme.text;
+                font-size: 12.5px;
+                font-weight: 500;
+                overflow: elide;
+            }
+
+            Text {
+                text: cmd.summary;
+                color: Theme.text-mute;
+                font-size: 10.5px;
+                font-family: Theme.font-mono;
+                overflow: elide;
+            }
+        }
+
+        // recent badge
+        if cmd.recent && !cmd.favorite: Rectangle {
+            y: (parent.height - 18px) / 2;
+            width: 50px;
+            height: 18px;
+            border-radius: 4px;
+            background: Theme.accent.with-alpha(0.14);
+            Text {
+                text: "RECENT";
+                color: Theme.accent;
+                font-size: 9px;
+                letter-spacing: 0.6px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // favorite star
+        Rectangle {
+            width: 26px;
+            height: 26px;
+            y: (parent.height - 26px) / 2;
+            border-radius: 4px;
+            background: fav-ta.has-hover ? Theme.bg : transparent;
+            Text {
+                text: cmd.favorite ? "★" : "☆";
+                color: cmd.favorite ? Theme.cat-measure : Theme.text-faint;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            fav-ta := TouchArea {
+                clicked => {
+                    root.toggle-favorite();
+                }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+        double-clicked => {
+            root.double-clicked();
+        }
+    }
+}
+
+// ---------- Detail pane (right side) ----------
+
+component DetailPane inherits Rectangle {
+    in property <CommandDef> cmd;
+    in property <bool> has-selection: false;
+
+    background: Theme.bg;
+
+    if !has-selection: VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        Text {
+            text: "◇";
+            color: Theme.text-faint;
+            font-size: 28px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "Pick a command";
+            color: Theme.text-dim;
+            font-size: 12px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "Use ↑↓ to navigate · ↵ to add";
+            color: Theme.text-mute;
+            font-size: 10.5px;
+            font-family: Theme.font-mono;
+            horizontal-alignment: center;
+        }
+    }
+
+    if has-selection: VerticalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        padding-top: 20px;
+        padding-bottom: 20px;
+        spacing: 16px;
+
+        // Category eyebrow
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 1.5px;
+                background: PickerStyle.cat-color(cmd.category);
+                y: (parent.height - 6px) / 2;
+            }
+
+            Text {
+                text: PickerStyle.cat-name(cmd.category);
+                color: PickerStyle.cat-color(cmd.category);
+                font-size: 10px;
+                font-weight: 600;
+                letter-spacing: 0.6px;
+                vertical-alignment: center;
+            }
+        }
+
+        // Title
+        Text {
+            text: cmd.name;
+            color: Theme.text;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        // Summary
+        Text {
+            text: cmd.summary;
+            color: Theme.text-dim;
+            font-size: 12.5px;
+            wrap: word-wrap;
+        }
+
+        // Divider
+        Rectangle {
+            height: 1px;
+            background: Theme.border-soft;
+        }
+
+        // Description body
+        Text {
+            text: cmd.description;
+            color: Theme.text-dim;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        // Default parameters
+        if cmd.default-params.length > 0: VerticalLayout {
+            spacing: 8px;
+            Text {
+                text: "DEFAULT PARAMETERS";
+                color: Theme.text-mute;
+                font-size: 9.5px;
+                font-weight: 600;
+                letter-spacing: 0.6px;
+            }
+
+            for p in cmd.default-params: HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: p.name;
+                    color: Theme.text-dim;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: p.value;
+                    color: Theme.text;
+                    font-size: 11.5px;
+                    font-family: Theme.font-mono;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }   // spacer
+
+        // Footer metadata
+        Rectangle {
+            height: 1px;
+            background: Theme.border-soft;
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: "Source";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                }
+
+                Text {
+                    text: cmd.source;
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: "Id";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                }
+
+                Text {
+                    text: "\{cmd.id}";
+                    color: Theme.text-faint;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                }
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// Main dialog
+// ===========================================================================
+
+export component CommandSelectionDialog inherits Rectangle {
+    // ---- Host inputs ----
+    in property <[CommandDef]> commands;
+    in property <string> target-pipeline;        // pipeline name, for breadcrumb
+    in property <int> insert-after-idx;          // -1 = append
+    in property <int> total-steps;               // for breadcrumb "after step N of M"
+
+    // ---- Selection / filter state (in-out so host can drive too) ----
+    in-out property <string> query: "";
+    in-out property <int> filter-category: -1;   // -1 = All; else StepCategory cast to int
+    in-out property <bool> filter-favorites: false;
+    in-out property <bool> filter-recents: false;
+    in-out property <int> selected-id: -1;
+
+    // ---- Host-computed helpers (must be supplied; do not compute in Slint) ----
+    // Pre-filtered + grouped, in display order. Host applies query + filters
+    // and returns one flat list per category. This keeps the panel branchless
+    // and lets the host implement fuzzy ranking server-side.
+    in property <[CommandDef]> shown-preprocess;
+    in property <[CommandDef]> shown-segment;
+    in property <[CommandDef]> shown-object;
+    in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-measure;
+    in property <CommandDef> detail;            // command for selected-id (or default)
+    in property <bool> has-detail;
+    in property <int> total-shown;       // sum across the five categories
+    in property <int> cat-count-pre;
+    in property <int> cat-count-seg;
+    in property <int> cat-count-obj;
+    in property <int> cat-count-cls;
+    in property <int> cat-count-mea;
+    in property <int> cat-count-fav;
+    in property <int> cat-count-rec;
+
+    // ---- Outbound callbacks ----
+    callback query-changed(string);
+    callback select(int);            // by id
+    callback toggle-favorite(int);
+    callback confirm(int);           // commit: insert this id
+    callback cancel();
+
+    // Dimmed background
+    background: Theme.modal-overlay;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: PickerStyle.modal-w;
+        height: PickerStyle.modal-h;
+        background: Theme.panel;
+        border-radius: PickerStyle.radius;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        clip: true;
+
+        // -------- Keyboard --------
+    forward-focus: kbd;
+        kbd := FocusScope {
+            key-pressed(e) => {
+                if e.text == Key.Escape {
+                    root.cancel();
+                    return accept;
+                }
+                if e.text == Key.Return && root.selected-id != -1 {
+                    root.confirm(root.selected-id);
+                    return accept;
+                }
+                return reject;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 0;
+
+            // ---------- 1. Header ----------
+        Rectangle {
+                height: 44px;
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 12px;
+                    spacing: 12px;
+                    alignment: stretch;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 0;
+                        Text {
+                            text: "Add step";
+                            color: Theme.text;
+                            font-size: 13.5px;
+                            font-weight: 600;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border-soft;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 0;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: insert-after-idx < 0 ? "Append to \"\{target-pipeline}\"" : "After step \{insert-after-idx + 1} of \"\{target-pipeline}\"";
+                            color: Theme.text-mute;
+                            font-size: 11px;
+                            font-family: Theme.font-mono;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        y: (parent.height - 28px) / 2;
+                        border-radius: 5px;
+                        background: close-ta.has-hover ? Theme.raised : transparent;
+                        Text {
+                            text: "✕";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-ta := TouchArea {
+                            clicked => {
+                                root.cancel();
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
+            Rectangle {
+                height: 56px;
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    Rectangle {
+                        height: 36px;
+                        border-radius: 6px;
+                        background: Theme.bg;
+                        border-width: 1px;
+                        border-color: Theme.border-soft;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            alignment: stretch;
+                            Text {
+                                text: "🔍";
+                                color: Theme.text-mute;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+
+                            LineEdit {
+                                placeholder-text: "Search commands…";
+                                text <=> root.query;
+                                font-size: 12px;
+                                edited(t) => {
+                                    root.query-changed(t);
+                                }
+                            }
+
+                            Rectangle {
+                                width: 32px;
+                                height: 18px;
+                                y: (parent.height - 18px) / 2;
+                                border-radius: 3px;
+                                background: Theme.raised;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                Text {
+                                    text: "⌘K";
+                                    color: Theme.text-mute;
+                                    font-size: 9.5px;
+                                    font-family: Theme.font-mono;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 40px;
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    spacing: 6px;
+                    alignment: start;
+
+                    FilterChip {
+                        label: "All";
+                        count: total-shown;
+                        tinted: false;
+                        active: filter-category == -1 && !filter-favorites && !filter-recents;
+                        clicked => {
+                            root.filter-category = -1;
+                            root.filter-favorites = false;
+                            root.filter-recents = false;
+                            root.query-changed(query);
+                        }
+                    }
+
+                    FilterChip {
+                        label: "Preprocess";
+                        count: cat-count-pre;
+                        tint: Theme.cat-preprocess;
+                        active: filter-category == 0;
+                        clicked => {
+                            root.filter-category = filter-category == 0 ? -1 : 0;
+                            root.filter-favorites = false;
+                            root.filter-recents = false;
+                            root.query-changed(query);
+                        }
+                    }
+
+                    FilterChip {
+                        label: "Segment";
+                        count: cat-count-seg;
+                        tint: Theme.cat-segment;
+                        active: filter-category == 1;
+                        clicked => {
+                            root.filter-category = filter-category == 1 ? -1 : 1;
+                            root.filter-favorites = false;
+                            root.filter-recents = false;
+                            root.query-changed(query);
+                        }
+                    }
+
+                    FilterChip {
+                        label: "Object";
+                        count: cat-count-obj;
+                        tint: Theme.cat-object;
+                        active: filter-category == 2;
+                        clicked => {
+                            root.filter-category = filter-category == 2 ? -1 : 2;
+                            root.filter-favorites = false;
+                            root.filter-recents = false;
+                            root.query-changed(query);
+                        }
+                    }
+
+                    FilterChip {
+                        label: "Measure";
+                        count: cat-count-mea;
+                        tint: Theme.cat-measure;
+                        active: filter-category == 3;
+                        clicked => {
+                            root.filter-category = filter-category == 3 ? -1 : 3;
+                            root.filter-favorites = false;
+                            root.filter-recents = false;
+                            root.query-changed(query);
+                        }
+                    }
+
+                    FilterChip {
+                        label: "Classify";
+                        count: cat-count-cls;
+                        tint: Theme.cat-classify;
+                        active: filter-category == 4;
+                        clicked => {
+                            root.filter-category = filter-category == 4 ? -1 : 4;
+                            root.filter-favorites = false;
+                            root.filter-recents = false;
+                            root.query-changed(query);
+                        }
+                    }
+
+                    Rectangle {
+                        width: 1px;
+                        height: 16px;
+                        y: (parent.height - 16px) / 2;
+                        background: Theme.border-soft;
+                    }
+
+                    FilterChip {
+                        label: "Recents";
+                        count: cat-count-rec;
+                        tinted: false;
+                        active: filter-recents;
+                        clicked => {
+                            root.filter-recents = !filter-recents;
+                            root.filter-favorites = false;
+                            root.filter-category = -1;
+                        }
+                    }
+
+                    FilterChip {
+                        label: "★ Favorites";
+                        count: cat-count-fav;
+                        tinted: false;
+                        active: filter-favorites;
+                        clicked => {
+                            root.filter-favorites = !filter-favorites;
+                            root.filter-recents = false;
+                            root.filter-category = -1;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
+            // ---------- 4. Body - split list + detail ----------
+        Rectangle {
+                vertical-stretch: 1;
+                HorizontalLayout {
+                    spacing: 0;
+                    alignment: stretch;
+
+                    // LIST
+                Rectangle {
+                        width: PickerStyle.list-col-w;
+                        background: Theme.panel;
+                   // border-right-width: 0;
+
+                    ScrollView {
+                            VerticalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                padding-top: 8px;
+                                padding-bottom: 12px;
+                                spacing: 0;
+
+                                // Empty state
+                            if total-shown == 0: VerticalLayout {
+                                    padding-top: 60px;
+                                    spacing: 10px;
+                                    Text {
+                                        text: "No commands match";
+                                        color: Theme.text-dim;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: query == "" ? "Try a different filter" : "Try a different query";
+                                        color: Theme.text-mute;
+                                        font-size: 10.5px;
+                                        font-family: Theme.font-mono;
+                                        horizontal-alignment: center;
+                                    }
+                                }
+
+                                // Preprocess
+                            if shown-preprocess.length > 0: VerticalLayout {
+                                    spacing: 0;
+                                    SectionHeader {
+                                        category: StepCategory.preprocess;
+                                        count: shown-preprocess.length;
+                                    }
+
+                                    for c in shown-preprocess: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
+
+                                // Segment
+                            if shown-segment.length > 0: VerticalLayout {
+                                    spacing: 0;
+                                    SectionHeader {
+                                        category: StepCategory.segment;
+                                        count: shown-segment.length;
+                                    }
+
+                                    for c in shown-segment: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
+
+                                // Object
+                            if shown-object.length > 0: VerticalLayout {
+                                    spacing: 0;
+                                    SectionHeader {
+                                        category: StepCategory.object;
+                                        count: shown-object.length;
+                                    }
+
+                                    for c in shown-object: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
+
+                                // Measure
+                            if shown-measure.length > 0: VerticalLayout {
+                                    spacing: 0;
+                                    SectionHeader {
+                                        category: StepCategory.measure;
+                                        count: shown-measure.length;
+                                    }
+
+                                    for c in shown-measure: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
+
+                                // Classify
+                            if shown-classify.length > 0: VerticalLayout {
+                                    spacing: 0;
+                                    SectionHeader {
+                                        category: StepCategory.classify;
+                                        count: shown-classify.length;
+                                    }
+
+                                    for c in shown-classify: CommandRow {
+                                        cmd: c;
+                                        selected: c.id == selected-id;
+                                        clicked => {
+                                            root.selected-id = c.id;
+                                            root.select(c.id);
+                                        }
+                                        double-clicked => {
+                                            root.confirm(c.id);
+                                        }
+                                        toggle-favorite => {
+                                            root.toggle-favorite(c.id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Splitter
+                Rectangle {
+                        width: 1px;
+                        background: Theme.border-soft;
+                    }
+
+                    // DETAIL
+                DetailPane {
+                        horizontal-stretch: 1;
+                        cmd: root.detail;
+                        has-selection: root.has-detail;
+                    }
+                }
+            }
+
+            // ---------- 5. Footer ----------
+        Rectangle {
+                height: 52px;
+                background: Theme.bg;
+          //  border-top-width: 1px;
+            border-color: Theme.border-soft;
+
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 14px;
+                    alignment: stretch;
+
+                    // Keyboard hints
+                HorizontalLayout {
+                        spacing: 14px;
+                        alignment: start;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Rectangle {
+                                width: 22px;
+                                height: 18px;
+                                y: (parent.height - 18px) / 2;
+                                border-radius: 3px;
+                                background: Theme.raised;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                Text {
+                                    text: "↑↓";
+                                    color: Theme.text-dim;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: "navigate";
+                                color: Theme.text-mute;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Rectangle {
+                                width: 22px;
+                                height: 18px;
+                                y: (parent.height - 18px) / 2;
+                                border-radius: 3px;
+                                background: Theme.raised;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                Text {
+                                    text: "↵";
+                                    color: Theme.text-dim;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: "add";
+                                color: Theme.text-mute;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Rectangle {
+                                width: 22px;
+                                height: 18px;
+                                y: (parent.height - 18px) / 2;
+                                border-radius: 3px;
+                                background: Theme.raised;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                Text {
+                                    text: "⎋";
+                                    color: Theme.text-dim;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: "cancel";
+                                color: Theme.text-mute;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    // Action buttons
+                    AppButton {
+                        text: "Cancel";
+                        clicked => {
+                            root.cancel();
+                        }
+                    }
+
+                    AppButton {
+                        text: "Add to pipeline";
+                        primary: true;
+                        clicked => {
+                            root.confirm(root.selected-id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// Modal wrapper - convenience element you can place inside MainWindow with
+// `visible <=> showing-add-step`. Adds the scrim + click-outside-to-close.
+// ===========================================================================
+
+export component CommandPickerModal inherits Rectangle {
+    in property <[CommandDef]> commands;
+    in property <string> target-pipeline;
+    in property <int> insert-after-idx;
+    in property <int> total-steps;
+
+    in property <[CommandDef]> shown-preprocess;
+    in property <[CommandDef]> shown-segment;
+    in property <[CommandDef]> shown-object;
+    in property <[CommandDef]> shown-classify;
+    in property <[CommandDef]> shown-measure;
+    in property <CommandDef> detail;
+    in property <bool> has-detail;
+    in property <int> total-shown;
+    in property <int> cat-count-pre;
+    in property <int> cat-count-seg;
+    in property <int> cat-count-obj;
+    in property <int> cat-count-cls;
+    in property <int> cat-count-mea;
+    in property <int> cat-count-fav;
+    in property <int> cat-count-rec;
+
+    in-out property <string> query: "";
+    in-out property <int> filter-category: -1;
+    in-out property <bool> filter-favorites: false;
+    in-out property <bool> filter-recents: false;
+    in-out property <int> selected-id: -1;
+
+    callback query-changed(string);
+    callback select(int);
+    callback toggle-favorite(int);
+    callback confirm(int);
+    callback cancel();
+
+    // Scrim (full-screen darkening)
+    background: #000000.with-alpha(0.55);
+    TouchArea {
+        clicked => {
+            root.cancel();
+        }
+    }
+
+    // Centered modal
+    CommandSelectionDialog {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        commands: root.commands;
+        target-pipeline: root.target-pipeline;
+        insert-after-idx: root.insert-after-idx;
+        total-steps: root.total-steps;
+        shown-preprocess: root.shown-preprocess;
+        shown-segment: root.shown-segment;
+        shown-object: root.shown-object;
+        shown-classify: root.shown-classify;
+        shown-measure: root.shown-measure;
+        detail: root.detail;
+        has-detail: root.has-detail;
+        total-shown: root.total-shown;
+        cat-count-pre: root.cat-count-pre;
+        cat-count-seg: root.cat-count-seg;
+        cat-count-obj: root.cat-count-obj;
+        cat-count-cls: root.cat-count-cls;
+        cat-count-mea: root.cat-count-mea;
+        cat-count-fav: root.cat-count-fav;
+        cat-count-rec: root.cat-count-rec;
+        query <=> root.query;
+        filter-category <=> root.filter-category;
+        filter-favorites <=> root.filter-favorites;
+        filter-recents <=> root.filter-recents;
+        selected-id <=> root.selected-id;
+
+        // Eat clicks so the scrim TouchArea doesn't fire when clicking inside.
+        TouchArea { }
+
+        query-changed(t) => {
+            root.query-changed(t);
+        }
+        select(id) => {
+            root.select(id);
+        }
+        toggle-favorite(id) => {
+            root.toggle-favorite(id);
+        }
+        confirm(id) => {
+            root.confirm(id);
+        }
+        cancel => {
+            root.cancel();
+        }
+    }
+}

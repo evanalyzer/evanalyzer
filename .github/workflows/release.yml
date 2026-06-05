@@ -1,0 +1,115 @@
+name: Build & Package
+
+on:
+  push:
+    tags: ["v*"]
+    branches: ["pipeline_start"]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.1.5
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64
+
+      - name: Set version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Build
+        run: cargo build-linux
+
+      - name: Package
+        run: |
+          mkdir -p dist/java
+          cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
+          unzip -q crates/core/java/jre_linux.zip -d dist/java/jre_linux
+          cp crates/core/java/bioformats.jar                       dist/java/
+          cp crates/core/java/BioFormatsWrapper.class              dist/java/
+          tar -czf evanalyzer-linux-x86_64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evanalyzer-linux-x86_64
+          path: evanalyzer-linux-x86_64.tar.gz
+
+  build-windows:
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.1.5
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x86_64
+
+      - name: Set version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Unzip DuckDB Windows library
+        run: unzip -q libs/win/libduckdb-windows-amd64.zip -d libs/win/libduckdb-windows-amd64
+
+      - name: Build
+        run: cargo build-win
+
+      - name: Package
+        run: |
+          mkdir -p dist/java
+          cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
+          cp libs/win/libduckdb-windows-amd64/duckdb.dll           dist/
+          unzip -q crates/core/java/jre_win.zip -d dist/java/jre_win
+          cp crates/core/java/bioformats.jar                       dist/java/
+          cp crates/core/java/BioFormatsWrapper.class              dist/java/
+          zip -r evanalyzer-windows-x86_64.zip dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evanalyzer-windows-x86_64
+          path: evanalyzer-windows-x86_64.zip
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    # Only publish a GitHub release when triggered by a version tag
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/evanalyzer-linux-x86_64/evanalyzer-linux-x86_64.tar.gz
+            artifacts/evanalyzer-windows-x86_64/evanalyzer-windows-x86_64.zip

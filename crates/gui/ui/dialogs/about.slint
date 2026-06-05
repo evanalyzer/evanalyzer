@@ -1,0 +1,191 @@
+import { Palette } from "std-widgets.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+
+export component AboutDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+    TouchArea { }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 400px;
+        height: 500px;
+        background: Theme.panel;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 48px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 16px;
+
+        VerticalLayout {
+            padding: 32px;
+            spacing: 0px;
+            alignment: center;
+
+            // -- App icon ----------------------------------------------------
+            Rectangle {
+                height: 84px;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 76px;
+                        height: 76px;
+                        border-radius: 18px;
+                        background: Theme.accent.with-alpha(0.12);
+                        border-width: 1px;
+                        border-color: Theme.accent.with-alpha(0.25);
+                        Image {
+                            source: @image-url("../icons/icon.png");
+                            width: 52px;
+                            height: 52px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+            }
+
+            // -- App name & version ------------------------------------------
+            Rectangle {
+                height: 16px;
+            }
+
+            Text {
+                text: "EVAnalyzer";
+                font-size: 24px;
+                font-weight: 800;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+
+            Rectangle {
+                height: 6px;
+            }
+
+            Text {
+                text: "Version 1.0.4";
+                font-size: 13px;
+                font-weight: 500;
+                color: Theme.accent;
+                horizontal-alignment: center;
+            }
+
+            // -- Divider -----------------------------------------------------
+            Rectangle {
+                height: 20px;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            Rectangle {
+                height: 20px;
+            }
+
+            // -- Description -------------------------------------------------
+            Text {
+                text: "High-throughput image analysis for biological sciences.\nDesigned for fluorescence microscopy workflows.";
+                font-size: 13px;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            // -- Meta row ----------------------------------------------------
+            Rectangle {
+                height: 20px;
+            }
+
+            HorizontalLayout {
+                spacing: 0px;
+                alignment: center;
+
+                Rectangle {
+                    width: 48%;
+                    height: 52px;
+                    background: Theme.raised;
+                    border-radius: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        padding: 8px;
+                        Text {
+                            text: "License";
+                            font-size: 10px;
+                            font-weight: 600;
+                            color: Theme.text-mute;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "AGPL-3.0";
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: Theme.text;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 8px;
+                }
+
+                Rectangle {
+                    width: 48%;
+                    height: 52px;
+                    background: Theme.raised;
+                    border-radius: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        padding: 8px;
+                        Text {
+                            text: "Authors";
+                            font-size: 10px;
+                            font-weight: 600;
+                            color: Theme.text-mute;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "M.S., J.D.";
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: Theme.text;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // -- Copyright ---------------------------------------------------
+            Rectangle {
+                height: 18px;
+            }
+
+            Text {
+                text: "© 2026 Joachim Danmayr. All rights reserved.";
+                font-size: 11px;
+                color: Theme.text-mute;
+                horizontal-alignment: center;
+            }
+
+            // -- Close button ------------------------------------------------
+            Rectangle {
+                height: 24px;
+            }
+
+            AppButton {
+                text: "Close";
+                primary: true;
+                clicked => {
+                    GlobalAppState.active-dialog = DialogType.none;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,10 @@
+/target
+/java/jre_linux
+tests/fixtures/test_image_big_endian.lif
+tests/fixtures/test_image_slide_scanner_rgb.vsi
+backend/tests/muliple_z_stacks.nd2
+lcov.info
+/.claude
+.claude
+.claude/settings.json
+.claude/settings.local.json

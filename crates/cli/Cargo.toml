@@ -1,0 +1,11 @@
+[package]
+name = "evanalyzer_cli"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+evanalyzer_core = { path = "../core" }
+evanalyzer_app = { path = "../app" }
+evanalyzer_cfg = { path = "../cfg" }

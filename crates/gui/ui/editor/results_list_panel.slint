@@ -1,0 +1,268 @@
+import {
+    VerticalBox,
+    ListView,
+    Spinner,
+} from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ToolToggleButton } from "../components/toggle_button.slint";
+import { ToolToggleButtonLabeled } from "../components/tool_button.slint";
+
+// ----------------------------------------------------------
+export struct ResultItemData {
+    name: string,
+    path: string,
+    file_size: string,
+    modified: string,
+}
+
+export global ResultsListState {
+    in property <bool> is_scanning: false;
+    in-out property <bool> is_loading: false;
+    in-out property <int> selected_result_index: -1;
+    in property <[ResultItemData]> results_list: [];
+
+    callback result_selected(string);
+    callback refresh_clicked();
+    callback open_folder_clicked();
+}
+
+// ----------------------------------------------------------
+component ResultListRow inherits Rectangle {
+    in property <ResultItemData> data;
+    in property <bool> selected;
+    callback row_clicked;
+
+    height: 52px;
+
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: Theme.radius-md;
+
+        background: root.selected ? Theme.list-select-row-bg : (row_ta.has-hover ? Theme.raised : transparent);
+        border-width: 1px;
+        border-color: root.selected ? Theme.list-select-row-border-color : transparent;
+        animate background { duration: 80ms; }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 10px;
+            alignment: stretch;
+
+            // File icon tile
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 5px;
+                    background: root.selected ? rgba(77, 141, 255, 0.12) : @linear-gradient(135deg, Theme.raised 0%, Theme.bg 100%);
+                    border-width: 1px;
+                    border-color: root.selected ? rgba(77, 141, 255, 0.20) : rgba(255, 255, 255, 0.05);
+
+                    Image {
+                        source: @image-url("../icons/regular-white/file-csv.svg");
+                        width: 14px;
+                        height: 14px;
+                        colorize: root.selected ? Theme.accent : Theme.text-faint;
+                    }
+                }
+            }
+
+            // Name + meta
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: root.data.name;
+                    color: root.selected ? Theme.text-bright : Theme.text;
+                    font-size: 13px;
+                    font-weight: root.selected ? 500 : 400;
+                    overflow: elide;
+                    horizontal-alignment: left;
+                }
+
+                Text {
+                    text: root.data.file_size + "  ·  " + root.data.modified;
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    overflow: elide;
+                    horizontal-alignment: left;
+                }
+            }
+
+            // Open icon – only on hover or selected
+            if (row_ta.has-hover || root.selected): VerticalLayout {
+                alignment: center;
+                Image {
+                    source: @image-url("../icons/regular-white/arrow-square-out.svg");
+                    width: 14px;
+                    height: 14px;
+                    colorize: root.selected ? Theme.accent : Theme.text-mute;
+                }
+            }
+        }
+    }
+
+    row_ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.row_clicked();
+        }
+    }
+}
+
+// ----------------------------------------------------------
+export component ResultsListPanel inherits Rectangle {
+
+    VerticalBox {
+        spacing: 12px;
+        padding: Theme.panel-content-padding;
+
+        // ----- HEADER -----
+        HorizontalLayout {
+            alignment: space-between;
+            Text {
+                text: "Results";
+                font-size: 14px;
+                font-weight: 600;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: ResultsListState.results_list.length == 1 ? "1 file" : ResultsListState.results_list.length + " files";
+                font-size: 11px;
+                font-family: Theme.font-mono;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
+        }
+
+        // ----- REFRESH BUTTON -----
+        HorizontalLayout {
+            alignment: end;
+            ToolToggleButton {
+                height: 32px;
+                width: 32px;
+                border-color: Theme.border;
+                border-width: 1px;
+                icon: @image-url("../icons/regular-white/arrow-clockwise.svg");
+                clicked => {
+                    ResultsListState.refresh_clicked();
+                }
+            }
+        }
+
+        // ----- RESULTS LIST -----
+        Rectangle {
+            vertical-stretch: 1;
+
+            ListView {
+                width: 100%;
+                height: 100%;
+                horizontal-scrollbar-policy: always-off;
+
+                for data[index] in ResultsListState.results_list: ResultListRow {
+                    data: data;
+                    selected: ResultsListState.selected_result_index == index;
+
+                    row_clicked => {
+                        ResultsListState.selected_result_index = index;
+                        ResultsListState.result_selected(data.path);
+                    }
+                }
+            }
+
+            // Empty state
+            if ResultsListState.results_list.length == 0 && !ResultsListState.is_scanning: Rectangle {
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    padding: 20px;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 56px;
+                            height: 56px;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            Image {
+                                source: @image-url("../icons/regular-white/rows.svg");
+                                width: 22px;
+                                height: 22px;
+                                colorize: Theme.text-faint;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "No results yet";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "Run a pipeline to generate measurement files.";
+                        font-size: 11px;
+                        color: Theme.text-mute;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            // Scanning overlay
+            if ResultsListState.is_scanning: Rectangle {
+                background: Theme.overlay-scrim;
+                Spinner {
+                    indeterminate: true;
+                }
+
+                TouchArea { }
+            }
+
+            // Loading overlay (shown while a result DB is being opened)
+            if ResultsListState.is_loading: Rectangle {
+                background: Theme.overlay-scrim;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    Spinner {
+                        indeterminate: true;
+                        width: 24px;
+                        height: 24px;
+                    }
+
+                    Text {
+                        text: "Opening…";
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                TouchArea { }
+            }
+        }
+
+        // ----- FOOTER ACTION -----
+        ToolToggleButtonLabeled {
+            height: 36px;
+            text: "Show output folder";
+            icon: @image-url("../icons/regular-white/folder-open.svg");
+            clicked => {
+                ResultsListState.open_folder_clicked();
+            }
+        }
+    }
+}

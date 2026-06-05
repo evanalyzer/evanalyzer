@@ -1,0 +1,74 @@
+import { StandardListView, VerticalBox } from "std-widgets.slint";
+import { GlobalAppState } from "state.slint";
+import { ImagesListPanel } from "editor/images_list_panel.slint";
+import {
+    PipelinesPanel,
+} from "editor/pipelines_panel.slint";
+import { NavIconLeft } from "components/navicon_left.slint";
+import { Theme } from "style.slint";
+import { ImageMetaPanel } from "editor/image_meta_panel.slint";
+import { ResultsListPanel } from "editor/results_list_panel.slint";
+
+
+export component SidebarLeft inherits HorizontalLayout {
+    spacing: 0;
+
+    Rectangle {
+        width: 64px;
+        background: Theme.panel;
+        border-width: 1px;
+        border-color: Theme.border;
+        VerticalBox {
+            width: 64px;
+            padding: 4px;
+            alignment: start;
+            spacing: 8px;
+
+            NavIconLeft {
+                label: "Images";
+                icon: @image-url("icons/regular-black/image-square.svg");
+                active: GlobalAppState.sidebar_left_active_tab == 0;
+                clicked => {
+                    GlobalAppState.sidebar_left_active_tab = 0;
+                }
+            }
+
+            NavIconLeft {
+                label: "Meta";
+                icon: @image-url("icons/regular-black/aperture.svg");
+                active: GlobalAppState.sidebar_left_active_tab == 1;
+                clicked => {
+                    GlobalAppState.sidebar_left_active_tab = 1;
+                }
+            }
+
+            NavIconLeft {
+                label: "Pipelines";
+                icon: @image-url("icons/regular-black/cards-three.svg");
+                active: GlobalAppState.sidebar_left_active_tab == 2;
+                clicked => {
+                    GlobalAppState.sidebar_left_active_tab = 2;
+                }
+            }
+
+            NavIconLeft {
+                label: "Results";
+                icon: @image-url("icons/regular-black/rows.svg");
+                active: GlobalAppState.sidebar_left_active_tab == 3;
+                clicked => {
+                    GlobalAppState.sidebar_left_active_tab = 3;
+                }
+            }
+        }
+    }
+
+    // --- DYNAMIC PANEL AREA ---
+    Rectangle {
+        width: parent.width - 64px;
+        background: Theme.panel;
+        if (GlobalAppState.sidebar_left_active_tab == 0): ImagesListPanel { }
+        if (GlobalAppState.sidebar_left_active_tab == 1): ImageMetaPanel { }
+        if (GlobalAppState.sidebar_left_active_tab == 2): PipelinesPanel { }
+        if (GlobalAppState.sidebar_left_active_tab == 3): ResultsListPanel { }
+    }
+}

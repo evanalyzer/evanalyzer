@@ -1,0 +1,656 @@
+import {
+    Button,
+    LineEdit,
+    ComboBox,
+    SpinBox,
+    VerticalBox,
+    HorizontalBox,
+    Palette,
+    CheckBox,
+    ScrollView,
+} from "std-widgets.slint";
+import { DialogType, GlobalAppState } from "../state.slint";
+import { NavIconLeft } from "../components/navicon_left.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+
+
+export struct StatValues {
+    val: bool,
+    avg: bool,
+    max: bool,
+    min: bool,
+    sum: bool,
+    stdev: bool,
+    median: bool,
+}
+
+export struct MeasurementStateSlint {
+    object_count_stats: StatValues,
+    intersecting_stats: StatValues,
+    area_size: StatValues,
+    perimeter_stats: StatValues,
+    circularity_stats: StatValues,
+    intensity_min_stats: StatValues,
+    intensity_max_stats: StatValues,
+    intensity_avg_stats: StatValues,
+    intensity_sum_stats: StatValues,
+    position_stats: StatValues,
+    distance_center_center_stats: StatValues,
+    distance_center_surface_min_stats: StatValues,
+    distance_center_surface_max_stats: StatValues,
+    distance_surface_surface_min_stats: StatValues,
+    distance_surface_surface_max_stats: StatValues,
+}
+
+export struct ClassSettingsSlint {
+    class_id: int,
+    name: string,
+    notes: string,
+    color: color,
+    measurement: MeasurementStateSlint,
+}
+
+export global ClassificationSettingsState {
+    in-out property <ClassSettingsSlint> settings;
+    callback apply_classification_settings(ClassSettingsSlint);
+    in-out property <int> selected_tab_index: 0;
+
+    pure function empty_stats() -> StatValues {
+        return { val: false, avg: false, max: false, min: false, sum: false, stdev: false, median: false };
+    }
+
+    public function reset_to_zero() {
+        self.settings.class-id = -1;
+        self.settings.name = "";
+        self.settings.notes = "";
+        self.settings.color = #FF00FF;
+
+        self.settings.measurement.object-count-stats = self.empty_stats();
+        self.settings.measurement.intersecting-stats = self.empty_stats();
+        self.settings.measurement.area-size = self.empty_stats();
+        self.settings.measurement.perimeter-stats = self.empty_stats();
+        self.settings.measurement.circularity-stats = self.empty_stats();
+
+        self.settings.measurement.intensity-min-stats = self.empty_stats();
+        self.settings.measurement.intensity-max-stats = self.empty_stats();
+        self.settings.measurement.intensity-avg-stats = self.empty_stats();
+        self.settings.measurement.intensity-sum-stats = self.empty_stats();
+
+        self.settings.measurement.position-stats = self.empty_stats();
+
+        self.settings.measurement.distance-center-center-stats = self.empty_stats();
+        self.settings.measurement.distance-center-surface-min-stats = self.empty_stats();
+        self.settings.measurement.distance-center-surface-max-stats = self.empty_stats();
+        self.settings.measurement.distance-surface-surface-min-stats = self.empty_stats();
+        self.settings.measurement.distance-surface-surface-max-stats = self.empty_stats();
+    }
+}
+
+component ColorTile inherits Rectangle {
+    in property <color> item_color;
+    property <bool> is_selected: ClassificationSettingsState.settings.color == item_color;
+    width: 16px;
+    height: 16px;
+    background: item_color;
+    border-radius: 4px;
+
+    border-width: is_selected ? 3px : 1px;
+    border-color: is_selected ? Palette.accent-background : Palette.border.darker(20%);
+
+    TouchArea {
+        clicked => {
+            ClassificationSettingsState.settings.color = item_color;
+        }
+    }
+}
+
+component StatHeader inherits Text {
+    horizontal-alignment: center;
+    font-weight: 700;
+    font-size: 12px;
+}
+
+export component MeasurementRow {
+    in property <string> label;
+    in-out property <StatValues> stats;
+    in property <StatValues> disabled;
+    in property <StatValues> defaults;
+
+    public function reset_to_zero() {
+        root.stats.val = false;
+        root.stats.avg = false;
+        root.stats.max = false;
+        root.stats.min = false;
+        root.stats.sum = false;
+        root.stats.stdev = false;
+        root.stats.median = false;
+    }
+
+    measure-touch := TouchArea {
+        Rectangle {
+            background: measure-touch.has-hover ? Theme.hover : transparent;
+            HorizontalLayout {
+                spacing: 10px;
+                padding: 5px;
+                Text {
+                    text: root.label;
+                    width: 110px;
+                    vertical-alignment: center;
+                }
+
+                Button {
+                    text: (stats.val || stats.avg || stats.max || stats.min || stats.sum || stats.stdev || stats.median) ? "x" : "✓";
+                    width: 25px;
+                    height: 25px;
+                    clicked => {
+                        if (stats.val || stats.avg || stats.max || stats.min || stats.sum || stats.stdev || stats.median) {
+                            root.stats = { avg: false, max: false, min: false, sum: false, stdev: false, median: false };
+                        } else {
+                            root.stats = root.defaults;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 25px;
+                    height: 25px;
+                    CheckBox {
+                        enabled: !disabled.val;
+                        checked: root.stats.val;
+                        toggled => {
+                            root.stats.val = self.checked;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 25px;
+                    height: 25px;
+                    CheckBox {
+                        enabled: !root.disabled.avg;
+                        checked: root.stats.avg;
+                        toggled => {
+                            root.stats.avg = self.checked;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 25px;
+                    height: 25px;
+                    CheckBox {
+                        enabled: !root.disabled.max;
+                        checked: root.stats.max;
+                        toggled => {
+                            root.stats.max = self.checked;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 25px;
+                    height: 25px;
+                    CheckBox {
+                        enabled: !root.disabled.min;
+                        checked: root.stats.min;
+                        toggled => {
+                            root.stats.min = self.checked;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 25px;
+                    height: 25px;
+                    CheckBox {
+                        enabled: !root.disabled.sum;
+                        checked: root.stats.sum;
+                        toggled => {
+                            root.stats.sum = self.checked;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 25px;
+                    height: 25px;
+                    CheckBox {
+                        enabled: !root.disabled.stdev;
+                        checked: root.stats.stdev;
+                        toggled => {
+                            root.stats.stdev = self.checked;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 25px;
+                    height: 25px;
+                    CheckBox {
+                        enabled: !root.disabled.median;
+                        checked: root.stats.median;
+                        toggled => {
+                            root.stats.median = self.checked;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component ClassEditDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 680px;
+        height: 600px;
+        background: Theme.panel;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        clip: true;
+
+        VerticalLayout {
+            spacing: 0;
+
+            Rectangle {
+                height: 56px;
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: stretch;
+
+                    Text {
+                        text: "Class Settings";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 5px;
+                        background: close-ta.has-hover ? Theme.raised : transparent;
+                        Text {
+                            text: "✕";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-ta := TouchArea {
+                            clicked => {
+                                GlobalAppState.active-dialog = DialogType.none;
+                                ClassificationSettingsState.reset_to_zero();
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                HorizontalLayout {
+                    Rectangle {
+                        width: 48px;
+                        background: Theme.panel;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        vertical-stretch: 1;
+                        VerticalBox {
+                            width: 48px;
+                            padding: 4px;
+                            alignment: start;
+                            spacing: 8px;
+
+                            NavIconLeft {
+                                icon: @image-url("../icons/regular-black/text-t.svg");
+                                active: ClassificationSettingsState.selected_tab_index == 0;
+                                clicked => {
+                                    ClassificationSettingsState.selected_tab_index = 0;
+                                }
+                            }
+
+                            NavIconLeft {
+                                icon: @image-url("../icons/regular-black/radical.svg");
+                                active: ClassificationSettingsState.selected_tab_index == 1;
+                                clicked => {
+                                    ClassificationSettingsState.selected_tab_index = 1;
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: parent.width - 48px;
+                        if (ClassificationSettingsState.selected_tab_index == 0):
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 15px;
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: "Name:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                }
+
+                                LineEdit {
+                                    placeholder-text: "e.g. FITC-Cell";
+                                    text <=> ClassificationSettingsState.settings.name;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: "Notes:";
+                                    vertical-alignment: center;
+                                    width: 110px;
+                                }
+
+                                LineEdit {
+                                    placeholder-text: "Optional description...";
+                                    text <=> ClassificationSettingsState.settings.notes;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text {
+                                    text: "Color:";
+                                    font-weight: 700;
+                                    width: 110px;
+                                }
+
+                                GridLayout {
+                                    spacing: 8px;
+                                    Row {
+                                        for c in [
+                                            #FF00FF,
+                                            #00FFFF,
+                                            #00FF00,
+                                            #FFFF00,
+                                            #FF3333,
+                                            #3366FF,
+                                            #FF9900,
+                                            #ADFF2F,
+                                            #00FA9A,
+                                            #87CEFA,
+                                            #FF66CC
+                                        ]: ColorTile {
+                                            item_color: c;
+                                        }
+                                    }
+
+                                    Row {
+                                        for c in [
+                                            #FFD700,
+                                            #FF4500,
+                                            #FF69B4,
+                                            #F08080,
+                                            #FFA07A,
+                                            #DA70D6,
+                                            #FF007F,
+                                            #FFCC00,
+                                            #EEDD82,
+                                            #BC8F8F,
+                                            #FF8C00
+                                        ]: ColorTile {
+                                            item_color: c;
+                                        }
+                                    }
+
+                                    Row {
+                                        for c in [
+                                            #00CED1,
+                                            #1E90FF,
+                                            #9370DB,
+                                            #40E0D0,
+                                            #7B68EE,
+                                            #48D1CC,
+                                            #00BFFF,
+                                            #AFEEEE,
+                                            #B0C4DE,
+                                            #66CDAA,
+                                            #9932CC
+                                        ]: ColorTile {
+                                            item_color: c;
+                                        }
+                                    }
+
+                                    Row {
+                                        for c in [
+                                            #FFCCFF,
+                                            #99FFFF,
+                                            #FFE4B5,
+                                            #EEE8AA,
+                                            #CCFFCC,
+                                            #E6E6FA,
+                                            #FFFAC8,
+                                            #F0FFF0,
+                                            #F5FFFA,
+                                            #F0F8FF,
+                                            #FFFFFF
+                                        ]: ColorTile {
+                                            item_color: c;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                vertical-stretch: 1;
+                            }
+                        }
+                        if (ClassificationSettingsState.selected_tab_index == 1):
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 15px;
+                            HorizontalLayout {
+                                spacing: 10px;
+                                height: 20px;
+                                Rectangle {
+                                    width: 110px;
+                                }
+
+                                StatHeader {
+                                    text: "";
+                                    width: 30px;
+                                }
+
+                                StatHeader {
+                                    text: "VAL";
+                                    width: 25px;
+                                }
+
+                                StatHeader {
+                                    text: "AVG";
+                                    width: 25px;
+                                }
+
+                                StatHeader {
+                                    text: "MAX";
+                                    width: 25px;
+                                }
+
+                                StatHeader {
+                                    text: "MIN";
+                                    width: 25px;
+                                }
+
+                                StatHeader {
+                                    text: "SUM";
+                                    width: 25px;
+                                }
+
+                                StatHeader {
+                                    text: "STDEV";
+                                    width: 25px;
+                                }
+
+                                StatHeader {
+                                    text: "MED";
+                                    width: 25px;
+                                }
+                            }
+
+                            ScrollView {
+                                VerticalLayout {
+                                    spacing: 10px;
+                                    padding-right: 20px;
+
+                                    MeasurementRow {
+                                        label: "Object count";
+                                        stats <=> ClassificationSettingsState.settings.measurement.object_count_stats;
+                                        disabled: { avg: true, max: true, min: true, sum: false, stdev: true, median: true };
+                                        defaults: { val: true, sum: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Intersecting";
+                                        stats <=> ClassificationSettingsState.settings.measurement.intersecting-stats;
+                                        disabled: { max: true, min: true, stdev: true, median: true };
+                                        defaults: { val: true, avg: true, sum: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Area size";
+                                        stats <=> ClassificationSettingsState.settings.measurement.area-size;
+                                        defaults: { val: true, avg: true, sum: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Perimeter";
+                                        stats <=> ClassificationSettingsState.settings.measurement.perimeter-stats;
+                                        defaults: { val: true, avg: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Circularity";
+                                        stats <=> ClassificationSettingsState.settings.measurement.circularity-stats;
+                                        defaults: { val: true, avg: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Intensity min.";
+                                        stats <=> ClassificationSettingsState.settings.measurement.intensity-min-stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Intensity max.";
+                                        stats <=> ClassificationSettingsState.settings.measurement.intensity-max-stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Intensity avg.";
+                                        stats <=> ClassificationSettingsState.settings.measurement.intensity-avg-stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Intensity sum.";
+                                        stats <=> ClassificationSettingsState.settings.measurement.intensity-sum-stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Position";
+                                        stats <=> ClassificationSettingsState.settings.measurement.position-stats;
+                                        disabled: { max: true, min: true, sum: true, stdev: true, median: true };
+                                        defaults: { val: true, avg: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Dist. center";
+                                        stats <=> ClassificationSettingsState.settings.measurement.distance_center_center_stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Dist. cent.-surface min";
+                                        stats <=> ClassificationSettingsState.settings.measurement.distance_center_surface_min_stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Dist. cent.-surface max";
+                                        stats <=> ClassificationSettingsState.settings.measurement.distance_center_surface_max_stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Dist. surface min";
+                                        stats <=> ClassificationSettingsState.settings.measurement.distance_surface_surface_min_stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+
+                                    MeasurementRow {
+                                        label: "Dist. surface max";
+                                        stats <=> ClassificationSettingsState.settings.measurement.distance_surface_surface_max_stats;
+                                        defaults: { val: true, avg: true, stdev: true };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 56px;
+                background: Theme.bg;
+                border-color: Theme.border-soft;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: end;
+
+                    AppButton {
+                        text: "Cancel";
+                        clicked => {
+                            GlobalAppState.active-dialog = DialogType.none;
+                            ClassificationSettingsState.reset_to_zero();
+                        }
+                    }
+
+                    AppButton {
+                        text: "Apply Settings";
+                        primary: true;
+                        clicked => {
+                            ClassificationSettingsState.apply_classification_settings(ClassificationSettingsState.settings);
+                            GlobalAppState.active-dialog = DialogType.none;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

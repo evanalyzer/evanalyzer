@@ -1,0 +1,324 @@
+import {
+    LineEdit,
+    Button,
+    VerticalBox,
+    ListView,
+    Spinner,
+    Palette,
+} from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ToolToggleButton } from "../components/toggle_button.slint";
+import { ToolToggleButtonLabeled } from "../components/tool_button.slint";
+
+// ----------------------------------------------------------
+export struct ImageItemData {
+    name: string,
+    path: string,
+    image_dimension: string,
+    image_size: string,
+    has_annotations: bool,
+}
+
+export global ImagesListState {
+    in property <bool> is_scanning: false;
+    in-out property <string> filter_text;
+    in-out property <string> act_image_root_dir;
+
+    callback new_image_root_folder_clicked();
+    callback open_images_folder_clicked();
+    callback refresh_images_clicked();
+    callback image_selected(string);
+    callback image_filter_text_changed(string);
+
+    in-out property <int> selected_image_index: -1;
+    in property <[ImageItemData]> images_list: [];
+}
+
+// ----------------------------------------------------------
+// One image row - thumbnail + name + mono meta line.
+component ImageListRow inherits Rectangle {
+    in property <ImageItemData> data;
+    in property <bool> selected;
+    callback row_clicked;
+
+    // Two lines of text need a touch more than the default list-row-height.
+    height: 52px;
+
+    // Inner card, inset so the selection ring doesn't hug the panel edges.
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: Theme.radius-md;
+
+        background: root.selected ? Theme.list-select-row-bg                       // #1E3866
+            : (row_ta.has-hover ? Theme.raised : transparent);
+        border-width: 1px;
+        border-color: root.selected ? Theme.list-select-row-border-color             // #4D8DFF
+            : transparent;
+        animate background { duration: 80ms; }
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 10px;
+            alignment: stretch;
+
+            // Thumbnail placeholder - gradient tile with a tiny accent
+            // dot for images that already have annotations.
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 5px;
+                    background: @linear-gradient(135deg, Theme.raised 0%, Theme.bg 100%);
+                    border-width: 1px;
+                    border-color: rgba(255, 255, 255, 0.05);
+
+                    // Annotation indicator dot
+                    if root.data.has-annotations: Rectangle {
+                        x: parent.width - 9px;
+                        y: 3px;
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.accent;
+                        // Subtle ring so it reads on the gradient
+                        border-width: 1px;
+                        border-color: Theme.bg;
+                    }
+                }
+            }
+
+            // Name (line 1) + meta (line 2)
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: root.data.name;
+                    color: root.selected ? Theme.text-bright : Theme.text;
+                    font-size: 13px;
+                    font-weight: root.selected ? 500 : 400;
+                    overflow: elide;
+                    horizontal-alignment: left;
+                }
+
+                Text {
+                    text: root.data.image-dimension + "  ·  " + root.data.image-size;
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    overflow: elide;
+                    horizontal-alignment: left;
+                }
+            }
+
+            // Annotation tag - only on hover/selected, otherwise the dot
+            // on the thumb is enough
+            if root.data.has-annotations && (row_ta.has-hover || root.selected): VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 18px;
+                    min-width: 22px;
+                    border-radius: 3px;
+                    background: rgba(77, 141, 255, 0.12);
+                    border-width: 1px;
+                    border-color: rgba(77, 141, 255, 0.25);
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        Text {
+                            text: "ann";
+                            font-size: 9.5px;
+                            font-family: Theme.font-mono;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    row_ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.row_clicked();
+        }
+    }
+}
+
+// ----------------------------------------------------------
+export component ImagesListPanel inherits Rectangle {
+
+    VerticalBox {
+        spacing: 12px;
+        padding: Theme.panel-content-padding;
+
+        // ----- HEADER -----
+        HorizontalLayout {
+            alignment: space-between;
+            Text {
+                text: "Project Images";
+                font-size: 14px;
+                font-weight: 600;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: ImagesListState.images_list.length == 1 ? "1 file" : ImagesListState.images_list.length + " files";
+                font-size: 11px;
+                font-family: Theme.font-mono;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
+        }
+
+        // ----- SEARCH + REFRESH -----
+        HorizontalLayout {
+            spacing: 6px;
+            LineEdit {
+                placeholder-text: "Search files…";
+                height: 32px;
+                horizontal-stretch: 1;
+                text: ImagesListState.filter_text;
+                edited(text) => {
+                    ImagesListState.filter_text = text;
+                    ImagesListState.image_filter_text_changed(text);
+                }
+            }
+
+            ToolToggleButton {
+                height: 32px;
+                width: 32px;
+                border-color: Theme.border;
+                border-width: 1px;
+                icon: @image-url("../icons/regular-white/arrow-clockwise.svg");
+                clicked => {
+                    ImagesListState.refresh_images_clicked();
+                }
+            }
+        }
+
+        // ----- PATH STRIP (root dir) -----
+        if ImagesListState.act_image_root_dir != "": Rectangle {
+            height: 26px;
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            border-radius: Theme.radius-sm;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 6px;
+                alignment: start;
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: @image-url("../icons/regular-white/folder.svg");
+                        width: 11px;
+                        height: 11px;
+                        colorize: Theme.text-mute;
+                    }
+                }
+
+                Text {
+                    text: ImagesListState.act_image_root_dir;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
+        // ----- FILE LIST -----
+        Rectangle {
+            vertical-stretch: 1;
+
+            ListView {
+                width: 100%;
+                height: 100%;
+                horizontal-scrollbar-policy: always-off;
+
+                for data[index] in ImagesListState.images_list: ImageListRow {
+                    data: data;
+                    selected: ImagesListState.selected_image_index == index;
+
+                    row_clicked => {
+                        ImagesListState.selected_image_index = index;
+                        ImagesListState.image_selected(data.path);
+                    }
+                }
+            }
+
+            // Empty state - list is empty AND we aren't currently scanning
+            if ImagesListState.images_list.length == 0 && !ImagesListState.is_scanning: Rectangle {
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    padding: 20px;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 56px;
+                            height: 56px;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            Image {
+                                source: @image-url("../icons/regular-white/image.svg");
+                                width: 22px;
+                                height: 22px;
+                                colorize: Theme.text-faint;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "No images loaded";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "Select a folder to import TIFF, OME-TIFF or CZI files.";
+                        font-size: 11px;
+                        color: Theme.text-mute;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            // Scanning overlay
+            if ImagesListState.is_scanning: Rectangle {
+                background: Theme.overlay-scrim;
+                Spinner {
+                    indeterminate: true;
+                }
+
+                TouchArea { }
+            }
+        }
+
+        // ----- FOOTER ACTION -----
+        ToolToggleButtonLabeled {
+            height: 36px;
+            text: "Select folder";
+            icon: @image-url("../icons/regular-white/folder.svg");
+            clicked => {
+                ImagesListState.open_images_folder_clicked();
+            }
+        }
+    }
+}

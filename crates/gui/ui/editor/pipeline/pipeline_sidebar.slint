@@ -1,0 +1,153 @@
+import { ScrollView, Button, LineEdit } from "std-widgets.slint";
+import { Theme } from "../../style.slint";
+
+export struct PipelineStep {
+    name: string,
+    completed: bool,
+}
+
+export struct Pipeline {
+    id: int,
+    name: string,
+    steps: [PipelineStep],
+}
+
+export component PipelineSidebar inherits Rectangle {
+    // --- Data Inputs ---
+    in property <[Pipeline]> pipelines: [
+        {
+            id: 1,
+            name: "Cell Counting AI",
+            steps: [
+                { name: "Denoising", completed: true },
+                { name: "StarDist AI", completed: false },
+                { name: "Size Filter", completed: false }
+            ]
+        },
+        {
+            id: 2,
+            name: "Tissue Mapping",
+            steps: [
+                { name: "Normalization", completed: true },
+                { name: "Thresholding", completed: true },
+                { name: "Voronoi", completed: true }
+            ]
+        }
+    ];
+
+    // --- State ---
+    in-out property <int> selected-pipeline-idx: -1;
+    in-out property <int> active-step-idx: 0;
+
+    background: Theme.sidebar;
+    width: 280px;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 15px;
+
+        // 1. HEADER & GLOBAL COMMANDS
+        Text {
+            text: "ANALYSIS PIPELINES";
+            font-size: 14px;
+            font-weight: 700;
+            color: Theme.text-mute;
+        }
+
+        Button {
+            text: "+ New Pipeline";
+            primary: true;
+            clicked => { /* Logic to push new Pipeline to Rust */ }
+        }
+
+        // 2. PIPELINES LIST
+        Rectangle {
+            background: Theme.sidebar-list;
+            border-radius: 4px;
+            height: 200px; // Fixed height for the list
+            
+            ScrollView {
+                VerticalLayout {
+                    alignment: start;
+                    padding: 5px;
+                    for p[i] in pipelines: Rectangle {
+                        height: 32px;
+                        background: selected-pipeline-idx == i ? Theme.hover : transparent;
+                        border-radius: 2px;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            Text {
+                                text: p.name;
+                                vertical-alignment: center;
+                                color: selected-pipeline-idx == i ? Theme.text-bright : Theme.text-dim;
+                            }
+                        }
+
+                        TouchArea {
+                            clicked => {
+                                selected-pipeline-idx = i;
+                                active-step-idx = 0; // Reset to first step of new pipeline
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. STEP SELECTION (Command List)
+        if (selected-pipeline-idx >= 0): VerticalLayout {
+            spacing: 8px;
+
+            Text {
+                text: "STEPS: " + pipelines[selected-pipeline-idx].name;
+                font-size: 12px;
+                color: Theme.text-mute;
+            }
+
+            // The "Step-by-Step" Command List
+            for step[j] in pipelines[selected-pipeline-idx].steps: Rectangle {
+                height: 32px;
+                background: active-step-idx == j ? Theme.sidebar-step-active : Theme.sidebar-step-idle;
+                //border-left-width: active-step-idx == j ? 4px : 0px;
+                //border-left-color: #4A90E2;
+
+                HorizontalLayout {
+                    padding: 10px;
+                    spacing: 10px;
+
+                    // Status Circle
+                    Rectangle {
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 6px;
+                        background: step.completed ? Theme.status-done : Theme.status-idle;
+                        y: 7px; // manual centering
+                    }
+
+                    Text {
+                        text: (j + 1) + ". " + step.name;
+                        color: active-step-idx == j ? Theme.text-bright : Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                }
+
+                TouchArea {
+                    clicked => {
+                        active-step-idx = j;
+                    }
+                }
+            }
+        }
+
+        // Spacer to push everything up
+        Rectangle { }
+
+        // 4. GLOBAL EXECUTION
+        if (selected-pipeline-idx >= 0): Button {
+            text: "Run Entire Pipeline";
+            height: 32px;
+            // logic: emit run-pipeline(selected-pipeline-idx)
+        }
+    }
+}

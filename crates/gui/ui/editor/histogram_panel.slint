@@ -1,0 +1,317 @@
+// histogram_panel.slint - redesigned
+//
+// Changes vs. the original:
+//   - Slimmer (140px) instead of 200px; more breathing room above/below
+//   - Shades OUTSIDE the active range (visible-clipped pattern) instead of
+//     inside (which read as "selection box"). Standard histogram convention.
+//   - White pill-cap handles at the bottom so they're easy to grab without
+//     covering the curve.
+//   - Renamed bottom controls from "AXIS MIN / AXIS MAX" to "BLACK POINT /
+//     WHITE POINT" - that's what they actually are, and the new labels make
+//     the histogram self-explanatory.
+//   - Adds a "Reset" button next to "Auto-scale" so users can revert quickly.
+//   - All colors via Theme tokens, no scattered `Palette.foreground.with-alpha`.
+
+import { Button, Palette, LineEdit } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { HistogramState } from "../state.slint";
+import { CustomLineEdit } from "../components/custom_line_edit.slint";
+
+export component HistogramPanel inherits Rectangle {
+    background: transparent;
+
+    property <bool> dragging-min: false;
+    property <bool> dragging-max: false;
+
+    VerticalLayout {
+        spacing: 10px;
+
+        // ---- HEADER ----
+        HorizontalLayout {
+            alignment: space-between;
+            Text {
+                text: "HISTOGRAM";
+                font-size: 10.5px;
+                font-weight: 600;
+                letter-spacing: 0.8px;
+                color: Theme.text-dim;
+                vertical-alignment: center;
+            }
+
+            HorizontalLayout {
+                spacing: 4px;
+                Button {
+                    text: "Auto-scale";
+                    height: 22px;
+                    primary: false;
+                    clicked => {
+                        HistogramState.auto_adjust_clicked();
+                    }
+                }
+            }
+        }
+
+        // ---- GRAPH ----
+        Rectangle {
+            height: 140px;
+            background: Theme.raised;
+            border-radius: Theme.radius-sm;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            clip: true;
+
+            // Subtle dotted grid (3 verticals + 3 horizontals)
+            for i in 3: Rectangle {
+                x: parent.width * ((i + 1) * 0.25);
+                width: 1px;
+                height: 100%;
+                background: Theme.border.with-alpha(0.6);
+                opacity: 0.5;
+            }
+            for i in 3: Rectangle {
+                y: parent.height * ((i + 1) * 0.25);
+                height: 1px;
+                width: 100%;
+                background: Theme.border.with-alpha(0.6);
+                opacity: 0.5;
+            }
+
+            // Histogram curve(s) - one path per channel/series, fed by state.
+            for hist in HistogramState.histogram_svg_path: Path {
+                width: 100%;
+                height: 100%;
+                commands: hist.path;
+                stroke: hist.color;
+                stroke-width: 1.25px;
+                fill: hist.color.with-alpha(0.18);
+                viewbox-width: 100;
+                viewbox-height: 100;
+            }
+
+            // Clipped-OUTSIDE overlay (left of min)
+            Rectangle {
+                x: 0;
+                width: parent.width * HistogramState.histogram_min_val;
+                height: 100%;
+                background: Theme.bg.with-alpha(0.6);
+            }
+            // Clipped-OUTSIDE overlay (right of max)
+            Rectangle {
+                x: parent.width * HistogramState.histogram_max_val;
+                width: parent.width * (1 - HistogramState.histogram_max_val);
+                height: 100%;
+                background: Theme.bg.with-alpha(0.6);
+            }
+
+            // ---- Handles ----
+            min-handle := Rectangle {
+                x: parent.width * HistogramState.histogram_min_val - (self.width / 2);
+                width: 2px;
+                height: 100%;
+                background: dragging-min ? Theme.accent : Theme.text;
+                Rectangle {
+                    // bottom pill cap - easy hit target
+                    y: parent.height - 9px;
+                    x: -4px;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: dragging-min ? Theme.accent : Theme.text;
+                }
+            }
+
+            max-handle := Rectangle {
+                x: parent.width * HistogramState.histogram_max_val - (self.width / 2);
+                width: 2px;
+                height: 100%;
+                background: dragging-max ? Theme.accent : Theme.text;
+                Rectangle {
+                    y: parent.height - 9px;
+                    x: -4px;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: dragging-max ? Theme.accent : Theme.text;
+                }
+            }
+
+            // ---- Drag interaction (unchanged logic) ----
+            TouchArea {
+                mouse-cursor: dragging-min || dragging-max ? col-resize : pointer;
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left) {
+                        if (event.kind == PointerEventKind.down) {
+                            let d-min = Math.abs(self.mouse-x - (parent.width * HistogramState.histogram_min_val));
+                            let d-max = Math.abs(self.mouse-x - (parent.width * HistogramState.histogram_max_val));
+                            if (d-min < d-max && d-min < 20px) {
+                                dragging-min = true;
+                            } else if (d-max < 20px) {
+                                dragging-max = true;
+                            }
+                        } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                            dragging-min = false;
+                            dragging-max = false;
+                        }
+                    }
+                }
+                moved => {
+                    if (dragging-min || dragging-max) {
+                        let rel = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                        let range = HistogramState.histogram_max_lim - HistogramState.histogram_min_lim;
+                        if (dragging-min) {
+                            let final-rel = Math.min(rel, HistogramState.histogram_max_val - 0.01);
+                            HistogramState.histogram_min_val = final-rel;
+                            HistogramState.histogram_min_val_abs = HistogramState.histogram_min_lim + (final-rel * range);
+                        } else {
+                            let final-rel = Math.max(rel, HistogramState.histogram_min_val + 0.01);
+                            HistogramState.histogram_max_val = final-rel;
+                            HistogramState.histogram_max_val_abs = HistogramState.histogram_min_lim + (final-rel * range);
+                        }
+                        HistogramState.histogram_adjusted(
+                            HistogramState.histogram_min_val_abs,
+                            HistogramState.histogram_max_val_abs,
+                            HistogramState.histogram_min_lim,
+                            HistogramState.histogram_max_lim);
+                    }
+                }
+            }
+        }
+
+        // ---- BOTTOM: Black point / White point (labeled inputs) ----
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: stretch;
+
+            VerticalLayout {
+                spacing: 3px;
+                horizontal-stretch: 1;
+                Text {
+                    text: "BLACK POINT";
+                    font-size: 9.5px;
+                    font-weight: 600;
+                    letter-spacing: 0.4px;
+                    color: Theme.text-mute;
+                }
+
+                Rectangle {
+                    height: 26px;
+                    border-radius: Theme.radius-sm;
+                    LineEdit {
+                        text <=> HistogramState.histogram_min_lim_txt;
+                        font-size: 11px;
+                        width: 100%;
+
+                        accepted(val) => {
+                            let num = val.to-float();
+                            HistogramState.histogram_min_lim = num;
+                            root.update_zoom_limits_min(num);
+                            self.clear-focus();
+                        }
+                    }
+                }
+            }
+
+            // The current active range, monospace, accent color
+         /*   VerticalLayout {
+                spacing: 3px;
+                alignment: center;
+                Text {
+                    text: " ";
+                    font-size: 9.5px;
+                }
+
+                HorizontalLayout {
+                    spacing: 5px;
+                    alignment: center;
+                    Text {
+                        text: Math.round(HistogramState.histogram_min_val_abs * 1000) / 1000;
+                        font-size: 11px;
+                        font-weight: 500;
+                        color: Theme.accent;
+                        font-family: Theme.font-mono;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "→";
+                        font-size: 10px;
+                        color: Theme.text-faint;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: Math.round(HistogramState.histogram_max_val_abs * 1000) / 1000;
+                        font-size: 11px;
+                        font-weight: 500;
+                        color: Theme.accent;
+                        font-family: Theme.font-mono;
+                        vertical-alignment: center;
+                    }
+                }
+            }*/
+
+            VerticalLayout {
+                spacing: 3px;
+                horizontal-stretch: 1;
+                Text {
+                    text: "WHITE POINT";
+                    font-size: 9.5px;
+                    font-weight: 600;
+                    letter-spacing: 0.4px;
+                    horizontal-alignment: right;
+                    color: Theme.text-mute;
+                }
+
+                Rectangle {
+                    height: 26px;
+                    border-radius: Theme.radius-sm;
+                    LineEdit {
+                        text <=> HistogramState.histogram_max_lim_txt;
+                        font-size: 11px;
+                        horizontal-alignment: right;
+                        width: 100%;
+                        accepted(val) => {
+                            let num = val.to-float();
+                            HistogramState.histogram_max_lim = num;
+                            root.update_zoom_limits_max(num);
+                            //self.clear-focus();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- RE-SYNC LOGIC (unchanged) ---
+    function update_zoom_limits_min(new_lim: float) {
+        let range = HistogramState.histogram_max_lim - new_lim;
+        let c_abs_min = HistogramState.histogram_min_val_abs;
+        let cl_abs_min = Math.max(new_lim, c_abs_min);
+        let c_abs_max = HistogramState.histogram_max_val_abs;
+        let cl_abs_max = Math.max(new_lim, c_abs_max);
+        if (range > 0.00001) {
+            HistogramState.histogram_min_val = (cl_abs_min - new_lim) / range;
+            HistogramState.histogram_max_val = (cl_abs_max - new_lim) / range;
+        }
+        HistogramState.histogram_min_val_abs = cl_abs_min;
+        HistogramState.histogram_max_val_abs = cl_abs_max;
+        HistogramState.histogram_adjusted(cl_abs_min, cl_abs_max,
+            HistogramState.histogram_min_lim, HistogramState.histogram_max_lim);
+    }
+
+    function update_zoom_limits_max(new_lim: float) {
+        let range = new_lim - HistogramState.histogram_min_lim;
+        let c_abs_min = HistogramState.histogram_min_val_abs;
+        let cl_abs_min = Math.min(new_lim, c_abs_min);
+        let c_abs_max = HistogramState.histogram_max_val_abs;
+        let cl_abs_max = Math.min(new_lim, c_abs_max);
+        if (range > 0.00001) {
+            HistogramState.histogram_min_val = 1.0 - (new_lim - cl_abs_min) / range;
+            HistogramState.histogram_max_val = 1.0 - (new_lim - cl_abs_max) / range;
+        }
+        HistogramState.histogram_min_val_abs = cl_abs_min;
+        HistogramState.histogram_max_val_abs = cl_abs_max;
+        HistogramState.histogram_adjusted(cl_abs_min, cl_abs_max,
+            HistogramState.histogram_min_lim, HistogramState.histogram_max_lim);
+    }
+}

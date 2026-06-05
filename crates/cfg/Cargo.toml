@@ -1,0 +1,45 @@
+[package]
+name = "evanalyzer_cfg"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+log = "0.4"        
+libloading = "0.8"
+quick-xml = "0.39"
+serde_json = "1.0.149"
+ndarray = "0.17.2"
+rayon = "1.10"
+serde = {version = "1.0.228", features = ["derive","rc"]}
+thiserror = "2.0.18"
+indexmap = {version ="2.13.0",features = ["serde"]}
+pathdiff = "0.2"
+human-sort = "0.2.2"
+bitvec = {version = "1.0.1", features = ["serde", "alloc","atomic","std"]}
+schemars = { version = "1.2.1", features = ["indexmap2"] }
+fast-uuid-v7 = "0.1"
+
+
+[dev-dependencies]
+approx = "0.5"
+env_logger = "0.11"
+tempfile = "3.27.0"
+
+
+[build-dependencies]
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+schemars = { version = "1.2.1", features = ["indexmap2"] }
+serde_json = "1.0.149"
+indexmap = {version ="2.13.0",features = ["serde"]}
+serde = {version = "1.0.228", features = ["derive","rc"]}
+bitvec = {version = "1.0.1", features = ["serde", "alloc","atomic","std"]}
+fast-uuid-v7 = "0.1"
+
+
+[lib]
+name = "evanalyzer_cfg"
+doctest = false

@@ -1,0 +1,4 @@
+- [ ] Force user that Waterhed must be after connected component
+- [ ] Fix watershed algorithm which is not working yet
+- [ ] Allow to store and open project templates
+- [ ] When clicking on a ROI in the results paint the bounding box of this ROI in the correct image.

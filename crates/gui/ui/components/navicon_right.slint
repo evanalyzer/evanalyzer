@@ -1,0 +1,46 @@
+import { Palette } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+export component NavIconRight inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active;
+    callback clicked;
+
+    width: 44px; // Consistent with the left nav for symmetry
+    height: 44px;
+    border-radius: 8px;
+
+    // Use the theme hover color (Palette.alternate-background)
+    background: ta.has-hover ? Theme.hover : transparent;
+    animate background { duration: 100ms; }
+
+    Image {
+        source: root.icon;
+        width: 22px;
+        height: 22px;
+
+        // ICON COLOR LOGIC:
+        // Active: Pure foreground (White in Dark, Black in Light)
+        // Inactive: Muted (60% opacity)
+        // Hover: Brighter feedback
+        colorize: root.active ? Palette.foreground : (ta.has-hover ? Palette.foreground : Palette.foreground.with-alpha(0.6));
+        animate colorize { duration: 150ms; }
+    }
+
+    // The "Active" indicator: Vertical bar on the FAR RIGHT
+    if (root.active): Rectangle {
+        // Move to the right edge minus a small 2px padding for "glue"
+        x: parent.width - 5px;
+        width: 3px;
+        height: 20px;
+        background: Palette.accent-background; // System Blue
+        border-radius: 1.5px;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

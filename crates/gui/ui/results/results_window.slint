@@ -1,0 +1,464 @@
+import { Palette, ScrollView } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ToolToggleButton } from "../components/toggle_button.slint";
+import { VerticalDivider } from "../components/divider.slint";
+import {
+    ResultsTable,
+    ResultsState,
+    ResultsViewMode,
+    ResultsColumnDef,
+    ResultsRow,
+    FilterItem,
+} from "results_table.slint";
+export { ResultsState, ResultsViewMode, ResultsColumnDef, ResultsRow, FilterItem } from "results_table.slint";
+
+
+// -- Toolbar -------------------------------------------------------------------
+
+component ResultsToolbar inherits Rectangle {
+    height: 48px;
+    background: Theme.bg;
+
+    HorizontalLayout {
+        padding-top: 5px;
+        padding-left: 4px;
+        padding-right: 8px;
+        padding-bottom: 5px;
+        spacing: 2px;
+
+        // -- Column visibility (funnel icon opens popup) -----------------------
+        col-vis-btn := Rectangle {
+            width: 36px;
+            height: 36px;
+            property <bool> col-popup-open: false;
+
+            ToolToggleButton {
+                icon: @image-url("../icons/regular-black/funnel.svg");
+                clicked => {
+                    col-vis-btn.col-popup-open = true;
+                    col-filter-popup.show();
+                }
+            }
+
+            col-filter-popup := PopupWindow {
+                x: 0px;
+                y: col-vis-btn.height + 2px;
+                width: 230px;
+                height: 320px;
+                close-policy: no-auto-close;
+
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-md;
+                    drop-shadow-blur: 12px;
+                    drop-shadow-color: #00000036;
+                    drop-shadow-offset-y: 4px;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+
+                        // -- Search field --------------------------------------
+                        Rectangle {
+                            height: 34px;
+                            background: Theme.bg;
+
+                            HorizontalLayout {
+                                padding: 4px;
+                                spacing: 4px;
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 26px;
+                                    background: Theme.bg;
+                                    border-radius: 3px;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    clip: true;
+
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 4px;
+                                        spacing: 5px;
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Image {
+                                                source: @image-url("../icons/regular-black/magnifying-glass.svg");
+                                                width: 11px;
+                                                height: 11px;
+                                                colorize: Theme.text-mute;
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+
+                                            col-search-input := TextInput {
+                                                width: parent.width;
+                                                font-size: 11px;
+                                                font-family: Theme.font-mono;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                                edited => {
+                                                    ResultsState.column_search_changed(self.text);
+                                                }
+                                            }
+
+                                            if col-search-input.text == "": Text {
+                                                x: 0px;
+                                                y: (parent.height - self.height) / 2;
+                                                text: "Search…";
+                                                font-size: 11px;
+                                                color: Theme.text-faint;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        // -- (Select All) --------------------------------------
+                        col-sel-all-ta := TouchArea {
+                            height: 26px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                if (ResultsState.column_popup_all_checked) {
+                                    ResultsState.column_clear_all();
+                                } else {
+                                    ResultsState.column_select_all();
+                                }
+                            }
+
+                            Rectangle {
+                                background: col-sel-all-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 6px;
+                                    spacing: 7px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 13px;
+                                            height: 13px;
+                                            border-radius: 2px;
+                                            border-width: 1.5px;
+                                            border-color: ResultsState.column_popup_all_checked ? Theme.accent : Theme.border;
+                                            background: ResultsState.column_popup_all_checked ? Theme.accent : transparent;
+
+                                            if ResultsState.column_popup_all_checked: Image {
+                                                source: @image-url("../icons/regular-black/check.svg");
+                                                width: 9px;
+                                                height: 9px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                colorize: white;
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "(Select All)";
+                                        font-size: 11px;
+                                        font-family: Theme.font-mono;
+                                        font-weight: 600;
+                                        color: ResultsState.column_popup_all_checked ? Theme.text-dim : Theme.text-mute;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        // -- Item list -----------------------------------------
+                        ScrollView {
+                            vertical-stretch: 1;
+
+                            VerticalLayout {
+                                padding: 2px;
+                                spacing: 0px;
+
+                                for item in (col-vis-btn.col-popup-open ? ResultsState.column_popup : []): col-item-ta := TouchArea {
+                                    height: 26px;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        ResultsState.column_label_toggled(item.label);
+                                    }
+
+                                    Rectangle {
+                                        background: col-item-ta.has-hover ? Theme.raised : transparent;
+                                        animate background { duration: 80ms; }
+
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 6px;
+                                            spacing: 7px;
+                                            alignment: start;
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 13px;
+                                                    height: 13px;
+                                                    border-radius: 2px;
+                                                    border-width: 1.5px;
+                                                    border-color: item.checked ? Theme.accent : Theme.border;
+                                                    background: item.checked ? Theme.accent : transparent;
+
+                                                    if item.checked: Image {
+                                                        source: @image-url("../icons/regular-black/check.svg");
+                                                        width: 9px;
+                                                        height: 9px;
+                                                        x: (parent.width - self.width) / 2;
+                                                        y: (parent.height - self.height) / 2;
+                                                        colorize: white;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: item.label;
+                                                font-size: 11px;
+                                                font-family: Theme.font-mono;
+                                                color: item.checked ? Theme.text-dim : Theme.text-mute;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                                horizontal-stretch: 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        // -- Done button ---------------------------------------
+                        col-done-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.column_filter_apply();
+                                col-vis-btn.col-popup-open = false;
+                                col-filter-popup.close();
+                            }
+
+                            Rectangle {
+                                background: col-done-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: "Done";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: Theme.accent;
+                                        font-weight: 500;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        VerticalDivider { }
+
+        // -- View mode ---------------------------------------------------------
+        ToolToggleButton {
+            icon: @image-url("../icons/regular-black/table.svg");
+            checked: ResultsState.view_mode == ResultsViewMode.table;
+            clicked => {
+                ResultsState.view_mode = ResultsViewMode.table;
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("../icons/regular-black/chart-bar.svg");
+            checked: ResultsState.view_mode == ResultsViewMode.chart;
+            enabled: false;
+            clicked => {
+                ResultsState.view_mode = ResultsViewMode.chart;
+            }
+        }
+
+        VerticalDivider { }
+
+        // -- Sort direction ----------------------------------------------------
+        ToolToggleButton {
+            icon: ResultsState.sort_ascending ? @image-url("../icons/regular-black/sort-ascending.svg") : @image-url("../icons/regular-black/sort-descending.svg");
+            enabled: ResultsState.sort_column_id != "";
+            clicked => {
+                ResultsState.sort_ascending = !ResultsState.sort_ascending;
+                ResultsState.sort_requested(ResultsState.sort_column_id, ResultsState.sort_ascending);
+            }
+        }
+
+        // -- Copy to clipboard -------------------------------------------------
+        ToolToggleButton {
+            icon: @image-url("../icons/regular-black/clipboard.svg");
+            clicked => {
+                ResultsState.copy_to_clipboard();
+            }
+        }
+
+        // -- Spacer ------------------------------------------------------------
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        VerticalDivider { }
+
+        // -- Export ------------------------------------------------------------
+        ToolToggleButton {
+            icon: @image-url("../icons/regular-black/file-csv.svg");
+            clicked => {
+                ResultsState.export_csv();
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("../icons/regular-black/file-xls.svg");
+            clicked => {
+                ResultsState.export_xlsx();
+            }
+        }
+    }
+}
+
+// -- Status footer -------------------------------------------------------------
+
+component ResultsStatusBar inherits Rectangle {
+    height: 32px;
+
+    VerticalLayout {
+        spacing: 0;
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 12px;
+            vertical-stretch: 1;
+
+            Text {
+                text: ResultsState.rows.length == 1 ? "1 row" : ResultsState.rows.length + " rows";
+                font-size: 11px;
+                font-family: Theme.font-mono;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
+
+            if ResultsState.filter_active: VerticalLayout {
+                alignment: center;
+
+                filter-badge-ta := TouchArea {
+                    height: 16px;
+                    mouse-cursor: pointer;
+                    clicked => { ResultsState.clear_all_filters(); }
+
+                    Rectangle {
+                        border-radius: 3px;
+                        background: filter-badge-ta.has-hover ? Theme.accent : Theme.accent-dim;
+                        border-width: 1px;
+                        border-color: Theme.accent;
+                        animate background { duration: 80ms; }
+
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 4px;
+                            spacing: 3px;
+                            alignment: center;
+
+                            Text {
+                                text: "filtered";
+                                font-size: 10px;
+                                font-family: Theme.font-mono;
+                                color: filter-badge-ta.has-hover ? white : Theme.accent;
+                                vertical-alignment: center;
+                                animate color { duration: 80ms; }
+                            }
+
+                            Image {
+                                source: @image-url("../icons/regular-black/x.svg");
+                                width: 8px;
+                                height: 8px;
+                                colorize: filter-badge-ta.has-hover ? white : Theme.accent;
+                                animate colorize { duration: 80ms; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            if ResultsState.selected_roi_id != 0: Text {
+                text: "ROI \{ResultsState.selected_roi_id}";
+                font-size: 11px;
+                font-family: Theme.font-mono;
+                color: Theme.accent;
+                vertical-alignment: center;
+            }
+
+            if ResultsState.sort_column_id != "": Text {
+                text: "sorted by \{ResultsState.sort_column_id}";
+                font-size: 11px;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// -- Window --------------------------------------------------------------------
+
+export component ResultsWindow inherits Window {
+    title: "Results - EVAnalyzer";
+    preferred-width: 1100px;
+    preferred-height: 680px;
+    min-width: 600px;
+    min-height: 300px;
+    background: Theme.bg;
+
+    init => {
+        Palette.color-scheme = ColorScheme.light;
+    }
+
+    VerticalLayout {
+        padding: 0;
+        spacing: 0;
+
+        ResultsToolbar { }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+
+        ResultsTable {
+            vertical-stretch: 1;
+            background: Theme.panel;
+        }
+
+        ResultsStatusBar { }
+    }
+}

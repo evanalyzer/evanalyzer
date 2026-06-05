@@ -1,0 +1,34 @@
+import {
+    LineEdit,
+    Button,
+    VerticalBox,
+    Slider,
+    GridBox,
+} from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+
+export component MetaItem inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    background: Theme.hover;
+    border-radius: 4px;
+    min-height: 32px;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        alignment: space-between;
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+            font-size: 12px;
+        }
+
+        Text {
+            text: root.value;
+            vertical-alignment: center;
+            font-weight: 600;
+            font-size: 13px;
+        }
+    }
+}

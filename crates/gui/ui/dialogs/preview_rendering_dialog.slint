@@ -1,0 +1,126 @@
+import { Palette } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { AppButton } from "../components/app_button.slint";
+import { PipelineRunningState } from "pipeline_running_dialog.slint";
+
+
+// -- Dialog --------------------------------------------------------------------
+
+export component PreviewRendering inherits Rectangle {
+    //background: Theme.modal-overlay;
+
+    TouchArea { }
+
+    Rectangle {
+        width: 340px;
+        height: 100px;
+        background: Palette.background;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: PipelineRunningState.has-error && PipelineRunningState.done ? Theme.err : Palette.border;
+        drop-shadow-blur: 32px;
+        drop-shadow-color: Theme.shadow;
+        animate border-color { duration: 250ms; }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            // Header row: status dot + title + percentage
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        y: 3px;
+                        background: PipelineRunningState.done ? (PipelineRunningState.has-error ? Theme.err : Theme.ok) : Theme.accent;
+                        animate background { duration: 300ms; }
+                    }
+
+                    Text {
+                        text: PipelineRunningState.done ? (PipelineRunningState.has-error ? "Preview failed" : "Preview ready") : "Generating preview…";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: Palette.foreground;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text: PipelineRunningState.total > 0 && !PipelineRunningState.done ? ((PipelineRunningState.processed * 100 / PipelineRunningState.total) + "%") : "";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Progress bar (hidden when done with error)
+            if !PipelineRunningState.has-error || !PipelineRunningState.done: Rectangle {
+                height: 4px;
+                border-radius: 2px;
+                background: Theme.raised;
+
+                Rectangle {
+                    x: 0;
+                    width: PipelineRunningState.total > 0 ? parent.width * (PipelineRunningState.processed * 1.0 / PipelineRunningState.total) : 0px;
+                    height: parent.height;
+                    border-radius: 2px;
+                    background: Theme.ok;
+                    animate width {
+                        duration: 350ms;
+                        easing: ease-out;
+                    }
+                }
+            }
+
+            // Error message panel
+            if PipelineRunningState.has-error && PipelineRunningState.done: Rectangle {
+                background: Theme.err.with-alpha(0.1);
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.err.with-alpha(0.35);
+
+                Text {
+                    text: PipelineRunningState.status-message;
+                    font-size: 11px;
+                    font-family: Theme.font-mono;
+                    color: Theme.err;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Bottom row: count + button
+            HorizontalLayout {
+                alignment: space-between;
+                spacing: 8px;
+
+                Text {
+                    text: PipelineRunningState.total > 0 && !PipelineRunningState.has-error ? (PipelineRunningState.processed + " / " + PipelineRunningState.total) : "";
+                    font-size: 11px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+
+                AppButton {
+                    text: PipelineRunningState.done ? "Close" : "Cancel";
+                    clicked => {
+                        if (PipelineRunningState.done) {
+                            PipelineRunningState.close();
+                        } else {
+                            PipelineRunningState.cancel();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
