@@ -174,6 +174,7 @@ impl ImageMetaController {
                     active: true,
                     idx: channel_copy.len() as i32,
                     color: slint::Color::from_rgb_u8(255, 0, 0),
+                    emission_wave_length: 0.0,
                 });
             }
             channel_copy.truncate(series_info.channels.len());
@@ -189,6 +190,7 @@ impl ImageMetaController {
                         color: color_from_rgb(wavelength_to_rgb_float(
                             channel.emission_wave_length,
                         )),
+                        emission_wave_length: channel.emission_wave_length,
                     })
                 })
                 .collect();

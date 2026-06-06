@@ -10,80 +10,26 @@ import {
     ScrollView,
 } from "std-widgets.slint";
 import { DialogType, GlobalAppState } from "../state.slint";
-import { NavIconLeft } from "../components/navicon_left.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
 
 
-export struct StatValues {
-    val: bool,
-    avg: bool,
-    max: bool,
-    min: bool,
-    sum: bool,
-    stdev: bool,
-    median: bool,
-}
-
-export struct MeasurementStateSlint {
-    object_count_stats: StatValues,
-    intersecting_stats: StatValues,
-    area_size: StatValues,
-    perimeter_stats: StatValues,
-    circularity_stats: StatValues,
-    intensity_min_stats: StatValues,
-    intensity_max_stats: StatValues,
-    intensity_avg_stats: StatValues,
-    intensity_sum_stats: StatValues,
-    position_stats: StatValues,
-    distance_center_center_stats: StatValues,
-    distance_center_surface_min_stats: StatValues,
-    distance_center_surface_max_stats: StatValues,
-    distance_surface_surface_min_stats: StatValues,
-    distance_surface_surface_max_stats: StatValues,
-}
 
 export struct ClassSettingsSlint {
     class_id: int,
     name: string,
     notes: string,
     color: color,
-    measurement: MeasurementStateSlint,
 }
 
 export global ClassificationSettingsState {
     in-out property <ClassSettingsSlint> settings;
     callback apply_classification_settings(ClassSettingsSlint);
-    in-out property <int> selected_tab_index: 0;
-
-    pure function empty_stats() -> StatValues {
-        return { val: false, avg: false, max: false, min: false, sum: false, stdev: false, median: false };
-    }
-
     public function reset_to_zero() {
         self.settings.class-id = -1;
         self.settings.name = "";
         self.settings.notes = "";
         self.settings.color = #FF00FF;
-
-        self.settings.measurement.object-count-stats = self.empty_stats();
-        self.settings.measurement.intersecting-stats = self.empty_stats();
-        self.settings.measurement.area-size = self.empty_stats();
-        self.settings.measurement.perimeter-stats = self.empty_stats();
-        self.settings.measurement.circularity-stats = self.empty_stats();
-
-        self.settings.measurement.intensity-min-stats = self.empty_stats();
-        self.settings.measurement.intensity-max-stats = self.empty_stats();
-        self.settings.measurement.intensity-avg-stats = self.empty_stats();
-        self.settings.measurement.intensity-sum-stats = self.empty_stats();
-
-        self.settings.measurement.position-stats = self.empty_stats();
-
-        self.settings.measurement.distance-center-center-stats = self.empty_stats();
-        self.settings.measurement.distance-center-surface-min-stats = self.empty_stats();
-        self.settings.measurement.distance-center-surface-max-stats = self.empty_stats();
-        self.settings.measurement.distance-surface-surface-min-stats = self.empty_stats();
-        self.settings.measurement.distance-surface-surface-max-stats = self.empty_stats();
     }
 }
 
@@ -101,141 +47,6 @@ component ColorTile inherits Rectangle {
     TouchArea {
         clicked => {
             ClassificationSettingsState.settings.color = item_color;
-        }
-    }
-}
-
-component StatHeader inherits Text {
-    horizontal-alignment: center;
-    font-weight: 700;
-    font-size: 12px;
-}
-
-export component MeasurementRow {
-    in property <string> label;
-    in-out property <StatValues> stats;
-    in property <StatValues> disabled;
-    in property <StatValues> defaults;
-
-    public function reset_to_zero() {
-        root.stats.val = false;
-        root.stats.avg = false;
-        root.stats.max = false;
-        root.stats.min = false;
-        root.stats.sum = false;
-        root.stats.stdev = false;
-        root.stats.median = false;
-    }
-
-    measure-touch := TouchArea {
-        Rectangle {
-            background: measure-touch.has-hover ? Theme.hover : transparent;
-            HorizontalLayout {
-                spacing: 10px;
-                padding: 5px;
-                Text {
-                    text: root.label;
-                    width: 110px;
-                    vertical-alignment: center;
-                }
-
-                Button {
-                    text: (stats.val || stats.avg || stats.max || stats.min || stats.sum || stats.stdev || stats.median) ? "x" : "✓";
-                    width: 25px;
-                    height: 25px;
-                    clicked => {
-                        if (stats.val || stats.avg || stats.max || stats.min || stats.sum || stats.stdev || stats.median) {
-                            root.stats = { avg: false, max: false, min: false, sum: false, stdev: false, median: false };
-                        } else {
-                            root.stats = root.defaults;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 25px;
-                    height: 25px;
-                    CheckBox {
-                        enabled: !disabled.val;
-                        checked: root.stats.val;
-                        toggled => {
-                            root.stats.val = self.checked;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 25px;
-                    height: 25px;
-                    CheckBox {
-                        enabled: !root.disabled.avg;
-                        checked: root.stats.avg;
-                        toggled => {
-                            root.stats.avg = self.checked;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 25px;
-                    height: 25px;
-                    CheckBox {
-                        enabled: !root.disabled.max;
-                        checked: root.stats.max;
-                        toggled => {
-                            root.stats.max = self.checked;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 25px;
-                    height: 25px;
-                    CheckBox {
-                        enabled: !root.disabled.min;
-                        checked: root.stats.min;
-                        toggled => {
-                            root.stats.min = self.checked;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 25px;
-                    height: 25px;
-                    CheckBox {
-                        enabled: !root.disabled.sum;
-                        checked: root.stats.sum;
-                        toggled => {
-                            root.stats.sum = self.checked;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 25px;
-                    height: 25px;
-                    CheckBox {
-                        enabled: !root.disabled.stdev;
-                        checked: root.stats.stdev;
-                        toggled => {
-                            root.stats.stdev = self.checked;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 25px;
-                    height: 25px;
-                    CheckBox {
-                        enabled: !root.disabled.median;
-                        checked: root.stats.median;
-                        toggled => {
-                            root.stats.median = self.checked;
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -314,44 +125,10 @@ export component ClassEditDialog inherits Rectangle {
 
             Rectangle {
                 vertical-stretch: 1;
-                HorizontalLayout {
-                    Rectangle {
-                        width: 48px;
-                        background: Theme.panel;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        vertical-stretch: 1;
-                        VerticalBox {
-                            width: 48px;
-                            padding: 4px;
-                            alignment: start;
-                            spacing: 8px;
-
-                            NavIconLeft {
-                                icon: @image-url("../icons/regular-black/text-t.svg");
-                                active: ClassificationSettingsState.selected_tab_index == 0;
-                                clicked => {
-                                    ClassificationSettingsState.selected_tab_index = 0;
-                                }
-                            }
-
-                            NavIconLeft {
-                                icon: @image-url("../icons/regular-black/radical.svg");
-                                active: ClassificationSettingsState.selected_tab_index == 1;
-                                clicked => {
-                                    ClassificationSettingsState.selected_tab_index = 1;
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        width: parent.width - 48px;
-                        if (ClassificationSettingsState.selected_tab_index == 0):
-                        VerticalLayout {
-                            padding: 20px;
-                            spacing: 15px;
-                            HorizontalLayout {
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 15px;
+                    HorizontalLayout {
                                 spacing: 10px;
                                 Text {
                                     text: "Name:";
@@ -463,162 +240,8 @@ export component ClassEditDialog inherits Rectangle {
                                 }
                             }
 
-                            Rectangle {
-                                vertical-stretch: 1;
-                            }
-                        }
-                        if (ClassificationSettingsState.selected_tab_index == 1):
-                        VerticalLayout {
-                            padding: 20px;
-                            spacing: 15px;
-                            HorizontalLayout {
-                                spacing: 10px;
-                                height: 20px;
-                                Rectangle {
-                                    width: 110px;
-                                }
-
-                                StatHeader {
-                                    text: "";
-                                    width: 30px;
-                                }
-
-                                StatHeader {
-                                    text: "VAL";
-                                    width: 25px;
-                                }
-
-                                StatHeader {
-                                    text: "AVG";
-                                    width: 25px;
-                                }
-
-                                StatHeader {
-                                    text: "MAX";
-                                    width: 25px;
-                                }
-
-                                StatHeader {
-                                    text: "MIN";
-                                    width: 25px;
-                                }
-
-                                StatHeader {
-                                    text: "SUM";
-                                    width: 25px;
-                                }
-
-                                StatHeader {
-                                    text: "STDEV";
-                                    width: 25px;
-                                }
-
-                                StatHeader {
-                                    text: "MED";
-                                    width: 25px;
-                                }
-                            }
-
-                            ScrollView {
-                                VerticalLayout {
-                                    spacing: 10px;
-                                    padding-right: 20px;
-
-                                    MeasurementRow {
-                                        label: "Object count";
-                                        stats <=> ClassificationSettingsState.settings.measurement.object_count_stats;
-                                        disabled: { avg: true, max: true, min: true, sum: false, stdev: true, median: true };
-                                        defaults: { val: true, sum: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Intersecting";
-                                        stats <=> ClassificationSettingsState.settings.measurement.intersecting-stats;
-                                        disabled: { max: true, min: true, stdev: true, median: true };
-                                        defaults: { val: true, avg: true, sum: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Area size";
-                                        stats <=> ClassificationSettingsState.settings.measurement.area-size;
-                                        defaults: { val: true, avg: true, sum: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Perimeter";
-                                        stats <=> ClassificationSettingsState.settings.measurement.perimeter-stats;
-                                        defaults: { val: true, avg: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Circularity";
-                                        stats <=> ClassificationSettingsState.settings.measurement.circularity-stats;
-                                        defaults: { val: true, avg: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Intensity min.";
-                                        stats <=> ClassificationSettingsState.settings.measurement.intensity-min-stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Intensity max.";
-                                        stats <=> ClassificationSettingsState.settings.measurement.intensity-max-stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Intensity avg.";
-                                        stats <=> ClassificationSettingsState.settings.measurement.intensity-avg-stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Intensity sum.";
-                                        stats <=> ClassificationSettingsState.settings.measurement.intensity-sum-stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Position";
-                                        stats <=> ClassificationSettingsState.settings.measurement.position-stats;
-                                        disabled: { max: true, min: true, sum: true, stdev: true, median: true };
-                                        defaults: { val: true, avg: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Dist. center";
-                                        stats <=> ClassificationSettingsState.settings.measurement.distance_center_center_stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Dist. cent.-surface min";
-                                        stats <=> ClassificationSettingsState.settings.measurement.distance_center_surface_min_stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Dist. cent.-surface max";
-                                        stats <=> ClassificationSettingsState.settings.measurement.distance_center_surface_max_stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Dist. surface min";
-                                        stats <=> ClassificationSettingsState.settings.measurement.distance_surface_surface_min_stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-
-                                    MeasurementRow {
-                                        label: "Dist. surface max";
-                                        stats <=> ClassificationSettingsState.settings.measurement.distance_surface_surface_max_stats;
-                                        defaults: { val: true, avg: true, stdev: true };
-                                    }
-                                }
-                            }
-                        }
+                    Rectangle {
+                        vertical-stretch: 1;
                     }
                 }
             }

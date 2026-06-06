@@ -172,7 +172,7 @@ component ChannelPicker inherits Rectangle {
                 }
 
                 Text {
-                    text: "▾";
+                    text: "↓";
                     font-size: 9px;
                     color: Theme.text-mute;
                     vertical-alignment: center;
@@ -346,8 +346,40 @@ export component PipelineEditDialog inherits Rectangle {
                     spacing: 4px;
 
                     SourceOption {
+                        label: "Channel";
+                        description: "Read directly from an image channel (0-based)";
+                        selected: PipelineEditState.source-type == 2;
+                        clicked => {
+                            PipelineEditState.source-type = 2;
+                        }
+                    }
+
+                    if PipelineEditState.source-type == 2: HorizontalLayout {
+                        padding-left: 26px;
+                        padding-top: 2px;
+                        padding-bottom: 4px;
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "Channel";
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                            width: 52px;
+                        }
+
+                        ChannelPicker {
+                            width: 250px;
+                            value: PipelineEditState.source-channel;
+                            changed(v) => {
+                                PipelineEditState.source-channel = v;
+                            }
+                        }
+                    }
+
+                    SourceOption {
                         label: "Scratchpad";
-                        description: "Pipeline's own internal scratchpad image";
+                        description: "Start with an empty image";
                         selected: PipelineEditState.source-type == 0;
                         clicked => {
                             PipelineEditState.source-type = 0;
@@ -383,38 +415,6 @@ export component PipelineEditDialog inherits Rectangle {
                             current-index: PipelineEditState.source-slot;
                             selected(v) => {
                                 PipelineEditState.source-slot = round(v.to-float());
-                            }
-                        }
-                    }
-
-                    SourceOption {
-                        label: "Channel";
-                        description: "Read directly from an image channel (0-based)";
-                        selected: PipelineEditState.source-type == 2;
-                        clicked => {
-                            PipelineEditState.source-type = 2;
-                        }
-                    }
-
-                    if PipelineEditState.source-type == 2: HorizontalLayout {
-                        padding-left: 26px;
-                        padding-top: 2px;
-                        padding-bottom: 4px;
-                        spacing: 8px;
-                        alignment: start;
-                        Text {
-                            text: "Channel";
-                            font-size: 11px;
-                            color: Theme.text-dim;
-                            vertical-alignment: center;
-                            width: 52px;
-                        }
-
-                        ChannelPicker {
-                            width: 250px;
-                            value: PipelineEditState.source-channel;
-                            changed(v) => {
-                                PipelineEditState.source-channel = v;
                             }
                         }
                     }
