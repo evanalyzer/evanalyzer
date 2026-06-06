@@ -27,12 +27,12 @@ use log::{debug, info, warn};
 use macros::CommandsMeta;
 
 pub enum ClassifyMatchHandling {
-    AddTargetClassIfMatch,
-    AddTargetClassIfNotMatch,
-    RemoveOriginClassIfMatch,
-    RemoveOriginClassIfNotMatch,
-    RemoveTargetClassIfMatch,
-    RemoveTargetClassIfNotMatch,
+    AddOutputClassIfMatch,
+    AddOutputClassIfNotMatch,
+    RemoveInputClassIfMatch,
+    RemoveInputClassIfNotMatch,
+    RemoveOutputClassIfMatch,
+    RemoveOutputClassIfNotMatch,
     RemoveAllClassesIfMatch,
     RemoveAllClassesIfNotMatch,
 }
@@ -50,16 +50,36 @@ pub struct ClassifyRois {
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
     /// If no seg class is selected the criteria are applied to all objects.
+    #[cmdsmeta(visible = false)]
     pub origin_segmentation: Vec<SegmentationClass>,
 
-    /// Apply only to objects with this given class
-    pub origin_class: Vec<ObjectClass>,
-
-    /// Target class for objects matching the chosen criteria.
+    /// Restrict classification to objects that already carry one of these classes
     ///
-    /// Objects with metrics matching the chosen criteria are labeled with this additional class.
-    #[cmdsmeta(default = ObjectClass::Unset)]
-    pub target_class: ObjectClass,
+    /// Only ROIs that have been assigned at least one of the listed classes by a prior
+    /// pipeline step will be evaluated against the morphological and intensity criteria below.
+    /// Leave empty to apply the criteria to every object regardless of its current class.
+    #[cmdsmeta(display_name = "Input Classes")]
+    pub input_classes: Vec<ObjectClass>,
+
+    /// What to do with object class labels after criteria evaluation
+    ///
+    /// Controls whether the output class is added or existing classes are removed,
+    /// and whether the action is triggered on a criteria **match** or a **non-match**:
+    ///
+    /// - **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.
+    /// - **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.
+    /// - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
+    /// - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
+    /// - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
+    #[cmdsmeta(default = ClassifyMatchHandling::RemoveAllClassesIfNotMatch)]
+    pub match_handling: ClassifyMatchHandling,
+
+    /// Class label assigned to (or removed from) objects by the chosen operation
+    ///
+    /// Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
+    /// Has no effect when the selected operation only manipulates input classes or clears all classes.
+    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Output Class")]
+    pub output_class: ObjectClass,
 
     /// Unit to use for roi extraction
     #[cmdsmeta(
@@ -137,22 +157,6 @@ pub struct ClassifyRois {
     )]
     pub max_aspect_ratio: f32,
 
-    /// Unit used for the intensity value.
-    ///
-    /// bit: 0 - 255/65535
-    /// %: 0 - 100.0
-    /// rel: 0 - 1.0
-    #[cmdsmeta(default = PixelUnits::Bit, min = 0.0, max = 65535.0, step = 1)]
-    pub intensity_unit: PixelUnits,
-
-    /// The minimum average intensity an object must have in the selected image channel
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1)]
-    pub min_mean_intensity: f32,
-
-    /// The maximum average intensity an object is allowed to have in the selected image channel
-    #[cmdsmeta(default = 65535.0, min = 0.0, max = 65535.0, step = 1)]
-    pub max_mean_intensity: f32,
-
     /// Eccentricity: 0 = perfect circle, 1 = line
     ///
     /// Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
@@ -213,8 +217,6 @@ impl Default for ClassifyRois {
             max_solidity: 1.0,
             min_aspect_ratio: 0.0,
             max_aspect_ratio: 2147483648.0,
-            min_mean_intensity: 0.0,
-            max_mean_intensity: 65535.0,
             min_eccentricity: 0.0,
             max_eccentricity: 1.0,
             min_feret: 0.0,
@@ -222,9 +224,9 @@ impl Default for ClassifyRois {
             allow_edge_touching: true,
             size_unit: SizeUnits::NanoMeter,
             origin_segmentation: vec![],
-            intensity_unit: PixelUnits::Bit,
-            target_class: Unset,
-            origin_class: vec![],
+            output_class: Unset,
+            input_classes: vec![],
+            match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
         }
     }
 }
@@ -239,8 +241,57 @@ impl ImageAlgorithm for ClassifyRois {
 
         // Iterate through all ROIs in the cache
         for roi in cache.roi_cache.values_mut() {
-            if self.matches_criteria(roi, px_size) {
-                roi.add_object_class(self.target_class.clone());
+            // Skip ROIs that don't carry any of the required input classes
+            if !self.input_classes.is_empty() && !roi.has_object_classes(&self.input_classes) {
+                continue;
+            }
+
+            let matches = self.matches_criteria(roi, px_size);
+            match self.match_handling {
+                ClassifyMatchHandling::AddOutputClassIfMatch => {
+                    if matches {
+                        roi.add_object_class(self.output_class.clone());
+                    }
+                }
+                ClassifyMatchHandling::AddOutputClassIfNotMatch => {
+                    if !matches {
+                        roi.add_object_class(self.output_class.clone());
+                    }
+                }
+                ClassifyMatchHandling::RemoveInputClassIfMatch => {
+                    if matches {
+                        for class in &self.input_classes {
+                            roi.remove_object_class(class);
+                        }
+                    }
+                }
+                ClassifyMatchHandling::RemoveInputClassIfNotMatch => {
+                    if !matches {
+                        for class in &self.input_classes {
+                            roi.remove_object_class(class);
+                        }
+                    }
+                }
+                ClassifyMatchHandling::RemoveOutputClassIfMatch => {
+                    if matches {
+                        roi.remove_object_class(&self.output_class);
+                    }
+                }
+                ClassifyMatchHandling::RemoveOutputClassIfNotMatch => {
+                    if !matches {
+                        roi.remove_object_class(&self.output_class);
+                    }
+                }
+                ClassifyMatchHandling::RemoveAllClassesIfMatch => {
+                    if matches {
+                        roi.object_class.clear();
+                    }
+                }
+                ClassifyMatchHandling::RemoveAllClassesIfNotMatch => {
+                    if !matches {
+                        roi.object_class.clear();
+                    }
+                }
             }
         }
 
@@ -331,22 +382,6 @@ impl ClassifyRois {
                 roi.id, feret, self.min_feret, self.max_feret
             );
             return false;
-        }
-
-        // Check mean intensity (if available)
-        if !roi.intensities.is_empty() {
-            if let Some((_, intensity)) = roi.intensities.iter().next() {
-                let mean_intensity = intensity.sum_intensity / roi.area as f64;
-                if (mean_intensity as f32) < self.min_mean_intensity
-                    || (mean_intensity as f32) > self.max_mean_intensity
-                {
-                    debug!(
-                        "ROI {} failed intensity check: {:.2} (range: {:.2}-{:.2})",
-                        roi.id, mean_intensity, self.min_mean_intensity, self.max_mean_intensity
-                    );
-                    return false;
-                }
-            }
         }
 
         true

@@ -26,6 +26,20 @@ pub enum FiltersRollingBallBallTypeSettings {
     Paraboloid,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ClassificationClassifyRoisClassifyMatchHandlingSettings {
+    #[default]
+    AddOutputClassIfMatch,
+    AddOutputClassIfNotMatch,
+    RemoveInputClassIfMatch,
+    RemoveInputClassIfNotMatch,
+    RemoveOutputClassIfMatch,
+    RemoveOutputClassIfNotMatch,
+    RemoveAllClassesIfMatch,
+    RemoveAllClassesIfNotMatch,
+}
+
 ///  Specifies the feature extraction method for the Hessian matrix.
 ///
 ///  The Hessian matrix describes the local second-order structure of an image,
@@ -942,12 +956,28 @@ pub struct ClassifyRoisSettings {
     ///  after a Threshold, Pixel classifier or AI classifier.
     ///  If no seg class is selected the criteria are applied to all objects.
     pub origin_segmentation: Vec<SegmentationClass>,
-    ///  Apply only to objects with this given class
-    pub origin_class: Vec<ObjectClass>,
-    ///  Target class for objects matching the chosen criteria.
+    ///  Restrict classification to objects that already carry one of these classes
     ///
-    ///  Objects with metrics matching the chosen criteria are labeled with this additional class.
-    pub target_class: ObjectClass,
+    ///  Only ROIs that have been assigned at least one of the listed classes by a prior
+    ///  pipeline step will be evaluated against the morphological and intensity criteria below.
+    ///  Leave empty to apply the criteria to every object regardless of its current class.
+    pub input_classes: Vec<ObjectClass>,
+    ///  What to do with object class labels after criteria evaluation
+    ///
+    ///  Controls whether the output class is added or existing classes are removed,
+    ///  and whether the action is triggered on a criteria **match** or a **non-match**:
+    ///
+    ///  - **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.
+    ///  - **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.
+    ///  - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
+    ///  - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
+    ///  - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
+    pub match_handling: ClassificationClassifyRoisClassifyMatchHandlingSettings,
+    ///  Class label assigned to (or removed from) objects by the chosen operation
+    ///
+    ///  Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
+    ///  Has no effect when the selected operation only manipulates input classes or clears all classes.
+    pub output_class: ObjectClass,
     ///  Unit to use for roi extraction
     pub size_unit: SizeUnits,
     ///  Minimum area size
@@ -1006,19 +1036,6 @@ pub struct ClassifyRoisSettings {
     ///  The value is without unit in the range of 0 to MAX_F32
     #[schemars(range(min = 0, max = 2147483600))]
     pub max_aspect_ratio: f32,
-    ///  Unit used for the intensity value.
-    ///
-    ///  bit: 0 - 255/65535
-    ///  %: 0 - 100.0
-    ///  rel: 0 - 1.0
-    #[schemars(range(min = 0, max = 65535))]
-    pub intensity_unit: PixelUnits,
-    ///  The minimum average intensity an object must have in the selected image channel
-    #[schemars(range(min = 0, max = 65535))]
-    pub min_mean_intensity: f32,
-    ///  The maximum average intensity an object is allowed to have in the selected image channel
-    #[schemars(range(min = 0, max = 65535))]
-    pub max_mean_intensity: f32,
     ///  Eccentricity: 0 = perfect circle, 1 = line
     ///
     ///  Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
@@ -1061,8 +1078,10 @@ impl Default for ClassifyRoisSettings {
     fn default() -> Self {
         Self {
             origin_segmentation: vec![],
-            origin_class: vec![],
-            target_class: ObjectClass::Unset,
+            input_classes: vec![],
+            match_handling:
+                ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch,
+            output_class: ObjectClass::Unset,
             size_unit: SizeUnits::NanoMeter,
             min_area: 0.0f32,
             max_area: 2147483648.0f32,
@@ -1072,9 +1091,6 @@ impl Default for ClassifyRoisSettings {
             max_solidity: 1.0f32,
             min_aspect_ratio: 0.0f32,
             max_aspect_ratio: 2147483648.0f32,
-            intensity_unit: PixelUnits::Bit,
-            min_mean_intensity: 0.0f32,
-            max_mean_intensity: 65535.0f32,
             min_eccentricity: 0.0f32,
             max_eccentricity: 1.0f32,
             min_feret: 0.0f32,

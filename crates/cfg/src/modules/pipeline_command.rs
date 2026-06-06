@@ -258,9 +258,9 @@ impl PipelineCommand {
                 ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7)".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![] },
             ],
             Self::ClassifyRois(_s) => vec![
-                ParameterDef { name: "origin_segmentation".to_string(), display_name: "Origin Segmentation".to_string(), description: "Apply only to objects with this given segmentation class\n\nThe segmentation class value is assigned to each pixel in the image\nafter a Threshold, Pixel classifier or AI classifier.\nIf no seg class is selected the criteria are applied to all objects.".to_string(), value: _s.origin_segmentation.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiSegClass, options: (0u32..33u32).map(|__idx| if _s.origin_segmentation.iter().any(|c| c.as_u32() == __idx) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "origin_class".to_string(), display_name: "Origin Class".to_string(), description: "Apply only to objects with this given class".to_string(), value: _s.origin_class.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.origin_class.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "target_class".to_string(), display_name: "Target Class".to_string(), description: "Target class for objects matching the chosen criteria.\n\nObjects with metrics matching the chosen criteria are labeled with this additional class.".to_string(), value: match _s.target_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated against the morphological and intensity criteria below.\nLeave empty to apply the criteria to every object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after criteria evaluation\n\nControls whether the output class is added or existing classes are removed,\nand whether the action is triggered on a criteria **match** or a **non-match**:\n\n- **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n- **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n- **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n- **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n- **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.".to_string(), value: format!("{:?}", _s.match_handling), param_type: ParamType::Dropdown, options: vec!["AddOutputClassIfMatch".to_string(), "AddOutputClassIfNotMatch".to_string(), "RemoveInputClassIfMatch".to_string(), "RemoveInputClassIfNotMatch".to_string(), "RemoveOutputClassIfMatch".to_string(), "RemoveOutputClassIfNotMatch".to_string(), "RemoveAllClassesIfMatch".to_string(), "RemoveAllClassesIfNotMatch".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "Class label assigned to (or removed from) objects by the chosen operation\n\nUsed as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.\nHas no effect when the selected operation only manipulates input classes or clears all classes.".to_string(), value: match _s.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Unit to use for roi extraction".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "min_area".to_string(), display_name: "Min Area".to_string(), description: "Minimum area size\n\nMinimum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.min_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "max_area".to_string(), display_name: "Max Area".to_string(), description: "Maximum area size\n\nMaximum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.max_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
@@ -270,9 +270,6 @@ impl PipelineCommand {
                 ParameterDef { name: "max_solidity".to_string(), display_name: "Max Solidity".to_string(), description: "Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.max_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] },
                 ParameterDef { name: "min_aspect_ratio".to_string(), display_name: "Min Aspect Ratio".to_string(), description: "Minimum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.min_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "max_aspect_ratio".to_string(), display_name: "Max Aspect Ratio".to_string(), description: "Maximum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.max_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "intensity_unit".to_string(), display_name: "Intensity Unit".to_string(), description: "Unit used for the intensity value.\n\nbit: 0 - 255/65535\n%: 0 - 100.0\nrel: 0 - 1.0".to_string(), value: match _s.intensity_unit { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, param_type: ParamType::PixelUnits, options: vec!["bit".to_string(), "%".to_string(), "rel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "min_mean_intensity".to_string(), display_name: "Min Mean Intensity".to_string(), description: "The minimum average intensity an object must have in the selected image channel".to_string(), value: format!("{}", _s.min_mean_intensity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "max_mean_intensity".to_string(), display_name: "Max Mean Intensity".to_string(), description: "The maximum average intensity an object is allowed to have in the selected image channel".to_string(), value: format!("{}", _s.max_mean_intensity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "min_eccentricity".to_string(), display_name: "Min Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.min_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] },
                 ParameterDef { name: "max_eccentricity".to_string(), display_name: "Max Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.max_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] },
                 ParameterDef { name: "min_feret".to_string(), display_name: "Min Feret".to_string(), description: "Feret diameter threshold\n\nThe absolute shortest parallel distance across the object.\nThis represents the minimum sieve size a particle could pass through.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.min_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
@@ -437,41 +434,22 @@ impl PipelineCommand {
                 }
             }
             Self::ClassifyRois(s) => {
-                if param_name == "origin_segmentation" {
+                if param_name == "input_classes" {
                     if let Some(id) = value
                         .strip_prefix("toggle:")
                         .and_then(|x| x.trim().parse::<u32>().ok())
                     {
-                        if s.origin_segmentation.iter().any(|c| c.as_u32() == id) {
-                            s.origin_segmentation.retain(|c| c.as_u32() != id);
-                        } else {
-                            s.origin_segmentation.push(SegmentationClass(id));
-                        }
-                    } else {
-                        s.origin_segmentation = value
-                            .split(',')
-                            .filter(|x| !x.is_empty())
-                            .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| SegmentationClass(v))
-                            .collect();
-                    }
-                }
-                if param_name == "origin_class" {
-                    if let Some(id) = value
-                        .strip_prefix("toggle:")
-                        .and_then(|x| x.trim().parse::<u32>().ok())
-                    {
-                        if s.origin_class
+                        if s.input_classes
                             .iter()
                             .any(|c| c.to_u32().map_or(false, |v| v == id))
                         {
-                            s.origin_class
+                            s.input_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.origin_class.push(ObjectClass::Valid(id));
+                            s.input_classes.push(ObjectClass::Valid(id));
                         }
                     } else {
-                        s.origin_class = value
+                        s.input_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
@@ -479,11 +457,14 @@ impl PipelineCommand {
                             .collect();
                     }
                 }
-                if param_name == "target_class" {
+                if param_name == "match_handling" {
+                    s.match_handling = match value { "AddOutputClassIfMatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch, "AddOutputClassIfNotMatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfNotMatch, "RemoveInputClassIfMatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfMatch, "RemoveInputClassIfNotMatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch, "RemoveOutputClassIfMatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfMatch, "RemoveOutputClassIfNotMatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch, "RemoveAllClassesIfMatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch, "RemoveAllClassesIfNotMatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch, _ => s.match_handling.clone() };
+                }
+                if param_name == "output_class" {
                     if value == "-1" {
-                        s.target_class = ObjectClass::Unset;
+                        s.output_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.target_class = ObjectClass::Valid(v);
+                        s.output_class = ObjectClass::Valid(v);
                     }
                 }
                 if param_name == "size_unit" {
@@ -530,23 +511,6 @@ impl PipelineCommand {
                 if param_name == "max_aspect_ratio" {
                     if let Ok(v) = value.parse::<f32>() {
                         s.max_aspect_ratio = v;
-                    }
-                }
-                if param_name == "intensity_unit" {
-                    s.intensity_unit = match value {
-                        "bit" => PixelUnits::Bit,
-                        "%" => PixelUnits::Percent,
-                        _ => PixelUnits::Relative,
-                    };
-                }
-                if param_name == "min_mean_intensity" {
-                    if let Ok(v) = value.parse::<f32>() {
-                        s.min_mean_intensity = v;
-                    }
-                }
-                if param_name == "max_mean_intensity" {
-                    if let Ok(v) = value.parse::<f32>() {
-                        s.max_mean_intensity = v;
                     }
                 }
                 if param_name == "min_eccentricity" {

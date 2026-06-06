@@ -199,6 +199,19 @@
         "measure"
       ]
     },
+    "ClassificationClassifyRoisClassifyMatchHandlingSettings": {
+      "type": "string",
+      "enum": [
+        "addOutputClassIfMatch",
+        "addOutputClassIfNotMatch",
+        "removeInputClassIfMatch",
+        "removeInputClassIfNotMatch",
+        "removeOutputClassIfMatch",
+        "removeOutputClassIfNotMatch",
+        "removeAllClassesIfMatch",
+        "removeAllClassesIfNotMatch"
+      ]
+    },
     "ClassificationSettings": {
       "type": "object",
       "properties": {
@@ -222,10 +235,18 @@
           "type": "boolean",
           "default": true
         },
-        "intensityUnit": {
-          "description": "Unit used for the intensity value.\n\n bit: 0 - 255/65535\n %: 0 - 100.0\n rel: 0 - 1.0",
-          "$ref": "#/$defs/PixelUnits",
-          "default": "bit"
+        "inputClasses": {
+          "description": "Restrict classification to objects that already carry one of these classes\n\n Only ROIs that have been assigned at least one of the listed classes by a prior\n pipeline step will be evaluated against the morphological and intensity criteria below.\n Leave empty to apply the criteria to every object regardless of its current class.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "matchHandling": {
+          "description": "What to do with object class labels after criteria evaluation\n\n Controls whether the output class is added or existing classes are removed,\n and whether the action is triggered on a criteria **match** or a **non-match**:\n\n - **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n - **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.",
+          "$ref": "#/$defs/ClassificationClassifyRoisClassifyMatchHandlingSettings",
+          "default": "removeAllClassesIfNotMatch"
         },
         "maxArea": {
           "description": "Maximum area size\n\n Maximum area size of the object in selected unit (px^2 or nm^2).",
@@ -265,14 +286,6 @@
           "format": "float",
           "default": 2147483648.0,
           "maximum": 2147483600,
-          "minimum": 0
-        },
-        "maxMeanIntensity": {
-          "description": "The maximum average intensity an object is allowed to have in the selected image channel",
-          "type": "number",
-          "format": "float",
-          "default": 65535.0,
-          "maximum": 65535,
           "minimum": 0
         },
         "maxSolidity": {
@@ -323,14 +336,6 @@
           "maximum": 2147483600,
           "minimum": 0
         },
-        "minMeanIntensity": {
-          "description": "The minimum average intensity an object must have in the selected image channel",
-          "type": "number",
-          "format": "float",
-          "default": 0.0,
-          "maximum": 65535,
-          "minimum": 0
-        },
         "minSolidity": {
           "description": "Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\n Solidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\n It compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\n often visualized as a rubber band stretched around the shape).\n\n Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\n Solidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.",
           "type": "number",
@@ -338,14 +343,6 @@
           "default": 0.0,
           "maximum": 1,
           "minimum": 0
-        },
-        "originClass": {
-          "description": "Apply only to objects with this given class",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ObjectClass"
-          }
         },
         "originSegmentation": {
           "description": "Apply only to objects with this given segmentation class\n\n The segmentation class value is assigned to each pixel in the image\n after a Threshold, Pixel classifier or AI classifier.\n If no seg class is selected the criteria are applied to all objects.",
@@ -355,15 +352,15 @@
             "$ref": "#/$defs/SegmentationClass"
           }
         },
+        "outputClass": {
+          "description": "Class label assigned to (or removed from) objects by the chosen operation\n\n Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.\n Has no effect when the selected operation only manipulates input classes or clears all classes.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "Unset"
+        },
         "sizeUnit": {
           "description": "Unit to use for roi extraction",
           "$ref": "#/$defs/SizeUnits",
           "default": "nm"
-        },
-        "targetClass": {
-          "description": "Target class for objects matching the chosen criteria.\n\n Objects with metrics matching the chosen criteria are labeled with this additional class.",
-          "$ref": "#/$defs/ObjectClass",
-          "default": "Unset"
         }
       }
     },

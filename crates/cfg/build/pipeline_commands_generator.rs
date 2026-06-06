@@ -74,6 +74,40 @@ fn format_code(content: &str) -> Option<String> {
 // FILE 1: Config structs + enums - no From impls, no core imports
 // ============================================================
 
+/// Rewrite type names in a default expression from core names to their generated
+/// settings equivalents. `quote!` serialises `Foo::Bar` as `"Foo :: Bar"` (with
+/// spaces), so we replace both the spaced and the compact forms.
+fn remap_default_expr(expr: &str, enums: &[EnumInfo], commands: &[CommandInfo]) -> String {
+    let mut result = expr.to_string();
+    for enum_info in enums {
+        let settings_name = format!(
+            "{}{}Settings",
+            to_pascal_case(&enum_info.source_file),
+            enum_info.enum_name
+        );
+        result = result.replace(
+            &format!("{} ::", enum_info.enum_name),
+            &format!("{} ::", settings_name),
+        );
+        result = result.replace(
+            &format!("{}::", enum_info.enum_name),
+            &format!("{}::", settings_name),
+        );
+    }
+    for cmd in commands {
+        let settings_name = format!("{}Settings", cmd.struct_name);
+        result = result.replace(
+            &format!("{} ::", cmd.struct_name),
+            &format!("{} ::", settings_name),
+        );
+        result = result.replace(
+            &format!("{}::", cmd.struct_name),
+            &format!("{}::", settings_name),
+        );
+    }
+    result
+}
+
 fn format_default_for_type(ty: &str, val: f64) -> String {
     match ty {
         "f32" => {
@@ -211,7 +245,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                     let field_type = map_to_settings_type(&field.ty, enums, commands);
                     let fn_name = format!("_serde_default_{}_{}", prefix, field.name);
                     let body = if let Some(ref expr) = field.metadata.default_expr {
-                        expr.clone()
+                        remap_default_expr(expr, enums, commands)
                     } else if let Some(val) = field.metadata.default {
                         format_default_for_type(&field.ty, val)
                     } else {
@@ -284,7 +318,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                     for field in &cmd.fields {
                         let field_type = map_to_settings_type(&field.ty, enums, commands);
                         let default_expr = if let Some(ref expr) = field.metadata.default_expr {
-                            expr.clone()
+                            remap_default_expr(expr, enums, commands)
                         } else if let Some(val) = field.metadata.default {
                             format_default_for_type(&field.ty, val)
                         } else if field_type.starts_with("Vec<") {
@@ -450,7 +484,7 @@ fn scan_directory(dir: &Path, commands: &mut Vec<CommandInfo>, enums: &mut Vec<E
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct FieldMetadata {
     min: Option<f32>,
     max: Option<f32>,
@@ -463,6 +497,26 @@ struct FieldMetadata {
     display_name: Option<String>,
     summary: bool,
     optional: bool,
+    visible: bool,
+}
+
+impl Default for FieldMetadata {
+    fn default() -> Self {
+        Self {
+            min: None,
+            max: None,
+            default: None,
+            default_expr: None,
+            step: None,
+            custom_name: None,
+            unit: None,
+            regex: None,
+            display_name: None,
+            summary: false,
+            optional: false,
+            visible: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -880,6 +934,13 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                             metadata.optional = b.value;
                         }
                     }
+                } else if meta.path.is_ident("visible") {
+                    metadata.visible = true;
+                    if let Ok(stream) = meta.value() {
+                        if let Ok(b) = stream.parse::<syn::LitBool>() {
+                            metadata.visible = b.value;
+                        }
+                    }
                 }
                 Ok(())
             });
@@ -1003,6 +1064,11 @@ fn field_to_param_def(
     let ty = &field.ty;
     let name = &field.name;
     let meta = &field.metadata;
+
+    if !meta.visible {
+        return vec![];
+    }
+
     let routing_name = format!("{}{}", name_prefix, name);
     // display_label: from cmdsmeta display_name, else title-case the bare field name
     let display_label = meta
@@ -1292,6 +1358,10 @@ fn collect_summary_exprs(
     let name = &field.name;
     let meta = &field.metadata;
 
+    if !meta.visible {
+        return vec![];
+    }
+
     if ty.starts_with("Vec<")
         || ty.starts_with("Option<")
         || ty.starts_with("HashMap<")
@@ -1345,6 +1415,10 @@ fn field_to_apply_change(
     let ty = &field.ty;
     let name = &field.name;
     let display_name = format!("{}{}", name_prefix, name);
+
+    if !field.metadata.visible {
+        return vec![];
+    }
 
     // Vec<ObjectClass> / Vec<SegmentationClass> → toggle or full-replace via comma-separated list
     if let Some(inner) = ty.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')) {

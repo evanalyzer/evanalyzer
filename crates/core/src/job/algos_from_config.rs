@@ -13,6 +13,21 @@ impl From<FiltersRollingBallBallTypeSettings> for BallType {
     }
 }
 
+impl From<ClassificationClassifyRoisClassifyMatchHandlingSettings> for ClassifyMatchHandling {
+    fn from(_s: ClassificationClassifyRoisClassifyMatchHandlingSettings) -> Self {
+        match _s {
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch => ClassifyMatchHandling::AddOutputClassIfMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => ClassifyMatchHandling::AddOutputClassIfNotMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfMatch => ClassifyMatchHandling::RemoveInputClassIfMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => ClassifyMatchHandling::RemoveInputClassIfNotMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => ClassifyMatchHandling::RemoveOutputClassIfMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => ClassifyMatchHandling::RemoveAllClassesIfMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
+        }
+    }
+}
+
 impl From<FiltersHessianHessianModeSettings> for HessianMode {
     fn from(_s: FiltersHessianHessianModeSettings) -> Self {
         match _s {
@@ -164,8 +179,9 @@ impl From<ClassifyRoisSettings> for ClassifyRois {
                 .into_iter()
                 .map(|v| v.into())
                 .collect(),
-            origin_class: _s.origin_class.into_iter().map(|v| v.into()).collect(),
-            target_class: _s.target_class,
+            input_classes: _s.input_classes.into_iter().map(|v| v.into()).collect(),
+            match_handling: ClassifyMatchHandling::from(_s.match_handling),
+            output_class: _s.output_class,
             size_unit: _s.size_unit,
             min_area: _s.min_area.clamp(0.0, 2147483600.0),
             max_area: _s.max_area.clamp(0.0, 2147483600.0),
@@ -175,9 +191,6 @@ impl From<ClassifyRoisSettings> for ClassifyRois {
             max_solidity: _s.max_solidity.clamp(0.0, 1.0),
             min_aspect_ratio: _s.min_aspect_ratio.clamp(0.0, 2147483600.0),
             max_aspect_ratio: _s.max_aspect_ratio.clamp(0.0, 2147483600.0),
-            intensity_unit: _s.intensity_unit,
-            min_mean_intensity: _s.min_mean_intensity.clamp(0.0, 65535.0),
-            max_mean_intensity: _s.max_mean_intensity.clamp(0.0, 65535.0),
             min_eccentricity: _s.min_eccentricity.clamp(0.0, 1.0),
             max_eccentricity: _s.max_eccentricity.clamp(0.0, 1.0),
             min_feret: _s.min_feret.clamp(0.0, 2147483600.0),

@@ -20,6 +20,7 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         "display_name",
         "summary",
         "optional",
+        "visible",
     ];
 
     // Validate struct-level #[cmdsmeta(...)]
