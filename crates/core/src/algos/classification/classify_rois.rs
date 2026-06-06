@@ -26,14 +26,23 @@ use evanalyzer_cfg::core_types::{
 use log::{debug, info, warn};
 use macros::CommandsMeta;
 
+#[derive(CommandsMeta)]
 pub enum ClassifyMatchHandling {
+    #[cmdsmeta(display_name = "If match add output class")]
     AddOutputClassIfMatch,
+    #[cmdsmeta(display_name = "If not match add output class")]
     AddOutputClassIfNotMatch,
+    #[cmdsmeta(display_name = "If match remove input class")]
     RemoveInputClassIfMatch,
+    #[cmdsmeta(display_name = "If not match remove input class")]
     RemoveInputClassIfNotMatch,
+    #[cmdsmeta(display_name = "If match remove output class")]
     RemoveOutputClassIfMatch,
+    #[cmdsmeta(display_name = "If not match remove output class")]
     RemoveOutputClassIfNotMatch,
+    #[cmdsmeta(display_name = "If match remove all classes")]
     RemoveAllClassesIfMatch,
+    #[cmdsmeta(display_name = "If not match remove all classes")]
     RemoveAllClassesIfNotMatch,
 }
 

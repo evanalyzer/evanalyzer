@@ -958,12 +958,12 @@ component SpinnerInput inherits HorizontalLayout {
         dec := TouchArea {
             mouse-cursor: pointer;
             clicked => {
-                root.changed(root.value - root.step >= root.min ? "\{root.value - root.step}" : "\{root.min}");
+                root.changed(input.text.to-float() - root.step >= root.min ? "\{input.text.to-float() - root.step}" : "\{root.min}");
             }
         }
     }
 
-    LineEdit {
+    input := LineEdit {
         horizontal-stretch: 1;
         text: "\{root.value}";
         font-size: 11px;
@@ -991,7 +991,7 @@ component SpinnerInput inherits HorizontalLayout {
         inc := TouchArea {
             mouse-cursor: pointer;
             clicked => {
-                root.changed(root.value + root.step <= root.max ? "\{root.value + root.step}" : "\{root.max}");
+                root.changed(input.text.to-float() + root.step <= root.max ? "\{input.text.to-float() + root.step}" : "\{root.max}");
             }
         }
     }

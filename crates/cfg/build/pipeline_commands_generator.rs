@@ -557,6 +557,7 @@ struct EnumVariant {
     name: String,
     data_type: Option<String>,
     doc_comments: Vec<String>,
+    display_name: Option<String>,
 }
 
 fn extract_command_structs(
@@ -778,6 +779,7 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
         .iter()
         .map(|v| {
             let mut doc_comments = Vec::new();
+            let mut display_name: Option<String> = None;
             for attr in &v.attrs {
                 if attr.path().is_ident("doc") {
                     if let syn::Meta::NameValue(nv) = &attr.meta {
@@ -790,6 +792,17 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
                         }
                     }
                 }
+                if attr.path().is_ident("cmdsmeta") {
+                    let _ = attr.parse_nested_meta(|meta| {
+                        if meta.path.is_ident("display_name") {
+                            let value: syn::LitStr = meta.value()?.parse()?;
+                            display_name = Some(value.value());
+                        } else if meta.input.peek(syn::Token![=]) {
+                            let _: syn::Expr = meta.value()?.parse()?;
+                        }
+                        Ok(())
+                    });
+                }
             }
             let data_type = match &v.fields {
                 syn::Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
@@ -801,6 +814,7 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
                 name: v.ident.to_string(),
                 data_type,
                 doc_comments,
+                display_name,
             }
         })
         .collect()
@@ -947,6 +961,27 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
         }
     }
     metadata
+}
+
+fn pascal_to_title_case(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut result = String::new();
+    for i in 0..chars.len() {
+        let c = chars[i];
+        if c.is_uppercase() && i > 0 {
+            let prev = chars[i - 1];
+            let next = chars.get(i + 1).copied();
+            // Standard lower→upper boundary (e.g. "addOutput" → "add Output")
+            // OR start of a new capitalized word after an acronym (e.g. "HTMLParser" → "HTML Parser")
+            if prev.is_lowercase()
+                || (prev.is_uppercase() && next.map_or(false, |n| n.is_lowercase()))
+            {
+                result.push(' ');
+            }
+        }
+        result.push(c);
+    }
+    result
 }
 
 fn snake_to_title_case(s: &str) -> String {
@@ -1316,15 +1351,52 @@ fn field_to_param_def(
         ),
         _ => {
             if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty.as_str()) {
-                let variants: Vec<String> = enum_info
+                let settings_name = format!(
+                    "{}{}Settings",
+                    to_pascal_case(&enum_info.source_file),
+                    ty
+                );
+                // Build (variant_name, display_label) pairs
+                let display_map: Vec<(String, String)> = enum_info
                     .variants
                     .iter()
-                    .map(|v| format!("\"{}\".to_string()", v.name))
+                    .map(|v| {
+                        let label = v
+                            .display_name
+                            .as_deref()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| pascal_to_title_case(&v.name));
+                        (v.name.clone(), label)
+                    })
                     .collect();
+                let options: Vec<String> = display_map
+                    .iter()
+                    .map(|(_, d)| format!("\"{}\".to_string()", d))
+                    .collect();
+                let match_arms: String = enum_info
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        let label = v
+                            .display_name
+                            .as_deref()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| pascal_to_title_case(&v.name));
+                        // Data variants (e.g. Outliers(f32)) need a wildcard inner pattern
+                        let pattern = if v.data_type.is_some() {
+                            format!("{settings_name}::{}(_)", v.name)
+                        } else {
+                            format!("{settings_name}::{}", v.name)
+                        };
+                        format!("{pattern} => \"{label}\".to_string()")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let value_expr = format!("match {var}.{name} {{ {match_arms} }}");
                 (
                     "ParamType::Dropdown",
-                    format!("format!(\"{{:?}}\", {var}.{name})"),
-                    format!("vec![{}]", variants.join(", ")),
+                    value_expr,
+                    format!("vec![{}]", options.join(", ")),
                     0.0_f32,
                     0.0_f32,
                 )
@@ -1395,8 +1467,31 @@ fn collect_summary_exprs(
         "bool" => format!("format!(\"{{}}\", {var}.{name})"),
         "String" => format!("{var}.{name}.clone()"),
         _ => {
-            if enums.iter().any(|e| e.enum_name == *ty) {
-                format!("format!(\"{{:?}}\", {var}.{name})")
+            if let Some(enum_info) = enums.iter().find(|e| e.enum_name == *ty) {
+                let settings_name = format!(
+                    "{}{}Settings",
+                    to_pascal_case(&enum_info.source_file),
+                    ty
+                );
+                let match_arms: String = enum_info
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        let label = v
+                            .display_name
+                            .as_deref()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| pascal_to_title_case(&v.name));
+                        let pattern = if v.data_type.is_some() {
+                            format!("{settings_name}::{}(_)", v.name)
+                        } else {
+                            format!("{settings_name}::{}", v.name)
+                        };
+                        format!("{pattern} => \"{label}\".to_string()")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("match {var}.{name} {{ {match_arms} }}")
             } else {
                 return vec![];
             }
@@ -1569,7 +1664,14 @@ fn field_to_apply_change(
                     .variants
                     .iter()
                     .filter(|v| v.data_type.is_none())
-                    .map(|v| format!("\"{}\" => {}::{}, ", v.name, settings_name, v.name))
+                    .map(|v| {
+                        let label = v
+                            .display_name
+                            .as_deref()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| pascal_to_title_case(&v.name));
+                        format!("\"{}\" => {}::{}, ", label, settings_name, v.name)
+                    })
                     .collect();
                 format!(
                     "if param_name == \"{display_name}\" {{ {var}.{name} = match value {{ {arms}_ => {var}.{name}.clone() }}; }}"
