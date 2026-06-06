@@ -327,47 +327,29 @@ impl ClassifyRois {
 
         // Check area
         if roi.area < min_area_px || roi.area > max_area_px {
-            debug!(
-                "ROI {} failed area check: {} (range: {}-{})",
-                roi.id, roi.area, min_area_px, max_area_px
-            );
             return false;
         }
 
         // Check edge touching
         if roi.touches_edge && !self.allow_edge_touching {
-            debug!("ROI {} touches image edge", roi.id);
             return false;
         }
 
         // Check circularity
-        let _perimeter = roi.get_perimeter();
         let circularity = roi.circularity();
         if circularity < self.min_circularity || circularity > self.max_circularity {
-            debug!(
-                "ROI {} failed circularity check: {:.4} (range: {:.4}-{:.4})",
-                roi.id, circularity, self.min_circularity, self.max_circularity
-            );
             return false;
         }
 
         // Check solidity
         let solidity = roi.get_solidity();
         if solidity < self.min_solidity || solidity > self.max_solidity {
-            debug!(
-                "ROI {} failed solidity check: {:.4} (range: {:.4}-{:.4})",
-                roi.id, solidity, self.min_solidity, self.max_solidity
-            );
             return false;
         }
 
         // Check aspect ratio
         let aspect_ratio = roi.get_aspect_ratio();
         if aspect_ratio < self.min_aspect_ratio || aspect_ratio > self.max_aspect_ratio {
-            debug!(
-                "ROI {} failed aspect ratio check: {:.4} (range: {:.4}-{:.4})",
-                roi.id, aspect_ratio, self.min_aspect_ratio, self.max_aspect_ratio
-            );
             return false;
         }
 
@@ -376,20 +358,12 @@ impl ClassifyRois {
         if ellipse.eccentricity < self.min_eccentricity
             || ellipse.eccentricity > self.max_eccentricity
         {
-            debug!(
-                "ROI {} failed eccentricity check: {:.4} (range: {:.4}-{:.4})",
-                roi.id, ellipse.eccentricity, self.min_eccentricity, self.max_eccentricity
-            );
             return false;
         }
 
         // Check Feret diameter
         let feret = roi.get_feret_diameter();
         if feret < self.min_feret || feret > self.max_feret {
-            debug!(
-                "ROI {} failed Feret diameter check: {:.2} (range: {:.2}-{:.2})",
-                roi.id, feret, self.min_feret, self.max_feret
-            );
             return false;
         }
 

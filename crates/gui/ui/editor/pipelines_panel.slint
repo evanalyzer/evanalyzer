@@ -933,6 +933,11 @@ component SpinnerInput inherits HorizontalLayout {
     in property <float> max: 100;
     callback changed(string);
 
+    // Single source of truth for the displayed text.
+    // Initialized from root.value; updated by the edited callback and the ± buttons.
+    // Both buttons always read this property, so manual edits are never lost.
+    property <string> display: "\{root.value}";
+
     spacing: 2px;
     height: 26px;
 
@@ -958,16 +963,20 @@ component SpinnerInput inherits HorizontalLayout {
         dec := TouchArea {
             mouse-cursor: pointer;
             clicked => {
-                root.changed(input.text.to-float() - root.step >= root.min ? "\{input.text.to-float() - root.step}" : "\{root.min}");
+                root.display = root.display.to-float() - root.step >= root.min
+                    ? "\{root.display.to-float() - root.step}"
+                    : "\{root.min}";
+                root.changed(root.display);
             }
         }
     }
 
-    input := LineEdit {
+    LineEdit {
         horizontal-stretch: 1;
-        text: "\{root.value}";
+        text: root.display;
         font-size: 11px;
         edited(t) => {
+            root.display = t;
             root.changed(t);
         }
     }
@@ -991,7 +1000,10 @@ component SpinnerInput inherits HorizontalLayout {
         inc := TouchArea {
             mouse-cursor: pointer;
             clicked => {
-                root.changed(input.text.to-float() + root.step <= root.max ? "\{input.text.to-float() + root.step}" : "\{root.max}");
+                root.display = root.display.to-float() + root.step <= root.max
+                    ? "\{root.display.to-float() + root.step}"
+                    : "\{root.max}";
+                root.changed(root.display);
             }
         }
     }

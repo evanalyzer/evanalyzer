@@ -57,8 +57,8 @@ export component ClassEditDialog inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 680px;
-        height: 600px;
+        width: 450px;
+        height: 400px;
         background: Theme.panel;
         border-radius: 10px;
         border-width: 1px;
@@ -98,7 +98,7 @@ export component ClassEditDialog inherits Rectangle {
                         border-radius: 5px;
                         background: close-ta.has-hover ? Theme.raised : transparent;
                         Text {
-                            text: "✕";
+                            text: "x";
                             color: Theme.text-dim;
                             font-size: 12px;
                             horizontal-alignment: center;
@@ -129,116 +129,116 @@ export component ClassEditDialog inherits Rectangle {
                     padding: 20px;
                     spacing: 15px;
                     HorizontalLayout {
-                                spacing: 10px;
-                                Text {
-                                    text: "Name:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                }
+                        spacing: 10px;
+                        Text {
+                            text: "Name:";
+                            vertical-alignment: center;
+                            width: 110px;
+                        }
 
-                                LineEdit {
-                                    placeholder-text: "e.g. FITC-Cell";
-                                    text <=> ClassificationSettingsState.settings.name;
+                        LineEdit {
+                            placeholder-text: "e.g. FITC-Cell";
+                            text <=> ClassificationSettingsState.settings.name;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: "Notes:";
+                            vertical-alignment: center;
+                            width: 110px;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "Optional description...";
+                            text <=> ClassificationSettingsState.settings.notes;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: "Color:";
+                            font-weight: 700;
+                            width: 110px;
+                        }
+
+                        GridLayout {
+                            spacing: 8px;
+                            Row {
+                                for c in [
+                                    #FF00FF,
+                                    #00FFFF,
+                                    #00FF00,
+                                    #FFFF00,
+                                    #FF3333,
+                                    #3366FF,
+                                    #FF9900,
+                                    #ADFF2F,
+                                    #00FA9A,
+                                    #87CEFA,
+                                    #FF66CC
+                                ]: ColorTile {
+                                    item_color: c;
+                                }
+                            }
+
+                            Row {
+                                for c in [
+                                    #FFD700,
+                                    #FF4500,
+                                    #FF69B4,
+                                    #F08080,
+                                    #FFA07A,
+                                    #DA70D6,
+                                    #FF007F,
+                                    #FFCC00,
+                                    #EEDD82,
+                                    #BC8F8F,
+                                    #FF8C00
+                                ]: ColorTile {
+                                    item_color: c;
                                 }
                             }
 
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Text {
-                                    text: "Notes:";
-                                    vertical-alignment: center;
-                                    width: 110px;
-                                }
-
-                                LineEdit {
-                                    placeholder-text: "Optional description...";
-                                    text <=> ClassificationSettingsState.settings.notes;
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Text {
-                                    text: "Color:";
-                                    font-weight: 700;
-                                    width: 110px;
-                                }
-
-                                GridLayout {
-                                    spacing: 8px;
-                                    Row {
-                                        for c in [
-                                            #FF00FF,
-                                            #00FFFF,
-                                            #00FF00,
-                                            #FFFF00,
-                                            #FF3333,
-                                            #3366FF,
-                                            #FF9900,
-                                            #ADFF2F,
-                                            #00FA9A,
-                                            #87CEFA,
-                                            #FF66CC
-                                        ]: ColorTile {
-                                            item_color: c;
-                                        }
-                                    }
-
-                                    Row {
-                                        for c in [
-                                            #FFD700,
-                                            #FF4500,
-                                            #FF69B4,
-                                            #F08080,
-                                            #FFA07A,
-                                            #DA70D6,
-                                            #FF007F,
-                                            #FFCC00,
-                                            #EEDD82,
-                                            #BC8F8F,
-                                            #FF8C00
-                                        ]: ColorTile {
-                                            item_color: c;
-                                        }
-                                    }
-
-                                    Row {
-                                        for c in [
-                                            #00CED1,
-                                            #1E90FF,
-                                            #9370DB,
-                                            #40E0D0,
-                                            #7B68EE,
-                                            #48D1CC,
-                                            #00BFFF,
-                                            #AFEEEE,
-                                            #B0C4DE,
-                                            #66CDAA,
-                                            #9932CC
-                                        ]: ColorTile {
-                                            item_color: c;
-                                        }
-                                    }
-
-                                    Row {
-                                        for c in [
-                                            #FFCCFF,
-                                            #99FFFF,
-                                            #FFE4B5,
-                                            #EEE8AA,
-                                            #CCFFCC,
-                                            #E6E6FA,
-                                            #FFFAC8,
-                                            #F0FFF0,
-                                            #F5FFFA,
-                                            #F0F8FF,
-                                            #FFFFFF
-                                        ]: ColorTile {
-                                            item_color: c;
-                                        }
-                                    }
+                            Row {
+                                for c in [
+                                    #00CED1,
+                                    #1E90FF,
+                                    #9370DB,
+                                    #40E0D0,
+                                    #7B68EE,
+                                    #48D1CC,
+                                    #00BFFF,
+                                    #AFEEEE,
+                                    #B0C4DE,
+                                    #66CDAA,
+                                    #9932CC
+                                ]: ColorTile {
+                                    item_color: c;
                                 }
                             }
+
+                            Row {
+                                for c in [
+                                    #FFCCFF,
+                                    #99FFFF,
+                                    #FFE4B5,
+                                    #EEE8AA,
+                                    #CCFFCC,
+                                    #E6E6FA,
+                                    #FFFAC8,
+                                    #F0FFF0,
+                                    #F5FFFA,
+                                    #F0F8FF,
+                                    #FFFFFF
+                                ]: ColorTile {
+                                    item_color: c;
+                                }
+                            }
+                        }
+                    }
 
                     Rectangle {
                         vertical-stretch: 1;
