@@ -11,6 +11,7 @@ import {
     Slider,
     CheckBox,
     Palette,
+    Switch,
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ClassificationState, ClassItemData } from "classification_panel.slint";
@@ -962,9 +963,7 @@ component SpinnerInput inherits HorizontalLayout {
                 // compute the new value, write it back to input.text so the display updates,
                 // then notify the backend. Writing input.text here is intentional: after user typing,
                 // the text: binding on LineEdit is broken, so only a direct write keeps it in sync.
-                input.text = input.text.to-float() - root.step >= root.min
-                    ? "\{input.text.to-float() - root.step}"
-                    : "\{root.min}";
+                input.text = input.text.to-float() - root.step >= root.min ? "\{input.text.to-float() - root.step}" : "\{root.min}";
                 root.changed(input.text);
             }
         }
@@ -998,9 +997,7 @@ component SpinnerInput inherits HorizontalLayout {
         inc := TouchArea {
             mouse-cursor: pointer;
             clicked => {
-                input.text = input.text.to-float() + root.step <= root.max
-                    ? "\{input.text.to-float() + root.step}"
-                    : "\{root.max}";
+                input.text = input.text.to-float() + root.step <= root.max ? "\{input.text.to-float() + root.step}" : "\{root.max}";
                 root.changed(input.text);
             }
         }
@@ -1570,10 +1567,7 @@ component StepRow inherits Rectangle {
                         // Click cycles: off → stop → snapshot → off
                         bp-btn := Rectangle {
                             // 0=off, 1=stop, 2=snapshot for this specific step
-                            property <int> bp-state: (
-                                PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id
-                                && PipelinesPanelState.breakpoint-step-id == root.step.id
-                            ) ? PipelinesPanelState.breakpoint-mode : 0;
+                            property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.id) ? PipelinesPanelState.breakpoint-mode : 0;
                             width: 22px;
                             height: 22px;
                             border-radius: 4px;
@@ -1583,12 +1577,11 @@ component StepRow inherits Rectangle {
                                 width: 10px;
                                 height: 10px;
                                 border-radius: 5px;
-                                background: bp-btn.bp-state == 1 ? #e53e3e
-                                          : bp-btn.bp-state == 2 ? #ed8936
-                                          : Theme.text-faint;
+                                background: bp-btn.bp-state == 1 ? #e53e3e : bp-btn.bp-state == 2 ? #ed8936 : Theme.text-faint;
                                 border-width: bp-btn.bp-state == 0 ? 1.5px : 0px;
                                 border-color: Theme.text-faint;
                             }
+
                             bp-btn-ta := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
@@ -1598,7 +1591,7 @@ component StepRow inherits Rectangle {
                         }
 
                         GhostIconBtn {
-                            icon: step.enabled ? @image-url("../icons/regular-white/eye.svg") : @image-url("../icons/regular-white/eye-slash.svg");
+                            icon: step.enabled ? @image-url("../icons/regular-white/check-square.svg") : @image-url("../icons/regular-white/selection-slash.svg");
                             icon-sz: 13px;
                             tint: step.enabled ? Theme.text-dim : Theme.text-faint;
                             clicked => {
@@ -1880,6 +1873,8 @@ export global PipelinesPanelState {
     in-out property <bool> show-breakpoint-image: false;
     // True once a breakpoint image has been captured (enables the toggle).
     in-out property <bool> has-breakpoint-image: false;
+    // True once auto preview is enabled
+    in-out property <bool> auto-preview-enabled: false;
 
     // -- Outbound callbacks --
     // mode: 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
@@ -1908,6 +1903,7 @@ export global PipelinesPanelState {
 
     callback run-all();
     callback dry-run();
+    callback auto-preview(bool);
     callback save();
 }
 
@@ -2245,8 +2241,7 @@ export component PipelinesPanel inherits Rectangle {
                                 PipelinesPanelState.param-changed(cmd.id, n, v);
                             }
                             toggle-breakpoint => {
-                                if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id
-                                        && PipelinesPanelState.breakpoint-step-id == cmd.id {
+                                if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id && PipelinesPanelState.breakpoint-step-id == cmd.id {
                                     if PipelinesPanelState.breakpoint-mode == 1 {
                                         // Stop → Snapshot (capture image, pipeline continues)
                                         PipelinesPanelState.breakpoint-mode = 2;
@@ -2389,6 +2384,7 @@ export component PipelinesPanel inherits Rectangle {
                             background: #e53e3e;
                             y: 11px;
                         }
+
                         Text {
                             text: PipelinesPanelState.show-breakpoint-image ? "Breakpoint image" : "Original image";
                             font-size: 11px;
@@ -2396,6 +2392,7 @@ export component PipelinesPanel inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
+
                     bp-view-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
@@ -2420,14 +2417,14 @@ export component PipelinesPanel inherits Rectangle {
                             spacing: 6px;
                             Image {
                                 y: 10px;
-                                source: @image-url("../icons/regular-white/lightning.svg");
+                                source: @image-url("../icons/regular-white/eye.svg");
                                 width: 13px;
                                 height: 13px;
                                 colorize: #ffffff;
                             }
 
                             Text {
-                                text: "Run all";
+                                text: "Preview";
                                 color: #ffffff;
                                 font-size: 12px;
                                 font-weight: 500;
@@ -2438,20 +2435,45 @@ export component PipelinesPanel inherits Rectangle {
                         run-ta := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
-                                PipelinesPanelState.run-all();
+                                PipelinesPanelState.dry-run();
                             }
                         }
                     }
 
-                    GhostIconBtn {
-                        sz: 34px;
-                        icon-sz: 14px;
-                        icon: @image-url("../icons/regular-white/bug.svg");
-                        clicked => {
-                            PipelinesPanelState.dry-run();
+                    Rectangle {
+                        VerticalLayout {
+                            spacing: 5px;
+
+                            Switch {
+                                checked: PipelinesPanelState.auto-preview-enabled;
+                                toggled => {
+                                    PipelinesPanelState.auto-preview-enabled = !PipelinesPanelState.auto-preview-enabled;
+                                    PipelinesPanelState.auto-preview(PipelinesPanelState.auto-preview-enabled);
+                                }
+                            }
+
+                            Text {
+                                text: "Auto preview";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 500;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
                         }
                     }
 
+                    // Run analysis
+                    GhostIconBtn {
+                        sz: 34px;
+                        icon-sz: 14px;
+                        icon: @image-url("../icons/regular-white/person-simple-run.svg");
+                        clicked => {
+                            PipelinesPanelState.run-all();
+                        }
+                    }
+
+                    // Save pipeline as template
                     GhostIconBtn {
                         sz: 34px;
                         icon-sz: 14px;

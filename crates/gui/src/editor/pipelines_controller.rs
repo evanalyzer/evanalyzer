@@ -18,6 +18,7 @@ use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, all_command_meta, default_command,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use log::debug;
 use log::info;
 use log::warn;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -33,6 +34,9 @@ pub struct PipelinesController {
     pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
     pub(crate) breakpoint: Arc<Mutex<Option<(u32, i32, evanalyzer_core::BreakpointMode)>>>,
+
+    /// If true the trigger_pipeline_preview_execution is called on parameter change
+    auto_preview_enabled: Mutex<bool>,
 }
 
 impl PipelinesController {
@@ -50,6 +54,7 @@ impl PipelinesController {
             task_request: Arc::new((Mutex::new(None), Condvar::new())),
             pipeline_cancel_flag: Arc::new(Mutex::new(None)),
             breakpoint: Arc::new(Mutex::new(None)),
+            auto_preview_enabled: Mutex::new(false),
         }
     }
 
@@ -62,10 +67,17 @@ impl PipelinesController {
                 manager.trigger_pipeline_preview_execution();
             });
 
-            // Set breakpoint (mode: 1=Stop, 2=Snapshot)
+            // Auto preview toggled
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
-                .on_set_breakpoint(move |pipeline_id, step_id, mode| {
+                .on_auto_preview(move |auto_preview| {
+                    *manager.auto_preview_enabled.lock().expect("Poisned") = auto_preview;
+                });
+
+            // Set breakpoint (mode: 1=Stop, 2=Snapshot)
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>().on_set_breakpoint(
+                move |pipeline_id, step_id, mode| {
                     let bp_mode = if mode == 2 {
                         evanalyzer_core::BreakpointMode::Snapshot
                     } else {
@@ -73,7 +85,8 @@ impl PipelinesController {
                     };
                     *manager.breakpoint.lock().unwrap() =
                         Some((pipeline_id as u32, step_id, bp_mode));
-                });
+                },
+            );
 
             // Clear breakpoint
             let manager = self.clone();
@@ -122,7 +135,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         project.enable_pipeline(enabled, PipelineId(pipeline_id as u32));
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                 });
 
@@ -134,7 +147,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         project.move_pipeline_up(PipelineId(pipeline_id as u32));
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                 });
 
@@ -146,7 +159,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         project.move_pipeline_down(PipelineId(pipeline_id as u32));
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                 });
 
@@ -166,7 +179,7 @@ impl PipelinesController {
                     });
                     (next_id, name)
                 };
-                manager.app_state.mark_dirty();
+                manager.pipeline_settings_changed();
                 manager.sync_pipelines_to_slint();
                 manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(new_id), true);
                 let ui_weak = manager.ui.clone();
@@ -255,7 +268,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         project.pipelines.push(new_p);
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                     manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(new_id), true);
                     let ui_weak = manager.ui.clone();
@@ -311,7 +324,7 @@ impl PipelinesController {
                     };
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                     match next_active {
                         Some(nid) => {
@@ -399,7 +412,7 @@ impl PipelinesController {
                     };
                     ps.set_active_pipeline_image_source(image_source_str);
                 }
-                manager.app_state.mark_dirty();
+                manager.pipeline_settings_changed();
                 manager.sync_pipelines_to_slint();
             });
 
@@ -459,7 +472,7 @@ impl PipelinesController {
                             step_idx as usize,
                         );
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
@@ -489,7 +502,7 @@ impl PipelinesController {
                             }
                         }
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
                 });
 
@@ -514,7 +527,7 @@ impl PipelinesController {
                             }
                         }
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
@@ -666,7 +679,7 @@ impl PipelinesController {
                     }
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
@@ -805,7 +818,7 @@ impl PipelinesController {
                         }
                         model.set_row_data(step_idx as usize, cmd);
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                 },
             );
 
@@ -823,7 +836,7 @@ impl PipelinesController {
                             true,
                             None,
                         );
-                        manager.app_state.mark_dirty();
+                        manager.pipeline_settings_changed();
                     }
                 });
 
@@ -841,7 +854,7 @@ impl PipelinesController {
                             false,
                             Some(item_idx as usize),
                         );
-                        manager.app_state.mark_dirty();
+                        manager.pipeline_settings_changed();
                     }
                 },
             );
@@ -871,13 +884,17 @@ impl PipelinesController {
 
         let Some(current_project) = &project.tmp_settings.current_project else {
             warn!("No project path set, please save project first!");
-            self.show_warning("No project is open. Please save the project first before running a preview.");
+            self.show_warning(
+                "No project is open. Please save the project first before running a preview.",
+            );
             return;
         };
 
         let Some(current_image_path) = project.get_current_rel_image_path_cloned() else {
             warn!("Selected image not found in project!");
-            self.show_warning("No image is selected. Please select an image before running a preview.");
+            self.show_warning(
+                "No image is selected. Please select an image before running a preview.",
+            );
             return;
         };
 
@@ -929,7 +946,9 @@ impl PipelinesController {
 
         let Some(current_project) = &project.tmp_settings.current_project else {
             warn!("No project path set, please save project first!");
-            self.show_warning("No project is open. Please save the project first before starting an analysis.");
+            self.show_warning(
+                "No project is open. Please save the project first before starting an analysis.",
+            );
             return;
         };
 
@@ -952,6 +971,20 @@ impl PipelinesController {
         }
 
         self.dispatch_worker_task(task);
+    }
+
+    /// A pipeline setting has been changed
+    ///
+    /// Marks the settings as dirty and trigger a preview update if
+    /// auto preview is enabled
+    fn pipeline_settings_changed(&self) {
+        self.app_state.mark_dirty();
+        // Trigger preview if auto preview is enabled
+        let auto_preview = self.auto_preview_enabled.lock().expect("Poisned").clone();
+        if auto_preview {
+            debug!("Auto preview triggered!");
+            self.trigger_pipeline_preview_execution();
+        }
     }
 
     /// Dispatches a drawing task to the background worker threads based on the specified scope.
