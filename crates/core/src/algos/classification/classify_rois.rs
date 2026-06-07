@@ -28,24 +28,24 @@ use macros::CommandsMeta;
 
 #[derive(CommandsMeta)]
 pub enum ClassifyMatchHandling {
-    #[cmdsmeta(display_name = "Add output class on match")]
+    #[cmdsmeta(display_name = "Add tag on match")]
     AddOutputClassIfMatch,
-    #[cmdsmeta(display_name = "Add output class on mismatch")]
+    #[cmdsmeta(display_name = "Add tag on mismatch")]
     AddOutputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove input class on match")]
+    #[cmdsmeta(display_name = "Remove class on match", visible = false)]
     RemoveInputClassIfMatch,
-    #[cmdsmeta(display_name = "Remove input class on mismatch")]
+    #[cmdsmeta(display_name = "Remove class on mismatch", visible = false)]
     RemoveInputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove output class on match")]
+    #[cmdsmeta(display_name = "Remove tag on match")]
     RemoveOutputClassIfMatch,
-    #[cmdsmeta(display_name = "Remove output class on mismatch")]
+    #[cmdsmeta(display_name = "Remove tag on mismatch")]
     RemoveOutputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove all classes on match")]
+    #[cmdsmeta(display_name = "Remove ROIs matching criteria")]
     RemoveAllClassesIfMatch,
-    #[cmdsmeta(display_name = "Remove all classes on mismatch")]
+    #[cmdsmeta(display_name = "Keep ROIs matching criteria")]
     RemoveAllClassesIfNotMatch,
 
     #[cmdsmeta(display_name = "Reclassify on match")]
@@ -95,7 +95,7 @@ pub struct ClassifyRois {
     ///
     /// Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
     /// Has no effect when the selected operation only manipulates input classes or clears all classes.
-    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Output Class")]
+    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Output Tag")]
     pub output_class: ObjectClass,
 
     /// Unit to use for roi extraction
