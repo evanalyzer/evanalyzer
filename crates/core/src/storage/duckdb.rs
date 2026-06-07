@@ -31,8 +31,7 @@ impl DuckDbExporter {
         // but never "DDL complete" the crash is inside DuckDB itself - see the
         // build note in the README about using the MSVC toolchain on Windows.
         log::info!("DuckDB: opening {} and running DDL ...", path.display());
-        let conn =
-            Connection::open(&path).map_err(|e| InternalErrors::Io(e.to_string()))?;
+        let conn = Connection::open(&path).map_err(|e| InternalErrors::Io(e.to_string()))?;
         conn.execute_batch(CREATE_TABLES)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
@@ -55,7 +54,10 @@ impl DuckDbExporter {
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
         log::info!("DuckDB: DDL complete, exporter ready");
-        Ok(Self { conn: Mutex::new(conn), class_names })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            class_names,
+        })
     }
 
     fn class_label(&self, class: &ObjectClass) -> String {
@@ -138,7 +140,6 @@ CREATE TABLE IF NOT EXISTS coloc_stats (
 );
 ";
 
-
 // ---------------------------------------------------------------------------
 // Helpers for list columns passed as JSON strings to CAST(? AS T[])
 // ---------------------------------------------------------------------------
@@ -155,7 +156,6 @@ fn json_int_array(values: &[i32]) -> String {
     let items: Vec<String> = values.iter().map(|n| n.to_string()).collect();
     format!("[{}]", items.join(","))
 }
-
 
 // ---------------------------------------------------------------------------
 // JSON serialisation helpers
@@ -177,14 +177,12 @@ fn coloc_to_json(
     format!("{{{}}}", entries.join(","))
 }
 
-fn intensities_to_json(
-    intensities: &IndexMap<i32, Intensity>,
-    area: usize,
-    bit_max: f64,
-) -> String {
+fn intensities_to_json(intensities: &IndexMap<i32, Intensity>, bit_max: f64) -> String {
     let mut entries = Vec::with_capacity(intensities.len());
     for (ch, v) in intensities {
-        let mean = v.sum_intensity / (area as f64).max(1.0);
+        // Mean is the precomputed per-channel average (sum / area), so the DB matches
+        // what the rest of the app reports rather than re-deriving it here.
+        let mean = v.avg_intensity as f64;
         let min = v.min_intensity as f64;
         let max = v.max_intensity as f64;
         entries.push(format!(
@@ -336,7 +334,7 @@ impl PipelineResultExporter for DuckDbExporter {
                 let object_class_ids_json = json_int_array(&object_class_ids);
                 let children_json = json_string_array(&children_ids);
                 let coloc_json = coloc_to_json(&roi.colocalized_with, &label);
-                let intensities_json = intensities_to_json(&roi.intensities, roi.area, bit_max);
+                let intensities_json = intensities_to_json(&roi.intensities, bit_max);
 
                 let seg_class_name = roi.segmentation_class.to_string();
                 let seg_class_id = roi.segmentation_class.0 as i32;
@@ -357,57 +355,57 @@ impl PipelineResultExporter for DuckDbExporter {
                 let px_size_z = px.px_size_z as f64;
 
                 app.append_row(params![
-                    &image_name,               // image_name
-                    &image_rel,                // image_rel_path
-                    roi.plane.c,               // c_stack
-                    roi.plane.z,               // z_stack
-                    roi.plane.t,               // t_stack
-                    &object_id,                // object_id (VARCHAR → UUID column)
-                    &seg_class_name,           // seg_class_name
-                    seg_class_id,              // seg_class_id
-                    &object_class_names_json,  // object_class_name (VARCHAR JSON)
-                    &object_class_ids_json,    // object_class_id   (VARCHAR JSON)
-                    &parent_id,                // parent_id         (VARCHAR)
-                    &children_json,            // children          (VARCHAR JSON)
-                    track_id,                  // track_id
-                    centroid_x_px,             // centroid_x_px
-                    centroid_y_px,             // centroid_y_px
-                    centroid_x_px * pxx,       // centroid_x_nm
-                    centroid_y_px * pxy,       // centroid_y_nm
-                    roi.bbox[0],               // bbox_xmin_px
-                    roi.bbox[1],               // bbox_ymin_px
-                    roi.bbox[2],               // bbox_xmax_px
-                    roi.bbox[3],               // bbox_ymax_px
-                    roi.bbox[0] as f64 * pxx,  // bbox_xmin_nm
-                    roi.bbox[1] as f64 * pxy,  // bbox_ymin_nm
-                    roi.bbox[2] as f64 * pxx,  // bbox_xmax_nm
-                    roi.bbox[3] as f64 * pxy,  // bbox_ymax_nm
-                    area_px,                   // area_px
-                    area_nm2,                  // area_nm2
-                    perimeter,                 // perimeter_px
-                    perimeter_nm,              // perimeter_nm
-                    circularity,               // circularity
-                    roi.get_solidity() as f64, // solidity
-                    aspect_ratio,              // aspect_ratio
-                    roundness,                 // roundness
-                    compactness,               // compactness
-                    ellipse.major as f64,      // major_axis_px
-                    ellipse.minor as f64,      // minor_axis_px
+                    &image_name,                   // image_name
+                    &image_rel,                    // image_rel_path
+                    roi.plane.c,                   // c_stack
+                    roi.plane.z,                   // z_stack
+                    roi.plane.t,                   // t_stack
+                    &object_id,                    // object_id (VARCHAR → UUID column)
+                    &seg_class_name,               // seg_class_name
+                    seg_class_id,                  // seg_class_id
+                    &object_class_names_json,      // object_class_name (VARCHAR JSON)
+                    &object_class_ids_json,        // object_class_id   (VARCHAR JSON)
+                    &parent_id,                    // parent_id         (VARCHAR)
+                    &children_json,                // children          (VARCHAR JSON)
+                    track_id,                      // track_id
+                    centroid_x_px,                 // centroid_x_px
+                    centroid_y_px,                 // centroid_y_px
+                    centroid_x_px * pxx,           // centroid_x_nm
+                    centroid_y_px * pxy,           // centroid_y_nm
+                    roi.bbox[0],                   // bbox_xmin_px
+                    roi.bbox[1],                   // bbox_ymin_px
+                    roi.bbox[2],                   // bbox_xmax_px
+                    roi.bbox[3],                   // bbox_ymax_px
+                    roi.bbox[0] as f64 * pxx,      // bbox_xmin_nm
+                    roi.bbox[1] as f64 * pxy,      // bbox_ymin_nm
+                    roi.bbox[2] as f64 * pxx,      // bbox_xmax_nm
+                    roi.bbox[3] as f64 * pxy,      // bbox_ymax_nm
+                    area_px,                       // area_px
+                    area_nm2,                      // area_nm2
+                    perimeter,                     // perimeter_px
+                    perimeter_nm,                  // perimeter_nm
+                    circularity,                   // circularity
+                    roi.get_solidity() as f64,     // solidity
+                    aspect_ratio,                  // aspect_ratio
+                    roundness,                     // roundness
+                    compactness,                   // compactness
+                    ellipse.major as f64,          // major_axis_px
+                    ellipse.minor as f64,          // minor_axis_px
                     ellipse.major as f64 * px_len, // major_axis_nm
                     ellipse.minor as f64 * px_len, // minor_axis_nm
-                    ellipse.angle as f64,      // major_axis_angle
-                    ellipse.eccentricity as f64, // eccentricity
-                    feret,                     // feret_diameter_px
-                    min_feret,                 // min_feret_px
-                    feret_nm,                  // feret_diameter_nm
-                    min_feret_nm,              // min_feret_nm
-                    roi.touches_edge,          // touches_edge
-                    pxx,                       // pixel_size_x_nm
-                    pxy,                       // pixel_size_y_nm
-                    px_size_z,                 // pixel_size_z_nm
-                    nr_of_bits,                // image_bit_depth
-                    &intensities_json,         // intensities_json
-                    &coloc_json,               // coloc_json
+                    ellipse.angle as f64,          // major_axis_angle
+                    ellipse.eccentricity as f64,   // eccentricity
+                    feret,                         // feret_diameter_px
+                    min_feret,                     // min_feret_px
+                    feret_nm,                      // feret_diameter_nm
+                    min_feret_nm,                  // min_feret_nm
+                    roi.touches_edge,              // touches_edge
+                    pxx,                           // pixel_size_x_nm
+                    pxy,                           // pixel_size_y_nm
+                    px_size_z,                     // pixel_size_z_nm
+                    nr_of_bits,                    // image_bit_depth
+                    &intensities_json,             // intensities_json
+                    &coloc_json,                   // coloc_json
                 ])
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
@@ -705,4 +703,3 @@ fn extract_int_list(val: Value) -> Vec<i32> {
         _ => vec![],
     }
 }
-
