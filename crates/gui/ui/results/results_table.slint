@@ -604,7 +604,11 @@ export component ResultsTable inherits Rectangle {
 
             HorizontalLayout {
                 x: h-scroll-view.viewport-x;
-                width: max(parent.width, ResultsState.visible_column_count * 100px);
+                // Match the body's usable width (ListView width minus the
+                // vertical-scrollbar gutter) so stretched columns line up with
+                // the rows. Using parent.width here would over-shoot by the
+                // scrollbar width and drift the header right of the rows.
+                width: max(table-scroll.visible-width, ResultsState.visible_column_count * 100px);
 
                 for col in ResultsState.columns: ResultsHeaderCell {
                     visible: col.visible;
