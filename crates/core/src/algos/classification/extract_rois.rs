@@ -77,12 +77,6 @@ impl ImageAlgorithm for ExtractRois {
             )));
         }
 
-        // Pixel count per instance, used to pre-allocate each ROI's intensity buffers.
-        let mut pixel_counts = vec![0u32; max_id + 1];
-        for &id in instance_map_slice {
-            pixel_counts[id as usize] += 1;
-        }
-
         // Hoist loop-invariant lookups out of the per-pixel hot path. In particular
         // `get_channel_slice()` allocates a Vec and bumps Arc refcounts on every call,
         // so calling it once per pixel dominated the runtime.
@@ -94,9 +88,9 @@ impl ImageAlgorithm for ExtractRois {
             .unwrap_or(ImagePlane { z: -1, c: -1, t: -1 });
 
         // Resolve each channel's pixel slice and sampling geometry once. The previous
-        // per-pixel path re-matched the container type, recomputed zoom and hashed the
-        // channel key into the intensity IndexMap for every pixel — all loop-invariant
-        // per channel. `is_rgb` selects the luminance vs. direct-sample branch below.
+        // per-pixel path re-matched the container type and recomputed zoom for every
+        // pixel — all loop-invariant per channel. `is_rgb` selects the luminance vs.
+        // direct-sample branch below.
         let origin_width = size.width;
         let zoom_x = size.width / full_image_size.width;
         let zoom_y = size.height / full_image_size.height;
@@ -108,40 +102,29 @@ impl ImageAlgorithm for ExtractRois {
                 ImageContainer::U32(_) => None, // no intensity contribution
             })
             .collect();
+        let n_ch = channel_views.len();
+        let n_obj = max_id + 1;
 
-        // One skeleton ROI per instance id (index 0 is background and stays empty). bbox
-        // starts at sentinels so the min/max accumulation below converges; the geometry
-        // computed by `Roi::new` on the empty skeleton is overwritten by `finalize_geometry`
-        // in the second pass. Intensity buffers are pre-populated per channel (in
-        // `channel_views` order) so pass 1 addresses them by position instead of hashing.
-        let mut rois: Vec<Roi> = (0..=max_id)
-            .map(|id| {
-                let mut roi = Roi::new(RoiInit {
-                    id: ObjectId::next(),
-                    ..Default::default()
-                });
-                roi.bbox = [u32::MAX, u32::MAX, 0, 0];
-                // Skip the background slot (id 0) — its pixel count spans the whole image
-                // and pre-allocating that capacity would be a huge, unused allocation.
-                if id != 0 {
-                    let capacity = pixel_counts[id] as usize;
-                    for (channel_idx, _, _) in &channel_views {
-                        roi.intensities.insert(
-                            *channel_idx,
-                            Intensity {
-                                sum_intensity: 0.0,
-                                min_intensity: f32::MAX,
-                                max_intensity: f32::MIN,
-                                pixel_values: Vec::with_capacity(capacity),
-                                median_intensity: None,
-                                std_dev: None,
-                            },
-                        );
-                    }
-                }
-                roi
-            })
-            .collect();
+        // Struct-of-arrays accumulators. Pass 1 only ever touches these small, contiguous
+        // arrays (indexed by instance id) instead of the large `Roi` struct and its
+        // per-ROI intensity IndexMap — far better cache behaviour on the hot per-pixel
+        // path. The full `Roi`s are assembled once, in pass 2.
+        let mut area = vec![0usize; n_obj];
+        let mut bbox = vec![[u32::MAX, u32::MAX, 0u32, 0u32]; n_obj];
+        let mut sum_x = vec![0u64; n_obj];
+        let mut sum_y = vec![0u64; n_obj];
+        let mut sum_x2 = vec![0u64; n_obj];
+        let mut sum_y2 = vec![0u64; n_obj];
+        let mut sum_xy = vec![0u64; n_obj];
+        let mut seg_class = vec![0u32; n_obj];
+        let mut touches_edge = vec![false; n_obj];
+
+        // Per-(object, channel) intensity accumulators, indexed `id * n_ch + ci`.
+        // Only sum / min / max are kept; mean (avg) is derived as sum / area in pass 2.
+        // No per-pixel value storage — that (for median/stddev) was the bottleneck.
+        let mut i_sum = vec![0f64; n_obj * n_ch];
+        let mut i_min = vec![f32::MAX; n_obj * n_ch];
+        let mut i_max = vec![f32::MIN; n_obj * n_ch];
 
         // --- Pass 1: accumulate per-object area, moments, intensities and bbox ---
         let edge_x = full_image_size.width.saturating_sub(1);
@@ -158,11 +141,11 @@ impl ImageAlgorithm for ExtractRois {
                 let x_abs = x + tile_offset.x;
                 let y_abs = y + tile_offset.y;
 
-                let roi = &mut rois[id];
-                roi.segmentation_class = SegmentationClass(segmentation_slice[row + x]);
+                seg_class[id] = segmentation_slice[row + x];
 
                 // Sample intensity for each pre-resolved channel.
                 let sample = sample_row + x * zoom_x;
+                let base = id * n_ch;
                 for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
                     let val = if *is_rgb {
                         let idx = sample * 3;
@@ -172,80 +155,99 @@ impl ImageAlgorithm for ExtractRois {
                     } else {
                         slice[sample]
                     };
-                    // `channel_views` order matches the insertion order above, so the
-                    // entry is addressable by position — no per-pixel key hashing.
-                    let intensity = roi
-                        .intensities
-                        .get_index_mut(ci)
-                        .expect("intensity entry pre-populated for every channel")
-                        .1;
-                    intensity.sum_intensity += val as f64;
-                    intensity.max_intensity = intensity.max_intensity.max(val);
-                    intensity.min_intensity = intensity.min_intensity.min(val);
-                    intensity.pixel_values.push(val);
+                    let k = base + ci;
+                    i_sum[k] += val as f64;
+                    if val < i_min[k] {
+                        i_min[k] = val;
+                    }
+                    if val > i_max[k] {
+                        i_max[k] = val;
+                    }
                 }
 
                 // Moments (for centroid / ellipse) use absolute coordinates.
-                roi.area += 1;
-                roi.sum_x += x_abs as u64;
-                roi.sum_y += y_abs as u64;
-                roi.sum_x2 += (x_abs * x_abs) as u64;
-                roi.sum_y2 += (y_abs * y_abs) as u64;
-                roi.sum_xy += (x_abs * y_abs) as u64;
+                area[id] += 1;
+                sum_x[id] += x_abs as u64;
+                sum_y[id] += y_abs as u64;
+                sum_x2[id] += (x_abs * x_abs) as u64;
+                sum_y2[id] += (y_abs * y_abs) as u64;
+                sum_xy[id] += (x_abs * y_abs) as u64;
 
                 if x_abs == 0 || y_abs == 0 || x_abs == edge_x || y_abs == edge_y {
-                    roi.touches_edge = true;
+                    touches_edge[id] = true;
                 }
 
-                // Update BBox
-                roi.bbox[0] = roi.bbox[0].min(x_abs as u32); // x_min
-                roi.bbox[1] = roi.bbox[1].min(y_abs as u32); // y_min
-                roi.bbox[2] = roi.bbox[2].max(x_abs as u32); // x_max
-                roi.bbox[3] = roi.bbox[3].max(y_abs as u32); // y_max
+                let b = &mut bbox[id];
+                b[0] = b[0].min(x_abs as u32); // x_min
+                b[1] = b[1].min(y_abs as u32); // y_min
+                b[2] = b[2].max(x_abs as u32); // x_max
+                b[3] = b[3].max(y_abs as u32); // y_max
             }
         }
 
-        // --- Pass 2: build each ROI's bbox-relative mask and finalize stats ---
+        // --- Pass 2: assemble each ROI (mask, intensities, geometry) ---
         // Kept single-threaded on purpose: the pipeline parallelizes across images (one
         // core per image), so adding threads here would oversubscribe the CPU.
-        for (id, roi) in rois.iter_mut().enumerate() {
-            if id == 0 || roi.area == 0 {
-                continue; // background slot or empty
-            }
-            let instance_id = id as u32;
-
-            let rw = (roi.bbox[2] - roi.bbox[0] + 1) as usize;
-            let rh = (roi.bbox[3] - roi.bbox[1] + 1) as usize;
+        cache.roi_cache.extend((1..=max_id).filter(|&id| area[id] != 0).map(|id| {
+            let bb = bbox[id];
+            let rw = (bb[2] - bb[0] + 1) as usize;
+            let rh = (bb[3] - bb[1] + 1) as usize;
 
             // Build the bbox-relative bitmask by re-scanning only the bbox window.
             let mut mask = BitVec::<u64, Lsb0>::repeat(false, rw * rh);
             for ry in 0..rh {
                 for rx in 0..rw {
                     // Convert bbox-local coords to tile-local for slice indexing.
-                    let tile_x = rx + roi.bbox[0] as usize - tile_offset.x;
-                    let tile_y = ry + roi.bbox[1] as usize - tile_offset.y;
-                    if instance_map_slice[tile_y * w + tile_x] == instance_id {
+                    let tile_x = rx + bb[0] as usize - tile_offset.x;
+                    let tile_y = ry + bb[1] as usize - tile_offset.y;
+                    if instance_map_slice[tile_y * w + tile_x] == id as u32 {
                         mask.set(ry * rw + rx, true);
                     }
                 }
             }
 
-            roi.mask_data = mask;
-            roi.plane = plane;
-            roi.finalize_intensity_statistics();
-            // Precompute perimeter/ellipse now so the single-threaded DB writer never has to.
-            roi.finalize_geometry();
+            // Per-channel intensity stats from the SoA accumulators. Mean is sum / area
+            // (every pixel contributes one sample per channel); no per-pixel storage.
+            let base = id * n_ch;
+            let n = area[id] as f64;
+            let mut intensities = IndexMap::with_capacity(n_ch);
+            for (ci, (ch_idx, _, _)) in channel_views.iter().enumerate() {
+                let k = base + ci;
+                intensities.insert(
+                    *ch_idx,
+                    Intensity {
+                        sum_intensity: i_sum[k],
+                        min_intensity: i_min[k],
+                        max_intensity: i_max[k],
+                        avg_intensity: (i_sum[k] / n) as f32,
+                        pixel_values: Vec::new(),
+                    },
+                );
+            }
+
+            // `Roi::new` finalizes geometry (perimeter/ellipse) from the mask and moments.
+            let mut roi = Roi::new(RoiInit {
+                id: ObjectId::next(),
+                segmentation_class: SegmentationClass(seg_class[id]),
+                bbox: bb,
+                mask_data: mask,
+                area: area[id],
+                touches_edge: touches_edge[id],
+                sum_x: sum_x[id],
+                sum_y: sum_y[id],
+                sum_x2: sum_x2[id],
+                sum_y2: sum_y2[id],
+                sum_xy: sum_xy[id],
+                intensities,
+                plane,
+                ..Default::default()
+            });
             // Assign the segmentation class as default first object class so classify ROI is not mandatory.
             roi.add_object_class(ObjectClass::from_segmentation_class(roi.segmentation_class));
-        }
 
-        // Store results in context (skip the background slot and any empty ids).
-        cache.roi_cache.extend(
-            rois.into_iter()
-                .enumerate()
-                .filter(|(id, roi)| *id != 0 && roi.area != 0)
-                .map(|(_, roi)| (roi.id.clone(), roi)),
-        );
+            (roi.id.clone(), roi)
+        }));
+
         Ok(())
     }
 
@@ -286,11 +288,10 @@ impl Roi {
         let y1 = bbox[1] as usize;
         let x2 = bbox[2] as usize;
         let y2 = bbox[3] as usize;
-        let capacity = (x2 - x1 + 1) * (y2 - y1 + 1);
 
         for y in y1..=y2 {
             for x in x1..=x2 {
-                roi.update_roi_metrics(full_image_size, x, y, origin_image, images, capacity);
+                roi.update_roi_metrics(full_image_size, x, y, origin_image, images);
             }
         }
         roi.finalize_intensity_statistics();
@@ -301,11 +302,12 @@ impl Roi {
         roi
     }
 
-    /// Updates ROI metrics including intensity statistics (sum, min, max, all values for later median/stdev calculation).
+    /// Updates ROI metrics (sum / min / max intensity, moments, edge flag) for one pixel.
     ///
     /// This method accumulates intensity data from each channel for every pixel in the ROI.
     /// For grayscale images, the raw intensity is used.
     /// For RGB images, the perceptual luminance (BT.709) is calculated with optional background correction.
+    /// The per-channel average is derived later in [`finalize_intensity_statistics`].
     ///
     /// # Arguments
     /// * `x` - Absolute X coordinate in the full image
@@ -319,7 +321,6 @@ impl Roi {
         y: usize,
         origin_image: &crate::ImageContainer,
         images: &[(i32, Arc<crate::ImageContainer>)],
-        pixel_capacity: usize,
     ) {
         let zoom_x = origin_image.size().width / full_image_size.width;
         let zoom_y = origin_image.size().height / full_image_size.height;
@@ -334,18 +335,10 @@ impl Roi {
                     let intensity_slice = image.as_slice();
                     let val = intensity_slice[y_rel * origin_image.size().width + x_rel];
                     let channel_intensity =
-                        self.intensities.entry(*index).or_insert_with(|| Intensity {
-                            sum_intensity: 0.0,
-                            min_intensity: f32::MAX,
-                            max_intensity: f32::MIN,
-                            pixel_values: Vec::with_capacity(pixel_capacity),
-                            median_intensity: None,
-                            std_dev: None,
-                        });
+                        self.intensities.entry(*index).or_insert_with(new_intensity_acc);
                     channel_intensity.sum_intensity += val as f64;
                     channel_intensity.max_intensity = channel_intensity.max_intensity.max(val);
                     channel_intensity.min_intensity = channel_intensity.min_intensity.min(val);
-                    channel_intensity.pixel_values.push(val);
                 }
                 crate::ImageContainer::F32Rgb(image) => {
                     let rgb_slice = image.as_slice();
@@ -365,21 +358,13 @@ impl Roi {
                     let corrected_val = (raw_val - background_level).max(0.0);
 
                     let channel_intensity =
-                        self.intensities.entry(*index).or_insert_with(|| Intensity {
-                            sum_intensity: 0.0,
-                            min_intensity: f32::MAX,
-                            max_intensity: f32::MIN,
-                            pixel_values: Vec::with_capacity(pixel_capacity),
-                            median_intensity: None,
-                            std_dev: None,
-                        });
+                        self.intensities.entry(*index).or_insert_with(new_intensity_acc);
 
                     channel_intensity.sum_intensity += corrected_val as f64;
                     channel_intensity.max_intensity =
                         channel_intensity.max_intensity.max(corrected_val);
                     channel_intensity.min_intensity =
                         channel_intensity.min_intensity.min(corrected_val);
-                    channel_intensity.pixel_values.push(corrected_val);
                 }
                 crate::ImageContainer::U32(_image) => {}
             }
@@ -399,47 +384,24 @@ impl Roi {
         }
     }
 
-    /// Finalizes intensity statistics by computing median and standard deviation.
-    ///
-    /// This method should be called after all pixels for the ROI have been processed.
-    /// It computes:
-    /// - **Median**: The middle value when pixel intensities are sorted
-    /// - **Standard Deviation**: The spread of pixel values around the mean
-    ///
-    /// # Returns
-    /// `Ok(())` on success, `Err(InternalErrors)` if computation fails
+    /// Finalizes per-channel intensity statistics — derives the average from the
+    /// accumulated sum and the ROI's pixel `area`. Call once after all pixels have been
+    /// processed via [`update_roi_metrics`](Self::update_roi_metrics).
     pub fn finalize_intensity_statistics(&mut self) {
+        let n = self.area.max(1) as f64;
         for (_channel_id, intensity) in self.intensities.iter_mut() {
-            if intensity.pixel_values.is_empty() {
-                continue;
-            }
-
-            // Standard deviation first — variance is order-independent, so compute it
-            // before the in-place sort below reorders the values.
-            let mean = intensity.sum_intensity / (intensity.pixel_values.len() as f64);
-            let variance: f64 = intensity
-                .pixel_values
-                .iter()
-                .map(|val| (*val as f64 - mean).powi(2))
-                .sum::<f64>()
-                / (intensity.pixel_values.len() as f64);
-            intensity.std_dev = Some(variance.sqrt() as f32);
-
-            // Median: sort the values in place (they are cleared right after, so we
-            // don't need to preserve the original order — avoids cloning the whole Vec).
-            let values = &mut intensity.pixel_values;
-            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let median = if values.len() % 2 == 0 {
-                let mid = values.len() / 2;
-                (values[mid - 1] + values[mid]) / 2.0
-            } else {
-                values[values.len() / 2]
-            };
-            intensity.median_intensity = Some(median);
-
-            intensity.pixel_values.clear();
-            intensity.pixel_values.shrink_to_fit();
+            intensity.avg_intensity = (intensity.sum_intensity / n) as f32;
         }
+    }
+}
+
+/// A fresh per-channel intensity accumulator: sum/avg start at 0, and min/max start at
+/// the opposite sentinels so the first real pixel always replaces them.
+fn new_intensity_acc() -> Intensity {
+    Intensity {
+        min_intensity: f32::MAX,
+        max_intensity: f32::MIN,
+        ..Intensity::default()
     }
 }
 

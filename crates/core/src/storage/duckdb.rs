@@ -185,15 +185,11 @@ fn intensities_to_json(
     let mut entries = Vec::with_capacity(intensities.len());
     for (ch, v) in intensities {
         let mean = v.sum_intensity / (area as f64).max(1.0);
-        let median = v.median_intensity.unwrap_or(0.0) as f64;
-        let std = v.std_dev.unwrap_or(0.0) as f64;
         let min = v.min_intensity as f64;
         let max = v.max_intensity as f64;
         entries.push(format!(
             "\"{}\":{{\"sum_raw\":{:.6},\"sum_scaled\":{:.2},\
                                \"mean_raw\":{:.6},\"mean_scaled\":{:.2},\
-                               \"median_raw\":{:.6},\"median_scaled\":{:.2},\
-                               \"std_raw\":{:.6},\"std_scaled\":{:.2},\
                                \"min_raw\":{:.6},\"min_scaled\":{:.2},\
                                \"max_raw\":{:.6},\"max_scaled\":{:.2}}}",
             ch,
@@ -201,10 +197,6 @@ fn intensities_to_json(
             v.sum_intensity * bit_max,
             mean,
             mean * bit_max,
-            median,
-            median * bit_max,
-            std,
-            std * bit_max,
             min,
             min * bit_max,
             max,

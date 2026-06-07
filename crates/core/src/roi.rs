@@ -16,10 +16,8 @@ pub struct Intensity {
     pub min_intensity: f32,
     /// Maximum pixel intensity in the ROI
     pub max_intensity: f32,
-    /// Median pixel intensity in the ROI
-    pub median_intensity: Option<f32>,
-    /// Standard deviation of pixel intensities
-    pub std_dev: Option<f32>,
+    /// Average pixel intensity in the ROI
+    pub avg_intensity: f32,
     /// All pixel values (used for computing median and std_dev)
     pub pixel_values: Vec<f32>,
 }
@@ -503,8 +501,7 @@ impl Roi {
                             sum_intensity: v.sum_intensity,
                             min_intensity: v.min_intensity,
                             max_intensity: v.max_intensity,
-                            median_intensity: v.median_intensity,
-                            std_dev: v.std_dev,
+                            avg_intensity: v.avg_intensity,
                             pixel_values: vec![],
                         },
                     )
@@ -549,8 +546,7 @@ impl Roi {
                             sum_intensity: v.sum_intensity,
                             min_intensity: v.min_intensity,
                             max_intensity: v.max_intensity,
-                            median_intensity: v.median_intensity,
-                            std_dev: v.std_dev,
+                            avg_intensity: v.avg_intensity,
                             pixel_values: Vec::new(),
                         },
                     )
@@ -780,7 +776,10 @@ mod tests {
             &[false, true, false],
         ]);
         let s = roi.get_solidity();
-        assert!(s > 0.0 && s < 1.0, "plus shape solidity should be in (0,1): {s}");
+        assert!(
+            s > 0.0 && s < 1.0,
+            "plus shape solidity should be in (0,1): {s}"
+        );
     }
 
     #[test]

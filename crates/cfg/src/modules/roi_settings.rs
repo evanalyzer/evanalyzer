@@ -27,11 +27,10 @@ pub struct IntensitySettings {
     pub min_intensity: f32,
     /// Maximum pixel intensity in the ROI
     pub max_intensity: f32,
-    /// Median pixel intensity in the ROI
-    pub median_intensity: Option<f32>,
-    /// Standard deviation of pixel intensities
-    pub std_dev: Option<f32>,
-    /// All pixel values (used for computing median and std_dev)
+    /// Average pixel intensity in the ROI
+    #[serde(default)]
+    pub avg_intensity: f32,
+    /// Unused scratch buffer kept for layout compatibility; never serialized.
     #[serde(skip)]
     pub pixel_values: Vec<f32>,
 }

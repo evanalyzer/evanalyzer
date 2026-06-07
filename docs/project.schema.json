@@ -966,30 +966,20 @@
     "IntensitySettings": {
       "type": "object",
       "properties": {
+        "avgIntensity": {
+          "description": "Average pixel intensity in the ROI",
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
         "maxIntensity": {
           "description": "Maximum pixel intensity in the ROI",
           "type": "number",
           "format": "float"
         },
-        "medianIntensity": {
-          "description": "Median pixel intensity in the ROI",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "float"
-        },
         "minIntensity": {
           "description": "Minimum pixel intensity in the ROI",
           "type": "number",
-          "format": "float"
-        },
-        "stdDev": {
-          "description": "Standard deviation of pixel intensities",
-          "type": [
-            "number",
-            "null"
-          ],
           "format": "float"
         },
         "sumIntensity": {
