@@ -185,7 +185,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
         out.push_str(
             "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]\n",
         );
-        out.push_str("#[serde(rename_all = \"camelCase\")]\n");
+        out.push_str("#[serde(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
         out.push_str(&format!("pub enum {} {{\n", settings_name));
         for (vi, variant) in enum_info.variants.iter().enumerate() {
             for doc in &variant.doc_comments {
@@ -1319,7 +1319,9 @@ fn field_to_param_def(
         ),
         "ObjectClass" => (
             "ParamType::ObjClass",
-            format!("match {var}.{name}.to_u32() {{ Some(v) => format!(\"{{}}\", v), None => \"-1\".to_string() }}"),
+            format!(
+                "match {var}.{name}.to_u32() {{ Some(v) => format!(\"{{}}\", v), None => \"-1\".to_string() }}"
+            ),
             "vec![]".to_string(),
             0.0_f32,
             0.0_f32,
@@ -1351,11 +1353,8 @@ fn field_to_param_def(
         ),
         _ => {
             if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty.as_str()) {
-                let settings_name = format!(
-                    "{}{}Settings",
-                    to_pascal_case(&enum_info.source_file),
-                    ty
-                );
+                let settings_name =
+                    format!("{}{}Settings", to_pascal_case(&enum_info.source_file), ty);
                 // Build (variant_name, display_label) pairs
                 let display_map: Vec<(String, String)> = enum_info
                     .variants
@@ -1468,11 +1467,8 @@ fn collect_summary_exprs(
         "String" => format!("{var}.{name}.clone()"),
         _ => {
             if let Some(enum_info) = enums.iter().find(|e| e.enum_name == *ty) {
-                let settings_name = format!(
-                    "{}{}Settings",
-                    to_pascal_case(&enum_info.source_file),
-                    ty
-                );
+                let settings_name =
+                    format!("{}{}Settings", to_pascal_case(&enum_info.source_file), ty);
                 let match_arms: String = enum_info
                     .variants
                     .iter()

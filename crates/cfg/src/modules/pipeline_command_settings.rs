@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 ///  The geometric shape used to probe the image intensity surface.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersRollingBallBallTypeSettings {
     /// A spherical cap.
     ///
@@ -27,7 +27,7 @@ pub enum FiltersRollingBallBallTypeSettings {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClassificationClassifyRoisClassifyMatchHandlingSettings {
     #[default]
     AddOutputClassIfMatch,
@@ -47,7 +47,7 @@ pub enum ClassificationClassifyRoisClassifyMatchHandlingSettings {
 ///  The Hessian matrix describes the local second-order structure of an image,
 ///  often used for blob detection (LoG) or ridge extraction.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersHessianHessianModeSettings {
     /// Computes the determinant: $det(H) = I_{xx}I_{yy} - I_{xy}^2$.
     ///
@@ -68,7 +68,7 @@ pub enum FiltersHessianHessianModeSettings {
 
 ///  Defines the interaction type with the persistent image storage.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MathImageCacheImageCacheModeSettings {
     /// Captures the current image from the pipeline and writes it to the cache.
     ///
@@ -84,7 +84,7 @@ pub enum MathImageCacheImageCacheModeSettings {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MathSaveImageImageSourceSettings {
     #[default]
     Image,
@@ -94,7 +94,7 @@ pub enum MathSaveImageImageSourceSettings {
 
 ///  Specifies how intensity adjustments are calculated.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersIntensityTransformIntensityTransformModeSettings {
     /// Parameters are calculated based on image statistics (e.g., histogram analysis).
     #[default]
@@ -105,7 +105,7 @@ pub enum FiltersIntensityTransformIntensityTransformModeSettings {
 
 ///  The geometric structure of the kernel (structuring element).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
     /// A square/rectangular kernel. Dilates in all directions equally (8-connectivity).
     #[default]
@@ -121,7 +121,7 @@ pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
 ///  Morphological operations process images based on shapes, typically used to
 ///  remove noise, isolate individual elements, or join disparate elements.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
     /// Expands the bright regions of an image. Useful for filling small holes.
     #[default]
@@ -138,7 +138,7 @@ pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
 
 ///  The mathematical or logical operation to perform between two images.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MathImageMathOperandSettings {
     /// No operation; typically used as a placeholder.
     #[default]
@@ -154,15 +154,15 @@ pub enum MathImageMathOperandSettings {
     /// Arithmetic division: `A / B`.
     Divide,
     /// Bitwise AND operation.
-    AND,
+    And,
     /// Bitwise OR operation.
-    OR,
+    Or,
     /// Bitwise XOR operation.
-    XOR,
+    Xor,
     /// Per-pixel minimum: `min(A, B)`. (Darkest Pixel).
-    MIN,
+    Min,
     /// Per-pixel maximum: `max(A, B)`. (Brightest Pixel).
-    MAX,
+    Max,
     /// Arithmetic mean: `(A + B) / 2`.
     Average,
     /// Absolute difference: `|A - B|`. Useful for change detection.
@@ -171,7 +171,7 @@ pub enum MathImageMathOperandSettings {
 
 ///  Specifies the statistical operation to perform on the local pixel neighborhood.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersRankFilterRankFilterTypeSettings {
     /// Selects the middle value. Excellent for removing salt-and-pepper noise
     /// while preserving sharp edges.
@@ -193,7 +193,7 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
 
 ///  The specific calculation to extract from the Structure Tensor.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersStructureTensorTensorModeSettings {
     /// Extracts the first (primary) eigenvalue.
     ///
@@ -218,7 +218,7 @@ pub enum FiltersStructureTensorTensorModeSettings {
 ///  Most methods analyze the image histogram to find a "cut-off" point that
 ///  best separates the foreground from the background.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SegmentationThresholdThresholdMethodSettings {
     /// No threshold applied; typically used for bypass logic.
     #[default]
