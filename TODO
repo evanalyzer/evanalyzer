@@ -4,7 +4,6 @@
 - [ ] Fix watershed algorithm which is not working yet
 - [ ] Allow to store and open project templates
 - [ ] Cy5 displayed in yellow
-- [ ] Aut live preview
 - [ ] "old" or non used objects in the respective pipelines should not be displayed.
 - [ ] channel should change with pipeline automatically
 
@@ -12,6 +11,4 @@
 ## Results
 
 - [ ] When clicking on a ROI in the results paint the bounding box of this ROI in the correct image.
-- [ ] Results table is not  alligned with the header any more if some columns made visibila false
 - [ ] Export R
-- [ ] Grouping- filename (Regex) or foldername

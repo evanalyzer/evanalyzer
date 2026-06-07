@@ -11,7 +11,6 @@ import {
     Slider,
     CheckBox,
     Palette,
-    Switch,
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ClassificationState, ClassItemData } from "classification_panel.slint";
@@ -2405,60 +2404,98 @@ export component PipelinesPanel inherits Rectangle {
                 HorizontalLayout {
                     spacing: 6px;
 
-                    // Run all - primary
+                    // Combined preview control — one rounded unit:
+                    //   • left  : tap "Preview" to render once (dry-run)
+                    //   • right : toggle "Auto" to keep re-rendering on change
+                    // The Auto segment dims when off and gets a bright wash +
+                    // bold label when on, so its state reads without a switch.
                     Rectangle {
                         height: 34px;
                         border-radius: 6px;
-                        background: run-ta.has-hover ? Theme.accent.brighter(0.1) : Theme.accent;
                         horizontal-stretch: 1;
-                        animate background { duration: 100ms; }
+                        clip: true;
+                        background: Theme.accent;
+
                         HorizontalLayout {
-                            alignment: center;
-                            spacing: 6px;
-                            Image {
-                                y: 10px;
-                                source: @image-url("../icons/regular-white/eye.svg");
-                                width: 13px;
-                                height: 13px;
-                                colorize: #ffffff;
-                            }
+                            spacing: 0px;
 
-                            Text {
-                                text: "Preview";
-                                color: #ffffff;
-                                font-size: 12px;
-                                font-weight: 500;
-                                vertical-alignment: center;
-                            }
-                        }
+                            // -- One-shot preview --
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: preview-ta.has-hover ? #ffffff.with-alpha(0.12) : transparent;
+                                animate background { duration: 100ms; }
 
-                        run-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                PipelinesPanelState.dry-run();
-                            }
-                        }
-                    }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 6px;
+                                    Image {
+                                        y: 10px;
+                                        source: @image-url("../icons/regular-white/eye.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: #ffffff;
+                                    }
 
-                    Rectangle {
-                        VerticalLayout {
-                            spacing: 5px;
+                                    Text {
+                                        text: "Preview";
+                                        color: #ffffff;
+                                        font-size: 12px;
+                                        font-weight: 500;
+                                        vertical-alignment: center;
+                                    }
+                                }
 
-                            Switch {
-                                checked: PipelinesPanelState.auto-preview-enabled;
-                                toggled => {
-                                    PipelinesPanelState.auto-preview-enabled = !PipelinesPanelState.auto-preview-enabled;
-                                    PipelinesPanelState.auto-preview(PipelinesPanelState.auto-preview-enabled);
+                                preview-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        PipelinesPanelState.dry-run();
+                                    }
                                 }
                             }
 
-                            Text {
-                                text: "Auto preview";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 500;
-                                vertical-alignment: center;
-                                horizontal-alignment: center;
+                            // Divider between the two segments
+                            Rectangle {
+                                width: 1px;
+                                background: #ffffff.with-alpha(0.25);
+                            }
+
+                            // -- Auto-preview toggle --
+                            Rectangle {
+                                width: 76px;
+                                background: PipelinesPanelState.auto-preview-enabled
+                                    ? #ffffff.with-alpha(0.22)
+                                    : (auto-ta.has-hover ? #ffffff.with-alpha(0.12) : transparent);
+                                animate background { duration: 100ms; }
+
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 5px;
+                                    Image {
+                                        y: 10px;
+                                        source: @image-url("../icons/regular-white/lightning.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: #ffffff;
+                                        opacity: PipelinesPanelState.auto-preview-enabled ? 1.0 : 0.55;
+                                    }
+
+                                    Text {
+                                        text: "Auto";
+                                        color: #ffffff;
+                                        opacity: PipelinesPanelState.auto-preview-enabled ? 1.0 : 0.55;
+                                        font-size: 12px;
+                                        font-weight: PipelinesPanelState.auto-preview-enabled ? 600 : 500;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                auto-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        PipelinesPanelState.auto-preview-enabled = !PipelinesPanelState.auto-preview-enabled;
+                                        PipelinesPanelState.auto-preview(PipelinesPanelState.auto-preview-enabled);
+                                    }
+                                }
                             }
                         }
                     }
