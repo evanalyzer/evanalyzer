@@ -25,6 +25,20 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::sync::Arc;
 use std::sync::{Condvar, Mutex, atomic::AtomicBool};
 
+/// Quiet period (in ms) the user must pause editing before an auto preview
+/// runs. Resets on every parameter change. See `pipeline_settings_changed`.
+const PREVIEW_DEBOUNCE_MS: u64 = 400;
+
+thread_local! {
+    /// Single-shot debounce timer for auto preview execution.
+    ///
+    /// Kept in a thread-local rather than on `PipelinesController` because
+    /// `slint::Timer` is `!Send`/`!Sync`, while the controller is shared with
+    /// the pipeline worker thread. `pipeline_settings_changed` only runs on the
+    /// Slint event-loop thread, so the thread-local is always valid there.
+    static PREVIEW_DEBOUNCE: slint::Timer = slint::Timer::default();
+}
+
 pub struct PipelinesController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
@@ -975,15 +989,32 @@ impl PipelinesController {
 
     /// A pipeline setting has been changed
     ///
-    /// Marks the settings as dirty and trigger a preview update if
-    /// auto preview is enabled
-    fn pipeline_settings_changed(&self) {
+    /// Marks the settings as dirty and triggers a preview update if
+    /// auto preview is enabled.
+    ///
+    /// The preview execution is debounced: each change cancels any pending
+    /// preview and restarts a single-shot timer, so the (expensive) preview
+    /// only runs once the user has stopped editing for `PREVIEW_DEBOUNCE_MS`.
+    /// This avoids a flood of preview refreshes while the user is still typing.
+    fn pipeline_settings_changed(self: &Arc<Self>) {
         self.app_state.mark_dirty();
+
         // Trigger preview if auto preview is enabled
-        let auto_preview = self.auto_preview_enabled.lock().expect("Poisned").clone();
+        let auto_preview = *self.auto_preview_enabled.lock().expect("Poisned");
         if auto_preview {
-            debug!("Auto preview triggered!");
-            self.trigger_pipeline_preview_execution();
+            let this = self.clone();
+            PREVIEW_DEBOUNCE.with(|timer| {
+                // Cancel any fire still pending from a previous change
+                timer.stop();
+                timer.start(
+                    slint::TimerMode::SingleShot,
+                    std::time::Duration::from_millis(PREVIEW_DEBOUNCE_MS),
+                    move || {
+                        debug!("Auto preview triggered (debounced)!");
+                        this.trigger_pipeline_preview_execution();
+                    },
+                );
+            });
         }
     }
 
