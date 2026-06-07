@@ -1881,6 +1881,11 @@
             }
           ]
         },
+        "perimeter": {
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
         "segmentationClass": {
           "$ref": "#/$defs/SegmentationClass"
         },

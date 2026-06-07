@@ -19,7 +19,6 @@ use indexmap::IndexMap;
 use kornia_apriltag::utils::Point2d;
 use kornia_image::ImageSize;
 use macros::CommandsMeta;
-use rayon::prelude::*;
 use std::sync::Arc;
 
 /// Represents a bounded region of interest extracted from a labeled image.
@@ -207,12 +206,11 @@ impl ImageAlgorithm for ExtractRois {
         }
 
         // --- Pass 2: build each ROI's bbox-relative mask and finalize stats ---
-        // Every ROI is independent, so this fans out across the rayon pool. The mask build
-        // is O(bbox area) and `finalize_geometry`'s perimeter walk is the most expensive
-        // per-ROI step, so parallelising here is the main scaling win.
-        rois.par_iter_mut().enumerate().for_each(|(id, roi)| {
+        // Kept single-threaded on purpose: the pipeline parallelizes across images (one
+        // core per image), so adding threads here would oversubscribe the CPU.
+        for (id, roi) in rois.iter_mut().enumerate() {
             if id == 0 || roi.area == 0 {
-                return; // background slot or empty
+                continue; // background slot or empty
             }
             let instance_id = id as u32;
 
@@ -235,12 +233,11 @@ impl ImageAlgorithm for ExtractRois {
             roi.mask_data = mask;
             roi.plane = plane;
             roi.finalize_intensity_statistics();
-            // Precompute perimeter/ellipse here on the parallel extraction workers
-            // so the single-threaded DB writer never has to compute them.
+            // Precompute perimeter/ellipse now so the single-threaded DB writer never has to.
             roi.finalize_geometry();
             // Assign the segmentation class as default first object class so classify ROI is not mandatory.
             roi.add_object_class(ObjectClass::from_segmentation_class(roi.segmentation_class));
-        });
+        }
 
         // Store results in context (skip the background slot and any empty ids).
         cache.roi_cache.extend(

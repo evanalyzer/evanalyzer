@@ -318,75 +318,107 @@ impl Roi {
     /// The perimeter value in pixels. A perfect circle with radius r has perimeter ≈ 2πr.
     fn compute_perimeter(&self) -> f32 {
         let [x_min, y_min, x_max, y_max] = self.bbox;
-        let width = (x_max - x_min) as usize;
-        let height = (y_max - y_min) as usize;
-
-        if width == 0 || height == 0 || self.area == 0 {
+        if self.area == 0 || x_max < x_min || y_max < y_min {
             return 0.0;
         }
 
-        let mut perimeter = 0.0;
-        const SQRT2: f32 = 1.414_213_562_373_095_0;
+        // Mask stride uses the INCLUSIVE bbox convention (width = x_max - x_min + 1),
+        // matching how the mask is built everywhere else. (The previous version dropped
+        // the +1, reading misaligned bits and undercounting multi-row ROIs.)
+        let width = (x_max - x_min + 1) as usize;
+        let height = (y_max - y_min + 1) as usize;
+        if width == 0 || height == 0 {
+            return 0.0;
+        }
 
-        // Iterate through each pixel in the bounding box
+        // Materialize the mask into a bool grid padded with a 1-pixel false border.
+        // The border lets the 8-neighbor scan below run without per-neighbor bounds
+        // checks, BitVec bit-addressing or Option handling — all of which dominated the
+        // boundary walk, the single most expensive ROI metric.
+        let pw = width + 2;
+        let mut grid = vec![false; pw * (height + 2)];
         for y in 0..height {
+            let src = y * width;
+            let dst = (y + 1) * pw + 1;
             for x in 0..width {
-                let bit_index = (y * width) + x;
-                let is_inside = self.mask_data.get(bit_index).map(|b| *b).unwrap_or(false);
-
-                if !is_inside {
-                    continue;
-                }
-
-                // Check 8-connected neighbors
-                // For each neighbor that is outside the mask, we have a boundary
-                for dy in -1..=1i32 {
-                    for dx in -1..=1i32 {
-                        if dx == 0 && dy == 0 {
-                            continue;
-                        }
-
-                        let nx = (x as i32) + dx;
-                        let ny = (y as i32) + dy;
-
-                        // Check if neighbor is outside bounds or outside the mask
-                        let is_neighbor_inside =
-                            if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
-                                let neighbor_index = ((ny as usize) * width) + (nx as usize);
-                                self.mask_data
-                                    .get(neighbor_index)
-                                    .map(|b| *b)
-                                    .unwrap_or(false)
-                            } else {
-                                false // Out of bounds is considered "outside"
-                            };
-
-                        if !is_neighbor_inside {
-                            // This neighbor is outside, so we have a boundary edge
-                            if dx == 0 || dy == 0 {
-                                // Horizontal or vertical edge
-                                perimeter += 1.0;
-                            } else {
-                                // Diagonal edge
-                                perimeter += SQRT2;
-                            }
-                        }
-                    }
+                if self.mask_data.get(src + x).map(|b| *b).unwrap_or(false) {
+                    grid[dst + x] = true;
                 }
             }
         }
 
-        // ImageJ divides by 2 because we count each edge twice (from both sides)
+        let mut perimeter = 0.0f32;
+        const SQRT2: f32 = std::f32::consts::SQRT_2;
+
+        // Out-of-bounds neighbors are the false border cells, so they count as "outside",
+        // exactly like the original. Orthogonal boundary edges weigh 1.0, diagonal SQRT2.
+        for y in 1..=height {
+            let row = y * pw;
+            for x in 1..=width {
+                if !grid[row + x] {
+                    continue;
+                }
+                let orth = (!grid[row + x - 1] as u32)
+                    + (!grid[row + x + 1] as u32)
+                    + (!grid[row - pw + x] as u32)
+                    + (!grid[row + pw + x] as u32);
+                let diag = (!grid[row - pw + x - 1] as u32)
+                    + (!grid[row - pw + x + 1] as u32)
+                    + (!grid[row + pw + x - 1] as u32)
+                    + (!grid[row + pw + x + 1] as u32);
+                perimeter += orth as f32 + diag as f32 * SQRT2;
+            }
+        }
+
+        // ImageJ divides by 2 because each boundary edge is counted from both sides.
         perimeter / 2.0
     }
 
-    /// Calculates solidity: ratio of area to convex hull area.
-    /// Values range from 0 to 1 (1 = perfectly convex).
+    /// Calculates solidity: pixel area divided by the area of the convex hull of the
+    /// mask. Values range from 0 to 1 (1 = perfectly convex; lower means more concave
+    /// boundaries, bays or holes).
+    ///
+    /// The hull is taken over the *corners* of the mask's pixel squares, so the pixel
+    /// union is always contained in its hull and solidity never exceeds 1. Only the
+    /// leftmost/rightmost pixel of each row can be a hull vertex, so we feed just those
+    /// extreme corners to the hull — O(height) hull points instead of O(area).
     pub fn get_solidity(&self) -> f32 {
-        // Approximate using area / (perimeter² / 4π)
-        // A perfect circle has the minimum perimeter for given area
-        let min_perimeter_sq = (4.0 * std::f32::consts::PI * self.area as f32).powi(2);
-        (self.area as f32 * 4.0 * std::f32::consts::PI) / min_perimeter_sq
+        let [x_min, y_min, x_max, y_max] = self.bbox;
+        if self.area == 0 || x_max < x_min || y_max < y_min {
+            return 0.0;
+        }
+        let width = (x_max - x_min + 1) as usize;
+        let height = (y_max - y_min + 1) as usize;
+
+        // Per row, collect the outer corners of the leftmost and rightmost set pixels.
+        let mut points: Vec<(f64, f64)> = Vec::with_capacity(height * 4);
+        for ry in 0..height {
+            let row = ry * width;
+            let mut left: Option<usize> = None;
+            let mut right = 0usize;
+            for rx in 0..width {
+                if self.mask_data.get(row + rx).map(|b| *b).unwrap_or(false) {
+                    if left.is_none() {
+                        left = Some(rx);
+                    }
+                    right = rx;
+                }
+            }
+            if let Some(left) = left {
+                let (y0, y1) = (ry as f64, (ry + 1) as f64);
+                points.push((left as f64, y0));
+                points.push((left as f64, y1));
+                points.push(((right + 1) as f64, y0));
+                points.push(((right + 1) as f64, y1));
+            }
+        }
+
+        let hull_area = convex_hull_area(&mut points);
+        if hull_area <= 0.0 {
+            // Degenerate (single pixel / thin line); the pixel union is its own hull.
+            return 1.0;
+        }
+        (self.area as f32 / hull_area as f32).min(1.0)
     }
 
     /// Calculates aspect ratio: major axis / minor axis.
@@ -478,6 +510,7 @@ impl Roi {
                     )
                 })
                 .collect(),
+            perimeter: self.perimeter,
             z_stack: self.plane.z,
             c_stack: self.plane.c,
             t_stack: self.plane.t,
@@ -624,5 +657,135 @@ impl Roi {
             plane: self.plane.clone(),
             ..Default::default()
         }))
+    }
+}
+
+/// Area of the convex hull of `points`, via Andrew's monotone chain + the shoelace
+/// formula. `points` is sorted (and may be reordered) in place. Returns 0.0 for fewer
+/// than three non-collinear points.
+fn convex_hull_area(points: &mut [(f64, f64)]) -> f64 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    points.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    // Cross product of OA x OB; > 0 means a counter-clockwise turn.
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+
+    let mut hull: Vec<(f64, f64)> = Vec::with_capacity(points.len() + 1);
+    // Lower hull.
+    for &p in points.iter() {
+        while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    // Upper hull.
+    let lower = hull.len() + 1;
+    for &p in points.iter().rev() {
+        while hull.len() >= lower && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    hull.pop(); // last point equals the first
+
+    if hull.len() < 3 {
+        return 0.0;
+    }
+    // Shoelace formula.
+    let mut twice_area = 0.0;
+    for i in 0..hull.len() {
+        let (x1, y1) = hull[i];
+        let (x2, y2) = hull[(i + 1) % hull.len()];
+        twice_area += x1 * y2 - x2 * y1;
+    }
+    twice_area.abs() / 2.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::core_types::ObjectId;
+
+    /// Build a finalized ROI from a rectangular `rows × cols` boolean pattern.
+    fn roi_from_pattern(pattern: &[&[bool]]) -> Roi {
+        let height = pattern.len();
+        let width = pattern[0].len();
+        let mut mask = BitVec::<u64, Lsb0>::repeat(false, width * height);
+        let mut area = 0usize;
+        for (y, row) in pattern.iter().enumerate() {
+            for (x, &on) in row.iter().enumerate() {
+                if on {
+                    mask.set(y * width + x, true);
+                    area += 1;
+                }
+            }
+        }
+        Roi::new(RoiInit {
+            id: ObjectId(1),
+            bbox: [0, 0, (width - 1) as u32, (height - 1) as u32],
+            mask_data: mask,
+            area,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn perimeter_uses_inclusive_stride_for_2x2_square() {
+        // 2×2 filled block. With the (now correct) inclusive stride the boundary walk
+        // visits all four pixels; the weighted ImageJ scheme yields 4 + 6·√2.
+        let roi = roi_from_pattern(&[&[true, true], &[true, true]]);
+        let expected = 4.0 + 6.0 * std::f32::consts::SQRT_2;
+        assert!(
+            (roi.get_perimeter() - expected).abs() < 1e-3,
+            "got {}, expected {}",
+            roi.get_perimeter(),
+            expected
+        );
+    }
+
+    #[test]
+    fn perimeter_single_pixel() {
+        // One pixel: all 8 neighbors are outside → (4·1 + 4·√2) / 2 = 2 + 2·√2.
+        // (The old buggy stride returned 0 here because width collapsed to 0.)
+        let roi = roi_from_pattern(&[&[true]]);
+        let expected = 2.0 + 2.0 * std::f32::consts::SQRT_2;
+        assert!((roi.get_perimeter() - expected).abs() < 1e-3);
+    }
+
+    #[test]
+    fn solidity_is_one_for_filled_square() {
+        let roi = roi_from_pattern(&[
+            &[true, true, true],
+            &[true, true, true],
+            &[true, true, true],
+        ]);
+        // Hull area == pixel area (9) → perfectly solid.
+        assert!((roi.get_solidity() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn solidity_below_one_for_concave_plus_shape() {
+        // A plus/cross: concave, so the convex hull is larger than the pixel area.
+        let roi = roi_from_pattern(&[
+            &[false, true, false],
+            &[true, true, true],
+            &[false, true, false],
+        ]);
+        let s = roi.get_solidity();
+        assert!(s > 0.0 && s < 1.0, "plus shape solidity should be in (0,1): {s}");
+    }
+
+    #[test]
+    fn solidity_one_for_single_pixel() {
+        let roi = roi_from_pattern(&[&[true]]);
+        assert_eq!(roi.get_solidity(), 1.0);
     }
 }
