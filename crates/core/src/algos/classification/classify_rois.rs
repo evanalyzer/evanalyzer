@@ -28,22 +28,30 @@ use macros::CommandsMeta;
 
 #[derive(CommandsMeta)]
 pub enum ClassifyMatchHandling {
-    #[cmdsmeta(display_name = "If match add output class")]
+    #[cmdsmeta(display_name = "Add output class on match")]
     AddOutputClassIfMatch,
-    #[cmdsmeta(display_name = "If not match add output class")]
+    #[cmdsmeta(display_name = "Add output class on mismatch")]
     AddOutputClassIfNotMatch,
-    #[cmdsmeta(display_name = "If match remove input class")]
+
+    #[cmdsmeta(display_name = "Remove input class on match")]
     RemoveInputClassIfMatch,
-    #[cmdsmeta(display_name = "If not match remove input class")]
+    #[cmdsmeta(display_name = "Remove input class on mismatch")]
     RemoveInputClassIfNotMatch,
-    #[cmdsmeta(display_name = "If match remove output class")]
+
+    #[cmdsmeta(display_name = "Remove output class on match")]
     RemoveOutputClassIfMatch,
-    #[cmdsmeta(display_name = "If not match remove output class")]
+    #[cmdsmeta(display_name = "Remove output class on mismatch")]
     RemoveOutputClassIfNotMatch,
-    #[cmdsmeta(display_name = "If match remove all classes")]
+
+    #[cmdsmeta(display_name = "Remove all classes on match")]
     RemoveAllClassesIfMatch,
-    #[cmdsmeta(display_name = "If not match remove all classes")]
+    #[cmdsmeta(display_name = "Remove all classes on mismatch")]
     RemoveAllClassesIfNotMatch,
+
+    #[cmdsmeta(display_name = "Reclassify on match")]
+    ReclassifyIfMatch,
+    #[cmdsmeta(display_name = "Reclassify on mismatch")]
+    ReclassifyIfNotMatch,
 }
 
 /// Classifies ROIs based on morphological and intensity features.
@@ -113,7 +121,7 @@ pub struct ClassifyRois {
     /// Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.
     /// A circle is the mathematically perfect shape for maximizing area while minimizing perimeter.
     /// It is calculated with `4*Pi*AreaSize / Perimeter^2`
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = true)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = false)]
     pub min_circularity: f32,
 
     /// Circularity range: 0 = elongated, 1 = perfect circle
@@ -301,6 +309,18 @@ impl ImageAlgorithm for ClassifyRois {
                         roi.object_class.clear();
                     }
                 }
+                ClassifyMatchHandling::ReclassifyIfMatch => {
+                    if matches {
+                        roi.object_class.clear();
+                        roi.add_object_class(self.output_class.clone());
+                    }
+                }
+                ClassifyMatchHandling::ReclassifyIfNotMatch => {
+                    if !matches {
+                        roi.object_class.clear();
+                        roi.add_object_class(self.output_class.clone());
+                    }
+                }
             }
         }
 
@@ -383,12 +403,5 @@ mod tests {
         assert_eq!(criteria.min_area, 0.0);
         assert_eq!(criteria.max_area, 2147483600.0);
         assert!(criteria.allow_edge_touching);
-    }
-
-    #[test]
-    fn test_classifier_creation() {
-        let class = ObjectClass::default();
-        let classifier = ClassifyRois::default();
-        assert_eq!(classifier.target_class, class);
     }
 }

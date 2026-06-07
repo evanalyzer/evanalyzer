@@ -209,7 +209,9 @@
         "removeOutputClassIfMatch",
         "removeOutputClassIfNotMatch",
         "removeAllClassesIfMatch",
-        "removeAllClassesIfNotMatch"
+        "removeAllClassesIfNotMatch",
+        "reclassifyIfMatch",
+        "reclassifyIfNotMatch"
       ]
     },
     "ClassificationSettings": {
@@ -2219,7 +2221,7 @@
         "method": {
           "description": "The algorithm to use (Manual or Automatic).",
           "$ref": "#/$defs/SegmentationThresholdThresholdMethodSettings",
-          "default": "none"
+          "default": "manual"
         },
         "minThreshold": {
           "description": "The lower intensity bound. Used directly in `Manual` mode, or as a\n floor for auto-methods.",

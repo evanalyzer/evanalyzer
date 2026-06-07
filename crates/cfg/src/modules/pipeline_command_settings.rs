@@ -38,6 +38,8 @@ pub enum ClassificationClassifyRoisClassifyMatchHandlingSettings {
     RemoveOutputClassIfNotMatch,
     RemoveAllClassesIfMatch,
     RemoveAllClassesIfNotMatch,
+    ReclassifyIfMatch,
+    ReclassifyIfNotMatch,
 }
 
 ///  Specifies the feature extraction method for the Hessian matrix.
@@ -860,7 +862,7 @@ pub struct ThresholdEntrySettings {
 impl Default for ThresholdEntrySettings {
     fn default() -> Self {
         Self {
-            method: SegmentationThresholdThresholdMethodSettings::default(),
+            method: SegmentationThresholdThresholdMethodSettings::Manual,
             min_threshold: 0.0f32,
             max_threshold: 65535.0f32,
             unit: PixelUnits::Bit,

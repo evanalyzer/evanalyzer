@@ -24,6 +24,8 @@ impl From<ClassificationClassifyRoisClassifyMatchHandlingSettings> for ClassifyM
             ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
             ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => ClassifyMatchHandling::RemoveAllClassesIfMatch,
             ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfMatch => ClassifyMatchHandling::ReclassifyIfMatch,
+            ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfNotMatch => ClassifyMatchHandling::ReclassifyIfNotMatch,
         }
     }
 }
