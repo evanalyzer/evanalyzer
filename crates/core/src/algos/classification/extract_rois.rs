@@ -19,7 +19,8 @@ use indexmap::IndexMap;
 use kornia_apriltag::utils::Point2d;
 use kornia_image::ImageSize;
 use macros::CommandsMeta;
-use std::{collections::HashMap, sync::Arc};
+use rayon::prelude::*;
+use std::sync::Arc;
 
 /// Represents a bounded region of interest extracted from a labeled image.
 
@@ -54,23 +55,22 @@ impl ImageAlgorithm for ExtractRois {
         let size = ctx.get_image_size();
         let (w, h) = (size.width as usize, size.height as usize);
 
-        ctx.get_image_tile_offset();
-
         // Semantic Labels (Pixel Class which defines which pixel belongs to which class)
         let segmentation_slice = ctx.get_segmentation_map()?.as_slice();
 
         // Instance IDs (Each individual object gets its own instance id)
         let instance_map_slice = ctx.get_instance_map()?.as_slice();
 
-        // Pre-pass: count pixels per instance so intensity Vecs can be pre-allocated.
-        let mut pixel_counts: HashMap<u32, usize> = HashMap::new();
-        for &id in instance_map_slice {
-            if id != 0 {
-                *pixel_counts.entry(id).or_insert(0) += 1;
-            }
+        // ConnectedComponents emits dense, contiguous instance ids (1..=max_id), so every
+        // per-object accumulator can be indexed by id with a flat Vec. This avoids the
+        // per-pixel HashMap lookups and id bookkeeping the previous version paid for.
+        let max_id = instance_map_slice.iter().copied().max().unwrap_or(0) as usize;
+        if max_id == 0 {
+            return Ok(()); // no objects in this tile
         }
 
-        let object_count = pixel_counts.len();
+        // Dense re-indexing guarantees every id in 1..=max_id has at least one pixel.
+        let object_count = max_id;
         if object_count > self.max_objects_before_fail as usize {
             return Err(InternalErrors::TooManyObjects(format!(
                 "Detected {} objects, limit is {}. Adjust upstream filter parameters to reduce noise.",
@@ -78,9 +78,11 @@ impl ImageAlgorithm for ExtractRois {
             )));
         }
 
-        // Using a HashMap for sparse IDs, or a Vec if IDs are dense
-        let mut roi_map: HashMap<ObjectId, Roi> = HashMap::new();
-        let mut instance_id_to_object_id_map: HashMap<u32, ObjectId> = HashMap::new();
+        // Pixel count per instance, used to pre-allocate each ROI's intensity buffers.
+        let mut pixel_counts = vec![0u32; max_id + 1];
+        for &id in instance_map_slice {
+            pixel_counts[id as usize] += 1;
+        }
 
         // Hoist loop-invariant lookups out of the per-pixel hot path. In particular
         // `get_channel_slice()` allocates a Vec and bumps Arc refcounts on every call,
@@ -88,107 +90,99 @@ impl ImageAlgorithm for ExtractRois {
         let tile_offset = ctx.get_image_tile_offset();
         let full_image_size = ctx.full_image_size();
         let channels = cache.image_cache.get_channel_slice();
+        let plane = ctx
+            .get_image_plane()
+            .unwrap_or(ImagePlane { z: -1, c: -1, t: -1 });
         let image = &ctx.image;
 
-        // Accumulate Metrics and Bounding Boxes
+        // One skeleton ROI per instance id (index 0 is background and stays empty). bbox
+        // starts at sentinels so the min/max accumulation below converges; the geometry
+        // computed by `Roi::new` on the empty skeleton is overwritten by `finalize_geometry`
+        // in the second pass.
+        let mut rois: Vec<Roi> = (0..=max_id)
+            .map(|_| {
+                let mut roi = Roi::new(RoiInit {
+                    id: ObjectId::next(),
+                    ..Default::default()
+                });
+                roi.bbox = [u32::MAX, u32::MAX, 0, 0];
+                roi
+            })
+            .collect();
+
+        // --- Pass 1: accumulate per-object area, moments, intensities and bbox ---
         for y in 0..h {
             for x in 0..w {
-                let id = instance_map_slice[y * w + x];
+                let id = instance_map_slice[y * w + x] as usize;
                 if id == 0 {
                     continue;
                 }
 
-                let sem = segmentation_slice[y * w + x];
-
                 let x_abs = x + tile_offset.x;
                 let y_abs = y + tile_offset.y;
-                let object_id = instance_id_to_object_id_map
-                    .entry(id)
-                    .or_insert_with(|| ObjectId::next());
 
-                let entry = roi_map.entry(object_id.clone()).or_insert_with(|| {
-                    // Skeleton ROI: the mask and moments are accumulated below across
-                    // the pixel passes, then re-finalized via finalize_geometry().
-                    Roi::new(RoiInit {
-                        id: object_id.clone(),
-                        segmentation_class: SegmentationClass(sem),
-                        intensities: IndexMap::new(),
-                        bbox: [x_abs as u32, y_abs as u32, x_abs as u32, y_abs as u32],
-                        ..Default::default()
-                    })
-                });
-                entry.update_roi_metrics(
+                let roi = &mut rois[id];
+                roi.segmentation_class = SegmentationClass(segmentation_slice[y * w + x]);
+                roi.update_roi_metrics(
                     &full_image_size,
                     x_abs,
                     y_abs,
                     image,
                     &channels,
-                    pixel_counts.get(&id).copied().unwrap_or(0),
+                    pixel_counts[id] as usize,
                 );
 
                 // Update BBox
-                entry.bbox[0] = entry.bbox[0].min(x_abs as u32); // x_min
-                entry.bbox[1] = entry.bbox[1].min(y_abs as u32); // y_min
-                entry.bbox[2] = entry.bbox[2].max(x_abs as u32); // x_max
-                entry.bbox[3] = entry.bbox[3].max(y_abs as u32); // y_max
+                roi.bbox[0] = roi.bbox[0].min(x_abs as u32); // x_min
+                roi.bbox[1] = roi.bbox[1].min(y_abs as u32); // y_min
+                roi.bbox[2] = roi.bbox[2].max(x_abs as u32); // x_max
+                roi.bbox[3] = roi.bbox[3].max(y_abs as u32); // y_max
             }
         }
 
-        // Build reverse map: ObjectId → instance_id so the mask pass can compare correctly.
-        let object_id_to_instance_id: HashMap<ObjectId, u32> = instance_id_to_object_id_map
-            .iter()
-            .map(|(instance_id, object_id)| (object_id.clone(), *instance_id))
-            .collect();
+        // --- Pass 2: build each ROI's bbox-relative mask and finalize stats ---
+        // Every ROI is independent, so this fans out across the rayon pool. The mask build
+        // is O(bbox area) and `finalize_geometry`'s perimeter walk is the most expensive
+        // per-ROI step, so parallelising here is the main scaling win.
+        rois.par_iter_mut().enumerate().for_each(|(id, roi)| {
+            if id == 0 || roi.area == 0 {
+                return; // background slot or empty
+            }
+            let instance_id = id as u32;
 
-        let tile_offset = ctx.get_image_tile_offset();
-
-        // Build Bitmasks (Relative to BBox)
-        // We do this in a second pass or by re-iterating only the BBox areas
-        // to save massive amounts of memory.
-        for (object_id, roi) in roi_map.iter_mut() {
             let rw = (roi.bbox[2] - roi.bbox[0] + 1) as usize;
             let rh = (roi.bbox[3] - roi.bbox[1] + 1) as usize;
 
-            let instance_id = object_id_to_instance_id[object_id];
-
-            // Initialize BitVec of the correct size with all bits set to false
+            // Build the bbox-relative bitmask by re-scanning only the bbox window.
             let mut mask = BitVec::<u64, Lsb0>::repeat(false, rw * rh);
-
             for ry in 0..rh {
                 for rx in 0..rw {
-                    let global_x = rx + roi.bbox[0] as usize;
-                    let global_y = ry + roi.bbox[1] as usize;
-
-                    // Convert absolute coords back to tile-local for slice indexing.
-                    let tile_x = global_x - tile_offset.x;
-                    let tile_y = global_y - tile_offset.y;
-
+                    // Convert bbox-local coords to tile-local for slice indexing.
+                    let tile_x = rx + roi.bbox[0] as usize - tile_offset.x;
+                    let tile_y = ry + roi.bbox[1] as usize - tile_offset.y;
                     if instance_map_slice[tile_y * w + tile_x] == instance_id {
                         mask.set(ry * rw + rx, true);
                     }
                 }
             }
 
-            // Assign the underlying storage back to the ROI
             roi.mask_data = mask;
-            roi.plane = match ctx.get_image_plane() {
-                Some(plane) => plane,
-                None => ImagePlane {
-                    z: -1,
-                    c: -1,
-                    t: -1,
-                },
-            };
+            roi.plane = plane;
             roi.finalize_intensity_statistics();
             // Precompute perimeter/ellipse here on the parallel extraction workers
             // so the single-threaded DB writer never has to compute them.
             roi.finalize_geometry();
-            // We assign the segmentation class as default first object class So classify ROI is not mandatory needed
+            // Assign the segmentation class as default first object class so classify ROI is not mandatory.
             roi.add_object_class(ObjectClass::from_segmentation_class(roi.segmentation_class));
-        }
+        });
 
-        // Store results in context
-        cache.roi_cache.extend(roi_map);
+        // Store results in context (skip the background slot and any empty ids).
+        cache.roi_cache.extend(
+            rois.into_iter()
+                .enumerate()
+                .filter(|(id, roi)| *id != 0 && roi.area != 0)
+                .map(|(_, roi)| (roi.id.clone(), roi)),
+        );
         Ok(())
     }
 
