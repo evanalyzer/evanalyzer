@@ -82,6 +82,14 @@ impl ImageAlgorithm for ExtractRois {
         let mut roi_map: HashMap<ObjectId, Roi> = HashMap::new();
         let mut instance_id_to_object_id_map: HashMap<u32, ObjectId> = HashMap::new();
 
+        // Hoist loop-invariant lookups out of the per-pixel hot path. In particular
+        // `get_channel_slice()` allocates a Vec and bumps Arc refcounts on every call,
+        // so calling it once per pixel dominated the runtime.
+        let tile_offset = ctx.get_image_tile_offset();
+        let full_image_size = ctx.full_image_size();
+        let channels = cache.image_cache.get_channel_slice();
+        let image = &ctx.image;
+
         // Accumulate Metrics and Bounding Boxes
         for y in 0..h {
             for x in 0..w {
@@ -92,8 +100,8 @@ impl ImageAlgorithm for ExtractRois {
 
                 let sem = segmentation_slice[y * w + x];
 
-                let x_abs = x + ctx.get_image_tile_offset().x;
-                let y_abs = y + ctx.get_image_tile_offset().y;
+                let x_abs = x + tile_offset.x;
+                let y_abs = y + tile_offset.y;
                 let object_id = instance_id_to_object_id_map
                     .entry(id)
                     .or_insert_with(|| ObjectId::next());
@@ -109,13 +117,12 @@ impl ImageAlgorithm for ExtractRois {
                         ..Default::default()
                     })
                 });
-                let full_image_size = ctx.full_image_size();
                 entry.update_roi_metrics(
                     &full_image_size,
                     x_abs,
                     y_abs,
-                    &ctx.image,
-                    cache.image_cache.get_channel_slice().as_slice(),
+                    image,
+                    &channels,
                     pixel_counts.get(&id).copied().unwrap_or(0),
                 );
 
@@ -350,19 +357,8 @@ impl Roi {
                 continue;
             }
 
-            // Calculate median
-            let mut sorted_values = intensity.pixel_values.clone();
-            sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-            let median = if sorted_values.len() % 2 == 0 {
-                let mid = sorted_values.len() / 2;
-                (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
-            } else {
-                sorted_values[sorted_values.len() / 2]
-            };
-            intensity.median_intensity = Some(median);
-
-            // Calculate standard deviation
+            // Standard deviation first — variance is order-independent, so compute it
+            // before the in-place sort below reorders the values.
             let mean = intensity.sum_intensity / (intensity.pixel_values.len() as f64);
             let variance: f64 = intensity
                 .pixel_values
@@ -370,8 +366,19 @@ impl Roi {
                 .map(|val| (*val as f64 - mean).powi(2))
                 .sum::<f64>()
                 / (intensity.pixel_values.len() as f64);
-            let std_dev = variance.sqrt();
-            intensity.std_dev = Some(std_dev as f32);
+            intensity.std_dev = Some(variance.sqrt() as f32);
+
+            // Median: sort the values in place (they are cleared right after, so we
+            // don't need to preserve the original order — avoids cloning the whole Vec).
+            let values = &mut intensity.pixel_values;
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let median = if values.len() % 2 == 0 {
+                let mid = values.len() / 2;
+                (values[mid - 1] + values[mid]) / 2.0
+            } else {
+                values[values.len() / 2]
+            };
+            intensity.median_intensity = Some(median);
 
             intensity.pixel_values.clear();
             intensity.pixel_values.shrink_to_fit();
