@@ -93,27 +93,65 @@ impl ImageAlgorithm for ExtractRois {
         let plane = ctx
             .get_image_plane()
             .unwrap_or(ImagePlane { z: -1, c: -1, t: -1 });
-        let image = &ctx.image;
+
+        // Resolve each channel's pixel slice and sampling geometry once. The previous
+        // per-pixel path re-matched the container type, recomputed zoom and hashed the
+        // channel key into the intensity IndexMap for every pixel — all loop-invariant
+        // per channel. `is_rgb` selects the luminance vs. direct-sample branch below.
+        let origin_width = size.width;
+        let zoom_x = size.width / full_image_size.width;
+        let zoom_y = size.height / full_image_size.height;
+        let channel_views: Vec<(i32, bool, &[f32])> = channels
+            .iter()
+            .filter_map(|(idx, container)| match container.as_ref() {
+                ImageContainer::F32Gray(img) => Some((*idx, false, img.as_slice())),
+                ImageContainer::F32Rgb(img) => Some((*idx, true, img.as_slice())),
+                ImageContainer::U32(_) => None, // no intensity contribution
+            })
+            .collect();
 
         // One skeleton ROI per instance id (index 0 is background and stays empty). bbox
         // starts at sentinels so the min/max accumulation below converges; the geometry
         // computed by `Roi::new` on the empty skeleton is overwritten by `finalize_geometry`
-        // in the second pass.
+        // in the second pass. Intensity buffers are pre-populated per channel (in
+        // `channel_views` order) so pass 1 addresses them by position instead of hashing.
         let mut rois: Vec<Roi> = (0..=max_id)
-            .map(|_| {
+            .map(|id| {
                 let mut roi = Roi::new(RoiInit {
                     id: ObjectId::next(),
                     ..Default::default()
                 });
                 roi.bbox = [u32::MAX, u32::MAX, 0, 0];
+                // Skip the background slot (id 0) — its pixel count spans the whole image
+                // and pre-allocating that capacity would be a huge, unused allocation.
+                if id != 0 {
+                    let capacity = pixel_counts[id] as usize;
+                    for (channel_idx, _, _) in &channel_views {
+                        roi.intensities.insert(
+                            *channel_idx,
+                            Intensity {
+                                sum_intensity: 0.0,
+                                min_intensity: f32::MAX,
+                                max_intensity: f32::MIN,
+                                pixel_values: Vec::with_capacity(capacity),
+                                median_intensity: None,
+                                std_dev: None,
+                            },
+                        );
+                    }
+                }
                 roi
             })
             .collect();
 
         // --- Pass 1: accumulate per-object area, moments, intensities and bbox ---
+        let edge_x = full_image_size.width.saturating_sub(1);
+        let edge_y = full_image_size.height.saturating_sub(1);
         for y in 0..h {
+            let row = y * w;
+            let sample_row = (y * zoom_y) * origin_width;
             for x in 0..w {
-                let id = instance_map_slice[y * w + x] as usize;
+                let id = instance_map_slice[row + x] as usize;
                 if id == 0 {
                     continue;
                 }
@@ -122,15 +160,43 @@ impl ImageAlgorithm for ExtractRois {
                 let y_abs = y + tile_offset.y;
 
                 let roi = &mut rois[id];
-                roi.segmentation_class = SegmentationClass(segmentation_slice[y * w + x]);
-                roi.update_roi_metrics(
-                    &full_image_size,
-                    x_abs,
-                    y_abs,
-                    image,
-                    &channels,
-                    pixel_counts[id] as usize,
-                );
+                roi.segmentation_class = SegmentationClass(segmentation_slice[row + x]);
+
+                // Sample intensity for each pre-resolved channel.
+                let sample = sample_row + x * zoom_x;
+                for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
+                    let val = if *is_rgb {
+                        let idx = sample * 3;
+                        // Perceptual luminance (BT.709); background_level = 0.
+                        (0.2126 * slice[idx] + 0.7152 * slice[idx + 1] + 0.0722 * slice[idx + 2])
+                            .max(0.0)
+                    } else {
+                        slice[sample]
+                    };
+                    // `channel_views` order matches the insertion order above, so the
+                    // entry is addressable by position — no per-pixel key hashing.
+                    let intensity = roi
+                        .intensities
+                        .get_index_mut(ci)
+                        .expect("intensity entry pre-populated for every channel")
+                        .1;
+                    intensity.sum_intensity += val as f64;
+                    intensity.max_intensity = intensity.max_intensity.max(val);
+                    intensity.min_intensity = intensity.min_intensity.min(val);
+                    intensity.pixel_values.push(val);
+                }
+
+                // Moments (for centroid / ellipse) use absolute coordinates.
+                roi.area += 1;
+                roi.sum_x += x_abs as u64;
+                roi.sum_y += y_abs as u64;
+                roi.sum_x2 += (x_abs * x_abs) as u64;
+                roi.sum_y2 += (y_abs * y_abs) as u64;
+                roi.sum_xy += (x_abs * y_abs) as u64;
+
+                if x_abs == 0 || y_abs == 0 || x_abs == edge_x || y_abs == edge_y {
+                    roi.touches_edge = true;
+                }
 
                 // Update BBox
                 roi.bbox[0] = roi.bbox[0].min(x_abs as u32); // x_min
