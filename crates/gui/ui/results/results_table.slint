@@ -22,6 +22,9 @@ export struct FilterItem {
 
 export enum ResultsViewMode { table, chart }
 
+// How rows are bucketed before aggregation.
+export enum ResultsGroupBy { none, image, folder, regex }
+
 export global ResultsState {
     in-out property <[ResultsColumnDef]> columns: [
         { id: "roi_id", label: "ROI ID", visible: true, filterable: false },
@@ -93,6 +96,22 @@ export global ResultsState {
     callback column_select_all();
     callback column_clear_all();
     callback column_filter_apply();
+
+    // -- Group-by / aggregation -------------------------------------------
+    in-out property <ResultsGroupBy> group_by:   ResultsGroupBy.none;
+    in-out property <string> group_regex:        "";
+    // Aggregates to compute (multi-select). Each ticked function adds one
+    // column per visible metric.
+    in-out property <bool> group_agg_min:        false;
+    in-out property <bool> group_agg_max:        false;
+    in-out property <bool> group_agg_avg:        true;
+    in-out property <bool> group_agg_median:     false;
+    in-out property <bool> group_agg_stdev:      false;
+    in-out property <bool> group_agg_sum:        false;
+    // True while a non-`none` grouping is applied (drives the status badge).
+    in-out property <bool> group_active:         false;
+    // Applies the current group_by / group_regex / aggregate selection.
+    callback group_apply();
 }
 
 // -- Shared checkbox item used inside filter popups ----------------------------

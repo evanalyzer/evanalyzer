@@ -1,10 +1,10 @@
 use crate::{
-    FilterItem, ResultsColumnDef, ResultsListState, ResultsRow, ResultsState, ResultsWindow,
-    UiState,
+    FilterItem, ResultsColumnDef, ResultsGroupBy, ResultsListState, ResultsRow, ResultsState,
+    ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
-    build_column_specs, discover_channels, to_display_row, ColumnSpec, DatabaseFilter,
-    ResultsExporter, ResultsLoader,
+    aggregate_rows, build_column_specs, discover_channels, to_display_row, AggFunc, ColumnSpec,
+    DatabaseFilter, GroupBy, GroupConfig, ResultsExporter, ResultsLoader,
 };
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
@@ -24,6 +24,7 @@ pub struct ResultsTableController {
     pub(crate) all_loaded: Arc<Mutex<bool>>,
     pub(crate) image_filter: Arc<Mutex<Option<Vec<String>>>>,
     pub(crate) class_filter: Arc<Mutex<Option<Vec<String>>>>,
+    pub(crate) group_config: Arc<Mutex<GroupConfig>>,
     pub(crate) image_search: Mutex<String>,
     pub(crate) class_search: Mutex<String>,
     pub(crate) column_search: Mutex<String>,
@@ -41,6 +42,7 @@ impl ResultsTableController {
             all_loaded: Arc::new(Mutex::new(false)),
             image_filter: Arc::new(Mutex::new(None)),
             class_filter: Arc::new(Mutex::new(None)),
+            group_config: Arc::new(Mutex::new(GroupConfig::default())),
             image_search: Mutex::new(String::new()),
             class_search: Mutex::new(String::new()),
             column_search: Mutex::new(String::new()),
@@ -85,6 +87,27 @@ impl ResultsTableController {
         state.on_column_filter_apply(cb!(column_filter_apply));
 
         state.on_sort_requested(cb!(on_sort_column_changed, SharedString, bool));
+
+        // --- group_apply: read group selection, reload (grouped or paginated) -
+        {
+            let this = Arc::clone(self);
+            state.on_group_apply(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+
+                let config = GroupConfig {
+                    group_by: map_group_by(state.get_group_by()),
+                    regex: state.get_group_regex().to_string(),
+                    aggs: selected_aggs(&state),
+                };
+                *this.group_config.lock().unwrap() = config;
+                *this.current_page.lock().unwrap() = 0;
+                *this.all_loaded.lock().unwrap() = false;
+
+                state.set_loading_more(true);
+                Self::spawn_reload(Arc::clone(&this));
+            });
+        }
 
         // --- filter_apply: read UI state on main thread, spawn DB reload ------
         {
@@ -131,8 +154,7 @@ impl ResultsTableController {
                 state.set_filter_active(is_filtered);
                 state.set_loading_more(true);
 
-                let arc = Arc::clone(&this);
-                std::thread::spawn(move || Self::bg_reload_page0(arc));
+                Self::spawn_reload(Arc::clone(&this));
             });
         }
 
@@ -168,8 +190,7 @@ impl ResultsTableController {
                 *this.class_filter.lock().unwrap() = None;
                 *this.current_page.lock().unwrap() = 0;
 
-                let arc = Arc::clone(&this);
-                std::thread::spawn(move || Self::bg_reload_page0(arc));
+                Self::spawn_reload(Arc::clone(&this));
             });
         }
 
@@ -240,6 +261,8 @@ impl ResultsTableController {
                 let Some(path) = this.path.lock().unwrap().clone() else { return };
                 let image_filter = this.image_filter.lock().unwrap().clone();
                 let class_filter = this.class_filter.lock().unwrap().clone();
+                let group = this.group_config.lock().unwrap().clone();
+                let base_specs = this.column_specs.lock().unwrap().clone();
 
                 let Some(export_path) = rfd::FileDialog::new()
                     .add_filter("CSV", &["csv"])
@@ -257,7 +280,9 @@ impl ResultsTableController {
                         class_filter,
                         ..Default::default()
                     };
-                    if let Err(e) = exporter.export_to_csv(filter, &export_path) {
+                    if let Err(e) =
+                        exporter.export_to_csv(filter, &group, &base_specs, &export_path)
+                    {
                         warn!("CSV export failed: {:?}", e);
                     }
                 });
@@ -271,6 +296,8 @@ impl ResultsTableController {
                 let Some(path) = this.path.lock().unwrap().clone() else { return };
                 let image_filter = this.image_filter.lock().unwrap().clone();
                 let class_filter = this.class_filter.lock().unwrap().clone();
+                let group = this.group_config.lock().unwrap().clone();
+                let base_specs = this.column_specs.lock().unwrap().clone();
 
                 let Some(export_path) = rfd::FileDialog::new()
                     .add_filter("Excel", &["xlsx"])
@@ -288,7 +315,9 @@ impl ResultsTableController {
                         class_filter,
                         ..Default::default()
                     };
-                    if let Err(e) = exporter.export_to_xlsx(filter, &export_path) {
+                    if let Err(e) =
+                        exporter.export_to_xlsx(filter, &group, &base_specs, &export_path)
+                    {
                         warn!("XLSX export failed: {:?}", e);
                     }
                 });
@@ -310,6 +339,7 @@ impl ResultsTableController {
         *self.all_loaded.lock().unwrap() = false;
         *self.image_filter.lock().unwrap() = None;
         *self.class_filter.lock().unwrap() = None;
+        *self.group_config.lock().unwrap() = GroupConfig::default();
         *self.image_search.lock().unwrap() = String::new();
         *self.class_search.lock().unwrap() = String::new();
 
@@ -398,6 +428,9 @@ impl ResultsTableController {
                             state.set_filter_class_all_popup_checked(true);
 
                             state.set_filter_active(false);
+                            state.set_group_active(false);
+                            state.set_group_by(ResultsGroupBy::None);
+                            state.set_group_regex(slint::SharedString::new());
                             state.set_all_rows_loaded(all_loaded);
                             state.set_loading_more(false);
                             state.set_rows(slint::ModelRc::new(slint::VecModel::from(
@@ -417,6 +450,90 @@ impl ResultsTableController {
                 }
             }
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // Reload dispatch: grouped (aggregated) vs. paginated per-ROI view
+    // -------------------------------------------------------------------------
+
+    /// Spawns the appropriate background reload based on the active grouping.
+    fn spawn_reload(this: Arc<Self>) {
+        let grouped = !matches!(
+            this.group_config.lock().unwrap().group_by,
+            GroupBy::None
+        );
+        std::thread::spawn(move || {
+            if grouped {
+                Self::bg_reload_grouped(this);
+            } else {
+                Self::bg_reload_page0(this);
+            }
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Background: grouped/aggregated reload (one summary row per group)
+    // -------------------------------------------------------------------------
+
+    fn bg_reload_grouped(this: Arc<Self>) {
+        let ui = this.ui.clone();
+        let finish_loading = move |ui: slint::Weak<ResultsWindow>| {
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = ui.upgrade() {
+                    w.global::<ResultsState>().set_loading_more(false);
+                }
+            });
+        };
+
+        let Some(path) = this.path.lock().unwrap().clone() else {
+            finish_loading(ui);
+            return;
+        };
+
+        let image_filter = this.image_filter.lock().unwrap().clone();
+        let class_filter = this.class_filter.lock().unwrap().clone();
+        let config = this.group_config.lock().unwrap().clone();
+        // Per-ROI specs carry the column-visibility selection; only visible
+        // metrics become grouped columns.
+        let base_specs = this.column_specs.lock().unwrap().clone();
+
+        let loader = ResultsLoader::new(&path);
+        // Aggregation needs every matching row, so fetch all (page_size 0).
+        match loader.get_rois(DatabaseFilter {
+            image_filter,
+            class_filter,
+            page_size: 0,
+            page: 0,
+            needs_intensities: true,
+        }) {
+            Ok(rois) => {
+                let (specs, display_rows) = aggregate_rows(&rois, &config, &base_specs);
+                // Grouped view is never paginated.
+                *this.all_loaded.lock().unwrap() = true;
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = ui.upgrade() {
+                        let state = window.global::<ResultsState>();
+                        let visible_count = specs.len() as i32;
+                        let slint_rows: Vec<ResultsRow> =
+                            display_rows.into_iter().map(to_slint_row).collect();
+
+                        state.set_columns(slint::ModelRc::new(slint::VecModel::from(
+                            specs_to_slint_cols(&specs),
+                        )));
+                        state.set_visible_column_count(visible_count);
+                        state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
+                        state.set_all_rows_loaded(true);
+                        state.set_loading_more(false);
+                        state.set_group_active(true);
+                    }
+                });
+            }
+            Err(e) => {
+                warn!("bg_reload_grouped failed: {:?}", e);
+                finish_loading(ui);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -459,6 +576,13 @@ impl ResultsTableController {
                             .map(|(i, r)| to_slint_row(to_display_row(i, r, &specs)))
                             .collect();
                         let state = window.global::<ResultsState>();
+                        // Restore the per-ROI columns (grouped mode may have replaced them).
+                        let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
+                        state.set_columns(slint::ModelRc::new(slint::VecModel::from(
+                            specs_to_slint_cols(&specs),
+                        )));
+                        state.set_visible_column_count(visible_count);
+                        state.set_group_active(false);
                         state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
                         state.set_all_rows_loaded(all_loaded);
                         state.set_loading_more(false);
@@ -714,10 +838,11 @@ impl ResultsTableController {
         state.set_column_popup(to_model(popup));
     }
 
-    /// Applies column-visibility selection: updates `ResultsState.columns`,
-    /// `visible_column_count`, and the stored `column_specs` (used on the next
-    /// DB reload to skip fetching unused channel data).
-    fn column_filter_apply(&self) {
+    /// Applies column-visibility selection: updates the stored `column_specs`
+    /// and refreshes the view. In grouped mode this re-aggregates (so only the
+    /// visible metrics appear as grouped columns); otherwise it updates
+    /// `ResultsState.columns` / `visible_column_count` directly.
+    fn column_filter_apply(self: &Arc<Self>) {
         let Some(window) = self.ui.upgrade() else { return };
         let state = window.global::<ResultsState>();
 
@@ -728,8 +853,8 @@ impl ResultsTableController {
             .map(|i| (i.label.to_string(), i.checked))
             .collect();
 
-        // Update the stored column specs so future DB reloads use the right
-        // fetch_intensities flag.
+        // Update the stored column specs (used by the next reload and to decide
+        // which channel data to fetch).
         {
             let mut specs = self.column_specs.lock().unwrap();
             for spec in specs.iter_mut() {
@@ -737,9 +862,20 @@ impl ResultsTableController {
                     spec.visible = visible;
                 }
             }
-            let specs_clone = specs.clone();
-            let slint_cols = specs_to_slint_cols(&specs_clone);
-            let visible_count = specs_clone.iter().filter(|c| c.visible).count() as i32;
+        }
+
+        let grouped = !matches!(
+            self.group_config.lock().unwrap().group_by,
+            GroupBy::None
+        );
+        if grouped {
+            // Re-aggregate so the grouped columns track the visible metrics.
+            state.set_loading_more(true);
+            Self::spawn_reload(Arc::clone(self));
+        } else {
+            let specs = self.column_specs.lock().unwrap().clone();
+            let slint_cols = specs_to_slint_cols(&specs);
+            let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
             state.set_columns(slint::ModelRc::new(slint::VecModel::from(slint_cols)));
             state.set_visible_column_count(visible_count);
         }
@@ -749,6 +885,44 @@ impl ResultsTableController {
 // ---------------------------------------------------------------------------
 // Slint type helpers
 // ---------------------------------------------------------------------------
+
+fn map_group_by(g: ResultsGroupBy) -> GroupBy {
+    match g {
+        ResultsGroupBy::None => GroupBy::None,
+        ResultsGroupBy::Image => GroupBy::Image,
+        ResultsGroupBy::Folder => GroupBy::Folder,
+        ResultsGroupBy::Regex => GroupBy::Regex,
+    }
+}
+
+/// Collects the ticked aggregate functions, in display order. Falls back to
+/// `Avg` if the user unticked everything (a grouped view with no aggregate
+/// would only show the key and count).
+fn selected_aggs(state: &ResultsState) -> Vec<AggFunc> {
+    let mut aggs = Vec::new();
+    if state.get_group_agg_min() {
+        aggs.push(AggFunc::Min);
+    }
+    if state.get_group_agg_max() {
+        aggs.push(AggFunc::Max);
+    }
+    if state.get_group_agg_avg() {
+        aggs.push(AggFunc::Avg);
+    }
+    if state.get_group_agg_median() {
+        aggs.push(AggFunc::Median);
+    }
+    if state.get_group_agg_stdev() {
+        aggs.push(AggFunc::Stdev);
+    }
+    if state.get_group_agg_sum() {
+        aggs.push(AggFunc::Sum);
+    }
+    if aggs.is_empty() {
+        aggs.push(AggFunc::Avg);
+    }
+    aggs
+}
 
 fn to_slint_row(row: evanalyzer_app::result::DisplayRow) -> ResultsRow {
     let values: Vec<SharedString> = row.values.into_iter().map(SharedString::from).collect();

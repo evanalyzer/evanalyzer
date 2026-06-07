@@ -2033,6 +2033,7 @@ dependencies = [
  "log",
  "pathdiff",
  "rayon",
+ "regex",
  "rust_xlsxwriter",
  "serde_json",
 ]
