@@ -214,8 +214,7 @@ impl ClassificationController {
     pub fn update_class_settings_in_project(self: &Arc<Self>, class_settings: ClassSettingsSlint) {
         let mut project = self.app_state.get_project_write();
 
-        let mut measures: IndexMap<MeasurementChannels, Vec<MeasurementStatistics>> =
-            IndexMap::new();
+        let measures: IndexMap<MeasurementChannels, Vec<MeasurementStatistics>> = IndexMap::new();
 
         let new_class = Class {
             id: AssignObjectClass!(class_settings.class_id),

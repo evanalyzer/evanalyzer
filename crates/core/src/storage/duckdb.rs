@@ -35,6 +35,25 @@ impl DuckDbExporter {
             Connection::open(&path).map_err(|e| InternalErrors::Io(e.to_string()))?;
         conn.execute_batch(CREATE_TABLES)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
+
+        // Tuning for sustained tile-by-tile appends:
+        //
+        // * checkpoint_threshold: DuckDB defaults to folding the WAL back into the
+        //   main database file every ~16 MB. With thousands of ROIs per image that
+        //   fold triggers repeatedly *during* the run, and each one is a blocking,
+        //   multi-hundred-ms-to-second stall — exactly the "sometimes the write
+        //   takes more than 1 second" symptom. Raising the threshold defers the
+        //   fold until the connection closes. Every append is still durably written
+        //   to the WAL on disk, so a crash loses nothing and RAM stays flat.
+        // * preserve_insertion_order: we never depend on physical row order (every
+        //   read query uses ORDER BY), so turning this off lets the appender skip
+        //   per-row ordering bookkeeping.
+        conn.execute_batch(
+            "SET preserve_insertion_order = false;
+             SET checkpoint_threshold = '1GB';",
+        )
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+
         log::info!("DuckDB: DDL complete, exporter ready");
         Ok(Self { conn: Mutex::new(conn), class_names })
     }
@@ -284,12 +303,22 @@ impl PipelineResultExporter for DuckDbExporter {
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
             for roi in cache.roi_cache.values() {
+                // get_perimeter()/get_ellipse() are precomputed at ROI creation on the
+                // parallel workers (see Roi::finalize_geometry), so here on the single
+                // writer thread they are just field reads. We pull each into a local and
+                // derive the dependent metrics (circularity/roundness from the perimeter;
+                // min_feret/aspect_ratio from the ellipse) to build the row from one read.
                 let perimeter_f32 = roi.get_perimeter();
                 let perimeter = perimeter_f32 as f64;
                 let ellipse = roi.get_ellipse();
                 let centroid = roi.get_centroid();
                 let feret = roi.get_feret_diameter() as f64;
-                let min_feret = roi.get_min_feret_diameter() as f64;
+                let min_feret = ellipse.minor as f64;
+                let aspect_ratio = if ellipse.minor > 0.0 {
+                    (ellipse.major / ellipse.minor) as f64
+                } else {
+                    1.0
+                };
 
                 let parent_id: Option<String> = roi.parent_id.as_ref().map(|id| id.to_string());
                 let track_id: u64 = roi.track.id.0;
@@ -325,7 +354,11 @@ impl PipelineResultExporter for DuckDbExporter {
                 let perimeter_nm = perimeter * px_len;
                 let area_px = roi.area as u64;
                 let area_nm2 = roi.area as f64 * pxx * pxy;
+                // circularity and roundness use the identical 4π·area/perimeter² formula,
+                // so compute it once from the perimeter local. (get_roundness also guards
+                // perimeter == 0, which roi.circularity() does not.)
                 let roundness = roi.get_roundness(perimeter_f32) as f64;
+                let circularity = roundness;
                 let compactness = roi.get_compactness(perimeter_f32) as f64;
                 let feret_nm = feret * px_len;
                 let min_feret_nm = min_feret * px_len;
@@ -361,9 +394,9 @@ impl PipelineResultExporter for DuckDbExporter {
                     area_nm2,                  // area_nm2
                     perimeter,                 // perimeter_px
                     perimeter_nm,              // perimeter_nm
-                    roi.circularity() as f64,  // circularity
+                    circularity,               // circularity
                     roi.get_solidity() as f64, // solidity
-                    roi.get_aspect_ratio() as f64, // aspect_ratio
+                    aspect_ratio,              // aspect_ratio
                     roundness,                 // roundness
                     compactness,               // compactness
                     ellipse.major as f64,      // major_axis_px

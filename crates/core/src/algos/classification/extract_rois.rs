@@ -11,7 +11,7 @@ use crate::{
     ImageContainer, ImagePlane,
     algos::ImageAlgorithm,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
-    roi::{FittingEllipse, Intensity, Roi},
+    roi::{Intensity, Roi, RoiInit},
 };
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SegmentationClass};
@@ -98,12 +98,16 @@ impl ImageAlgorithm for ExtractRois {
                     .entry(id)
                     .or_insert_with(|| ObjectId::next());
 
-                let entry = roi_map.entry(object_id.clone()).or_insert_with(|| Roi {
-                    id: object_id.clone(),
-                    segmentation_class: SegmentationClass(sem),
-                    intensities: IndexMap::new(),
-                    bbox: [x_abs as u32, y_abs as u32, x_abs as u32, y_abs as u32],
-                    ..Default::default()
+                let entry = roi_map.entry(object_id.clone()).or_insert_with(|| {
+                    // Skeleton ROI: the mask and moments are accumulated below across
+                    // the pixel passes, then re-finalized via finalize_geometry().
+                    Roi::new(RoiInit {
+                        id: object_id.clone(),
+                        segmentation_class: SegmentationClass(sem),
+                        intensities: IndexMap::new(),
+                        bbox: [x_abs as u32, y_abs as u32, x_abs as u32, y_abs as u32],
+                        ..Default::default()
+                    })
                 });
                 let full_image_size = ctx.full_image_size();
                 entry.update_roi_metrics(
@@ -169,6 +173,9 @@ impl ImageAlgorithm for ExtractRois {
                 },
             };
             roi.finalize_intensity_statistics();
+            // Precompute perimeter/ellipse here on the parallel extraction workers
+            // so the single-threaded DB writer never has to compute them.
+            roi.finalize_geometry();
             // We assign the segmentation class as default first object class So classify ROI is not mandatory needed
             roi.add_object_class(ObjectClass::from_segmentation_class(roi.segmentation_class));
         }
@@ -192,14 +199,14 @@ impl Roi {
         images: &[(i32, Arc<crate::ImageContainer>)],
         object_class: ObjectClass,
     ) -> Self {
-        let mut roi = Roi {
+        let mut roi = Roi::new(RoiInit {
             id: ObjectId::next(),
             segmentation_class: SegmentationClass::MANUAL_ANNOTATED,
             intensities: IndexMap::new(),
             bbox: bbox,
             mask_data: mask,
             ..Default::default()
-        };
+        });
 
         roi.add_object_class(object_class);
         roi.plane = match origin_image.plane() {
@@ -223,6 +230,9 @@ impl Roi {
             }
         }
         roi.finalize_intensity_statistics();
+        // Re-finalize geometry now that the mask, area and moments are fully
+        // accumulated — the eager finalize in Roi::new only saw the empty skeleton.
+        roi.finalize_geometry();
 
         roi
     }

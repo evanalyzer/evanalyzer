@@ -75,9 +75,58 @@ pub struct Roi {
 
     // Image plane information
     pub plane: ImagePlane,
+
+    // --- Precomputed geometry metrics ---
+    // Filled by `finalize_geometry()` at ROI creation time — which runs on the
+    // parallel extraction/segmentation workers — and read back through
+    // `get_perimeter()` / `get_ellipse()`. The perimeter is an O(bbox area)
+    // boundary walk; computing it here keeps it off the single-threaded DB writer,
+    // where a lazy computation would stall every other tile's insert. Both derive
+    // purely from the immutable mask geometry (mask_data, bbox, area, moments),
+    // which never changes after extraction, so the stored values stay valid for
+    // the ROI's lifetime. Default to 0 / empty until finalize_geometry runs.
+    //
+    // These are intentionally private (no `pub`): keeping them module-private makes
+    // a `Roi { .. }` struct literal illegal outside this module, which forces all
+    // external construction through [`Roi::new`] — the one path that is guaranteed
+    // to call [`finalize_geometry`](Self::finalize_geometry). Callers read them via
+    // `get_perimeter()` / `get_ellipse()`.
+    perimeter: f32,
+    ellipse: FittingEllipse,
 }
 
+/// Caller-settable fields for building a [`Roi`] via [`Roi::new`].
+///
+/// Mirrors every field of [`Roi`] except the derived geometry metrics
+/// (`perimeter`, `ellipse`), which [`Roi::new`] computes for you. Build it with
+/// struct-update syntax and pass it to [`Roi::new`]:
+///
+/// ```ignore
+/// let roi = Roi::new(RoiInit { id, bbox, mask_data, area, ..Default::default() });
+/// ```
 #[derive(Debug, Default, Clone)]
+pub struct RoiInit {
+    pub id: ObjectId,
+    pub segmentation_class: SegmentationClass,
+    pub object_class: HashSet<ObjectClass>,
+    pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
+    pub parent_id: Option<ObjectId>,
+    pub children: Vec<ObjectId>,
+    pub track: Track,
+    pub area: usize,
+    pub bbox: [u32; 4],
+    pub mask_data: BitVec<u64, Lsb0>,
+    pub touches_edge: bool,
+    pub sum_x: u64,
+    pub sum_y: u64,
+    pub sum_x2: u64,
+    pub sum_y2: u64,
+    pub sum_xy: u64,
+    pub intensities: IndexMap<i32, Intensity>,
+    pub plane: ImagePlane,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FittingEllipse {
     /// The length of the longest diameter (2a).
     /// ImageJ refers to this as 'Major'.
@@ -97,6 +146,45 @@ pub struct FittingEllipse {
 }
 
 impl Roi {
+    /// Builds a fully-finalized ROI from [`RoiInit`].
+    ///
+    /// This is the only public way to construct a [`Roi`]: the geometry metrics
+    /// (`perimeter`, `ellipse`) are computed here via
+    /// [`finalize_geometry`](Self::finalize_geometry), so they can never be left
+    /// uncomputed by a forgotten call.
+    ///
+    /// For ROIs assembled incrementally (e.g. pixel-by-pixel extraction where the
+    /// mask and moments are filled in after construction), call
+    /// [`finalize_geometry`](Self::finalize_geometry) again once accumulation is
+    /// complete — the eager finalize here only reflects the geometry present in
+    /// `init`.
+    pub fn new(init: RoiInit) -> Self {
+        let mut roi = Roi {
+            id: init.id,
+            segmentation_class: init.segmentation_class,
+            object_class: init.object_class,
+            colocalized_with: init.colocalized_with,
+            parent_id: init.parent_id,
+            children: init.children,
+            track: init.track,
+            area: init.area,
+            bbox: init.bbox,
+            mask_data: init.mask_data,
+            touches_edge: init.touches_edge,
+            sum_x: init.sum_x,
+            sum_y: init.sum_y,
+            sum_x2: init.sum_x2,
+            sum_y2: init.sum_y2,
+            sum_xy: init.sum_xy,
+            intensities: init.intensities,
+            plane: init.plane,
+            perimeter: 0.0,
+            ellipse: FittingEllipse::default(),
+        };
+        roi.finalize_geometry();
+        roi
+    }
+
     /// Checks if a global coordinate (x, y) is within the ROI's mask.
     pub fn is_part_of(&self, x: u32, y: u32) -> bool {
         let [x_min, y_min, x_max, y_max] = self.bbox;
@@ -148,7 +236,28 @@ impl Roi {
         self.object_class.remove(object_class);
     }
 
+    /// Computes and stores the geometry metrics (`perimeter`, `ellipse`) from the
+    /// current mask. Call once after the mask/moments are fully assembled — i.e.
+    /// at ROI creation, on the parallel extraction workers — so later reads
+    /// (classification, DB export) are free field accesses. The metrics depend
+    /// only on the immutable geometry, so a single call is enough for the ROI's life.
+    ///
+    /// `pub(crate)` on purpose: one-shot construction should go through [`Roi::new`],
+    /// which calls this for you. It stays reachable inside the crate for the
+    /// incremental extraction path, which must re-finalize after the mask and
+    /// moments are fully accumulated.
+    pub(crate) fn finalize_geometry(&mut self) {
+        self.perimeter = self.compute_perimeter();
+        self.ellipse = self.compute_ellipse();
+    }
+
+    /// Returns the fitted ellipse (major/minor axes, angle, eccentricity)
+    /// precomputed by [`finalize_geometry`](Self::finalize_geometry).
     pub fn get_ellipse(&self) -> FittingEllipse {
+        self.ellipse
+    }
+
+    fn compute_ellipse(&self) -> FittingEllipse {
         let n = self.area as f64;
         if n == 0.0 {
             return FittingEllipse::default();
@@ -187,6 +296,16 @@ impl Roi {
         (4.0 * std::f32::consts::PI * self.area as f32) / (perimeter * perimeter)
     }
 
+    /// Returns the ROI perimeter in pixels, precomputed by
+    /// [`finalize_geometry`](Self::finalize_geometry).
+    ///
+    /// The underlying [`compute_perimeter`](Self::compute_perimeter) is an
+    /// O(bbox area) boundary walk — by far the most expensive ROI metric — which
+    /// is why it is computed once at creation rather than on demand.
+    pub fn get_perimeter(&self) -> f32 {
+        self.perimeter
+    }
+
     /// Calculates the perimeter of the ROI using ImageJ's algorithm.
     ///
     /// This method computes the perimeter by analyzing the boundary of the mask.
@@ -197,7 +316,7 @@ impl Roi {
     ///
     /// # Returns
     /// The perimeter value in pixels. A perfect circle with radius r has perimeter ≈ 2πr.
-    pub fn get_perimeter(&self) -> f32 {
+    fn compute_perimeter(&self) -> f32 {
         let [x_min, y_min, x_max, y_max] = self.bbox;
         let width = (x_max - x_min) as usize;
         let height = (y_max - y_min) as usize;
@@ -366,7 +485,7 @@ impl Roi {
     }
 
     pub fn from_roi_settings(s: RoiSettings) -> Self {
-        Roi {
+        Roi::new(RoiInit {
             id: s.id,
             segmentation_class: s.segmentation_class,
             object_class: s.object_class,
@@ -409,7 +528,7 @@ impl Roi {
                 c: s.c_stack,
                 t: s.t_stack,
             },
-        }
+        })
     }
 
     /// Computes the intersection with another ROI.
@@ -489,14 +608,10 @@ impl Roi {
         }
 
         // 3. Assemble and return the brand-new structural intersection ROI
-        Some(Roi {
+        Some(Roi::new(RoiInit {
             id: ObjectId::next(), // Typically initialized empty or generated by your core engine later
             segmentation_class: self.segmentation_class.clone(),
-            object_class: HashSet::new(), // Starts pristine; can be updated by Classify Rois later
-            colocalized_with: IndexMap::new(),
             parent_id: Some(self.id.clone()), // Tracks lineage ancestry
-            children: Vec::new(),
-            track: Track::default(),
             area,
             bbox: [overlap_xmin, overlap_ymin, overlap_xmax, overlap_ymax],
             mask_data: overlap_mask,
@@ -506,8 +621,8 @@ impl Roi {
             sum_x2,
             sum_y2,
             sum_xy,
-            intensities: IndexMap::new(), // Left empty; recalculable down the pipeline via ImagePlane
-            plane: self.plane.clone(),    // Preserves matching Z-C-T coordinates
-        })
+            plane: self.plane.clone(),
+            ..Default::default()
+        }))
     }
 }
