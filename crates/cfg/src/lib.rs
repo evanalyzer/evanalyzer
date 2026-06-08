@@ -3,9 +3,9 @@ mod types;
 mod utils;
 
 // Constants
-pub const PROJECT_FILE_EXTENSIONS: &str = &"improj";
-pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"impt";
-
+pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
+pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evapt";
+pub const PIPELINE_EXTENSIONS: &str = &"evapipe";
 pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
 
 // Project Settings structs

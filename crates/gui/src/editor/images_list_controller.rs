@@ -4,10 +4,10 @@ use crate::editor::image_meta_controller::ImageMetaController;
 use crate::editor::roi_list_controller::RoiListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::size_formater::format_bytes;
-use crate::{AppWindow, DialogType, GlobalAppState, ViewportRoiState};
+use crate::{AppWindow, DialogType, GlobalAppState, RoiHighlightBox, ViewportRoiState};
 use crate::{ImageItemData, ImagesListState};
 use evanalyzer_app::extensions::project_ext::{ProjectExt, SelectNewProjectRootAction};
-use log::{info, warn};
+use log::{debug, info, warn};
 use slint::{ComponentHandle, Model};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -76,10 +76,11 @@ impl ImagesListController {
             self.roi_list_controller.sync_rois_to_slint();
             self.set_selected_image_index_in_slint_images_list(image_path.clone());
             self.viewport_controller.trigger_new_image_redraw();
-            // Remove possible existing markers
+            // Remove possible existing markers and the results-table ROI highlight
             if let Some(ui) = self.ui.upgrade() {
-                ui.global::<ViewportRoiState>()
-                    .set_markers(slint::ModelRc::new(slint::VecModel::default()));
+                let roi_state = ui.global::<ViewportRoiState>();
+                roi_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
+                roi_state.set_roi_highlight(RoiHighlightBox::default());
             }
         } else if let Some(parent) = parent_dir {
             self.change_image_root(&parent, Some(image_path));
@@ -93,10 +94,39 @@ impl ImagesListController {
             let project = self.app_state.get_project();
             project.get_image_absolute_path_from_relative(&rel_path)
         }; // read lock dropped before open_new_image acquires write lock
+
         if let Some(absolute_path) = absolute_path {
+            if let Some(act_image_path) = &self.app_state.get_project().tmp_settings.current_image {
+                if act_image_path == &absolute_path {
+                    debug!("Image still opened!");
+                    return;
+                }
+            }
             self.open_new_image(&absolute_path);
         } else {
             info!("Image is not part of the project {:?}", rel_path);
+        }
+    }
+
+    /// Opens the image identified by `rel_path` (as stored in a results file) and
+    /// paints `bbox_px` (`[xmin, ymin, xmax, ymax]`, in image pixels) as a
+    /// highlight box in the viewport. Used when a ROI row is selected in the
+    /// results table so the user can locate the object in its source image.
+    pub fn open_image_and_highlight_roi(self: &Arc<Self>, rel_path: &PathBuf, bbox_px: [u32; 4]) {
+        self.open_new_image_from_rel_path(rel_path);
+
+        // `open_new_image` clears any previous highlight, so set ours afterwards.
+        let [xmin, ymin, xmax, ymax] = bbox_px;
+        let highlight = RoiHighlightBox {
+            x_px: xmin as f32,
+            y_px: ymin as f32,
+            // +1 so a single-pixel ROI is still visible (max pixel is inclusive).
+            w_px: (xmax.saturating_sub(xmin) + 1) as f32,
+            h_px: (ymax.saturating_sub(ymin) + 1) as f32,
+            active: true,
+        };
+        if let Some(ui) = self.ui.upgrade() {
+            ui.global::<ViewportRoiState>().set_roi_highlight(highlight);
         }
     }
 

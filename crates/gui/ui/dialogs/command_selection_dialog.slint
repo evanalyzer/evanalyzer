@@ -840,6 +840,7 @@ export component CommandSelectionDialog inherits Rectangle {
                         count: cat-count-rec;
                         tinted: false;
                         active: filter-recents;
+                        visible: false;
                         clicked => {
                             root.filter-recents = !filter-recents;
                             root.filter-favorites = false;
@@ -848,7 +849,7 @@ export component CommandSelectionDialog inherits Rectangle {
                     }
 
                     FilterChip {
-                        label: "★ Favorites";
+                        label: "★ Templates";
                         count: cat-count-fav;
                         tinted: false;
                         active: filter-favorites;

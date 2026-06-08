@@ -1,10 +1,11 @@
+use crate::editor::images_list_controller::ImagesListController;
 use crate::{
     FilterItem, ResultsColumnDef, ResultsGroupBy, ResultsListState, ResultsRow, ResultsState,
     ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
     aggregate_rows, build_column_specs, discover_channels, to_display_row, AggFunc, ColumnSpec,
-    DatabaseFilter, GroupBy, GroupConfig, ResultsExporter, ResultsLoader,
+    DatabaseFilter, GroupBy, GroupConfig, ResultsExporter, ResultsLoader, RoiRow,
 };
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
@@ -17,7 +18,12 @@ const PAGE_SIZE: usize = 500;
 pub struct ResultsTableController {
     pub(crate) ui: slint::Weak<ResultsWindow>,
     pub(crate) app_state: Arc<UiState>,
+    pub(crate) image_list_controller: Arc<ImagesListController>,
     pub(crate) path: Arc<Mutex<Option<PathBuf>>>,
+    /// The per-ROI rows currently shown in the table, in display order. Indexed
+    /// by `ResultsRow.roi_id - 1` to map a selected row back to its source ROI
+    /// (image + bounding box). Empty while a grouped/aggregated view is active.
+    pub(crate) displayed_rois: Arc<Mutex<Vec<RoiRow>>>,
     pub(crate) channels: Arc<Mutex<Vec<i32>>>,
     pub(crate) column_specs: Arc<Mutex<Vec<ColumnSpec>>>,
     pub(crate) current_page: Arc<Mutex<usize>>,
@@ -31,11 +37,17 @@ pub struct ResultsTableController {
 }
 
 impl ResultsTableController {
-    pub fn new(ui: slint::Weak<ResultsWindow>, app_state: Arc<UiState>) -> Self {
+    pub fn new(
+        ui: slint::Weak<ResultsWindow>,
+        app_state: Arc<UiState>,
+        image_list_controller: Arc<ImagesListController>,
+    ) -> Self {
         Self {
             ui,
             app_state,
+            image_list_controller,
             path: Arc::new(Mutex::new(None)),
+            displayed_rois: Arc::new(Mutex::new(Vec::new())),
             channels: Arc::new(Mutex::new(Vec::new())),
             column_specs: Arc::new(Mutex::new(Vec::new())),
             current_page: Arc::new(Mutex::new(0)),
@@ -87,6 +99,8 @@ impl ResultsTableController {
         state.on_column_filter_apply(cb!(column_filter_apply));
 
         state.on_sort_requested(cb!(on_sort_column_changed, SharedString, bool));
+
+        state.on_roi_row_selected(cb!(on_roi_row_selected, i32));
 
         // --- group_apply: read group selection, reload (grouped or paginated) -
         {
@@ -342,12 +356,14 @@ impl ResultsTableController {
         *self.group_config.lock().unwrap() = GroupConfig::default();
         *self.image_search.lock().unwrap() = String::new();
         *self.class_search.lock().unwrap() = String::new();
+        self.displayed_rois.lock().unwrap().clear();
 
         let ui = self.ui.clone();
         let app_ui = self.app_state.ui_handle.clone();
         let channels_arc = Arc::clone(&self.channels);
         let all_loaded_arc = Arc::clone(&self.all_loaded);
         let column_specs_arc = Arc::clone(&self.column_specs);
+        let displayed_rois_arc = Arc::clone(&self.displayed_rois);
 
         std::thread::spawn(move || {
             let loader = ResultsLoader::new(&path);
@@ -368,6 +384,7 @@ impl ResultsTableController {
                     *channels_arc.lock().unwrap() = channels;
                     *all_loaded_arc.lock().unwrap() = all_loaded;
                     *column_specs_arc.lock().unwrap() = specs.clone();
+                    *displayed_rois_arc.lock().unwrap() = rois.clone();
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(app_ui) = app_ui.upgrade() {
@@ -510,6 +527,9 @@ impl ResultsTableController {
                 let (specs, display_rows) = aggregate_rows(&rois, &config, &base_specs);
                 // Grouped view is never paginated.
                 *this.all_loaded.lock().unwrap() = true;
+                // Grouped rows aggregate many ROIs, so there is no single source
+                // ROI to open/highlight when one is selected.
+                this.displayed_rois.lock().unwrap().clear();
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
@@ -567,6 +587,7 @@ impl ResultsTableController {
             Ok(rois) => {
                 let all_loaded = rois.len() < PAGE_SIZE;
                 *this.all_loaded.lock().unwrap() = all_loaded;
+                *this.displayed_rois.lock().unwrap() = rois.clone();
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
@@ -641,6 +662,12 @@ impl ResultsTableController {
             Ok(new_rois) => {
                 let all_loaded = new_rois.len() < PAGE_SIZE;
                 *this.all_loaded.lock().unwrap() = all_loaded;
+                // Mirror the table append so display indices stay aligned with
+                // `displayed_rois` (the next page is pushed after existing rows).
+                this.displayed_rois
+                    .lock()
+                    .unwrap()
+                    .extend(new_rois.iter().cloned());
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
@@ -680,6 +707,34 @@ impl ResultsTableController {
 
     fn on_sort_column_changed(&self, column_id: SharedString, sort_ascending: bool) {
         println!("Sort: {}/{}", column_id, sort_ascending);
+    }
+
+    // -------------------------------------------------------------------------
+    // Row selection: open the ROI's image and highlight its bounding box
+    // -------------------------------------------------------------------------
+
+    /// A per-ROI row was selected. Maps the display id back to the stored
+    /// [`RoiRow`], then opens its source image in the editor and paints the
+    /// ROI's bounding box. Grouped/aggregated rows have no source ROI, so the
+    /// lookup misses and the selection is ignored.
+    fn on_roi_row_selected(&self, roi_id: i32) {
+        if roi_id < 1 {
+            return;
+        }
+        let roi = {
+            let rois = self.displayed_rois.lock().unwrap();
+            match rois.get((roi_id - 1) as usize) {
+                Some(roi) => roi.clone(),
+                None => return,
+            }
+        };
+        if roi.image_rel_path.is_empty() {
+            warn!("Selected ROI has no image path; cannot open it");
+            return;
+        }
+        let rel_path = PathBuf::from(&roi.image_rel_path);
+        self.image_list_controller
+            .open_image_and_highlight_roi(&rel_path, roi.bbox_px);
     }
 
     // -------------------------------------------------------------------------

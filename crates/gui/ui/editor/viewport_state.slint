@@ -13,6 +13,16 @@ export struct MarkerData {
     label: string,
 }
 
+// Bounding box (in image pixel coordinates) of an ROI to highlight in the
+// viewport, e.g. when its row is selected in the results table.
+export struct RoiHighlightBox {
+    x-px: float,
+    y-px: float,
+    w-px: float,
+    h-px: float,
+    active: bool,
+}
+
 //
 // Viewport
 //
@@ -64,6 +74,7 @@ export global ViewportRoiState {
     callback marker-remove-at(length, length);
 
     in-out property <[MarkerData]> markers: [];
+    in-out property <RoiHighlightBox> roi_highlight: { active: false };
     in-out property <ToolState> act_tool_state:  ToolState.Move;
     in-out property <bool> is_drawing: false;
     in-out property <int> poly_idx:0;

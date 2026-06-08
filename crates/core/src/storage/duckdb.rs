@@ -474,6 +474,9 @@ pub struct RoiRow {
     pub touches_edge: bool,
     pub intensities_json: String,
     pub coloc_json: String,
+    /// Pixel-space bounding box `[xmin, ymin, xmax, ymax]`, used to highlight the
+    /// ROI in the editor viewport when its results row is selected.
+    pub bbox_px: [u32; 4],
 }
 
 /// Filter criteria for [`DuckDbReader::get_rois`].
@@ -539,7 +542,8 @@ fn roi_select_sql(fetch_intensities: bool) -> String {
                 area_px, area_nm2, perimeter_px, perimeter_nm,\n\
                 circularity, solidity, aspect_ratio, roundness, compactness,\n\
                 major_axis_px, minor_axis_px,\n\
-                touches_edge, {intensities_expr}, coloc_json\n\
+                touches_edge, {intensities_expr}, coloc_json,\n\
+                bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px\n\
          FROM rois"
     )
 }
@@ -675,6 +679,7 @@ fn map_roi_row(row: &duckdb::Row<'_>) -> duckdb::Result<RoiRow> {
         touches_edge: row.get(28)?,
         intensities_json: row.get::<_, Option<String>>(29)?.unwrap_or_default(),
         coloc_json: row.get::<_, Option<String>>(30)?.unwrap_or_default(),
+        bbox_px: [row.get(31)?, row.get(32)?, row.get(33)?, row.get(34)?],
     })
 }
 

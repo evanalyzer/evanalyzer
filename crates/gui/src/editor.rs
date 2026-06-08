@@ -59,15 +59,6 @@ impl Editor {
     ) -> Self {
         let viewport_controller = Arc::new(ViewportController::new(ui.clone(), app_state.clone()));
         let view_port_cache = Arc::new(viewport_cache::ViewportCache::new(app_state.clone()));
-        let results_table_controller = Arc::new(ResultsTableController::new(
-            results_ui.clone(),
-            app_state.clone(),
-        ));
-        let results_list_controller = Arc::new(ResultsListController::new(
-            ui.clone(),
-            app_state.clone(),
-            results_table_controller.clone(),
-        ));
 
         let roi_list_controller = Arc::new(RoiListController::new(
             ui.clone(),
@@ -106,6 +97,17 @@ impl Editor {
             histogram_controller.clone(),
             image_meta_controller.clone(),
             roi_list_controller.clone(),
+        ));
+
+        let results_table_controller = Arc::new(ResultsTableController::new(
+            results_ui.clone(),
+            app_state.clone(),
+            image_list_controller.clone(),
+        ));
+        let results_list_controller = Arc::new(ResultsListController::new(
+            ui.clone(),
+            app_state.clone(),
+            results_table_controller.clone(),
         ));
 
         let viewport_roi_controller = Arc::new(ViewPortRoiController::new(

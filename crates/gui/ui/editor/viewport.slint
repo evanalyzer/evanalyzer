@@ -163,6 +163,18 @@ export component Viewport inherits Rectangle {
             }
         }
 
+        // Layer 4b: Selected-ROI bounding box (from the results table)
+        if ViewportRoiState.roi_highlight.active: Rectangle {
+            x: ViewportRoiState.roi_highlight.x-px * ViewportState.zoom_factor * 1px + ViewportState.offset_x;
+            y: ViewportRoiState.roi_highlight.y-px * ViewportState.zoom_factor * 1px + ViewportState.offset_y;
+            width: ViewportRoiState.roi_highlight.w-px * ViewportState.zoom_factor * 1px;
+            height: ViewportRoiState.roi_highlight.h-px * ViewportState.zoom_factor * 1px;
+            background: transparent;
+            border-width: 2px;
+            border-color: #ffee00;
+            border-radius: 1px;
+        }
+
         // Layer 5: Drawing layer
         Rectangle {
             x: ViewportState.display_x;

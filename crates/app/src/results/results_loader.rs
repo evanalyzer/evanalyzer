@@ -625,6 +625,7 @@ mod tests {
             touches_edge: false,
             intensities_json: intensities_json.into(),
             coloc_json: "{}".into(),
+            bbox_px: [0, 0, 0, 0],
         }
     }
 

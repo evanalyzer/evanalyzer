@@ -157,6 +157,8 @@ pub trait ProjectExt {
 
     fn save_project(&mut self) -> SaveProjectActions;
     fn save_project_as(&mut self, path: &PathBuf) -> Result<(), InternalErrors>;
+    fn save_project_as_template(&mut self, path: &PathBuf) -> Result<(), InternalErrors>;
+
     fn new(&self) -> Arc<ProjectWithRuntime>;
     fn new_project(&mut self, path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors>;
 
@@ -1069,7 +1071,7 @@ impl ProjectExt for ProjectWithRuntime {
     fn save_project_as(&mut self, path: &PathBuf) -> Result<(), InternalErrors> {
         let mut final_path = path.clone();
 
-        // Check if the extension matches; if not, set it to improj
+        // Check if the extension matches; if not, set it to evaproj
         if final_path.extension().and_then(|s| s.to_str()) != Some(PROJECT_FILE_EXTENSIONS) {
             final_path.set_extension(PROJECT_FILE_EXTENSIONS);
         }
@@ -1079,6 +1081,11 @@ impl ProjectExt for ProjectWithRuntime {
         fs::write(final_path.clone(), json)?;
 
         let _ = self.tmp_settings.current_project.insert(final_path);
+        Ok(())
+    }
+
+    /// Stores the actual project as template project
+    fn save_project_as_template(&mut self, path: &PathBuf) -> Result<(), InternalErrors> {
         Ok(())
     }
 
