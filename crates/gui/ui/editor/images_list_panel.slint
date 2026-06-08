@@ -31,6 +31,9 @@ export global ImagesListState {
     callback image_filter_text_changed(string);
 
     in-out property <int> selected_image_index: -1;
+    // Index to scroll into view (e.g. when an image is opened from the results
+    // table or after a folder scan); -1 means "no scroll request".
+    in-out property <int> scroll_to_image_index: -1;
     in property <[ImageItemData]> images_list: [];
 }
 
@@ -243,7 +246,21 @@ export component ImagesListPanel inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
 
-            ListView {
+            // Mirror the global so we can scroll the selected image into view
+            // when selection is driven from outside the list (results table,
+            // folder scan). Row height is 52px (see ImageListRow).
+            property <int> scroll_index: ImagesListState.scroll_to_image_index;
+            changed scroll_index => {
+                if (ImagesListState.scroll_to_image_index >= 0) {
+                    images_listview.viewport-y = Math.clamp(
+                        -(ImagesListState.scroll_to_image_index * 52px) + images_listview.height / 2 - 26px,
+                        images_listview.height - images_listview.viewport-height,
+                        0px
+                    );
+                }
+            }
+
+            images_listview := ListView {
                 width: 100%;
                 height: 100%;
                 horizontal-scrollbar-policy: always-off;

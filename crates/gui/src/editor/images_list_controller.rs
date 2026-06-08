@@ -74,7 +74,7 @@ impl ImagesListController {
                 warn!("Failed to sync image meta to slint!");
             }
             self.roi_list_controller.sync_rois_to_slint();
-            self.set_selected_image_index_in_slint_images_list(image_path.clone());
+            self.set_selected_image_index_in_slint_images_list(image_path.clone(), true);
             self.viewport_controller.trigger_new_image_redraw();
             // Remove possible existing markers and the results-table ROI highlight
             if let Some(ui) = self.ui.upgrade() {
@@ -270,7 +270,7 @@ impl ImagesListController {
                 }
 
                 manager.roi_list_controller.sync_rois_to_slint();
-                manager.set_selected_image_index_in_slint_images_list(path);
+                manager.set_selected_image_index_in_slint_images_list(path, true);
                 manager.viewport_controller.trigger_new_image_redraw();
             }
 
@@ -318,7 +318,7 @@ impl ImagesListController {
                     manager.sync_image_list_to_slint();
                     let project = manager.app_state.get_project();
                     if let Some(image_path) = project.get_current_image_path_cloned() {
-                        manager.set_selected_image_index_in_slint_images_list(image_path);
+                        manager.set_selected_image_index_in_slint_images_list(image_path, false);
                     }
                 });
 
@@ -433,9 +433,14 @@ impl ImagesListController {
             .ok();
     }
 
+    /// Marks the image at `selected_absolute_path` as selected in the Slint list.
+    /// When `scroll_to` is true the list is also scrolled to bring that row into
+    /// view — used when selection is driven from outside the list (results-table
+    /// ROI selection, folder scan) and the row may be off-screen.
     pub(crate) fn set_selected_image_index_in_slint_images_list(
         &self,
         selected_absolute_path: PathBuf,
+        scroll_to: bool,
     ) {
         let ui_weak = self.ui.clone();
 
@@ -453,6 +458,9 @@ impl ImagesListController {
 
                     if let Some(index) = selected_index {
                         images_state.set_selected_image_index(index as i32);
+                        if scroll_to {
+                            images_state.set_scroll_to_image_index(index as i32);
+                        }
                     } else{
                        images_state.set_selected_image_index(-1);
                     }
