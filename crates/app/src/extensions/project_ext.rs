@@ -185,6 +185,10 @@ pub trait ProjectExt {
     fn add_pipeline(&mut self, pipeline_settings: PipelineSettings);
     fn add_pipeline_from_template_file(&mut self, template_file: &PathBuf);
 
+    /// Replaces the classification, plate and pipeline settings of this project
+    /// with the ones from `template`. The image list and project path are kept.
+    fn apply_project_template(&mut self, template: &ProjectTemplate);
+
     fn toggle_class_visibility(&mut self, class_id: ObjectClass);
     fn is_class_visible(&self, class_id: &ObjectClass) -> bool;
     fn count_rois_for_class(&self, class_id: &ObjectClass) -> usize;
@@ -1243,6 +1247,30 @@ impl ProjectExt for ProjectWithRuntime {
             enabled: true,
             steps: template.pipeline_steps,
         });
+    }
+
+    fn apply_project_template(&mut self, template: &ProjectTemplate) {
+        self.classification = template.classification.clone();
+        self.plate = template.plate.clone();
+        self.pipelines = template
+            .pipelines
+            .iter()
+            .enumerate()
+            .map(|(idx, pipeline)| {
+                let name = if pipeline.meta.name.is_empty() {
+                    None
+                } else {
+                    Some(pipeline.meta.name.clone())
+                };
+                PipelineSettings {
+                    id: PipelineId((idx + 1) as u32),
+                    name,
+                    image_source: ImageAddress::default(),
+                    enabled: true,
+                    steps: pipeline.pipeline_steps.clone(),
+                }
+            })
+            .collect();
     }
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass) {

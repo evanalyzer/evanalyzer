@@ -101,6 +101,14 @@ export component CustomMenuBar inherits Rectangle {
                         }
                     }
 
+                    MenuItem {
+                        text: "New from Template…";
+                        clicked => {
+                            ToolbarState.new_from_project_template_clicked();
+                            file-menu.close();
+                        }
+                    }
+
                     MenuSeparator { }
 
                     MenuItem {
