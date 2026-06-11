@@ -1,0 +1,602 @@
+{
+  "meta": {
+    "name": "EV uptake in cells",
+    "shortDescription": "Methods of Cell Biology course",
+    "description": "Methods of Cell Biology course",
+    "authorFirstName": "Melanie",
+    "authorLastName": "Schuerz, Anna Dlugosch",
+    "authorOrganization": "LBI NVPM",
+    "creationTime": "2026-06-11T00:00:00Z"
+  },
+  "classification": {
+    "classes": [
+      {
+        "id": {
+          "VALID": 4
+        },
+        "color": "#3399FF",
+        "name": "dapi@nucleus",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 11
+        },
+        "color": "#FFCC33",
+        "name": "brightfield@cell-area",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 12
+        },
+        "color": "#FF8C33",
+        "name": "brightfield@cells",
+        "notes": "",
+        "measure": {
+          "intensityAvg": [
+            "AVG"
+          ],
+          "intersecting": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 21
+        },
+        "color": "#BFBFBF",
+        "name": "cy7@spot",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 1
+        },
+        "color": "#640000",
+        "name": "cy5@spot",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 13
+        },
+        "color": "#FF33FF",
+        "name": "cy7@in-cell-spots",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 3
+        },
+        "color": "#FF3333",
+        "name": "cy5@in-cell-spots",
+        "notes": "",
+        "measure": {}
+      }
+    ]
+  },
+  "plate": {
+    "groupingMode": "NO_GROUPING",
+    "groupingRegex": "",
+    "plateCols": 1,
+    "plateRows": 1,
+    "wellCols": 4,
+    "wellRows": 4,
+    "wellImageOrder": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ]
+  },
+  "pipelines": [
+    {
+      "meta": {
+        "name": "Nuclei",
+        "shortDescription": "Nuclei",
+        "description": "1. Set image nucleus channel\n2. Adapt threshold. Recommanded autoTH: Triangle, Moments or Otsu\n3. Define min particle size in \"Classifier\" to filter out small aggregates not connected to Nuclei.",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "rollingBall",
+            "radius": 4.0,
+            "ballType": "PARABOLOID",
+            "preSmooth": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "TRIANGLE",
+                "minThreshold": 200.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 4
+            },
+            "sizeUnit": "px",
+            "minArea": 1000.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "Cell area",
+        "shortDescription": "Cell area",
+        "description": "Detects the whole brightfield cell area.\n1. Define Brightfield image channel\n2. Adjust TH if needed\n3. Define min particle size in \"Classifier\" to filter out small aggregates.",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "edgeDetectionSobel",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MIN_ERROR",
+                "minThreshold": 0.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 11
+            },
+            "sizeUnit": "px",
+            "minArea": 2000.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "Cells",
+        "shortDescription": "Cells",
+        "description": "Based on the detected nuclei a Voronoi algorithm is used to separete individual cells. The detected cell area is used to find the border of the cells\n1. Measure intensity per cell in your required channels (default Ch0,1 and 2 is measured)",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "voronoi",
+            "centers": {
+              "VALID": 4
+            },
+            "centerFilterClasses": [],
+            "mask": {
+              "VALID": 11
+            },
+            "maskFilterClasses": [],
+            "outputClass": {
+              "VALID": 12
+            },
+            "unit": "px",
+            "maxRadius": 0.0,
+            "excludeAreasAtTheEdges": false,
+            "excludeAreasWithNoCenter": true
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "spot ch1",
+        "shortDescription": "spot ch1",
+        "description": "1. Select EV image channel\n2. Adapt manual threshold\n\n Approximation notes: $reclassify was approximated via Colocalization",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "medianSubtract",
+            "radius": 3.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MANUAL",
+                "minThreshold": 40.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 21
+            },
+            "sizeUnit": "px",
+            "minArea": 5.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 21
+              },
+              {
+                "VALID": 12
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 13
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "saveImage",
+            "path": "images/${imageName}",
+            "source": "IMAGE"
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "spot ch2",
+        "shortDescription": "spot ch2",
+        "description": "1. Select EV image channel\n2. Adapt manual threshold\n\n Approximation notes: $reclassify was approximated via Colocalization",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "medianSubtract",
+            "radius": 3.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MANUAL",
+                "minThreshold": 200.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 1
+            },
+            "sizeUnit": "px",
+            "minArea": 5.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 1
+              },
+              {
+                "VALID": 12
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 3
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "saveImage",
+            "path": "images/${imageName}",
+            "source": "IMAGE"
+          }
+        }
+      ]
+    }
+  ]
+}
