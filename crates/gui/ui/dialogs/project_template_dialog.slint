@@ -38,6 +38,7 @@ export struct ProjectTemplateDef {
     description: string,
     author: string,
     organization: string,
+    creation-time: string,
     pipeline-count: int,
 }
 
@@ -268,6 +269,24 @@ component ProjectTemplateDetailPane inherits Rectangle {
 
                 Text {
                     text: tmpl.organization;
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    overflow: elide;
+                }
+            }
+
+            if tmpl.creation-time != "": HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: "Created";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                }
+
+                Text {
+                    text: tmpl.creation-time;
                     color: Theme.text-dim;
                     font-size: 10.5px;
                     font-family: Theme.font-mono;

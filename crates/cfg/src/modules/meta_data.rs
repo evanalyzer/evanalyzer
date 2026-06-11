@@ -23,5 +23,5 @@ pub struct MetaData {
     pub author_organization: String,
 
     /// Creation time
-    pub creation_time: String,
+    pub creation_time: chrono::DateTime<chrono::Utc>,
 }

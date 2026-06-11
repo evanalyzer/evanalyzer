@@ -1177,7 +1177,8 @@
         },
         "creationTime": {
           "description": "Creation time",
-          "type": "string"
+          "type": "string",
+          "format": "date-time"
         },
         "description": {
           "description": "A long detailed description of the module",

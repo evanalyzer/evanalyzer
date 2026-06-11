@@ -68,6 +68,7 @@ export struct CommandDef {
     is-template: bool,
     author: string,
     organization: string,
+    creation-time: string,
 }
 
 // ---------- Command picker global state ----------
@@ -541,6 +542,24 @@ component DetailPane inherits Rectangle {
 
                 Text {
                     text: cmd.organization;
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    overflow: elide;
+                }
+            }
+
+            if cmd.is-template && cmd.creation-time != "": HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: "Created";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                }
+
+                Text {
+                    text: cmd.creation-time;
                     color: Theme.text-dim;
                     font-size: 10.5px;
                     font-family: Theme.font-mono;

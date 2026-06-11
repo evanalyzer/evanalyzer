@@ -688,6 +688,7 @@ impl PipelinesController {
                             is_template: false,
                             author: "".into(),
                             organization: "".into(),
+                            creation_time: "".into(),
                         };
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_detail(detail);
@@ -1241,6 +1242,7 @@ impl PipelinesController {
                 is_template: false,
                 author: "".into(),
                 organization: "".into(),
+                creation_time: "".into(),
             }
         };
         let pre: Vec<CommandDef> = metas
@@ -1411,6 +1413,7 @@ impl PipelinesController {
                     is_template: false,
                     author: "".into(),
                     organization: "".into(),
+                    creation_time: "".into(),
                 };
                 let all: Vec<CommandDef> = raw.iter().map(make_def).collect();
                 let shown_pre: Vec<CommandDef> = raw
@@ -1762,5 +1765,11 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         is_template: true,
         author: author.into(),
         organization: template.meta.author_organization.clone().into(),
+        creation_time: template
+            .meta
+            .creation_time
+            .format("%Y-%m-%d")
+            .to_string()
+            .into(),
     }
 }

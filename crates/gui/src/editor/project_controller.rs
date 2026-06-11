@@ -465,6 +465,12 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
         description: template.meta.description.clone().into(),
         author: author.into(),
         organization: template.meta.author_organization.clone().into(),
+        creation_time: template
+            .meta
+            .creation_time
+            .format("%Y-%m-%d")
+            .to_string()
+            .into(),
         pipeline_count: template.pipelines.len() as i32,
     }
 }

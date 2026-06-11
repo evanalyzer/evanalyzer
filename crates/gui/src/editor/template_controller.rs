@@ -114,7 +114,7 @@ impl TemplateController {
             author_first_name,
             author_last_name,
             author_organization: meta_slint.author_organization.to_string(),
-            creation_time: chrono::Local::now().to_rfc3339(),
+            creation_time: chrono::Utc::now(),
         };
 
         let templates_folder = get_user_templates_folder();
