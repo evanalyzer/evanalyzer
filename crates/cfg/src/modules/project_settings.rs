@@ -1,21 +1,24 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{
-    classification_settings::ClassificationSettings, experimant_meta_settings::ExperimantMetadata,
-    images_settings::ImageSettings, pipeline_settings::PipelineSettings,
-    plate_settings::PlateSettings,
+use crate::{
+    modules::meta_data::MetaData,
+    settings::{
+        classification_settings::ClassificationSettings, images_settings::ImageSettings,
+        pipeline_settings::PipelineSettings, plate_settings::PlateSettings,
+    },
 };
 
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSettings {
     /// Descriptive information about the project (name, version, etc.).
-    pub metadata: ExperimantMetadata,
+    pub metadata: MetaData,
 
     // Defined classes, labels, names and measurment
     pub classification: ClassificationSettings,
 
+    // Plate settings
     pub plate: PlateSettings,
 
     /// The collection of images and their associated processing states.

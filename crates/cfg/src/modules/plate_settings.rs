@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default, JsonSchema, Debug, Clone, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GroupingMode {
     #[default]
     NoGrouping,

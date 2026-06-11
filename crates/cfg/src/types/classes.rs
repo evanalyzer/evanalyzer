@@ -69,6 +69,7 @@ impl std::fmt::Display for SegmentationClass {
     Ord,
     JsonSchema,
 )]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ObjectClass {
     #[default]
     Unset,

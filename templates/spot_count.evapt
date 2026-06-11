@@ -1,0 +1,280 @@
+{
+  "meta": {
+    "name": "Spot count",
+    "shortDescription": "Count the number of spots in an image channel.",
+    "description": "Count the number of spots in an image channel.",
+    "authorFirstName": "Melanie",
+    "authorLastName": "Schuerz",
+    "authorOrganization": "University of Salzburg",
+    "creationTime": "2026-06-11T00:00:00Z"
+  },
+  "classification": {
+    "classes": [
+      {
+        "id": {
+          "VALID": 21
+        },
+        "color": "#33CFFF",
+        "name": "ch1@spot",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG"
+          ],
+          "circularity": [
+            "AVG"
+          ],
+          "intensitySum": [
+            "AVG"
+          ],
+          "intensityAvg": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 5
+        },
+        "color": "#66FF33",
+        "name": "tetraspeck@spot",
+        "notes": "",
+        "measure": {}
+      }
+    ]
+  },
+  "plate": {
+    "groupingMode": "NO_GROUPING",
+    "groupingRegex": "",
+    "plateCols": 1,
+    "plateRows": 1,
+    "wellCols": 4,
+    "wellRows": 4,
+    "wellImageOrder": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ]
+  },
+  "pipelines": [
+    {
+      "meta": {
+        "name": "EV Detection",
+        "shortDescription": "EV Detection",
+        "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select EV image channel\n3. Adapt manual threshold\n4. Object can be gated by size/circularity in \"Classifier\"\n",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "rollingBall",
+            "radius": 4.0,
+            "ballType": "PARABOLOID",
+            "preSmooth": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MANUAL",
+                "minThreshold": 200.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 21
+            },
+            "sizeUnit": "px",
+            "minArea": 3.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.10000000149011612,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "saveImage",
+            "path": "images/${imageName}/ev",
+            "source": "IMAGE"
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "Tetraspeck",
+        "shortDescription": "Tetraspeck",
+        "description": "This pipeline steps enables the removal of calibration beads (e.g. tetraspeck) that are fluorescent in all channels. \n1. Enable pipeline\n2. Select Tetraspeck image channel (channel showing only tetraspecks)\n3. Adapt (manual) threshold \n4. Within the *Reclassify* command select the channels where tetraspeck need to be removed.",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "rollingBall",
+            "radius": 4.0,
+            "ballType": "PARABOLOID",
+            "preSmooth": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MANUAL",
+                "minThreshold": 200.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 5
+            },
+            "sizeUnit": "px",
+            "minArea": 5.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        }
+      ]
+    }
+  ]
+}

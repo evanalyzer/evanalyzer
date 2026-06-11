@@ -51,11 +51,12 @@ pub enum ThresholdMethod {
 #[derive(CommandsMeta)]
 pub struct ThresholdEntry {
     /// The algorithm to use (Manual or Automatic).
+    #[cmdsmeta(default = ThresholdMethod::Manual)]
     pub method: ThresholdMethod,
 
     /// The lower intensity bound. Used directly in `Manual` mode, or as a
     /// floor for auto-methods.
-    #[cmdsmeta(default = 0, min = 0, max = 65535, step = 1)]
+    #[cmdsmeta(default = 0, min = 0, max = 65535, step = 1, summary = true)]
     pub min_threshold: f32,
 
     /// The upper intensity bound. Used directly in `Manual` mode, or as a

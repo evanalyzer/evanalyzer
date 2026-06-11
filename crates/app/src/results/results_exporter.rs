@@ -1,5 +1,5 @@
 use crate::results::results_loader::{
-    build_column_specs, discover_channels, to_display_row, DatabaseFilter, ResultsLoader,
+    aggregate_rows, to_display_row, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, ResultsLoader,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use rust_xlsxwriter::{Format, Workbook};
@@ -14,13 +14,17 @@ impl ResultsExporter {
         Self { results_loader }
     }
 
-    /// Exports all rows matching `filter` as a CSV file to `export_path`.
+    /// Exports the rows matching `filter` as a CSV file to `export_path`.
+    /// When `group.group_by` is not `None`, the aggregated/grouped rows are
+    /// exported instead of the per-ROI rows (mirroring the table view).
     pub fn export_to_csv(
         &self,
         filter: DatabaseFilter,
+        group: &GroupConfig,
+        base_specs: &[ColumnSpec],
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
-        let (headers, rows) = self.prepare_data(filter)?;
+        let (headers, rows) = self.prepare_data(filter, group, base_specs)?;
 
         let mut writer = csv::Writer::from_path(export_path)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -41,13 +45,17 @@ impl ResultsExporter {
         Ok(())
     }
 
-    /// Exports all rows matching `filter` as an XLSX file to `export_path`.
+    /// Exports the rows matching `filter` as an XLSX file to `export_path`.
+    /// When `group.group_by` is not `None`, the aggregated/grouped rows are
+    /// exported instead of the per-ROI rows (mirroring the table view).
     pub fn export_to_xlsx(
         &self,
         filter: DatabaseFilter,
+        group: &GroupConfig,
+        base_specs: &[ColumnSpec],
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
-        let (headers, rows) = self.prepare_data(filter)?;
+        let (headers, rows) = self.prepare_data(filter, group, base_specs)?;
         let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
 
         let mut workbook = Workbook::new();
@@ -85,11 +93,17 @@ impl ResultsExporter {
 
     // -------------------------------------------------------------------------
 
-    /// Loads all matching rows, discovers channels, builds column specs, and
-    /// returns (header labels, rows-of-strings) for visible columns only.
+    /// Loads all matching rows and returns (header labels, rows-of-strings).
+    ///
+    /// `base_specs` are the per-ROI column specs from the table (carrying the
+    /// current visibility selection), so the export mirrors what is shown:
+    /// - grouped → one aggregated row per group over the visible metrics;
+    /// - otherwise → per-ROI rows for the visible columns only.
     fn prepare_data(
         &self,
         filter: DatabaseFilter,
+        group: &GroupConfig,
+        base_specs: &[ColumnSpec],
     ) -> Result<(Vec<String>, Vec<Vec<String>>), InternalErrors> {
         let rois = self.results_loader.get_rois(DatabaseFilter {
             page_size: 0, // fetch all rows
@@ -97,10 +111,15 @@ impl ResultsExporter {
             ..filter
         })?;
 
-        let channels = discover_channels(&rois);
-        let specs = build_column_specs(&channels);
+        // Grouped export: one aggregated row per group (over visible metrics).
+        if group.group_by != GroupBy::None {
+            let (specs, display_rows) = aggregate_rows(&rois, group, base_specs);
+            let headers = specs.iter().map(|c| c.label.clone()).collect();
+            let rows = display_rows.into_iter().map(|d| d.values).collect();
+            return Ok((headers, rows));
+        }
 
-        let headers: Vec<String> = specs
+        let headers: Vec<String> = base_specs
             .iter()
             .filter(|c| c.visible)
             .map(|c| c.label.clone())
@@ -110,8 +129,8 @@ impl ResultsExporter {
             .iter()
             .enumerate()
             .map(|(i, roi)| {
-                let display = to_display_row(i, roi, &specs);
-                specs
+                let display = to_display_row(i, roi, base_specs);
+                base_specs
                     .iter()
                     .zip(display.values.iter())
                     .filter(|(col, _)| col.visible)

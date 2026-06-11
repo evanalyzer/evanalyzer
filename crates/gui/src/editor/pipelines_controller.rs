@@ -2,6 +2,7 @@ use crate::AppWindow;
 use crate::DialogType;
 use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::roi_list_controller::RoiListController;
+use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CommandDef, CommandParameter, CommandPickerState, GlobalAppState, GroupItem, LeafParam,
@@ -10,6 +11,7 @@ use crate::{
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
@@ -18,21 +20,45 @@ use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, all_command_meta, default_command,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use evanalyzer_cfg::settings::templates::PipelineTemplate;
+use log::debug;
 use log::info;
 use log::warn;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::sync::Arc;
 use std::sync::{Condvar, Mutex, atomic::AtomicBool};
 
+/// Quiet period (in ms) the user must pause editing before an auto preview
+/// runs. Resets on every parameter change. See `pipeline_settings_changed`.
+const PREVIEW_DEBOUNCE_MS: u64 = 400;
+
+thread_local! {
+    /// Single-shot debounce timer for auto preview execution.
+    ///
+    /// Kept in a thread-local rather than on `PipelinesController` because
+    /// `slint::Timer` is `!Send`/`!Sync`, while the controller is shared with
+    /// the pipeline worker thread. `pipeline_settings_changed` only runs on the
+    /// Slint event-loop thread, so the thread-local is always valid there.
+    static PREVIEW_DEBOUNCE: slint::Timer = slint::Timer::default();
+}
+
 pub struct PipelinesController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
     pub(crate) _roi_list_controller: Arc<RoiListController>,
     pub(crate) viewport_controller: Arc<ViewportController>,
+    pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
     pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
     pub(crate) breakpoint: Arc<Mutex<Option<(u32, i32, evanalyzer_core::BreakpointMode)>>>,
+
+    /// If true the trigger_pipeline_preview_execution is called on parameter change
+    auto_preview_enabled: Mutex<bool>,
+
+    /// Pipeline templates currently shown in the command picker's "Templates"
+    /// section. Reloaded from disk whenever the picker is opened.
+    pipeline_templates: Mutex<Vec<PipelineTemplate>>,
 }
 
 impl PipelinesController {
@@ -41,31 +67,49 @@ impl PipelinesController {
         app_state: Arc<UiState>,
         roi_list_controller: Arc<RoiListController>,
         viewport_controller: Arc<ViewportController>,
+        template_controller: Arc<TemplateController>,
     ) -> Self {
         Self {
             ui,
             app_state: app_state.clone(),
             _roi_list_controller: roi_list_controller,
             viewport_controller,
+            template_controller,
             task_request: Arc::new((Mutex::new(None), Condvar::new())),
             pipeline_cancel_flag: Arc::new(Mutex::new(None)),
             breakpoint: Arc::new(Mutex::new(None)),
+            auto_preview_enabled: Mutex::new(false),
+            pipeline_templates: Mutex::new(Vec::new()),
         }
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
+            // Save as template
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_save_as_template(move || {
+                    manager.save_pipeline_as_template();
+                });
+
             // Dry run pipeline
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_dry_run(move || {
                 manager.trigger_pipeline_preview_execution();
             });
 
-            // Set breakpoint (mode: 1=Stop, 2=Snapshot)
+            // Auto preview toggled
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
-                .on_set_breakpoint(move |pipeline_id, step_id, mode| {
+                .on_auto_preview(move |auto_preview| {
+                    *manager.auto_preview_enabled.lock().expect("Poisned") = auto_preview;
+                });
+
+            // Set breakpoint (mode: 1=Stop, 2=Snapshot)
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>().on_set_breakpoint(
+                move |pipeline_id, step_id, mode| {
                     let bp_mode = if mode == 2 {
                         evanalyzer_core::BreakpointMode::Snapshot
                     } else {
@@ -73,7 +117,8 @@ impl PipelinesController {
                     };
                     *manager.breakpoint.lock().unwrap() =
                         Some((pipeline_id as u32, step_id, bp_mode));
-                });
+                },
+            );
 
             // Clear breakpoint
             let manager = self.clone();
@@ -122,7 +167,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         project.enable_pipeline(enabled, PipelineId(pipeline_id as u32));
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                 });
 
@@ -134,7 +179,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         project.move_pipeline_up(PipelineId(pipeline_id as u32));
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                 });
 
@@ -146,7 +191,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         project.move_pipeline_down(PipelineId(pipeline_id as u32));
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                 });
 
@@ -157,7 +202,7 @@ impl PipelinesController {
                     let mut project = manager.app_state.get_project_write();
                     let next_id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
                     let name = format!("Pipeline {}", next_id);
-                    project.pipelines.push(PipelineSettings {
+                    project.add_pipeline(PipelineSettings {
                         id: PipelineId(next_id),
                         name: Some(name.clone()),
                         image_source: ImageAddress::Channel(0),
@@ -166,7 +211,7 @@ impl PipelinesController {
                     });
                     (next_id, name)
                 };
-                manager.app_state.mark_dirty();
+                manager.pipeline_settings_changed();
                 manager.sync_pipelines_to_slint();
                 manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(new_id), true);
                 let ui_weak = manager.ui.clone();
@@ -255,7 +300,7 @@ impl PipelinesController {
                         let mut project = manager.app_state.get_project_write();
                         project.pipelines.push(new_p);
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                     manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(new_id), true);
                     let ui_weak = manager.ui.clone();
@@ -311,7 +356,7 @@ impl PipelinesController {
                     };
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_pipelines_to_slint();
                     match next_active {
                         Some(nid) => {
@@ -399,7 +444,7 @@ impl PipelinesController {
                     };
                     ps.set_active_pipeline_image_source(image_source_str);
                 }
-                manager.app_state.mark_dirty();
+                manager.pipeline_settings_changed();
                 manager.sync_pipelines_to_slint();
             });
 
@@ -459,7 +504,7 @@ impl PipelinesController {
                             step_idx as usize,
                         );
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
@@ -489,7 +534,7 @@ impl PipelinesController {
                             }
                         }
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager.sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), true);
                 });
 
@@ -514,7 +559,7 @@ impl PipelinesController {
                             }
                         }
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
@@ -565,6 +610,7 @@ impl PipelinesController {
                             (String::new(), 0, -1i32, -1i32)
                         }
                     };
+                    manager.reload_pipeline_templates_async();
                     if let Some(ui) = manager.ui.upgrade() {
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_pipeline_id(pipeline_id);
@@ -573,12 +619,13 @@ impl PipelinesController {
                         picker.set_total_steps(total_steps);
                         picker.set_context_category(context_cat);
                         picker.set_query("".into());
+                        picker.set_filter_favorites(false);
                         // Auto-select the filter for the suggested next category.
                         // -1 keeps the "All" view (empty pipeline or unknown context).
                         picker.set_filter_category(suggested_filter);
                         picker.set_selected_id(-1);
                         // Apply the filter immediately so the list matches the pre-selected chip.
-                        Self::apply_picker_filter(&ui, "", suggested_filter);
+                        manager.apply_picker_filter(&ui, "", suggested_filter, false);
                         ui.global::<GlobalAppState>()
                             .set_active_dialog(DialogType::CommandSelectionDialog);
                     }
@@ -592,8 +639,10 @@ impl PipelinesController {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
-                    let filter_cat = ui.global::<CommandPickerState>().get_filter_category();
-                    Self::apply_picker_filter(&ui, query.as_str(), filter_cat);
+                    let picker = ui.global::<CommandPickerState>();
+                    let filter_cat = picker.get_filter_category();
+                    let filter_favorites = picker.get_filter_favorites();
+                    manager.apply_picker_filter(&ui, query.as_str(), filter_cat, filter_favorites);
                 });
 
             // Picker: select - update detail pane
@@ -603,6 +652,18 @@ impl PipelinesController {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
+                    if command_id < 0 {
+                        // Pipeline template entry.
+                        let templates = manager.pipeline_templates.lock().expect("Poisoned");
+                        let idx = (-command_id - 1) as usize;
+                        if let Some(t) = templates.get(idx) {
+                            let detail = template_to_command_def(idx, t);
+                            let picker = ui.global::<CommandPickerState>();
+                            picker.set_detail(detail);
+                            picker.set_has_detail(true);
+                        }
+                        return;
+                    }
                     let metas = all_command_meta();
                     if let Some(m) = metas.iter().find(|m| m.id == command_id) {
                         let cat = match m.category {
@@ -624,6 +685,10 @@ impl PipelinesController {
                             favorite: false,
                             recent: false,
                             default_params: ModelRc::default(),
+                            is_template: false,
+                            author: "".into(),
+                            organization: "".into(),
+                            creation_time: "".into(),
                         };
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_detail(detail);
@@ -635,16 +700,33 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<CommandPickerState>()
                 .on_confirm(move |command_id| {
-                    let Some(cmd) = default_command(command_id) else {
-                        warn!("picker confirm: unknown command id {}", command_id);
-                        return;
-                    };
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
                     let picker = ui.global::<CommandPickerState>();
                     let pipeline_id = picker.get_pipeline_id() as u32;
                     let after_idx = picker.get_insert_after_idx();
+
+                    let new_steps: Vec<PipelineStepSettings> = if command_id < 0 {
+                        // Pipeline template entry: insert all of its steps.
+                        let templates = manager.pipeline_templates.lock().expect("Poisoned");
+                        let idx = (-command_id - 1) as usize;
+                        let Some(template) = templates.get(idx) else {
+                            warn!("picker confirm: unknown template id {}", command_id);
+                            return;
+                        };
+                        template.pipeline_steps.clone()
+                    } else {
+                        let Some(cmd) = default_command(command_id) else {
+                            warn!("picker confirm: unknown command id {}", command_id);
+                            return;
+                        };
+                        vec![PipelineStepSettings {
+                            enabled: true,
+                            command: cmd,
+                        }]
+                    };
+
                     {
                         let mut project = manager.app_state.get_project_write();
                         if let Some(pipeline) =
@@ -655,18 +737,12 @@ impl PipelinesController {
                             } else {
                                 ((after_idx as usize) + 1).min(pipeline.steps.len())
                             };
-                            pipeline.steps.insert(
-                                insert_at,
-                                PipelineStepSettings {
-                                    enabled: true,
-                                    command: cmd,
-                                },
-                            );
+                            pipeline.steps.splice(insert_at..insert_at, new_steps);
                         }
                     }
                     ui.global::<GlobalAppState>()
                         .set_active_dialog(DialogType::None);
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                     manager
                         .sync_steps_of_selected_pipeline_to_slint(PipelineId(pipeline_id), false);
                 });
@@ -805,7 +881,7 @@ impl PipelinesController {
                         }
                         model.set_row_data(step_idx as usize, cmd);
                     }
-                    manager.app_state.mark_dirty();
+                    manager.pipeline_settings_changed();
                 },
             );
 
@@ -823,7 +899,7 @@ impl PipelinesController {
                             true,
                             None,
                         );
-                        manager.app_state.mark_dirty();
+                        manager.pipeline_settings_changed();
                     }
                 });
 
@@ -841,7 +917,7 @@ impl PipelinesController {
                             false,
                             Some(item_idx as usize),
                         );
-                        manager.app_state.mark_dirty();
+                        manager.pipeline_settings_changed();
                     }
                 },
             );
@@ -871,13 +947,17 @@ impl PipelinesController {
 
         let Some(current_project) = &project.tmp_settings.current_project else {
             warn!("No project path set, please save project first!");
-            self.show_warning("No project is open. Please save the project first before running a preview.");
+            self.show_warning(
+                "No project is open. Please save the project first before running a preview.",
+            );
             return;
         };
 
         let Some(current_image_path) = project.get_current_rel_image_path_cloned() else {
             warn!("Selected image not found in project!");
-            self.show_warning("No image is selected. Please select an image before running a preview.");
+            self.show_warning(
+                "No image is selected. Please select an image before running a preview.",
+            );
             return;
         };
 
@@ -929,7 +1009,9 @@ impl PipelinesController {
 
         let Some(current_project) = &project.tmp_settings.current_project else {
             warn!("No project path set, please save project first!");
-            self.show_warning("No project is open. Please save the project first before starting an analysis.");
+            self.show_warning(
+                "No project is open. Please save the project first before starting an analysis.",
+            );
             return;
         };
 
@@ -952,6 +1034,37 @@ impl PipelinesController {
         }
 
         self.dispatch_worker_task(task);
+    }
+
+    /// A pipeline setting has been changed
+    ///
+    /// Marks the settings as dirty and triggers a preview update if
+    /// auto preview is enabled.
+    ///
+    /// The preview execution is debounced: each change cancels any pending
+    /// preview and restarts a single-shot timer, so the (expensive) preview
+    /// only runs once the user has stopped editing for `PREVIEW_DEBOUNCE_MS`.
+    /// This avoids a flood of preview refreshes while the user is still typing.
+    fn pipeline_settings_changed(self: &Arc<Self>) {
+        self.app_state.mark_dirty();
+
+        // Trigger preview if auto preview is enabled
+        let auto_preview = *self.auto_preview_enabled.lock().expect("Poisned");
+        if auto_preview {
+            let this = self.clone();
+            PREVIEW_DEBOUNCE.with(|timer| {
+                // Cancel any fire still pending from a previous change
+                timer.stop();
+                timer.start(
+                    slint::TimerMode::SingleShot,
+                    std::time::Duration::from_millis(PREVIEW_DEBOUNCE_MS),
+                    move || {
+                        debug!("Auto preview triggered (debounced)!");
+                        this.trigger_pipeline_preview_execution();
+                    },
+                );
+            });
+        }
     }
 
     /// Dispatches a drawing task to the background worker threads based on the specified scope.
@@ -1085,7 +1198,13 @@ impl PipelinesController {
         }
     }
 
-    fn apply_picker_filter(ui: &AppWindow, query: &str, filter_cat: i32) {
+    fn apply_picker_filter(
+        self: &Arc<Self>,
+        ui: &AppWindow,
+        query: &str,
+        filter_cat: i32,
+        filter_favorites: bool,
+    ) {
         let q = query.to_ascii_lowercase();
         let metas = all_command_meta();
 
@@ -1120,6 +1239,10 @@ impl PipelinesController {
                 favorite: false,
                 recent: false,
                 default_params: ModelRc::default(),
+                is_template: false,
+                author: "".into(),
+                organization: "".into(),
+                creation_time: "".into(),
             }
         };
         let pre: Vec<CommandDef> = metas
@@ -1167,7 +1290,25 @@ impl PipelinesController {
             })
             .map(|m| make(m, StepCategory::Classify))
             .collect();
-        let total = (pre.len() + seg.len() + obj.len() + mea.len() + cls.len()) as i32;
+        let templates_lock = self.pipeline_templates.lock().expect("Poisoned");
+        let templates: Vec<CommandDef> = templates_lock
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                q.is_empty()
+                    || t.meta.name.to_ascii_lowercase().contains(&q)
+                    || t.meta.short_description.to_ascii_lowercase().contains(&q)
+            })
+            .map(|(idx, t)| template_to_command_def(idx, t))
+            .collect();
+        drop(templates_lock);
+        let cf = templates.len() as i32;
+
+        let total = if filter_favorites {
+            cf
+        } else {
+            (pre.len() + seg.len() + obj.len() + mea.len() + cls.len()) as i32
+        };
         let (cp, cs, co, cm, cc) = (
             pre.len() as i32,
             seg.len() as i32,
@@ -1181,12 +1322,53 @@ impl PipelinesController {
         picker.set_shown_object(ModelRc::new(VecModel::from(obj)));
         picker.set_shown_measure(ModelRc::new(VecModel::from(mea)));
         picker.set_shown_classify(ModelRc::new(VecModel::from(cls)));
+        picker.set_shown_templates(ModelRc::new(VecModel::from(templates)));
         picker.set_total_shown(total);
         picker.set_cat_count_pre(cp);
         picker.set_cat_count_seg(cs);
         picker.set_cat_count_obj(co);
         picker.set_cat_count_mea(cm);
         picker.set_cat_count_cls(cc);
+        picker.set_cat_count_fav(cf);
+    }
+
+    /// Reloads pipeline templates from the user and app templates folders in the
+    /// background, then refreshes the command picker if it is still open.
+    ///
+    /// Scanning the templates folders involves blocking filesystem I/O which can
+    /// be slow (e.g. on Windows with antivirus scanning or network drives), so it
+    /// must not run on the Slint event-loop thread - doing so would freeze the UI
+    /// while the "Add Step" dialog opens. The dialog opens immediately with the
+    /// previously cached templates and is updated in place once the reload
+    /// completes.
+    fn reload_pipeline_templates_async(self: &Arc<Self>) {
+        let manager = self.clone();
+        std::thread::spawn(move || {
+            let templates: Vec<PipelineTemplate> = load_pipeline_templates()
+                .into_iter()
+                .map(|(_path, template)| template)
+                .collect();
+            *manager.pipeline_templates.lock().expect("Poisoned") = templates;
+
+            let manager = manager.clone();
+            if let Err(e) = slint::invoke_from_event_loop(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                if ui.global::<GlobalAppState>().get_active_dialog()
+                    != DialogType::CommandSelectionDialog
+                {
+                    return;
+                }
+                let picker = ui.global::<CommandPickerState>();
+                let query = picker.get_query().to_string();
+                let filter_cat = picker.get_filter_category();
+                let filter_favorites = picker.get_filter_favorites();
+                manager.apply_picker_filter(&ui, &query, filter_cat, filter_favorites);
+            }) {
+                warn!("Failed to refresh pipeline templates in picker: {}", e);
+            }
+        });
     }
 
     fn sync_commands_to_selection_dialog_slint(self: &Arc<Self>) {
@@ -1228,6 +1410,10 @@ impl PipelinesController {
                     favorite: false,
                     recent: false,
                     default_params: ModelRc::default(),
+                    is_template: false,
+                    author: "".into(),
+                    organization: "".into(),
+                    creation_time: "".into(),
                 };
                 let all: Vec<CommandDef> = raw.iter().map(make_def).collect();
                 let shown_pre: Vec<CommandDef> = raw
@@ -1522,5 +1708,68 @@ impl PipelinesController {
         }) {
             warn!("Failed to sync steps to Slint: {}", e);
         }
+    }
+
+    /// Opens the "Save as Template" flow for the currently active pipeline.
+    fn save_pipeline_as_template(self: &Arc<Self>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let panel = ui.global::<PipelinesPanelState>();
+        let pipeline_id = PipelineId(panel.get_active_pipeline_id() as u32);
+        let name = panel.get_active_pipeline_name().to_string();
+
+        self.template_controller
+            .start_pipeline_template_save(pipeline_id, name);
+    }
+}
+
+/// Builds the `CommandDef` shown in the command picker's "Templates" section
+/// for a loaded `PipelineTemplate`.
+///
+/// Picker ids for templates are encoded as negative numbers (`-(idx + 1)`)
+/// so they can't collide with the non-negative built-in command ids returned
+/// by [`all_command_meta`].
+fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDef {
+    let category = template
+        .pipeline_steps
+        .first()
+        .map(|s| match s.command.category() {
+            CommandCategory::Preprocess => StepCategory::Preprocess,
+            CommandCategory::Segment => StepCategory::Segment,
+            CommandCategory::Object => StepCategory::Object,
+            CommandCategory::Measure => StepCategory::Measure,
+            CommandCategory::Classify => StepCategory::Classify,
+        })
+        .unwrap_or(StepCategory::Preprocess);
+
+    let author = format!(
+        "{} {}",
+        template.meta.author_first_name, template.meta.author_last_name
+    )
+    .trim()
+    .to_string();
+
+    CommandDef {
+        id: -(idx as i32) - 1,
+        name: template.meta.name.clone().into(),
+        summary: template.meta.short_description.clone().into(),
+        description: template.meta.description.clone().into(),
+        category,
+        icon_glyph: "★".into(),
+        keywords: template.meta.name.to_ascii_lowercase().into(),
+        source: "template".into(),
+        favorite: false,
+        recent: false,
+        default_params: ModelRc::default(),
+        is_template: true,
+        author: author.into(),
+        organization: template.meta.author_organization.clone().into(),
+        creation_time: template
+            .meta
+            .creation_time
+            .format("%Y-%m-%d")
+            .to_string()
+            .into(),
     }
 }

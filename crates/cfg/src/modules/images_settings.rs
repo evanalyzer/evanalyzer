@@ -51,7 +51,7 @@ pub struct SeriesSettings {
 }
 
 #[derive(Serialize, Deserialize, Default, JsonSchema, Debug, Clone, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ZStackHandling {
     #[default]
     SingleStack,
@@ -71,7 +71,7 @@ pub struct ZStackSettings {
 }
 
 #[derive(Serialize, Deserialize, Default, JsonSchema, Debug, Clone, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TStackHandling {
     #[default]
     SingleStack,

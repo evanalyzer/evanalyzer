@@ -93,9 +93,9 @@ impl ProjectSettingsController {
                 let meta = &mut project.metadata;
                 let full_name: String = project_settings.author_name.clone().into();
                 let mut parts = full_name.split_whitespace();
-                meta.first_name = parts.next().unwrap_or("").into();
-                meta.last_name = parts.next().unwrap_or("").into();
-                meta.organization = project_settings.organization_name.clone().into();
+                meta.author_first_name = parts.next().unwrap_or("").into();
+                meta.author_last_name = parts.next().unwrap_or("").into();
+                meta.author_organization = project_settings.organization_name.clone().into();
                 meta.name = project_settings.project_name.clone().into();
             }
 
@@ -134,10 +134,10 @@ impl ProjectSettingsController {
 
         let (author_name, organization) = {
             let addr = &project.metadata;
-            let full_name = format!("{} {}", addr.first_name, addr.last_name)
+            let full_name = format!("{} {}", addr.author_first_name, addr.author_last_name)
                 .trim()
                 .to_string();
-            (full_name, addr.organization.clone())
+            (full_name, addr.author_organization.clone())
         };
 
         let (plate_rows, plate_cols, well_rows, well_cols, well_image_order, regex, mode_index) = {

@@ -5,6 +5,7 @@ import {
     Palette,
 } from "std-widgets.slint";
 import { Theme } from "../style.slint";
+import { ChannelState } from "../state.slint";
 
 // ----------------------------------------------------------
 export global ImageMetaData {
@@ -289,6 +290,68 @@ export component ImageMetaPanel inherits Rectangle {
                 key: "Bit depth";
                 value: ImageMetaData.pixel_type;
                 last: true;
+            }
+        }
+
+        // ----- CHANNELS -----
+        VerticalLayout {
+            spacing: 0px;
+            Text {
+                text: "CHANNELS";
+                font-size: 9.5px;
+                font-weight: 600;
+                letter-spacing: 0.8px;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+                height: 22px;
+            }
+
+            for channel[i] in ChannelState.channels: Rectangle {
+                height: 24px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    spacing: 8px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 10px;
+                            height: 10px;
+                            border-radius: 2px;
+                            background: channel.color;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        Text {
+                            text: channel.name;
+                            font-size: 11.5px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: channel.emission_wave_length > 0 ? channel.emission_wave_length + " nm" : "-";
+                        font-size: 11.5px;
+                        font-family: Theme.font-mono;
+                        color: channel.emission_wave_length > 0 ? Theme.text : Theme.text-mute;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                    }
+                }
+
+                if i < ChannelState.channels.length - 1: Rectangle {
+                    x: 0px;
+                    y: parent.height - 1px;
+                    width: 100%;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
             }
         }
 

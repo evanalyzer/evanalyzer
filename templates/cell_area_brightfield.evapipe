@@ -1,0 +1,126 @@
+{
+  "meta": {
+    "name": "Cell brightfield",
+    "shortDescription": "Cell brightfield",
+    "description": "Segments the overall cell area from a brightfield image using Sobel edge detection, blurring and an automatic threshold. The output object class can be remapped after import (default class id used during conversion: 1).",
+    "authorFirstName": "EVAnalyzer",
+    "authorLastName": "Team",
+    "authorOrganization": "evanalyzer.org",
+    "creationTime": "2026-06-11T00:00:00Z"
+  },
+  "pipelineSteps": [
+    {
+      "enabled": true,
+      "command": {
+        "type": "edgeDetectionSobel",
+        "kernelSize": 3
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "blur",
+        "kernelSize": 3
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "blur",
+        "kernelSize": 3
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "blur",
+        "kernelSize": 3
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "blur",
+        "kernelSize": 3
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "blur",
+        "kernelSize": 3
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "blur",
+        "kernelSize": 3
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "threshold",
+        "thresholds": [
+          {
+            "method": "MIN_ERROR",
+            "minThreshold": 0.0,
+            "maxThreshold": 65535.0,
+            "unit": "bit",
+            "objectClassId": 1
+          }
+        ]
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "connectedComponents"
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "extractRois",
+        "maxObjectsBeforeFail": 100000
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "classifyRois",
+        "originSegmentation": [
+          1
+        ],
+        "inputClasses": [],
+        "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+        "outputClass": {
+          "VALID": 1
+        },
+        "sizeUnit": "px",
+        "minArea": 53.2,
+        "maxArea": 2147483648.0,
+        "minCircularity": 0.0,
+        "maxCircularity": 1.0,
+        "minSolidity": 0.0,
+        "maxSolidity": 1.0,
+        "minAspectRatio": 0.0,
+        "maxAspectRatio": 2147483648,
+        "minEccentricity": 0.0,
+        "maxEccentricity": 1.0,
+        "minFeret": 0.0,
+        "maxFeret": 2147483648,
+        "allowEdgeTouching": true
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "saveImage",
+        "path": "images/${imageName}/cell_area",
+        "source": "IMAGE"
+      }
+    }
+  ]
+}

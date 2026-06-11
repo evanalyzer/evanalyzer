@@ -27,11 +27,10 @@ pub struct IntensitySettings {
     pub min_intensity: f32,
     /// Maximum pixel intensity in the ROI
     pub max_intensity: f32,
-    /// Median pixel intensity in the ROI
-    pub median_intensity: Option<f32>,
-    /// Standard deviation of pixel intensities
-    pub std_dev: Option<f32>,
-    /// All pixel values (used for computing median and std_dev)
+    /// Average pixel intensity in the ROI
+    #[serde(default)]
+    pub avg_intensity: f32,
+    /// Unused scratch buffer kept for layout compatibility; never serialized.
     #[serde(skip)]
     pub pixel_values: Vec<f32>,
 }
@@ -87,6 +86,11 @@ pub struct RoiSettings {
 
     // Intensities
     pub intensities: IndexMap<i32, IntensitySettings>, // Intensity values for each image channel
+
+    // Precomputed perimeter (pixels), filled from Roi::get_perimeter so consumers
+    // (e.g. the GUI ROI list) don't recompute the O(bbox area) boundary walk.
+    #[serde(default)]
+    pub perimeter: f32,
 
     // Image plane information
     pub z_stack: i32,

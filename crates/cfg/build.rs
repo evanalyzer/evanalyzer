@@ -26,10 +26,16 @@ mod core_types {
     pub use super::types::units::{PixelUnits, SizeUnits};
 }
 mod modules {
-    pub mod experimant_meta_settings {
+    pub mod meta_data {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/experimant_meta_settings.rs"
+            "/src/modules/meta_data.rs"
+        ));
+    }
+    pub mod templates {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/modules/templates.rs"
         ));
     }
     pub mod classification_settings {
@@ -89,12 +95,13 @@ mod modules {
 }
 mod settings {
     pub use crate::modules::classification_settings;
-    pub use crate::modules::experimant_meta_settings;
     pub use crate::modules::images_settings;
+    pub use crate::modules::meta_data;
     pub use crate::modules::pipeline_command;
     pub use crate::modules::pipeline_settings;
     pub use crate::modules::plate_settings;
     pub use crate::modules::roi_settings;
+    pub use crate::modules::templates;
 }
 
 #[path = "build/pipeline_commands_generator.rs"]
@@ -120,6 +127,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src/modules/pipeline_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/plate_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/project_settings.rs");
+    println!("cargo:rerun-if-changed=src/modules/meta_data.rs");
+    println!("cargo:rerun-if-changed=src/modules/templates.rs");
     // Input: algo structs the generator reads to produce pipeline_command*.rs
     println!("cargo:rerun-if-changed=../core/src/algos");
 

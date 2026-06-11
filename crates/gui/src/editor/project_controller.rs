@@ -1,5 +1,10 @@
 use crate::AppWindow;
+use crate::DialogType;
+use crate::GlobalAppState;
 use crate::ImagesListState;
+use crate::PipelinesPanelState;
+use crate::ProjectTemplateDef;
+use crate::ProjectTemplateState;
 use crate::ToolbarState;
 use crate::UiState;
 use crate::editor::classification_controller::ClassificationController;
@@ -7,14 +12,18 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
+use crate::editor::template_controller::TemplateController;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::extensions::project_ext::SaveProjectActions;
+use evanalyzer_app::templates::load_project_templates;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
+use evanalyzer_cfg::settings::templates::ProjectTemplate;
 use evanalyzer_core::SUPPORTED_IMAGE_FORMATS;
 use log::{info, warn};
 use slint::ComponentHandle;
+use slint::{ModelRc, VecModel};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct ProjectController {
     pub(crate) ui: slint::Weak<AppWindow>,
@@ -24,6 +33,10 @@ pub struct ProjectController {
     pub(crate) classification_controller: Arc<ClassificationController>,
     pub(crate) pipelines_controller: Arc<PipelinesController>,
     pub(crate) results_list_controller: Arc<ResultsListController>,
+    pub(crate) template_controller: Arc<TemplateController>,
+    /// Project templates currently shown in the "New from Project Template"
+    /// dialog. Reloaded from disk whenever the dialog is opened.
+    project_templates: Mutex<Vec<ProjectTemplate>>,
 }
 
 impl ProjectController {
@@ -35,6 +48,7 @@ impl ProjectController {
         classification_controller: Arc<ClassificationController>,
         pipelines_controller: Arc<PipelinesController>,
         results_list_controller: Arc<ResultsListController>,
+        template_controller: Arc<TemplateController>,
     ) -> Self {
         Self {
             ui,
@@ -44,6 +58,8 @@ impl ProjectController {
             classification_controller,
             pipelines_controller,
             results_list_controller,
+            template_controller,
+            project_templates: Mutex::new(Vec::new()),
         }
     }
 
@@ -139,6 +155,60 @@ impl ProjectController {
             let manager = Arc::clone(self);
             ui.global::<ToolbarState>().on_save_as_file_clicked(move || {
                 manager.save_project_as_handler();
+            });
+
+            // Save project as template
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_save_project_as_template_clicked(move || {
+                    let name = manager
+                        .app_state
+                        .get_project()
+                        .metadata
+                        .name
+                        .clone();
+                    manager
+                        .template_controller
+                        .start_project_template_save(name);
+                });
+
+            // New from project template - open the picker dialog
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_new_from_project_template_clicked(move || {
+                    manager.open_project_template_dialog();
+                });
+
+            // Project template picker: select - update detail pane
+            let manager = Arc::clone(self);
+            ui.global::<ProjectTemplateState>()
+                .on_select(move |id| {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let templates = manager.project_templates.lock().expect("Poisoned");
+                    if let Some(template) = templates.get(id as usize) {
+                        let detail = project_template_to_def(id, template);
+                        let picker = ui.global::<ProjectTemplateState>();
+                        picker.set_detail(detail);
+                        picker.set_has_detail(true);
+                    }
+                });
+
+            // Project template picker: confirm - apply template to the project
+            let manager = Arc::clone(self);
+            ui.global::<ProjectTemplateState>()
+                .on_confirm(move |id| {
+                    manager.apply_project_template(id);
+                });
+
+            // Project template picker: cancel - close dialog
+            let manager = Arc::clone(self);
+            ui.global::<ProjectTemplateState>().on_cancel(move || {
+                if let Some(ui) = manager.ui.upgrade() {
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::None);
+                }
             });
 
             // Open website in the system browser
@@ -271,5 +341,136 @@ impl ProjectController {
         } else {
             warn!("Could not save project");
         }
+    }
+
+    /// Opens the "New from Project Template" dialog.
+    ///
+    /// The dialog opens immediately with an empty list; the available
+    /// templates are loaded from disk in the background and populated once
+    /// ready, so a slow filesystem doesn't delay opening the dialog.
+    fn open_project_template_dialog(self: &Arc<Self>) {
+        let manager = self.clone();
+        if let Some(ui) = self.ui.upgrade() {
+            let picker = ui.global::<ProjectTemplateState>();
+            picker.set_selected_id(-1);
+            picker.set_has_detail(false);
+            picker.set_templates(ModelRc::new(VecModel::from(Vec::<ProjectTemplateDef>::new())));
+            ui.global::<GlobalAppState>()
+                .set_active_dialog(DialogType::ProjectTemplate);
+        }
+        std::thread::spawn(move || {
+            let templates: Vec<ProjectTemplate> = load_project_templates()
+                .into_iter()
+                .map(|(_path, template)| template)
+                .collect();
+            let defs: Vec<ProjectTemplateDef> = templates
+                .iter()
+                .enumerate()
+                .map(|(idx, t)| project_template_to_def(idx as i32, t))
+                .collect();
+            *manager.project_templates.lock().expect("Poisoned") = templates;
+
+            if let Err(e) = slint::invoke_from_event_loop(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                if ui.global::<GlobalAppState>().get_active_dialog() != DialogType::ProjectTemplate
+                {
+                    return;
+                }
+                ui.global::<ProjectTemplateState>()
+                    .set_templates(ModelRc::new(VecModel::from(defs)));
+            }) {
+                warn!("Failed to populate project template picker: {}", e);
+            }
+        });
+    }
+
+    /// Replaces the current project's classification, plate and pipeline
+    /// settings with the ones from the selected project template, then
+    /// re-syncs the affected panels.
+    fn apply_project_template(self: &Arc<Self>, id: i32) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let template = {
+            let templates = self.project_templates.lock().expect("Poisoned");
+            templates.get(id as usize).cloned()
+        };
+        let Some(template) = template else {
+            warn!("project template picker confirm: unknown template id {}", id);
+            return;
+        };
+
+        let first_pipeline_id = {
+            let mut project = self.app_state.get_project_write();
+            project.apply_project_template(&template);
+            project.pipelines.first().map(|p| p.id)
+        };
+        self.app_state.mark_dirty();
+
+        self.project_settings_controller
+            .sync_project_settings_to_slint();
+        self.classification_controller
+            .sync_classification_to_slint();
+        self.pipelines_controller.sync_pipelines_to_slint();
+
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::None);
+
+        match first_pipeline_id {
+            Some(pid) => {
+                self.pipelines_controller
+                    .sync_steps_of_selected_pipeline_to_slint(pid, true);
+                let ui_weak = self.ui.clone();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.global::<PipelinesPanelState>()
+                            .set_active_pipeline_id(pid.0 as i32);
+                    }
+                })
+                .ok();
+            }
+            None => {
+                let ui_weak = self.ui.clone();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let ps = ui.global::<PipelinesPanelState>();
+                        ps.set_active_pipeline_id(0);
+                        ps.set_active_pipeline_name("".into());
+                        ps.set_active_pipeline_image_source("".into());
+                        ps.set_active_commands(ModelRc::default());
+                    }
+                })
+                .ok();
+            }
+        }
+    }
+}
+
+/// Builds the `ProjectTemplateDef` shown in the "New from Project Template"
+/// dialog for a loaded `ProjectTemplate`.
+fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTemplateDef {
+    let author = format!(
+        "{} {}",
+        template.meta.author_first_name, template.meta.author_last_name
+    )
+    .trim()
+    .to_string();
+
+    ProjectTemplateDef {
+        id,
+        name: template.meta.name.clone().into(),
+        short_description: template.meta.short_description.clone().into(),
+        description: template.meta.description.clone().into(),
+        author: author.into(),
+        organization: template.meta.author_organization.clone().into(),
+        creation_time: template
+            .meta
+            .creation_time
+            .format("%Y-%m-%d")
+            .to_string()
+            .into(),
+        pipeline_count: template.pipelines.len() as i32,
     }
 }

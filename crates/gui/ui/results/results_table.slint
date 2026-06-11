@@ -22,6 +22,9 @@ export struct FilterItem {
 
 export enum ResultsViewMode { table, chart }
 
+// How rows are bucketed before aggregation.
+export enum ResultsGroupBy { none, image, folder, regex }
+
 export global ResultsState {
     in-out property <[ResultsColumnDef]> columns: [
         { id: "roi_id", label: "ROI ID", visible: true, filterable: false },
@@ -93,6 +96,22 @@ export global ResultsState {
     callback column_select_all();
     callback column_clear_all();
     callback column_filter_apply();
+
+    // -- Group-by / aggregation -------------------------------------------
+    in-out property <ResultsGroupBy> group_by:   ResultsGroupBy.none;
+    in-out property <string> group_regex:        "";
+    // Aggregates to compute (multi-select). Each ticked function adds one
+    // column per visible metric.
+    in-out property <bool> group_agg_min:        false;
+    in-out property <bool> group_agg_max:        false;
+    in-out property <bool> group_agg_avg:        true;
+    in-out property <bool> group_agg_median:     false;
+    in-out property <bool> group_agg_stdev:      false;
+    in-out property <bool> group_agg_sum:        false;
+    // True while a non-`none` grouping is applied (drives the status badge).
+    in-out property <bool> group_active:         false;
+    // Applies the current group_by / group_regex / aggregate selection.
+    callback group_apply();
 }
 
 // -- Shared checkbox item used inside filter popups ----------------------------
@@ -167,6 +186,10 @@ component ResultsHeaderCell inherits Rectangle {
     // Using a custom in-property so the internal bindings below can reference it;
     // external assignment to built-in min-width cannot override an internal binding.
     in property <bool> col-visible: true;
+    // Explicit, pre-rounded column width shared with the data cells. Fixed
+    // (min == max, no stretch) so the header and rows are laid out identically
+    // and never drift apart due to independent stretch rounding.
+    in property <length> cell-width: 100px;
     property <bool> popup-open: false;
     callback clicked;
     callback filter-label-toggled(string);
@@ -175,9 +198,9 @@ component ResultsHeaderCell inherits Rectangle {
     callback filter-clear-all();
     callback filter-apply;
 
-    min-width: root.col-visible ? 100px : 0px;
-    max-width: root.col-visible ? 1000000px : 0px;
-    horizontal-stretch: root.col-visible ? 1 : 0;
+    min-width: root.col-visible ? root.cell-width : 0px;
+    max-width: root.col-visible ? root.cell-width : 0px;
+    horizontal-stretch: 0;
     height: 32px;
     background: Theme.raised;
 
@@ -498,10 +521,12 @@ component ResultsDataCell inherits Rectangle {
     in property <bool> selected;
     in property <bool> mono: false;
     in property <bool> col-visible: true;
+    // Explicit, pre-rounded column width shared with the header cells.
+    in property <length> cell-width: 100px;
 
-    min-width: root.col-visible ? 100px : 0px;
-    max-width: root.col-visible ? 1000000px : 0px;
-    horizontal-stretch: root.col-visible ? 1 : 0;
+    min-width: root.col-visible ? root.cell-width : 0px;
+    max-width: root.col-visible ? root.cell-width : 0px;
+    horizontal-stretch: 0;
 
     HorizontalLayout {
         padding-left: 8px;
@@ -530,6 +555,11 @@ component ResultsDataRow inherits Rectangle {
     in property <bool> selected;
     // Horizontal scroll offset supplied by the parent table component.
     in property <length> h-offset: 0px;
+    // Total content width and per-column width, supplied by the parent so the
+    // row matches the header exactly. Both are computed once in ResultsTable;
+    // deriving width from this row's own size would diverge from the header.
+    in property <length> content-width: 0px;
+    in property <length> col-width: 100px;
     callback row-clicked;
 
     height: 32px;
@@ -555,10 +585,12 @@ component ResultsDataRow inherits Rectangle {
     // The clip above hides the overflow; h-offset pans the content.
     HorizontalLayout {
         x: -root.h-offset;
-        width: max(parent.width, ResultsState.visible_column_count * 100px);
+        width: root.content-width;
+        alignment: start;
         for col[i] in ResultsState.columns: ResultsDataCell {
             visible: col.visible;
             col-visible: col.visible;
+            cell-width: root.col-width;
             value: root.data.values.length > i ? root.data.values[i] : "";
             selected: root.selected;
             mono: i == 0;
@@ -575,6 +607,17 @@ component ResultsDataRow inherits Rectangle {
 // -- Public export -------------------------------------------------------------
 
 export component ResultsTable inherits Rectangle {
+    // Single source of truth for column sizing. Both the sticky header and
+    // every data row use `col-width` as an EXPLICIT, pre-rounded width per
+    // column (no stretch), so the two are laid out identically and can never
+    // drift apart due to independent fractional-stretch rounding.
+    property <length> content-width: max(table-scroll.visible-width, ResultsState.visible_column_count * 100px);
+    // Whole-pixel width per visible column. Rounded here once so header and
+    // rows share the exact same integer value.
+    property <length> col-width: ResultsState.visible_column_count > 0
+        ? round(content-width / 1px / ResultsState.visible_column_count) * 1px
+        : 100px;
+
     VerticalLayout {
         spacing: 0;
 
@@ -585,11 +628,13 @@ export component ResultsTable inherits Rectangle {
 
             HorizontalLayout {
                 x: h-scroll-view.viewport-x;
-                width: max(parent.width, ResultsState.visible_column_count * 100px);
+                width: root.content-width;
+                alignment: start;
 
                 for col in ResultsState.columns: ResultsHeaderCell {
                     visible: col.visible;
                     col-visible: col.visible;
+                    cell-width: root.col-width;
                     label: col.label;
                     col-id: col.id;
                     sorted: ResultsState.sort_column_id == col.id;
@@ -684,6 +729,8 @@ export component ResultsTable inherits Rectangle {
                     data: data;
                     selected: ResultsState.selected_roi_id == data.roi_id;
                     h-offset: -h-scroll-view.viewport-x;
+                    content-width: root.content-width;
+                    col-width: root.col-width;
                     row-clicked => {
                         ResultsState.selected_roi_id = data.roi_id;
                         ResultsState.roi_row_selected(data.roi_id);

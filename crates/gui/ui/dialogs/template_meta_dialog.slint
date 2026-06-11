@@ -1,0 +1,189 @@
+import { LineEdit, TextEdit } from "std-widgets.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+
+export struct TemplateMetaSlint {
+    name: string,
+    short_description: string,
+    description: string,
+    author_name: string,
+    author_organization: string,
+}
+
+export global TemplateMetaState {
+    in-out property <string> dialog_title: "Save as Template";
+    in-out property <TemplateMetaSlint> meta: {
+        name: "",
+        short_description: "",
+        description: "",
+        author_name: "",
+        author_organization: "",
+    };
+
+    callback confirm();
+    callback cancel();
+}
+
+export component TemplateMetaDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    TouchArea {
+        clicked => {
+            TemplateMetaState.cancel();
+        }
+    }
+
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 460px;
+        background: Theme.panel;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 12px;
+        clip: true;
+
+        // Eat clicks inside so the scrim doesn't fire
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: TemplateMetaState.dialog_title;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                }
+
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: close-ta.has-hover ? Theme.raised : transparent;
+                    animate background { duration: 80ms; }
+                    Text {
+                        text: "✕";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            TemplateMetaState.cancel();
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Name";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    height: 30px;
+                    text <=> TemplateMetaState.meta.name;
+                    placeholder-text: "e.g. Cell counting pipeline";
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Short description";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    height: 30px;
+                    text <=> TemplateMetaState.meta.short_description;
+                    placeholder-text: "One line summary";
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Description";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                TextEdit {
+                    height: 80px;
+                    text <=> TemplateMetaState.meta.description;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: "Author";
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                    }
+
+                    LineEdit {
+                        height: 30px;
+                        text <=> TemplateMetaState.meta.author_name;
+                        placeholder-text: "Charles Darwin";
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: "Organization";
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                    }
+
+                    LineEdit {
+                        height: 30px;
+                        text <=> TemplateMetaState.meta.author_organization;
+                        placeholder-text: "University / Company";
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                AppButton {
+                    text: "Cancel";
+                    clicked => {
+                        TemplateMetaState.cancel();
+                    }
+                }
+
+                AppButton {
+                    text: "Next…";
+                    primary: true;
+                    clicked => {
+                        TemplateMetaState.confirm();
+                    }
+                }
+            }
+        }
+
+        height: layout.preferred-height;
+    }
+}

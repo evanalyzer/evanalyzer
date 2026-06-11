@@ -2,8 +2,6 @@ use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::get_colors_from_class;
 use crate::{AppWindow, RoiItemDataSlint, RoiListState};
-use bitvec::order::Lsb0;
-use bitvec::vec::BitVec;
 use evanalyzer_app::ProjectWithRuntime;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
@@ -247,56 +245,13 @@ fn precompute_label_counts(app_state: &Arc<UiState>) -> HashMap<SegmentationClas
     counts
 }
 
-/// Compute perimeter from RoiSettings mask using ImageJ's algorithm (same as Roi::get_perimeter).
-fn get_perimeter(roi: &RoiSettings) -> f32 {
-    let [x_min, y_min, x_max, y_max] = roi.bbox;
-    // bbox[2]/[3] are INCLUSIVE - width = xmax - xmin + 1
-    let width = (x_max - x_min + 1) as usize;
-    let height = (y_max - y_min + 1) as usize;
-
-    if width == 0 || height == 0 || roi.area == 0 {
-        return 0.0;
-    }
-
-    let mask: &BitVec<u64, Lsb0> = &roi.mask_data;
-    let mut perimeter = 0.0f32;
-    const SQRT2: f32 = std::f32::consts::SQRT_2;
-
-    for y in 0..height {
-        for x in 0..width {
-            if !mask.get(y * width + x).map(|b| *b).unwrap_or(false) {
-                continue;
-            }
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
-                    if dx == 0 && dy == 0 {
-                        continue;
-                    }
-                    let nx = x as i32 + dx;
-                    let ny = y as i32 + dy;
-                    let neighbor_inside = nx >= 0
-                        && nx < width as i32
-                        && ny >= 0
-                        && ny < height as i32
-                        && mask
-                            .get(ny as usize * width + nx as usize)
-                            .map(|b| *b)
-                            .unwrap_or(false);
-                    if !neighbor_inside {
-                        perimeter += if dx == 0 || dy == 0 { 1.0 } else { SQRT2 };
-                    }
-                }
-            }
-        }
-    }
-    perimeter / 2.0
-}
-
 fn format_circularity(roi: &RoiSettings) -> SharedString {
     if roi.area == 0 {
         return "".into();
     }
-    let p = get_perimeter(roi);
+    // Perimeter is precomputed once during extraction (Roi::get_perimeter) and carried
+    // on RoiSettings, so the ROI list no longer re-walks the mask boundary here.
+    let p = roi.perimeter;
     if p <= 0.0 {
         return "".into();
     }
