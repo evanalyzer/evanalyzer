@@ -190,6 +190,7 @@ export component AppWindow inherits Window {
             shown-object: CommandPickerState.shown-object;
             shown-classify: CommandPickerState.shown-classify;
             shown-measure: CommandPickerState.shown-measure;
+            shown-templates: CommandPickerState.shown-templates;
             detail: CommandPickerState.detail;
             has-detail: CommandPickerState.has-detail;
             total-shown: CommandPickerState.total-shown;
@@ -198,8 +199,10 @@ export component AppWindow inherits Window {
             cat-count-obj: CommandPickerState.cat-count-obj;
             cat-count-cls: CommandPickerState.cat-count-cls;
             cat-count-mea: CommandPickerState.cat-count-mea;
+            cat-count-fav: CommandPickerState.cat-count-fav;
             query <=> CommandPickerState.query;
             filter-category <=> CommandPickerState.filter-category;
+            filter-favorites <=> CommandPickerState.filter-favorites;
             selected-id <=> CommandPickerState.selected-id;
             query-changed(t) => {
                 CommandPickerState.query-changed(t);

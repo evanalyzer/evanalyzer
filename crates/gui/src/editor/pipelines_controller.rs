@@ -11,6 +11,7 @@ use crate::{
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
+use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
@@ -19,6 +20,7 @@ use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, all_command_meta, default_command,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use evanalyzer_cfg::settings::templates::PipelineTemplate;
 use log::debug;
 use log::info;
 use log::warn;
@@ -53,6 +55,10 @@ pub struct PipelinesController {
 
     /// If true the trigger_pipeline_preview_execution is called on parameter change
     auto_preview_enabled: Mutex<bool>,
+
+    /// Pipeline templates currently shown in the command picker's "Templates"
+    /// section. Reloaded from disk whenever the picker is opened.
+    pipeline_templates: Mutex<Vec<PipelineTemplate>>,
 }
 
 impl PipelinesController {
@@ -73,6 +79,7 @@ impl PipelinesController {
             pipeline_cancel_flag: Arc::new(Mutex::new(None)),
             breakpoint: Arc::new(Mutex::new(None)),
             auto_preview_enabled: Mutex::new(false),
+            pipeline_templates: Mutex::new(Vec::new()),
         }
     }
 
@@ -603,6 +610,7 @@ impl PipelinesController {
                             (String::new(), 0, -1i32, -1i32)
                         }
                     };
+                    manager.reload_pipeline_templates();
                     if let Some(ui) = manager.ui.upgrade() {
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_pipeline_id(pipeline_id);
@@ -611,12 +619,13 @@ impl PipelinesController {
                         picker.set_total_steps(total_steps);
                         picker.set_context_category(context_cat);
                         picker.set_query("".into());
+                        picker.set_filter_favorites(false);
                         // Auto-select the filter for the suggested next category.
                         // -1 keeps the "All" view (empty pipeline or unknown context).
                         picker.set_filter_category(suggested_filter);
                         picker.set_selected_id(-1);
                         // Apply the filter immediately so the list matches the pre-selected chip.
-                        Self::apply_picker_filter(&ui, "", suggested_filter);
+                        manager.apply_picker_filter(&ui, "", suggested_filter, false);
                         ui.global::<GlobalAppState>()
                             .set_active_dialog(DialogType::CommandSelectionDialog);
                     }
@@ -630,8 +639,10 @@ impl PipelinesController {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
-                    let filter_cat = ui.global::<CommandPickerState>().get_filter_category();
-                    Self::apply_picker_filter(&ui, query.as_str(), filter_cat);
+                    let picker = ui.global::<CommandPickerState>();
+                    let filter_cat = picker.get_filter_category();
+                    let filter_favorites = picker.get_filter_favorites();
+                    manager.apply_picker_filter(&ui, query.as_str(), filter_cat, filter_favorites);
                 });
 
             // Picker: select - update detail pane
@@ -641,6 +652,18 @@ impl PipelinesController {
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
+                    if command_id < 0 {
+                        // Pipeline template entry.
+                        let templates = manager.pipeline_templates.lock().expect("Poisoned");
+                        let idx = (-command_id - 1) as usize;
+                        if let Some(t) = templates.get(idx) {
+                            let detail = template_to_command_def(idx, t);
+                            let picker = ui.global::<CommandPickerState>();
+                            picker.set_detail(detail);
+                            picker.set_has_detail(true);
+                        }
+                        return;
+                    }
                     let metas = all_command_meta();
                     if let Some(m) = metas.iter().find(|m| m.id == command_id) {
                         let cat = match m.category {
@@ -673,16 +696,33 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<CommandPickerState>()
                 .on_confirm(move |command_id| {
-                    let Some(cmd) = default_command(command_id) else {
-                        warn!("picker confirm: unknown command id {}", command_id);
-                        return;
-                    };
                     let Some(ui) = manager.ui.upgrade() else {
                         return;
                     };
                     let picker = ui.global::<CommandPickerState>();
                     let pipeline_id = picker.get_pipeline_id() as u32;
                     let after_idx = picker.get_insert_after_idx();
+
+                    let new_steps: Vec<PipelineStepSettings> = if command_id < 0 {
+                        // Pipeline template entry: insert all of its steps.
+                        let templates = manager.pipeline_templates.lock().expect("Poisoned");
+                        let idx = (-command_id - 1) as usize;
+                        let Some(template) = templates.get(idx) else {
+                            warn!("picker confirm: unknown template id {}", command_id);
+                            return;
+                        };
+                        template.pipeline_steps.clone()
+                    } else {
+                        let Some(cmd) = default_command(command_id) else {
+                            warn!("picker confirm: unknown command id {}", command_id);
+                            return;
+                        };
+                        vec![PipelineStepSettings {
+                            enabled: true,
+                            command: cmd,
+                        }]
+                    };
+
                     {
                         let mut project = manager.app_state.get_project_write();
                         if let Some(pipeline) =
@@ -693,13 +733,7 @@ impl PipelinesController {
                             } else {
                                 ((after_idx as usize) + 1).min(pipeline.steps.len())
                             };
-                            pipeline.steps.insert(
-                                insert_at,
-                                PipelineStepSettings {
-                                    enabled: true,
-                                    command: cmd,
-                                },
-                            );
+                            pipeline.steps.splice(insert_at..insert_at, new_steps);
                         }
                     }
                     ui.global::<GlobalAppState>()
@@ -1160,7 +1194,13 @@ impl PipelinesController {
         }
     }
 
-    fn apply_picker_filter(ui: &AppWindow, query: &str, filter_cat: i32) {
+    fn apply_picker_filter(
+        self: &Arc<Self>,
+        ui: &AppWindow,
+        query: &str,
+        filter_cat: i32,
+        filter_favorites: bool,
+    ) {
         let q = query.to_ascii_lowercase();
         let metas = all_command_meta();
 
@@ -1242,7 +1282,25 @@ impl PipelinesController {
             })
             .map(|m| make(m, StepCategory::Classify))
             .collect();
-        let total = (pre.len() + seg.len() + obj.len() + mea.len() + cls.len()) as i32;
+        let templates_lock = self.pipeline_templates.lock().expect("Poisoned");
+        let templates: Vec<CommandDef> = templates_lock
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                q.is_empty()
+                    || t.meta.name.to_ascii_lowercase().contains(&q)
+                    || t.meta.short_description.to_ascii_lowercase().contains(&q)
+            })
+            .map(|(idx, t)| template_to_command_def(idx, t))
+            .collect();
+        drop(templates_lock);
+        let cf = templates.len() as i32;
+
+        let total = if filter_favorites {
+            cf
+        } else {
+            (pre.len() + seg.len() + obj.len() + mea.len() + cls.len()) as i32
+        };
         let (cp, cs, co, cm, cc) = (
             pre.len() as i32,
             seg.len() as i32,
@@ -1256,12 +1314,23 @@ impl PipelinesController {
         picker.set_shown_object(ModelRc::new(VecModel::from(obj)));
         picker.set_shown_measure(ModelRc::new(VecModel::from(mea)));
         picker.set_shown_classify(ModelRc::new(VecModel::from(cls)));
+        picker.set_shown_templates(ModelRc::new(VecModel::from(templates)));
         picker.set_total_shown(total);
         picker.set_cat_count_pre(cp);
         picker.set_cat_count_seg(cs);
         picker.set_cat_count_obj(co);
         picker.set_cat_count_mea(cm);
         picker.set_cat_count_cls(cc);
+        picker.set_cat_count_fav(cf);
+    }
+
+    /// Reloads pipeline templates from the user and app templates folders.
+    fn reload_pipeline_templates(self: &Arc<Self>) {
+        let templates: Vec<PipelineTemplate> = load_pipeline_templates()
+            .into_iter()
+            .map(|(_path, template)| template)
+            .collect();
+        *self.pipeline_templates.lock().expect("Poisoned") = templates;
     }
 
     fn sync_commands_to_selection_dialog_slint(self: &Arc<Self>) {
@@ -1610,5 +1679,39 @@ impl PipelinesController {
 
         self.template_controller
             .start_pipeline_template_save(pipeline_id, name);
+    }
+}
+
+/// Builds the `CommandDef` shown in the command picker's "Templates" section
+/// for a loaded `PipelineTemplate`.
+///
+/// Picker ids for templates are encoded as negative numbers (`-(idx + 1)`)
+/// so they can't collide with the non-negative built-in command ids returned
+/// by [`all_command_meta`].
+fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDef {
+    let category = template
+        .pipeline_steps
+        .first()
+        .map(|s| match s.command.category() {
+            CommandCategory::Preprocess => StepCategory::Preprocess,
+            CommandCategory::Segment => StepCategory::Segment,
+            CommandCategory::Object => StepCategory::Object,
+            CommandCategory::Measure => StepCategory::Measure,
+            CommandCategory::Classify => StepCategory::Classify,
+        })
+        .unwrap_or(StepCategory::Preprocess);
+
+    CommandDef {
+        id: -(idx as i32) - 1,
+        name: template.meta.name.clone().into(),
+        summary: template.meta.short_description.clone().into(),
+        description: template.meta.description.clone().into(),
+        category,
+        icon_glyph: "★".into(),
+        keywords: template.meta.name.to_ascii_lowercase().into(),
+        source: "template".into(),
+        favorite: false,
+        recent: false,
+        default_params: ModelRc::default(),
     }
 }
