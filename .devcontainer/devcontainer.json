@@ -1,6 +1,6 @@
 {
 "name": "evanalyzer",
-    "dockerFile": "joda001/evanalyzer-toolchain:0.1.5",
+    "image": "joda001/evanalyzer-toolchain:0.1.5",
     "runArgs": [
         "--privileged",
         "--network=host",

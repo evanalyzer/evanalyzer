@@ -12,7 +12,7 @@
     },
     "metadata": {
       "description": "Descriptive information about the project (name, version, etc.).",
-      "$ref": "#/$defs/ExperimentMetadata"
+      "$ref": "#/$defs/MetaData"
     },
     "pipelines": {
       "description": "Pipelines to execute",
@@ -510,33 +510,6 @@
         "saturatedPixels",
         "normalize",
         "equalizeHistogram"
-      ]
-    },
-    "ExperimentMetadata": {
-      "type": "object",
-      "properties": {
-        "firstName": {
-          "type": "string"
-        },
-        "lastName": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "notes": {
-          "type": "string"
-        },
-        "organization": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "firstName",
-        "lastName",
-        "organization",
-        "name",
-        "notes"
       ]
     },
     "ExtractRoisSettings": {
@@ -1185,6 +1158,48 @@
             "PROJECT_CACHE"
           ]
         }
+      ]
+    },
+    "MetaData": {
+      "type": "object",
+      "properties": {
+        "authorFirstName": {
+          "description": "Author first name",
+          "type": "string"
+        },
+        "authorLastName": {
+          "description": "Author last name",
+          "type": "string"
+        },
+        "authorOrganization": {
+          "description": "Author organization",
+          "type": "string"
+        },
+        "creationTime": {
+          "description": "Creation time",
+          "type": "string"
+        },
+        "description": {
+          "description": "A long detailed description of the module",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the module",
+          "type": "string"
+        },
+        "shortDescription": {
+          "description": "A short one line description of the module",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "shortDescription",
+        "description",
+        "authorFirstName",
+        "authorLastName",
+        "authorOrganization",
+        "creationTime"
       ]
     },
     "MorphologicalCommandSettings": {

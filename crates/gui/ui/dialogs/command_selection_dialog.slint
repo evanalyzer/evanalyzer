@@ -835,18 +835,18 @@ export component CommandSelectionDialog inherits Rectangle {
                         background: Theme.border-soft;
                     }
 
-                    FilterChip {
-                        label: "Recents";
-                        count: cat-count-rec;
-                        tinted: false;
-                        active: filter-recents;
-                        visible: false;
-                        clicked => {
-                            root.filter-recents = !filter-recents;
-                            root.filter-favorites = false;
-                            root.filter-category = -1;
-                        }
-                    }
+                    // FilterChip {
+                   //     label: "Recents";
+                   //     count: cat-count-rec;
+                   //     tinted: false;
+                   //     active: filter-recents;
+                   //     visible: false;
+                   //     clicked => {
+                   //         root.filter-recents = !filter-recents;
+                   //         root.filter-favorites = false;
+                   //         root.filter-category = -1;
+                   //     }
+                   // }
 
                     FilterChip {
                         label: "★ Templates";

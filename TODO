@@ -1,15 +1,16 @@
 ## Editor
 
-- [ ] Force user that Waterhed must be after connected component
-- [ ] Fix watershed algorithm which is not working yet
-- [ ] Allow to store and open project templates
-- [ ] "old" or non used objects in the respective pipelines should not be displayed.
-- [ ] channel should change with pipeline automatically
+- [ ] feat: Force user that Waterhed must be after connected component
+- [ ] fet: Allow to store and open project templates
+- [ ] feat: "old" or non used objects in the respective pipelines should not be displayed.
+- [ ] feat: channel should change with pipeline automatically
 - [ ] fix: Cy5 displayed in yellow
+- [ ] fix:Fix watershed algorithm which is not working yet
+- [ ] feat: Pipeline templates
+- [ ] feat: Project templates
 
 
 
 ## Results
 
-- [ ] When clicking on a ROI in the results paint the bounding box of this ROI in the correct image.
 - [ ] Export R
