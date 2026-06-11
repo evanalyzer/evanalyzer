@@ -5,6 +5,7 @@ use crate::modules::plate_settings::PlateSettings;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[allow(unused)]
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineTemplate {
@@ -15,6 +16,7 @@ pub struct PipelineTemplate {
     pub pipeline_steps: Vec<PipelineStepSettings>,
 }
 
+#[allow(unused)]
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectTemplate {
