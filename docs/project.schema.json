@@ -12,7 +12,7 @@
     },
     "metadata": {
       "description": "Descriptive information about the project (name, version, etc.).",
-      "$ref": "#/$defs/ExperimantMetadata"
+      "$ref": "#/$defs/MetaData"
     },
     "pipelines": {
       "description": "Pipelines to execute",
@@ -199,6 +199,21 @@
         "measure"
       ]
     },
+    "ClassificationClassifyRoisClassifyMatchHandlingSettings": {
+      "type": "string",
+      "enum": [
+        "ADD_OUTPUT_CLASS_IF_MATCH",
+        "ADD_OUTPUT_CLASS_IF_NOT_MATCH",
+        "REMOVE_INPUT_CLASS_IF_MATCH",
+        "REMOVE_INPUT_CLASS_IF_NOT_MATCH",
+        "REMOVE_OUTPUT_CLASS_IF_MATCH",
+        "REMOVE_OUTPUT_CLASS_IF_NOT_MATCH",
+        "REMOVE_ALL_CLASSES_IF_MATCH",
+        "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+        "RECLASSIFY_IF_MATCH",
+        "RECLASSIFY_IF_NOT_MATCH"
+      ]
+    },
     "ClassificationSettings": {
       "type": "object",
       "properties": {
@@ -222,10 +237,18 @@
           "type": "boolean",
           "default": true
         },
-        "intensityUnit": {
-          "description": "Unit used for the intensity value.\n\n bit: 0 - 255/65535\n %: 0 - 100.0\n rel: 0 - 1.0",
-          "$ref": "#/$defs/PixelUnits",
-          "default": "bit"
+        "inputClasses": {
+          "description": "Restrict classification to objects that already carry one of these classes\n\n Only ROIs that have been assigned at least one of the listed classes by a prior\n pipeline step will be evaluated against the morphological and intensity criteria below.\n Leave empty to apply the criteria to every object regardless of its current class.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "matchHandling": {
+          "description": "What to do with object class labels after criteria evaluation\n\n Controls whether the output class is added or existing classes are removed,\n and whether the action is triggered on a criteria **match** or a **non-match**:\n\n - **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n - **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.",
+          "$ref": "#/$defs/ClassificationClassifyRoisClassifyMatchHandlingSettings",
+          "default": "REMOVE_ALL_CLASSES_IF_NOT_MATCH"
         },
         "maxArea": {
           "description": "Maximum area size\n\n Maximum area size of the object in selected unit (px^2 or nm^2).",
@@ -265,14 +288,6 @@
           "format": "float",
           "default": 2147483648.0,
           "maximum": 2147483600,
-          "minimum": 0
-        },
-        "maxMeanIntensity": {
-          "description": "The maximum average intensity an object is allowed to have in the selected image channel",
-          "type": "number",
-          "format": "float",
-          "default": 65535.0,
-          "maximum": 65535,
           "minimum": 0
         },
         "maxSolidity": {
@@ -323,14 +338,6 @@
           "maximum": 2147483600,
           "minimum": 0
         },
-        "minMeanIntensity": {
-          "description": "The minimum average intensity an object must have in the selected image channel",
-          "type": "number",
-          "format": "float",
-          "default": 0.0,
-          "maximum": 65535,
-          "minimum": 0
-        },
         "minSolidity": {
           "description": "Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\n Solidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\n It compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\n often visualized as a rubber band stretched around the shape).\n\n Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\n Solidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.",
           "type": "number",
@@ -338,14 +345,6 @@
           "default": 0.0,
           "maximum": 1,
           "minimum": 0
-        },
-        "originClass": {
-          "description": "Apply only to objects with this given class",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ObjectClass"
-          }
         },
         "originSegmentation": {
           "description": "Apply only to objects with this given segmentation class\n\n The segmentation class value is assigned to each pixel in the image\n after a Threshold, Pixel classifier or AI classifier.\n If no seg class is selected the criteria are applied to all objects.",
@@ -355,15 +354,15 @@
             "$ref": "#/$defs/SegmentationClass"
           }
         },
+        "outputClass": {
+          "description": "Class label assigned to (or removed from) objects by the chosen operation\n\n Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.\n Has no effect when the selected operation only manipulates input classes or clears all classes.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
         "sizeUnit": {
           "description": "Unit to use for roi extraction",
           "$ref": "#/$defs/SizeUnits",
           "default": "nm"
-        },
-        "targetClass": {
-          "description": "Target class for objects matching the chosen criteria.\n\n Objects with metrics matching the chosen criteria are labeled with this additional class.",
-          "$ref": "#/$defs/ObjectClass",
-          "default": "Unset"
         }
       }
     },
@@ -513,33 +512,6 @@
         "equalizeHistogram"
       ]
     },
-    "ExperimantMetadata": {
-      "type": "object",
-      "properties": {
-        "firstName": {
-          "type": "string"
-        },
-        "lastName": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "notes": {
-          "type": "string"
-        },
-        "organization": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "firstName",
-        "lastName",
-        "organization",
-        "name",
-        "notes"
-      ]
-    },
     "ExtractRoisSettings": {
       "description": "Represents a bounded region of interest extracted from a labeled image.\n A command to extract spatial statistics and bounding boxes from labeled objects.",
       "type": "object",
@@ -560,17 +532,17 @@
         {
           "description": "Computes the determinant: $det(H) = I_{xx}I_{yy} - I_{xy}^2$.\n\nHigh values typically indicate \"blob-like\" structures or corners.",
           "type": "string",
-          "const": "determinant"
+          "const": "DETERMINANT"
         },
         {
           "description": "Extracts the first (larger) eigenvalue ($\\lambda_1$).\n\nUseful for detecting the maximum local curvature, identifying\nthe principal axis of a ridge.",
           "type": "string",
-          "const": "eigenvaluesX"
+          "const": "EIGENVALUES_X"
         },
         {
           "description": "Extracts the second (smaller) eigenvalue ($\\lambda_2$).\n\nHighlights secondary curvature; when both $\\lambda_1$ and $\\lambda_2$\nare large, it indicates a blob or interest point.",
           "type": "string",
-          "const": "eigenvaluesY"
+          "const": "EIGENVALUES_Y"
         }
       ]
     },
@@ -580,12 +552,12 @@
         {
           "description": "Parameters are calculated based on image statistics (e.g., histogram analysis).",
           "type": "string",
-          "const": "automatic"
+          "const": "AUTOMATIC"
         },
         {
           "description": "Parameters are provided explicitly by the user.",
           "type": "string",
-          "const": "manual"
+          "const": "MANUAL"
         }
       ]
     },
@@ -595,35 +567,35 @@
         {
           "description": "Selects the middle value. Excellent for removing salt-and-pepper noise\nwhile preserving sharp edges.",
           "type": "string",
-          "const": "median"
+          "const": "MEDIAN"
         },
         {
           "description": "Selects the lowest intensity (Erosion). Shrinks bright regions and\nexpands dark regions.",
           "type": "string",
-          "const": "min"
+          "const": "MIN"
         },
         {
           "description": "Selects the highest intensity (Dilation). Expands bright regions and\nshrinks dark regions.",
           "type": "string",
-          "const": "max"
+          "const": "MAX"
         },
         {
           "description": "Computes the average value. Acts as a box blur, smoothing the image\nbut blurring edges.",
           "type": "string",
-          "const": "mean"
+          "const": "MEAN"
         },
         {
           "description": "Replaces a pixel only if it deviates from the neighborhood median\nby more than the specified threshold.",
           "type": "object",
           "properties": {
-            "outliers": {
+            "OUTLIERS": {
               "type": "number",
               "format": "float"
             }
           },
           "additionalProperties": false,
           "required": [
-            "outliers"
+            "OUTLIERS"
           ]
         }
       ]
@@ -634,12 +606,12 @@
         {
           "description": "A spherical cap.\n\nThis is the traditional ImageJ algorithm. Best for images with\ndistinct, round features like cells or particles.",
           "type": "string",
-          "const": "ball"
+          "const": "BALL"
         },
         {
           "description": "A sliding parabolic surface.\n\nMathematically smoother at the edges than the Ball, often\nresulting in fewer artifacts on complex gradients.",
           "type": "string",
-          "const": "paraboloid"
+          "const": "PARABOLOID"
         }
       ]
     },
@@ -649,17 +621,17 @@
         {
           "description": "Extracts the first (primary) eigenvalue.\n\nRepresents the local image intensity variation in the direction\nperpendicular to the edge. Useful for edge detection.",
           "type": "string",
-          "const": "eigenvaluesX"
+          "const": "EIGENVALUES_X"
         },
         {
           "description": "Extracts the second (secondary) eigenvalue.\n\nRepresents the local image intensity variation along the edge.\nHigh values typically indicate corners or noise.",
           "type": "string",
-          "const": "eigenvaluesY"
+          "const": "EIGENVALUES_Y"
         },
         {
           "description": "Computes the local anisotropy (coherence) of the image.\n\nMeasures how strongly the local neighborhood is oriented.\nRanges from 0 (isotropic/noise) to 1 (perfectly oriented/straight edge).",
           "type": "string",
-          "const": "coherence"
+          "const": "COHERENCE"
         }
       ]
     },
@@ -742,9 +714,9 @@
     "GroupingMode": {
       "type": "string",
       "enum": [
-        "noGrouping",
-        "folderName",
-        "fileName"
+        "NO_GROUPING",
+        "FOLDER_NAME",
+        "FILE_NAME"
       ]
     },
     "HessianSettings": {
@@ -836,32 +808,32 @@
         {
           "type": "string",
           "enum": [
-            "Scratchpad"
+            "SCRATCHPAD"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "Memory": {
+            "MEMORY": {
               "$ref": "#/$defs/MemoryId"
             }
           },
           "additionalProperties": false,
           "required": [
-            "Memory"
+            "MEMORY"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "Channel": {
+            "CHANNEL": {
               "type": "integer",
               "format": "int32"
             }
           },
           "additionalProperties": false,
           "required": [
-            "Channel"
+            "CHANNEL"
           ]
         }
       ]
@@ -969,30 +941,20 @@
     "IntensitySettings": {
       "type": "object",
       "properties": {
+        "avgIntensity": {
+          "description": "Average pixel intensity in the ROI",
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
         "maxIntensity": {
           "description": "Maximum pixel intensity in the ROI",
           "type": "number",
           "format": "float"
         },
-        "medianIntensity": {
-          "description": "Median pixel intensity in the ROI",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "float"
-        },
         "minIntensity": {
           "description": "Minimum pixel intensity in the ROI",
           "type": "number",
-          "format": "float"
-        },
-        "stdDev": {
-          "description": "Standard deviation of pixel intensities",
-          "type": [
-            "number",
-            "null"
-          ],
           "format": "float"
         },
         "sumIntensity": {
@@ -1053,12 +1015,12 @@
         {
           "description": "Captures the current image from the pipeline and writes it to the cache.\n\nUsed for \"checkpointing\" results at a specific stage in the pipeline\nfor later comparison or retrieval.",
           "type": "string",
-          "const": "store"
+          "const": "STORE"
         },
         {
           "description": "Retrieves a previously stored image from the cache and injects it\ninto the current pipeline context.\n\nThis effectively replaces the current working image with the cached version.",
           "type": "string",
-          "const": "load"
+          "const": "LOAD"
         }
       ]
     },
@@ -1068,88 +1030,88 @@
         {
           "description": "No operation; typically used as a placeholder.",
           "type": "string",
-          "const": "none"
+          "const": "NONE"
         },
         {
           "description": "Unary operation: Negates the intensities of the primary image.",
           "type": "string",
-          "const": "invert"
+          "const": "INVERT"
         },
         {
           "description": "Arithmetic addition: `A + B`. (Clamped to the maximum pixel value).",
           "type": "string",
-          "const": "add"
+          "const": "ADD"
         },
         {
           "description": "Arithmetic subtraction: `A - B`. (Clamped to zero).",
           "type": "string",
-          "const": "subtract"
+          "const": "SUBTRACT"
         },
         {
           "description": "Arithmetic multiplication: `A * B`.",
           "type": "string",
-          "const": "multiply"
+          "const": "MULTIPLY"
         },
         {
           "description": "Arithmetic division: `A / B`.",
           "type": "string",
-          "const": "divide"
+          "const": "DIVIDE"
         },
         {
           "description": "Bitwise AND operation.",
           "type": "string",
-          "const": "aND"
+          "const": "AND"
         },
         {
           "description": "Bitwise OR operation.",
           "type": "string",
-          "const": "oR"
+          "const": "OR"
         },
         {
           "description": "Bitwise XOR operation.",
           "type": "string",
-          "const": "xOR"
+          "const": "XOR"
         },
         {
           "description": "Per-pixel minimum: `min(A, B)`. (Darkest Pixel).",
           "type": "string",
-          "const": "mIN"
+          "const": "MIN"
         },
         {
           "description": "Per-pixel maximum: `max(A, B)`. (Brightest Pixel).",
           "type": "string",
-          "const": "mAX"
+          "const": "MAX"
         },
         {
           "description": "Arithmetic mean: `(A + B) / 2`.",
           "type": "string",
-          "const": "average"
+          "const": "AVERAGE"
         },
         {
           "description": "Absolute difference: `|A - B|`. Useful for change detection.",
           "type": "string",
-          "const": "differenceType"
+          "const": "DIFFERENCE_TYPE"
         }
       ]
     },
     "MathSaveImageImageSourceSettings": {
       "type": "string",
       "enum": [
-        "image",
-        "instanceMap",
-        "segmentationMask"
+        "IMAGE",
+        "INSTANCE_MAP",
+        "SEGMENTATION_MASK"
       ]
     },
     "MeasurementStatistics": {
       "type": "string",
       "enum": [
-        "val",
-        "avg",
-        "min",
-        "max",
-        "stdev",
-        "median",
-        "sum"
+        "VAL",
+        "AVG",
+        "MIN",
+        "MAX",
+        "STDEV",
+        "MEDIAN",
+        "SUM"
       ]
     },
     "MedianSubtractSettings": {
@@ -1171,7 +1133,7 @@
         {
           "type": "object",
           "properties": {
-            "PipelineContext": {
+            "PIPELINE_CONTEXT": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -1179,13 +1141,13 @@
           },
           "additionalProperties": false,
           "required": [
-            "PipelineContext"
+            "PIPELINE_CONTEXT"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "ProjectCache": {
+            "PROJECT_CACHE": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -1193,9 +1155,52 @@
           },
           "additionalProperties": false,
           "required": [
-            "ProjectCache"
+            "PROJECT_CACHE"
           ]
         }
+      ]
+    },
+    "MetaData": {
+      "type": "object",
+      "properties": {
+        "authorFirstName": {
+          "description": "Author first name",
+          "type": "string"
+        },
+        "authorLastName": {
+          "description": "Author last name",
+          "type": "string"
+        },
+        "authorOrganization": {
+          "description": "Author organization",
+          "type": "string"
+        },
+        "creationTime": {
+          "description": "Creation time",
+          "type": "string",
+          "format": "date-time"
+        },
+        "description": {
+          "description": "A long detailed description of the module",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the module",
+          "type": "string"
+        },
+        "shortDescription": {
+          "description": "A short one line description of the module",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "shortDescription",
+        "description",
+        "authorFirstName",
+        "authorLastName",
+        "authorOrganization",
+        "creationTime"
       ]
     },
     "MorphologicalCommandSettings": {
@@ -1234,17 +1239,17 @@
         {
           "description": "A square/rectangular kernel. Dilates in all directions equally (8-connectivity).",
           "type": "string",
-          "const": "box"
+          "const": "BOX"
         },
         {
           "description": "A rounded kernel. Best for preserving the natural, circular shape of objects.",
           "type": "string",
-          "const": "ellipse"
+          "const": "ELLIPSE"
         },
         {
           "description": "A cross-shaped kernel. Only considers horizontal and vertical neighbors (4-connectivity).",
           "type": "string",
-          "const": "cross"
+          "const": "CROSS"
         }
       ]
     },
@@ -1254,22 +1259,22 @@
         {
           "description": "Expands the bright regions of an image. Useful for filling small holes.",
           "type": "string",
-          "const": "dilate"
+          "const": "DILATE"
         },
         {
           "description": "Shrinks the bright regions of an image. Useful for removing small noise.",
           "type": "string",
-          "const": "erode"
+          "const": "ERODE"
         },
         {
           "description": "An erosion followed by a dilation. Removes small bright spots (noise)\nwhile preserving the relative size of larger objects.",
           "type": "string",
-          "const": "open"
+          "const": "OPEN"
         },
         {
           "description": "A dilation followed by an erosion. Fills small dark gaps or cracks\nwithin bright objects.",
           "type": "string",
-          "const": "close"
+          "const": "CLOSE"
         }
       ]
     },
@@ -1278,13 +1283,13 @@
         {
           "type": "string",
           "enum": [
-            "Unset"
+            "UNSET"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "Valid": {
+            "VALID": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -1292,7 +1297,7 @@
           },
           "additionalProperties": false,
           "required": [
-            "Valid"
+            "VALID"
           ]
         }
       ]
@@ -1884,6 +1889,11 @@
             }
           ]
         },
+        "perimeter": {
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
         "segmentationClass": {
           "$ref": "#/$defs/SegmentationClass"
         },
@@ -1956,7 +1966,7 @@
         "ballType": {
           "description": "The geometric shape of the rolling structural element.",
           "$ref": "#/$defs/FiltersRollingBallBallTypeSettings",
-          "default": "ball"
+          "default": "BALL"
         },
         "preSmooth": {
           "type": "boolean",
@@ -2000,87 +2010,87 @@
         {
           "description": "No threshold applied; typically used for bypass logic.",
           "type": "string",
-          "const": "none"
+          "const": "NONE"
         },
         {
           "description": "Uses the user-provided `min_threshold` and `max_threshold` values directly.",
           "type": "string",
-          "const": "manual"
+          "const": "MANUAL"
         },
         {
           "description": "Li's Minimum Cross Entropy method. Effective for images with varying backgrounds.",
           "type": "string",
-          "const": "li"
+          "const": "LI"
         },
         {
           "description": "An iterative version of Kittler and Illingworth's minimum error thresholding.",
           "type": "string",
-          "const": "minError"
+          "const": "MIN_ERROR"
         },
         {
           "description": "Zack's algorithm. Geometric method best for skewed histograms with a single clear peak.",
           "type": "string",
-          "const": "triangle"
+          "const": "TRIANGLE"
         },
         {
           "description": "Tsai's method. Preserves the moments of the original image in the binary result.",
           "type": "string",
-          "const": "moments"
+          "const": "MOMENTS"
         },
         {
           "description": "Huang's fuzzy thresholding. Minimizes the measures of fuzziness.",
           "type": "string",
-          "const": "huang"
+          "const": "HUANG"
         },
         {
           "description": "Assumes a bimodal histogram and finds the average of two peaks.",
           "type": "string",
-          "const": "intermodes"
+          "const": "INTERMODES"
         },
         {
           "description": "Ridler-Calvard iterative clustering. Similar to Otsu but uses a different error metric.",
           "type": "string",
-          "const": "isoData"
+          "const": "ISO_DATA"
         },
         {
           "description": "Kapur's method. Uses the entropy of the histogram to find the threshold.",
           "type": "string",
-          "const": "maxEntropy"
+          "const": "MAX_ENTROPY"
         },
         {
           "description": "Uses the average intensity of all pixels as the threshold.",
           "type": "string",
-          "const": "mean"
+          "const": "MEAN"
         },
         {
           "description": "Pre-smooths the histogram until there are only two peaks; finds the minimum between them.",
           "type": "string",
-          "const": "minimum"
+          "const": "MINIMUM"
         },
         {
           "description": "Most common method. Minimizes intra-class variance (maximizes inter-class variance).",
           "type": "string",
-          "const": "otsu"
+          "const": "OTSU"
         },
         {
           "description": "Assumes a fixed percentage of pixels belong to the foreground.",
           "type": "string",
-          "const": "percentile"
+          "const": "PERCENTILE"
         },
         {
           "description": "Based on the Renyi entropy of the histogram; a generalization of MaxEntropy.",
           "type": "string",
-          "const": "renyiEntropy"
+          "const": "RENYI_ENTROPY"
         },
         {
           "description": "An extension of Kapur's method using a different coefficient for entropy.",
           "type": "string",
-          "const": "shanbhag"
+          "const": "SHANBHAG"
         },
         {
           "description": "Minimizes a cost function based on the discrepancy between two classes.",
           "type": "string",
-          "const": "yen"
+          "const": "YEN"
         }
       ]
     },
@@ -2187,8 +2197,8 @@
     "TStackHandling": {
       "type": "string",
       "enum": [
-        "singleStack",
-        "allStacks"
+        "SINGLE_STACK",
+        "ALL_STACKS"
       ]
     },
     "TStackSettings": {
@@ -2227,7 +2237,7 @@
         "method": {
           "description": "The algorithm to use (Manual or Automatic).",
           "$ref": "#/$defs/SegmentationThresholdThresholdMethodSettings",
-          "default": "none"
+          "default": "MANUAL"
         },
         "minThreshold": {
           "description": "The lower intensity bound. Used directly in `Manual` mode, or as a\n floor for auto-methods.",
@@ -2396,13 +2406,13 @@
     "ZStackHandling": {
       "type": "string",
       "enum": [
-        "singleStack",
-        "allStacks",
-        "maxIntensity",
-        "minIntensity",
-        "avgIntensity",
-        "sumIntensity",
-        "takeTheMiddle"
+        "SINGLE_STACK",
+        "ALL_STACKS",
+        "MAX_INTENSITY",
+        "MIN_INTENSITY",
+        "AVG_INTENSITY",
+        "SUM_INTENSITY",
+        "TAKE_THE_MIDDLE"
       ]
     },
     "ZStackSettings": {

@@ -6,12 +6,76 @@ import {
     ResultsTable,
     ResultsState,
     ResultsViewMode,
+    ResultsGroupBy,
     ResultsColumnDef,
     ResultsRow,
     FilterItem,
 } from "results_table.slint";
-export { ResultsState, ResultsViewMode, ResultsColumnDef, ResultsRow, FilterItem } from "results_table.slint";
+export { ResultsState, ResultsViewMode, ResultsGroupBy, ResultsColumnDef, ResultsRow, FilterItem } from "results_table.slint";
 
+
+// -- Radio-style option row (used in the group-by popup) ----------------------
+
+component GroupOptionRow inherits TouchArea {
+    in property <string> label;
+    in property <bool> selected: false;
+    // false = radio (single choice), true = checkbox (multi-select)
+    in property <bool> checkbox: false;
+    height: 26px;
+    mouse-cursor: pointer;
+
+    Rectangle {
+        background: root.has-hover ? Theme.raised : transparent;
+        animate background { duration: 80ms; }
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 6px;
+            spacing: 7px;
+            alignment: start;
+
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 13px;
+                    height: 13px;
+                    border-radius: root.checkbox ? 2px : 6.5px;
+                    border-width: 1.5px;
+                    border-color: root.selected ? Theme.accent : Theme.border;
+                    background: root.selected ? Theme.accent : transparent;
+
+                    // Checkbox tick
+                    if root.selected && root.checkbox: Image {
+                        source: @image-url("../icons/regular-black/check.svg");
+                        width: 9px;
+                        height: 9px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: white;
+                    }
+                    // Radio dot
+                    if root.selected && !root.checkbox: Rectangle {
+                        width: 5px;
+                        height: 5px;
+                        border-radius: 2.5px;
+                        background: white;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
+            Text {
+                text: root.label;
+                font-size: 11px;
+                font-family: Theme.font-mono;
+                color: root.selected ? Theme.text-dim : Theme.text-mute;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+}
 
 // -- Toolbar -------------------------------------------------------------------
 
@@ -266,6 +330,221 @@ component ResultsToolbar inherits Rectangle {
                                         font-weight: 500;
                                         vertical-alignment: center;
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // -- Group by (stack icon opens popup) ---------------------------------
+        group-btn := Rectangle {
+            width: 36px;
+            height: 36px;
+
+            ToolToggleButton {
+                icon: @image-url("../icons/regular-black/stack.svg");
+                checked: ResultsState.group_active;
+                clicked => {
+                    group-popup.show();
+                }
+            }
+
+            group-popup := PopupWindow {
+                x: 0px;
+                y: group-btn.height + 2px;
+                width: 250px;
+                height: 414px;
+                close-policy: no-auto-close;
+
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-md;
+                    drop-shadow-blur: 12px;
+                    drop-shadow-color: #00000036;
+                    drop-shadow-offset-y: 4px;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+
+                        // -- "Group by" section header ---------------------
+                        Rectangle {
+                            height: 26px;
+                            background: Theme.bg;
+                            Text {
+                                x: 8px;
+                                text: "Group by";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                font-weight: 600;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        GroupOptionRow {
+                            label: "None";
+                            selected: ResultsState.group_by == ResultsGroupBy.none;
+                            clicked => { ResultsState.group_by = ResultsGroupBy.none; }
+                        }
+                        GroupOptionRow {
+                            label: "Image name";
+                            selected: ResultsState.group_by == ResultsGroupBy.image;
+                            clicked => { ResultsState.group_by = ResultsGroupBy.image; }
+                        }
+                        GroupOptionRow {
+                            label: "Folder name";
+                            selected: ResultsState.group_by == ResultsGroupBy.folder;
+                            clicked => { ResultsState.group_by = ResultsGroupBy.folder; }
+                        }
+                        GroupOptionRow {
+                            label: "Regex on image name";
+                            selected: ResultsState.group_by == ResultsGroupBy.regex;
+                            clicked => { ResultsState.group_by = ResultsGroupBy.regex; }
+                        }
+
+                        // -- Regex pattern input ---------------------------
+                        Rectangle {
+                            height: 36px;
+                            background: Theme.bg;
+                            HorizontalLayout {
+                                padding: 4px;
+                                padding-left: 26px;
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 26px;
+                                    background: ResultsState.group_by == ResultsGroupBy.regex ? Theme.bg : Theme.panel;
+                                    border-radius: 3px;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    clip: true;
+                                    opacity: ResultsState.group_by == ResultsGroupBy.regex ? 1.0 : 0.5;
+
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 4px;
+
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+
+                                            regex-input := TextInput {
+                                                width: parent.width;
+                                                font-size: 11px;
+                                                font-family: Theme.font-mono;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                                enabled: ResultsState.group_by == ResultsGroupBy.regex;
+                                                text: ResultsState.group_regex;
+                                                edited => {
+                                                    ResultsState.group_regex = self.text;
+                                                }
+                                            }
+
+                                            if regex-input.text == "": Text {
+                                                x: 0px;
+                                                y: (parent.height - self.height) / 2;
+                                                text: "^([A-Z]\\d+)_";
+                                                font-size: 11px;
+                                                font-family: Theme.font-mono;
+                                                color: Theme.text-faint;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- "Aggregate" section header --------------------
+                        Rectangle {
+                            height: 26px;
+                            background: Theme.bg;
+                            Text {
+                                x: 8px;
+                                text: "Aggregate";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                font-weight: 600;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        HorizontalLayout {
+                            padding: 4px;
+                            spacing: 0px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                GroupOptionRow {
+                                    label: "Min";
+                                    checkbox: true;
+                                    selected: ResultsState.group_agg_min;
+                                    clicked => { ResultsState.group_agg_min = !ResultsState.group_agg_min; }
+                                }
+                                GroupOptionRow {
+                                    label: "Max";
+                                    checkbox: true;
+                                    selected: ResultsState.group_agg_max;
+                                    clicked => { ResultsState.group_agg_max = !ResultsState.group_agg_max; }
+                                }
+                                GroupOptionRow {
+                                    label: "Average";
+                                    checkbox: true;
+                                    selected: ResultsState.group_agg_avg;
+                                    clicked => { ResultsState.group_agg_avg = !ResultsState.group_agg_avg; }
+                                }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                GroupOptionRow {
+                                    label: "Median";
+                                    checkbox: true;
+                                    selected: ResultsState.group_agg_median;
+                                    clicked => { ResultsState.group_agg_median = !ResultsState.group_agg_median; }
+                                }
+                                GroupOptionRow {
+                                    label: "Std. dev.";
+                                    checkbox: true;
+                                    selected: ResultsState.group_agg_stdev;
+                                    clicked => { ResultsState.group_agg_stdev = !ResultsState.group_agg_stdev; }
+                                }
+                                GroupOptionRow {
+                                    label: "Sum";
+                                    checkbox: true;
+                                    selected: ResultsState.group_agg_sum;
+                                    clicked => { ResultsState.group_agg_sum = !ResultsState.group_agg_sum; }
+                                }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        // -- Apply button ----------------------------------
+                        apply-ta := TouchArea {
+                            height: 30px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.group_apply();
+                                group-popup.close();
+                            }
+
+                            Rectangle {
+                                background: apply-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+                                Text {
+                                    text: "Apply";
+                                    font-size: 11px;
+                                    font-family: Theme.font-sans;
+                                    color: Theme.accent;
+                                    font-weight: 500;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
                                 }
                             }
                         }

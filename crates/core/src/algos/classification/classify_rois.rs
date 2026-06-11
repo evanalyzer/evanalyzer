@@ -26,15 +26,32 @@ use evanalyzer_cfg::core_types::{
 use log::{debug, info, warn};
 use macros::CommandsMeta;
 
+#[derive(CommandsMeta)]
 pub enum ClassifyMatchHandling {
-    AddTargetClassIfMatch,
-    AddTargetClassIfNotMatch,
-    RemoveOriginClassIfMatch,
-    RemoveOriginClassIfNotMatch,
-    RemoveTargetClassIfMatch,
-    RemoveTargetClassIfNotMatch,
+    #[cmdsmeta(display_name = "Add tag on match")]
+    AddOutputClassIfMatch,
+    #[cmdsmeta(display_name = "Add tag on mismatch")]
+    AddOutputClassIfNotMatch,
+
+    #[cmdsmeta(display_name = "Remove class on match", visible = false)]
+    RemoveInputClassIfMatch,
+    #[cmdsmeta(display_name = "Remove class on mismatch", visible = false)]
+    RemoveInputClassIfNotMatch,
+
+    #[cmdsmeta(display_name = "Remove tag on match")]
+    RemoveOutputClassIfMatch,
+    #[cmdsmeta(display_name = "Remove tag on mismatch")]
+    RemoveOutputClassIfNotMatch,
+
+    #[cmdsmeta(display_name = "Remove ROIs matching criteria")]
     RemoveAllClassesIfMatch,
+    #[cmdsmeta(display_name = "Keep ROIs matching criteria")]
     RemoveAllClassesIfNotMatch,
+
+    #[cmdsmeta(display_name = "Reclassify on match")]
+    ReclassifyIfMatch,
+    #[cmdsmeta(display_name = "Reclassify on mismatch")]
+    ReclassifyIfNotMatch,
 }
 
 /// Classifies ROIs based on morphological and intensity features.
@@ -50,16 +67,36 @@ pub struct ClassifyRois {
     /// The segmentation class value is assigned to each pixel in the image
     /// after a Threshold, Pixel classifier or AI classifier.
     /// If no seg class is selected the criteria are applied to all objects.
+    #[cmdsmeta(visible = false)]
     pub origin_segmentation: Vec<SegmentationClass>,
 
-    /// Apply only to objects with this given class
-    pub origin_class: Vec<ObjectClass>,
-
-    /// Target class for objects matching the chosen criteria.
+    /// Restrict classification to objects that already carry one of these classes
     ///
-    /// Objects with metrics matching the chosen criteria are labeled with this additional class.
-    #[cmdsmeta(default = ObjectClass::Unset)]
-    pub target_class: ObjectClass,
+    /// Only ROIs that have been assigned at least one of the listed classes by a prior
+    /// pipeline step will be evaluated against the morphological and intensity criteria below.
+    /// Leave empty to apply the criteria to every object regardless of its current class.
+    #[cmdsmeta(display_name = "Input Classes")]
+    pub input_classes: Vec<ObjectClass>,
+
+    /// What to do with object class labels after criteria evaluation
+    ///
+    /// Controls whether the output class is added or existing classes are removed,
+    /// and whether the action is triggered on a criteria **match** or a **non-match**:
+    ///
+    /// - **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.
+    /// - **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.
+    /// - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
+    /// - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
+    /// - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
+    #[cmdsmeta(default = ClassifyMatchHandling::RemoveAllClassesIfNotMatch)]
+    pub match_handling: ClassifyMatchHandling,
+
+    /// Class label assigned to (or removed from) objects by the chosen operation
+    ///
+    /// Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
+    /// Has no effect when the selected operation only manipulates input classes or clears all classes.
+    #[cmdsmeta(default = ObjectClass::Unset, display_name = "Output Tag")]
+    pub output_class: ObjectClass,
 
     /// Unit to use for roi extraction
     #[cmdsmeta(
@@ -84,7 +121,7 @@ pub struct ClassifyRois {
     /// Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.
     /// A circle is the mathematically perfect shape for maximizing area while minimizing perimeter.
     /// It is calculated with `4*Pi*AreaSize / Perimeter^2`
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = true)]
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 1.0, step = 0.1, summary = false)]
     pub min_circularity: f32,
 
     /// Circularity range: 0 = elongated, 1 = perfect circle
@@ -136,22 +173,6 @@ pub struct ClassifyRois {
         summary = false
     )]
     pub max_aspect_ratio: f32,
-
-    /// Unit used for the intensity value.
-    ///
-    /// bit: 0 - 255/65535
-    /// %: 0 - 100.0
-    /// rel: 0 - 1.0
-    #[cmdsmeta(default = PixelUnits::Bit, min = 0.0, max = 65535.0, step = 1)]
-    pub intensity_unit: PixelUnits,
-
-    /// The minimum average intensity an object must have in the selected image channel
-    #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1)]
-    pub min_mean_intensity: f32,
-
-    /// The maximum average intensity an object is allowed to have in the selected image channel
-    #[cmdsmeta(default = 65535.0, min = 0.0, max = 65535.0, step = 1)]
-    pub max_mean_intensity: f32,
 
     /// Eccentricity: 0 = perfect circle, 1 = line
     ///
@@ -213,8 +234,6 @@ impl Default for ClassifyRois {
             max_solidity: 1.0,
             min_aspect_ratio: 0.0,
             max_aspect_ratio: 2147483648.0,
-            min_mean_intensity: 0.0,
-            max_mean_intensity: 65535.0,
             min_eccentricity: 0.0,
             max_eccentricity: 1.0,
             min_feret: 0.0,
@@ -222,9 +241,9 @@ impl Default for ClassifyRois {
             allow_edge_touching: true,
             size_unit: SizeUnits::NanoMeter,
             origin_segmentation: vec![],
-            intensity_unit: PixelUnits::Bit,
-            target_class: Unset,
-            origin_class: vec![],
+            output_class: Unset,
+            input_classes: vec![],
+            match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
         }
     }
 }
@@ -239,8 +258,69 @@ impl ImageAlgorithm for ClassifyRois {
 
         // Iterate through all ROIs in the cache
         for roi in cache.roi_cache.values_mut() {
-            if self.matches_criteria(roi, px_size) {
-                roi.add_object_class(self.target_class.clone());
+            // Skip ROIs that don't carry any of the required input classes
+            if !self.input_classes.is_empty() && !roi.has_object_classes(&self.input_classes) {
+                continue;
+            }
+
+            let matches = self.matches_criteria(roi, px_size);
+            match self.match_handling {
+                ClassifyMatchHandling::AddOutputClassIfMatch => {
+                    if matches {
+                        roi.add_object_class(self.output_class.clone());
+                    }
+                }
+                ClassifyMatchHandling::AddOutputClassIfNotMatch => {
+                    if !matches {
+                        roi.add_object_class(self.output_class.clone());
+                    }
+                }
+                ClassifyMatchHandling::RemoveInputClassIfMatch => {
+                    if matches {
+                        for class in &self.input_classes {
+                            roi.remove_object_class(class);
+                        }
+                    }
+                }
+                ClassifyMatchHandling::RemoveInputClassIfNotMatch => {
+                    if !matches {
+                        for class in &self.input_classes {
+                            roi.remove_object_class(class);
+                        }
+                    }
+                }
+                ClassifyMatchHandling::RemoveOutputClassIfMatch => {
+                    if matches {
+                        roi.remove_object_class(&self.output_class);
+                    }
+                }
+                ClassifyMatchHandling::RemoveOutputClassIfNotMatch => {
+                    if !matches {
+                        roi.remove_object_class(&self.output_class);
+                    }
+                }
+                ClassifyMatchHandling::RemoveAllClassesIfMatch => {
+                    if matches {
+                        roi.object_class.clear();
+                    }
+                }
+                ClassifyMatchHandling::RemoveAllClassesIfNotMatch => {
+                    if !matches {
+                        roi.object_class.clear();
+                    }
+                }
+                ClassifyMatchHandling::ReclassifyIfMatch => {
+                    if matches {
+                        roi.object_class.clear();
+                        roi.add_object_class(self.output_class.clone());
+                    }
+                }
+                ClassifyMatchHandling::ReclassifyIfNotMatch => {
+                    if !matches {
+                        roi.object_class.clear();
+                        roi.add_object_class(self.output_class.clone());
+                    }
+                }
             }
         }
 
@@ -267,47 +347,29 @@ impl ClassifyRois {
 
         // Check area
         if roi.area < min_area_px || roi.area > max_area_px {
-            debug!(
-                "ROI {} failed area check: {} (range: {}-{})",
-                roi.id, roi.area, min_area_px, max_area_px
-            );
             return false;
         }
 
         // Check edge touching
         if roi.touches_edge && !self.allow_edge_touching {
-            debug!("ROI {} touches image edge", roi.id);
             return false;
         }
 
         // Check circularity
-        let _perimeter = roi.get_perimeter();
         let circularity = roi.circularity();
         if circularity < self.min_circularity || circularity > self.max_circularity {
-            debug!(
-                "ROI {} failed circularity check: {:.4} (range: {:.4}-{:.4})",
-                roi.id, circularity, self.min_circularity, self.max_circularity
-            );
             return false;
         }
 
         // Check solidity
         let solidity = roi.get_solidity();
         if solidity < self.min_solidity || solidity > self.max_solidity {
-            debug!(
-                "ROI {} failed solidity check: {:.4} (range: {:.4}-{:.4})",
-                roi.id, solidity, self.min_solidity, self.max_solidity
-            );
             return false;
         }
 
         // Check aspect ratio
         let aspect_ratio = roi.get_aspect_ratio();
         if aspect_ratio < self.min_aspect_ratio || aspect_ratio > self.max_aspect_ratio {
-            debug!(
-                "ROI {} failed aspect ratio check: {:.4} (range: {:.4}-{:.4})",
-                roi.id, aspect_ratio, self.min_aspect_ratio, self.max_aspect_ratio
-            );
             return false;
         }
 
@@ -316,37 +378,13 @@ impl ClassifyRois {
         if ellipse.eccentricity < self.min_eccentricity
             || ellipse.eccentricity > self.max_eccentricity
         {
-            debug!(
-                "ROI {} failed eccentricity check: {:.4} (range: {:.4}-{:.4})",
-                roi.id, ellipse.eccentricity, self.min_eccentricity, self.max_eccentricity
-            );
             return false;
         }
 
         // Check Feret diameter
         let feret = roi.get_feret_diameter();
         if feret < self.min_feret || feret > self.max_feret {
-            debug!(
-                "ROI {} failed Feret diameter check: {:.2} (range: {:.2}-{:.2})",
-                roi.id, feret, self.min_feret, self.max_feret
-            );
             return false;
-        }
-
-        // Check mean intensity (if available)
-        if !roi.intensities.is_empty() {
-            if let Some((_, intensity)) = roi.intensities.iter().next() {
-                let mean_intensity = intensity.sum_intensity / roi.area as f64;
-                if (mean_intensity as f32) < self.min_mean_intensity
-                    || (mean_intensity as f32) > self.max_mean_intensity
-                {
-                    debug!(
-                        "ROI {} failed intensity check: {:.2} (range: {:.2}-{:.2})",
-                        roi.id, mean_intensity, self.min_mean_intensity, self.max_mean_intensity
-                    );
-                    return false;
-                }
-            }
         }
 
         true
@@ -365,12 +403,5 @@ mod tests {
         assert_eq!(criteria.min_area, 0.0);
         assert_eq!(criteria.max_area, 2147483600.0);
         assert!(criteria.allow_edge_touching);
-    }
-
-    #[test]
-    fn test_classifier_creation() {
-        let class = ObjectClass::default();
-        let classifier = ClassifyRois::default();
-        assert_eq!(classifier.target_class, class);
     }
 }

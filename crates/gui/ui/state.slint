@@ -1,7 +1,7 @@
 //
 // Global app state
 //
-export enum DialogType { none, about, missing_images, project_settings, classification_confirm_delete,classification_confirm_auto_add_dialog, classification_edit_class_dialog, roi_confirm_delete, command_selection_dialog, pipeline_edit, pipeline_delete_confirm, pipeline_running, preview_rendering, warning  }
+export enum DialogType { none, about, missing_images, project_settings, classification_confirm_delete,classification_confirm_auto_add_dialog, classification_edit_class_dialog, roi_confirm_delete, command_selection_dialog, pipeline_edit, pipeline_delete_confirm, pipeline_running, preview_rendering, warning, template_meta, project_template  }
 
 
 export global GlobalAppState {
@@ -71,17 +71,17 @@ export enum IntensityProjection {
     middle
 }
 
-export struct ChannelInfo { name: string, color: color, active: bool, idx: int}
+export struct ChannelInfo { name: string, color: color, active: bool, idx: int, emission_wave_length: float }
 
 export global ChannelState {
 
     in-out property <[ChannelInfo]> channels: [
-        { name: "CH0", color: #FF0000, active: true, idx: 0 },
-        { name: "CH1", color: #FF0000, active: true, idx: 1 },
-        { name: "CH2", color: #FF0000, active: true, idx: 2 },
-        { name: "CH3", color: #FF0000, active: true, idx: 3 },
-        { name: "CH4", color: #FF0000, active: true, idx: 4 },
-        { name: "CH5", color: #FF0000, active: true, idx: 5 },
+        { name: "CH0", color: #FF0000, active: true, idx: 0, emission_wave_length: 0 },
+        { name: "CH1", color: #FF0000, active: true, idx: 1, emission_wave_length: 0 },
+        { name: "CH2", color: #FF0000, active: true, idx: 2, emission_wave_length: 0 },
+        { name: "CH3", color: #FF0000, active: true, idx: 3, emission_wave_length: 0 },
+        { name: "CH4", color: #FF0000, active: true, idx: 4, emission_wave_length: 0 },
+        { name: "CH5", color: #FF0000, active: true, idx: 5, emission_wave_length: 0 },
     ];
 
     in-out property <int> selected_series: 0;

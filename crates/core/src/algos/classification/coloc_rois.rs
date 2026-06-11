@@ -15,7 +15,10 @@
 //! specified object classes, establishing relational links or creating new intersection
 //! regions as distinct ROIs based on configuration settings.
 //!
-use crate::{algos::ImageAlgorithm, roi::Roi};
+use crate::{
+    algos::ImageAlgorithm,
+    roi::{Roi, RoiInit},
+};
 use evanalyzer_cfg::core_types::{
     InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
 };
@@ -303,14 +306,14 @@ mod tests {
         let h = (y_max - y_min + 1) as usize;
         let area = w * h;
         let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
-        let mut roi = Roi {
+        let mut roi = Roi::new(RoiInit {
             id: ObjectId(id),
             bbox,
             mask_data,
             area,
             plane,
-            ..Roi::default()
-        };
+            ..Default::default()
+        });
         roi.add_object_class(class);
         roi
     }

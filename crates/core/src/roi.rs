@@ -16,10 +16,8 @@ pub struct Intensity {
     pub min_intensity: f32,
     /// Maximum pixel intensity in the ROI
     pub max_intensity: f32,
-    /// Median pixel intensity in the ROI
-    pub median_intensity: Option<f32>,
-    /// Standard deviation of pixel intensities
-    pub std_dev: Option<f32>,
+    /// Average pixel intensity in the ROI
+    pub avg_intensity: f32,
     /// All pixel values (used for computing median and std_dev)
     pub pixel_values: Vec<f32>,
 }
@@ -75,9 +73,58 @@ pub struct Roi {
 
     // Image plane information
     pub plane: ImagePlane,
+
+    // --- Precomputed geometry metrics ---
+    // Filled by `finalize_geometry()` at ROI creation time — which runs on the
+    // parallel extraction/segmentation workers — and read back through
+    // `get_perimeter()` / `get_ellipse()`. The perimeter is an O(bbox area)
+    // boundary walk; computing it here keeps it off the single-threaded DB writer,
+    // where a lazy computation would stall every other tile's insert. Both derive
+    // purely from the immutable mask geometry (mask_data, bbox, area, moments),
+    // which never changes after extraction, so the stored values stay valid for
+    // the ROI's lifetime. Default to 0 / empty until finalize_geometry runs.
+    //
+    // These are intentionally private (no `pub`): keeping them module-private makes
+    // a `Roi { .. }` struct literal illegal outside this module, which forces all
+    // external construction through [`Roi::new`] — the one path that is guaranteed
+    // to call [`finalize_geometry`](Self::finalize_geometry). Callers read them via
+    // `get_perimeter()` / `get_ellipse()`.
+    perimeter: f32,
+    ellipse: FittingEllipse,
 }
 
+/// Caller-settable fields for building a [`Roi`] via [`Roi::new`].
+///
+/// Mirrors every field of [`Roi`] except the derived geometry metrics
+/// (`perimeter`, `ellipse`), which [`Roi::new`] computes for you. Build it with
+/// struct-update syntax and pass it to [`Roi::new`]:
+///
+/// ```ignore
+/// let roi = Roi::new(RoiInit { id, bbox, mask_data, area, ..Default::default() });
+/// ```
 #[derive(Debug, Default, Clone)]
+pub struct RoiInit {
+    pub id: ObjectId,
+    pub segmentation_class: SegmentationClass,
+    pub object_class: HashSet<ObjectClass>,
+    pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
+    pub parent_id: Option<ObjectId>,
+    pub children: Vec<ObjectId>,
+    pub track: Track,
+    pub area: usize,
+    pub bbox: [u32; 4],
+    pub mask_data: BitVec<u64, Lsb0>,
+    pub touches_edge: bool,
+    pub sum_x: u64,
+    pub sum_y: u64,
+    pub sum_x2: u64,
+    pub sum_y2: u64,
+    pub sum_xy: u64,
+    pub intensities: IndexMap<i32, Intensity>,
+    pub plane: ImagePlane,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FittingEllipse {
     /// The length of the longest diameter (2a).
     /// ImageJ refers to this as 'Major'.
@@ -97,6 +144,45 @@ pub struct FittingEllipse {
 }
 
 impl Roi {
+    /// Builds a fully-finalized ROI from [`RoiInit`].
+    ///
+    /// This is the only public way to construct a [`Roi`]: the geometry metrics
+    /// (`perimeter`, `ellipse`) are computed here via
+    /// [`finalize_geometry`](Self::finalize_geometry), so they can never be left
+    /// uncomputed by a forgotten call.
+    ///
+    /// For ROIs assembled incrementally (e.g. pixel-by-pixel extraction where the
+    /// mask and moments are filled in after construction), call
+    /// [`finalize_geometry`](Self::finalize_geometry) again once accumulation is
+    /// complete — the eager finalize here only reflects the geometry present in
+    /// `init`.
+    pub fn new(init: RoiInit) -> Self {
+        let mut roi = Roi {
+            id: init.id,
+            segmentation_class: init.segmentation_class,
+            object_class: init.object_class,
+            colocalized_with: init.colocalized_with,
+            parent_id: init.parent_id,
+            children: init.children,
+            track: init.track,
+            area: init.area,
+            bbox: init.bbox,
+            mask_data: init.mask_data,
+            touches_edge: init.touches_edge,
+            sum_x: init.sum_x,
+            sum_y: init.sum_y,
+            sum_x2: init.sum_x2,
+            sum_y2: init.sum_y2,
+            sum_xy: init.sum_xy,
+            intensities: init.intensities,
+            plane: init.plane,
+            perimeter: 0.0,
+            ellipse: FittingEllipse::default(),
+        };
+        roi.finalize_geometry();
+        roi
+    }
+
     /// Checks if a global coordinate (x, y) is within the ROI's mask.
     pub fn is_part_of(&self, x: u32, y: u32) -> bool {
         let [x_min, y_min, x_max, y_max] = self.bbox;
@@ -148,7 +234,28 @@ impl Roi {
         self.object_class.remove(object_class);
     }
 
+    /// Computes and stores the geometry metrics (`perimeter`, `ellipse`) from the
+    /// current mask. Call once after the mask/moments are fully assembled — i.e.
+    /// at ROI creation, on the parallel extraction workers — so later reads
+    /// (classification, DB export) are free field accesses. The metrics depend
+    /// only on the immutable geometry, so a single call is enough for the ROI's life.
+    ///
+    /// `pub(crate)` on purpose: one-shot construction should go through [`Roi::new`],
+    /// which calls this for you. It stays reachable inside the crate for the
+    /// incremental extraction path, which must re-finalize after the mask and
+    /// moments are fully accumulated.
+    pub(crate) fn finalize_geometry(&mut self) {
+        self.perimeter = self.compute_perimeter();
+        self.ellipse = self.compute_ellipse();
+    }
+
+    /// Returns the fitted ellipse (major/minor axes, angle, eccentricity)
+    /// precomputed by [`finalize_geometry`](Self::finalize_geometry).
     pub fn get_ellipse(&self) -> FittingEllipse {
+        self.ellipse
+    }
+
+    fn compute_ellipse(&self) -> FittingEllipse {
         let n = self.area as f64;
         if n == 0.0 {
             return FittingEllipse::default();
@@ -187,6 +294,16 @@ impl Roi {
         (4.0 * std::f32::consts::PI * self.area as f32) / (perimeter * perimeter)
     }
 
+    /// Returns the ROI perimeter in pixels, precomputed by
+    /// [`finalize_geometry`](Self::finalize_geometry).
+    ///
+    /// The underlying [`compute_perimeter`](Self::compute_perimeter) is an
+    /// O(bbox area) boundary walk — by far the most expensive ROI metric — which
+    /// is why it is computed once at creation rather than on demand.
+    pub fn get_perimeter(&self) -> f32 {
+        self.perimeter
+    }
+
     /// Calculates the perimeter of the ROI using ImageJ's algorithm.
     ///
     /// This method computes the perimeter by analyzing the boundary of the mask.
@@ -197,77 +314,109 @@ impl Roi {
     ///
     /// # Returns
     /// The perimeter value in pixels. A perfect circle with radius r has perimeter ≈ 2πr.
-    pub fn get_perimeter(&self) -> f32 {
+    fn compute_perimeter(&self) -> f32 {
         let [x_min, y_min, x_max, y_max] = self.bbox;
-        let width = (x_max - x_min) as usize;
-        let height = (y_max - y_min) as usize;
-
-        if width == 0 || height == 0 || self.area == 0 {
+        if self.area == 0 || x_max < x_min || y_max < y_min {
             return 0.0;
         }
 
-        let mut perimeter = 0.0;
-        const SQRT2: f32 = 1.414_213_562_373_095_0;
+        // Mask stride uses the INCLUSIVE bbox convention (width = x_max - x_min + 1),
+        // matching how the mask is built everywhere else. (The previous version dropped
+        // the +1, reading misaligned bits and undercounting multi-row ROIs.)
+        let width = (x_max - x_min + 1) as usize;
+        let height = (y_max - y_min + 1) as usize;
+        if width == 0 || height == 0 {
+            return 0.0;
+        }
 
-        // Iterate through each pixel in the bounding box
+        // Materialize the mask into a bool grid padded with a 1-pixel false border.
+        // The border lets the 8-neighbor scan below run without per-neighbor bounds
+        // checks, BitVec bit-addressing or Option handling — all of which dominated the
+        // boundary walk, the single most expensive ROI metric.
+        let pw = width + 2;
+        let mut grid = vec![false; pw * (height + 2)];
         for y in 0..height {
+            let src = y * width;
+            let dst = (y + 1) * pw + 1;
             for x in 0..width {
-                let bit_index = (y * width) + x;
-                let is_inside = self.mask_data.get(bit_index).map(|b| *b).unwrap_or(false);
-
-                if !is_inside {
-                    continue;
-                }
-
-                // Check 8-connected neighbors
-                // For each neighbor that is outside the mask, we have a boundary
-                for dy in -1..=1i32 {
-                    for dx in -1..=1i32 {
-                        if dx == 0 && dy == 0 {
-                            continue;
-                        }
-
-                        let nx = (x as i32) + dx;
-                        let ny = (y as i32) + dy;
-
-                        // Check if neighbor is outside bounds or outside the mask
-                        let is_neighbor_inside =
-                            if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
-                                let neighbor_index = ((ny as usize) * width) + (nx as usize);
-                                self.mask_data
-                                    .get(neighbor_index)
-                                    .map(|b| *b)
-                                    .unwrap_or(false)
-                            } else {
-                                false // Out of bounds is considered "outside"
-                            };
-
-                        if !is_neighbor_inside {
-                            // This neighbor is outside, so we have a boundary edge
-                            if dx == 0 || dy == 0 {
-                                // Horizontal or vertical edge
-                                perimeter += 1.0;
-                            } else {
-                                // Diagonal edge
-                                perimeter += SQRT2;
-                            }
-                        }
-                    }
+                if self.mask_data.get(src + x).map(|b| *b).unwrap_or(false) {
+                    grid[dst + x] = true;
                 }
             }
         }
 
-        // ImageJ divides by 2 because we count each edge twice (from both sides)
+        let mut perimeter = 0.0f32;
+        const SQRT2: f32 = std::f32::consts::SQRT_2;
+
+        // Out-of-bounds neighbors are the false border cells, so they count as "outside",
+        // exactly like the original. Orthogonal boundary edges weigh 1.0, diagonal SQRT2.
+        for y in 1..=height {
+            let row = y * pw;
+            for x in 1..=width {
+                if !grid[row + x] {
+                    continue;
+                }
+                let orth = (!grid[row + x - 1] as u32)
+                    + (!grid[row + x + 1] as u32)
+                    + (!grid[row - pw + x] as u32)
+                    + (!grid[row + pw + x] as u32);
+                let diag = (!grid[row - pw + x - 1] as u32)
+                    + (!grid[row - pw + x + 1] as u32)
+                    + (!grid[row + pw + x - 1] as u32)
+                    + (!grid[row + pw + x + 1] as u32);
+                perimeter += orth as f32 + diag as f32 * SQRT2;
+            }
+        }
+
+        // ImageJ divides by 2 because each boundary edge is counted from both sides.
         perimeter / 2.0
     }
 
-    /// Calculates solidity: ratio of area to convex hull area.
-    /// Values range from 0 to 1 (1 = perfectly convex).
+    /// Calculates solidity: pixel area divided by the area of the convex hull of the
+    /// mask. Values range from 0 to 1 (1 = perfectly convex; lower means more concave
+    /// boundaries, bays or holes).
+    ///
+    /// The hull is taken over the *corners* of the mask's pixel squares, so the pixel
+    /// union is always contained in its hull and solidity never exceeds 1. Only the
+    /// leftmost/rightmost pixel of each row can be a hull vertex, so we feed just those
+    /// extreme corners to the hull — O(height) hull points instead of O(area).
     pub fn get_solidity(&self) -> f32 {
-        // Approximate using area / (perimeter² / 4π)
-        // A perfect circle has the minimum perimeter for given area
-        let min_perimeter_sq = (4.0 * std::f32::consts::PI * self.area as f32).powi(2);
-        (self.area as f32 * 4.0 * std::f32::consts::PI) / min_perimeter_sq
+        let [x_min, y_min, x_max, y_max] = self.bbox;
+        if self.area == 0 || x_max < x_min || y_max < y_min {
+            return 0.0;
+        }
+        let width = (x_max - x_min + 1) as usize;
+        let height = (y_max - y_min + 1) as usize;
+
+        // Per row, collect the outer corners of the leftmost and rightmost set pixels.
+        let mut points: Vec<(f64, f64)> = Vec::with_capacity(height * 4);
+        for ry in 0..height {
+            let row = ry * width;
+            let mut left: Option<usize> = None;
+            let mut right = 0usize;
+            for rx in 0..width {
+                if self.mask_data.get(row + rx).map(|b| *b).unwrap_or(false) {
+                    if left.is_none() {
+                        left = Some(rx);
+                    }
+                    right = rx;
+                }
+            }
+            if let Some(left) = left {
+                let (y0, y1) = (ry as f64, (ry + 1) as f64);
+                points.push((left as f64, y0));
+                points.push((left as f64, y1));
+                points.push(((right + 1) as f64, y0));
+                points.push(((right + 1) as f64, y1));
+            }
+        }
+
+        let hull_area = convex_hull_area(&mut points);
+        if hull_area <= 0.0 {
+            // Degenerate (single pixel / thin line); the pixel union is its own hull.
+            return 1.0;
+        }
+        (self.area as f32 / hull_area as f32).min(1.0)
     }
 
     /// Calculates aspect ratio: major axis / minor axis.
@@ -352,13 +501,13 @@ impl Roi {
                             sum_intensity: v.sum_intensity,
                             min_intensity: v.min_intensity,
                             max_intensity: v.max_intensity,
-                            median_intensity: v.median_intensity,
-                            std_dev: v.std_dev,
+                            avg_intensity: v.avg_intensity,
                             pixel_values: vec![],
                         },
                     )
                 })
                 .collect(),
+            perimeter: self.perimeter,
             z_stack: self.plane.z,
             c_stack: self.plane.c,
             t_stack: self.plane.t,
@@ -366,7 +515,7 @@ impl Roi {
     }
 
     pub fn from_roi_settings(s: RoiSettings) -> Self {
-        Roi {
+        Roi::new(RoiInit {
             id: s.id,
             segmentation_class: s.segmentation_class,
             object_class: s.object_class,
@@ -397,8 +546,7 @@ impl Roi {
                             sum_intensity: v.sum_intensity,
                             min_intensity: v.min_intensity,
                             max_intensity: v.max_intensity,
-                            median_intensity: v.median_intensity,
-                            std_dev: v.std_dev,
+                            avg_intensity: v.avg_intensity,
                             pixel_values: Vec::new(),
                         },
                     )
@@ -409,7 +557,7 @@ impl Roi {
                 c: s.c_stack,
                 t: s.t_stack,
             },
-        }
+        })
     }
 
     /// Computes the intersection with another ROI.
@@ -489,14 +637,10 @@ impl Roi {
         }
 
         // 3. Assemble and return the brand-new structural intersection ROI
-        Some(Roi {
+        Some(Roi::new(RoiInit {
             id: ObjectId::next(), // Typically initialized empty or generated by your core engine later
             segmentation_class: self.segmentation_class.clone(),
-            object_class: HashSet::new(), // Starts pristine; can be updated by Classify Rois later
-            colocalized_with: IndexMap::new(),
             parent_id: Some(self.id.clone()), // Tracks lineage ancestry
-            children: Vec::new(),
-            track: Track::default(),
             area,
             bbox: [overlap_xmin, overlap_ymin, overlap_xmax, overlap_ymax],
             mask_data: overlap_mask,
@@ -506,8 +650,141 @@ impl Roi {
             sum_x2,
             sum_y2,
             sum_xy,
-            intensities: IndexMap::new(), // Left empty; recalculable down the pipeline via ImagePlane
-            plane: self.plane.clone(),    // Preserves matching Z-C-T coordinates
+            plane: self.plane.clone(),
+            ..Default::default()
+        }))
+    }
+}
+
+/// Area of the convex hull of `points`, via Andrew's monotone chain + the shoelace
+/// formula. `points` is sorted (and may be reordered) in place. Returns 0.0 for fewer
+/// than three non-collinear points.
+fn convex_hull_area(points: &mut [(f64, f64)]) -> f64 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    points.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    // Cross product of OA x OB; > 0 means a counter-clockwise turn.
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+
+    let mut hull: Vec<(f64, f64)> = Vec::with_capacity(points.len() + 1);
+    // Lower hull.
+    for &p in points.iter() {
+        while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    // Upper hull.
+    let lower = hull.len() + 1;
+    for &p in points.iter().rev() {
+        while hull.len() >= lower && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    hull.pop(); // last point equals the first
+
+    if hull.len() < 3 {
+        return 0.0;
+    }
+    // Shoelace formula.
+    let mut twice_area = 0.0;
+    for i in 0..hull.len() {
+        let (x1, y1) = hull[i];
+        let (x2, y2) = hull[(i + 1) % hull.len()];
+        twice_area += x1 * y2 - x2 * y1;
+    }
+    twice_area.abs() / 2.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::core_types::ObjectId;
+
+    /// Build a finalized ROI from a rectangular `rows × cols` boolean pattern.
+    fn roi_from_pattern(pattern: &[&[bool]]) -> Roi {
+        let height = pattern.len();
+        let width = pattern[0].len();
+        let mut mask = BitVec::<u64, Lsb0>::repeat(false, width * height);
+        let mut area = 0usize;
+        for (y, row) in pattern.iter().enumerate() {
+            for (x, &on) in row.iter().enumerate() {
+                if on {
+                    mask.set(y * width + x, true);
+                    area += 1;
+                }
+            }
+        }
+        Roi::new(RoiInit {
+            id: ObjectId(1),
+            bbox: [0, 0, (width - 1) as u32, (height - 1) as u32],
+            mask_data: mask,
+            area,
+            ..Default::default()
         })
+    }
+
+    #[test]
+    fn perimeter_uses_inclusive_stride_for_2x2_square() {
+        // 2×2 filled block. With the (now correct) inclusive stride the boundary walk
+        // visits all four pixels; the weighted ImageJ scheme yields 4 + 6·√2.
+        let roi = roi_from_pattern(&[&[true, true], &[true, true]]);
+        let expected = 4.0 + 6.0 * std::f32::consts::SQRT_2;
+        assert!(
+            (roi.get_perimeter() - expected).abs() < 1e-3,
+            "got {}, expected {}",
+            roi.get_perimeter(),
+            expected
+        );
+    }
+
+    #[test]
+    fn perimeter_single_pixel() {
+        // One pixel: all 8 neighbors are outside → (4·1 + 4·√2) / 2 = 2 + 2·√2.
+        // (The old buggy stride returned 0 here because width collapsed to 0.)
+        let roi = roi_from_pattern(&[&[true]]);
+        let expected = 2.0 + 2.0 * std::f32::consts::SQRT_2;
+        assert!((roi.get_perimeter() - expected).abs() < 1e-3);
+    }
+
+    #[test]
+    fn solidity_is_one_for_filled_square() {
+        let roi = roi_from_pattern(&[
+            &[true, true, true],
+            &[true, true, true],
+            &[true, true, true],
+        ]);
+        // Hull area == pixel area (9) → perfectly solid.
+        assert!((roi.get_solidity() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn solidity_below_one_for_concave_plus_shape() {
+        // A plus/cross: concave, so the convex hull is larger than the pixel area.
+        let roi = roi_from_pattern(&[
+            &[false, true, false],
+            &[true, true, true],
+            &[false, true, false],
+        ]);
+        let s = roi.get_solidity();
+        assert!(
+            s > 0.0 && s < 1.0,
+            "plus shape solidity should be in (0,1): {s}"
+        );
+    }
+
+    #[test]
+    fn solidity_one_for_single_pixel() {
+        let roi = roi_from_pattern(&[&[true]]);
+        assert_eq!(roi.get_solidity(), 1.0);
     }
 }

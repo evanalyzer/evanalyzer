@@ -9,6 +9,7 @@ pub type MemorySlot = u32;
 
 // Image addressins -----------
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MemoryId {
     PipelineContext(MemorySlot),
     ProjectCache(MemorySlot),
@@ -21,6 +22,7 @@ impl Default for MemoryId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ImageAddress {
     Scratchpad,
     Memory(MemoryId), // Memory slot

@@ -258,9 +258,9 @@ impl PipelineCommand {
                 ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7)".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![] },
             ],
             Self::ClassifyRois(_s) => vec![
-                ParameterDef { name: "origin_segmentation".to_string(), display_name: "Origin Segmentation".to_string(), description: "Apply only to objects with this given segmentation class\n\nThe segmentation class value is assigned to each pixel in the image\nafter a Threshold, Pixel classifier or AI classifier.\nIf no seg class is selected the criteria are applied to all objects.".to_string(), value: _s.origin_segmentation.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiSegClass, options: (0u32..33u32).map(|__idx| if _s.origin_segmentation.iter().any(|c| c.as_u32() == __idx) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "origin_class".to_string(), display_name: "Origin Class".to_string(), description: "Apply only to objects with this given class".to_string(), value: _s.origin_class.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.origin_class.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "target_class".to_string(), display_name: "Target Class".to_string(), description: "Target class for objects matching the chosen criteria.\n\nObjects with metrics matching the chosen criteria are labeled with this additional class.".to_string(), value: match _s.target_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated against the morphological and intensity criteria below.\nLeave empty to apply the criteria to every object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after criteria evaluation\n\nControls whether the output class is added or existing classes are removed,\nand whether the action is triggered on a criteria **match** or a **non-match**:\n\n- **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n- **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n- **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n- **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n- **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.".to_string(), value: match _s.match_handling { ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add tag on match".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => "Add tag on mismatch".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfMatch => "Remove class on match".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => "Remove class on mismatch".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => "Remove tag on match".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => "Remove tag on mismatch".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => "Remove ROIs matching criteria".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => "Keep ROIs matching criteria".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string(), ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfNotMatch => "Reclassify on mismatch".to_string() }, param_type: ParamType::Dropdown, options: vec!["Add tag on match".to_string(), "Add tag on mismatch".to_string(), "Remove class on match".to_string(), "Remove class on mismatch".to_string(), "Remove tag on match".to_string(), "Remove tag on mismatch".to_string(), "Remove ROIs matching criteria".to_string(), "Keep ROIs matching criteria".to_string(), "Reclassify on match".to_string(), "Reclassify on mismatch".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "output_class".to_string(), display_name: "Output Tag".to_string(), description: "Class label assigned to (or removed from) objects by the chosen operation\n\nUsed as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.\nHas no effect when the selected operation only manipulates input classes or clears all classes.".to_string(), value: match _s.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Unit to use for roi extraction".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "min_area".to_string(), display_name: "Min Area".to_string(), description: "Minimum area size\n\nMinimum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.min_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "max_area".to_string(), display_name: "Max Area".to_string(), description: "Maximum area size\n\nMaximum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.max_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
@@ -270,9 +270,6 @@ impl PipelineCommand {
                 ParameterDef { name: "max_solidity".to_string(), display_name: "Max Solidity".to_string(), description: "Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.max_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] },
                 ParameterDef { name: "min_aspect_ratio".to_string(), display_name: "Min Aspect Ratio".to_string(), description: "Minimum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.min_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "max_aspect_ratio".to_string(), display_name: "Max Aspect Ratio".to_string(), description: "Maximum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.max_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "intensity_unit".to_string(), display_name: "Intensity Unit".to_string(), description: "Unit used for the intensity value.\n\nbit: 0 - 255/65535\n%: 0 - 100.0\nrel: 0 - 1.0".to_string(), value: match _s.intensity_unit { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, param_type: ParamType::PixelUnits, options: vec!["bit".to_string(), "%".to_string(), "rel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "min_mean_intensity".to_string(), display_name: "Min Mean Intensity".to_string(), description: "The minimum average intensity an object must have in the selected image channel".to_string(), value: format!("{}", _s.min_mean_intensity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "max_mean_intensity".to_string(), display_name: "Max Mean Intensity".to_string(), description: "The maximum average intensity an object is allowed to have in the selected image channel".to_string(), value: format!("{}", _s.max_mean_intensity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "min_eccentricity".to_string(), display_name: "Min Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.min_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] },
                 ParameterDef { name: "max_eccentricity".to_string(), display_name: "Max Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.max_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] },
                 ParameterDef { name: "min_feret".to_string(), display_name: "Min Feret".to_string(), description: "Feret diameter threshold\n\nThe absolute shortest parallel distance across the object.\nThis represents the minimum sieve size a particle could pass through.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.min_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] },
@@ -322,17 +319,17 @@ impl PipelineCommand {
                 ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation of the Gaussian kernel.\n\nHigher values create a more significant blur effect.\n$$N \\approx 6\\sigma + 1$$".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 5.0f32, step: 0.1000f32, groups: vec![] },
             ],
             Self::Hessian(_s) => vec![
-                ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines which component of the Hessian matrix structure to extract.\n\nDepending on the mode, this can highlight interest points (blobs)\nor directional features (ridges).".to_string(), value: format!("{:?}", _s.mode), param_type: ParamType::Dropdown, options: vec!["Determinant".to_string(), "EigenvaluesX".to_string(), "EigenvaluesY".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines which component of the Hessian matrix structure to extract.\n\nDepending on the mode, this can highlight interest points (blobs)\nor directional features (ridges).".to_string(), value: match _s.mode { FiltersHessianHessianModeSettings::Determinant => "Determinant".to_string(), FiltersHessianHessianModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersHessianHessianModeSettings::EigenvaluesY => "Eigenvalues Y".to_string() }, param_type: ParamType::Dropdown, options: vec!["Determinant".to_string(), "Eigenvalues X".to_string(), "Eigenvalues Y".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::ImageCache(_s) => vec![
-                ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Whether to save the current state to the cache or load a state from it.".to_string(), value: format!("{:?}", _s.mode), param_type: ParamType::Dropdown, options: vec!["Store".to_string(), "Load".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Whether to save the current state to the cache or load a state from it.".to_string(), value: match _s.mode { MathImageCacheImageCacheModeSettings::Store => "Store".to_string(), MathImageCacheImageCacheModeSettings::Load => "Load".to_string() }, param_type: ParamType::Dropdown, options: vec!["Store".to_string(), "Load".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::ImageMath(_s) => vec![
-                ParameterDef { name: "operand".to_string(), display_name: "Operand".to_string(), description: "The specific mathematical or logical operator to apply.".to_string(), value: format!("{:?}", _s.operand), param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Invert".to_string(), "Add".to_string(), "Subtract".to_string(), "Multiply".to_string(), "Divide".to_string(), "AND".to_string(), "OR".to_string(), "XOR".to_string(), "MIN".to_string(), "MAX".to_string(), "Average".to_string(), "DifferenceType".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "operand".to_string(), display_name: "Operand".to_string(), description: "The specific mathematical or logical operator to apply.".to_string(), value: match _s.operand { MathImageMathOperandSettings::None => "None".to_string(), MathImageMathOperandSettings::Invert => "Invert".to_string(), MathImageMathOperandSettings::Add => "Add".to_string(), MathImageMathOperandSettings::Subtract => "Subtract".to_string(), MathImageMathOperandSettings::Multiply => "Multiply".to_string(), MathImageMathOperandSettings::Divide => "Divide".to_string(), MathImageMathOperandSettings::And => "And".to_string(), MathImageMathOperandSettings::Or => "Or".to_string(), MathImageMathOperandSettings::Xor => "Xor".to_string(), MathImageMathOperandSettings::Min => "Min".to_string(), MathImageMathOperandSettings::Max => "Max".to_string(), MathImageMathOperandSettings::Average => "Average".to_string(), MathImageMathOperandSettings::DifferenceType => "Difference Type".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Invert".to_string(), "Add".to_string(), "Subtract".to_string(), "Multiply".to_string(), "Divide".to_string(), "And".to_string(), "Or".to_string(), "Xor".to_string(), "Min".to_string(), "Max".to_string(), "Average".to_string(), "Difference Type".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "swap_operands".to_string(), display_name: "Swap Operands".to_string(), description: "If false, the calculation is `(Current Image OP Cached Image)`.\nIf true, the calculation is `(Cached Image OP Current Image)`.\n\nThis is critical for non-commutative operations like Subtraction or Division.".to_string(), value: format!("{}", _s.swap_operands), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::IntensityTransformation(_s) => vec![
-                ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines whether to use automated enhancement or user-defined values.".to_string(), value: format!("{:?}", _s.mode), param_type: ParamType::Dropdown, options: vec!["Automatic".to_string(), "Manual".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines whether to use automated enhancement or user-defined values.".to_string(), value: match _s.mode { FiltersIntensityTransformIntensityTransformModeSettings::Automatic => "Automatic".to_string(), FiltersIntensityTransformIntensityTransformModeSettings::Manual => "Manual".to_string() }, param_type: ParamType::Dropdown, options: vec!["Automatic".to_string(), "Manual".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "contrast".to_string(), display_name: "Contrast".to_string(), description: "Contrast multiplier (gain).\n\nOnly active in [`Mode::Manual`].\nValues > 1.0 increase contrast, while values < 1.0 decrease it.".to_string(), value: format!("{}", _s.contrast), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "brightness".to_string(), display_name: "Brightness".to_string(), description: "Brightness offset (bias).\n\nOnly active in [`Mode::Manual`].\nPositive values brighten the image, negative values darken it.".to_string(), value: format!("{}", _s.brightness), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
@@ -343,32 +340,32 @@ impl PipelineCommand {
                 ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the neighborhood used to estimate the background.\n\nFeatures smaller than this radius will be preserved, while\nlarger structures will be treated as background and removed.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::MorphologicalCommand(_s) => vec![
-                ParameterDef { name: "op".to_string(), display_name: "Op".to_string(), description: "The transformation type (e.g., Dilate, Erode).".to_string(), value: format!("{:?}", _s.op), param_type: ParamType::Dropdown, options: vec!["Dilate".to_string(), "Erode".to_string(), "Open".to_string(), "Close".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "op".to_string(), display_name: "Op".to_string(), description: "The transformation type (e.g., Dilate, Erode).".to_string(), value: match _s.op { MorphologyMorphologicalTransformationMorphOpsSettings::Dilate => "Dilate".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Erode => "Erode".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Open => "Open".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Close => "Close".to_string() }, param_type: ParamType::Dropdown, options: vec!["Dilate".to_string(), "Erode".to_string(), "Open".to_string(), "Close".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The diameter of the structuring element in pixels.\nMust be an odd number (e.g., 3, 5, 7).".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "kernel_shape".to_string(), display_name: "Kernel Shape".to_string(), description: "The geometric profile of the structuring element.".to_string(), value: format!("{:?}", _s.kernel_shape), param_type: ParamType::Dropdown, options: vec!["Box".to_string(), "Ellipse".to_string(), "Cross".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "kernel_shape".to_string(), display_name: "Kernel Shape".to_string(), description: "The geometric profile of the structuring element.".to_string(), value: match _s.kernel_shape { MorphologyMorphologicalTransformationKernelShapesSettings::Box => "Box".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Ellipse => "Ellipse".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Cross => "Cross".to_string() }, param_type: ParamType::Dropdown, options: vec!["Box".to_string(), "Ellipse".to_string(), "Cross".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "use_grayscale".to_string(), display_name: "Use Grayscale".to_string(), description: "If set the grayscale image instead of the labeld image is taken to perform a morphological transform".to_string(), value: format!("{}", _s.use_grayscale), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::RankFilter(_s) => vec![
                 ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The circular radius of the neighborhood to consider.\n\nA radius of 1.0 roughly corresponds to a 3x3 square, while larger\nvalues increase the effect's strength and computational cost.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "filter_type".to_string(), display_name: "Filter Type".to_string(), description: "The specific ranking algorithm to apply to the neighborhood.".to_string(), value: format!("{:?}", _s.filter_type), param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Min".to_string(), "Max".to_string(), "Mean".to_string(), "Outliers".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "filter_type".to_string(), display_name: "Filter Type".to_string(), description: "The specific ranking algorithm to apply to the neighborhood.".to_string(), value: match _s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Min".to_string(), "Max".to_string(), "Mean".to_string(), "Outliers".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::RollingBall(_s) => vec![
                 ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the ball or paraboloid in pixels.\n\nThis should be at least as large as the radius of the largest\nobject in the image that is not part of the background.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 64.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "ball_type".to_string(), display_name: "Ball Type".to_string(), description: "The geometric shape of the rolling structural element.".to_string(), value: format!("{:?}", _s.ball_type), param_type: ParamType::Dropdown, options: vec!["Ball".to_string(), "Paraboloid".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "ball_type".to_string(), display_name: "Ball Type".to_string(), description: "The geometric shape of the rolling structural element.".to_string(), value: match _s.ball_type { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, param_type: ParamType::Dropdown, options: vec!["Ball".to_string(), "Paraboloid".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "pre_smooth".to_string(), display_name: "Pre Smooth".to_string(), description: "".to_string(), value: format!("{}", _s.pre_smooth), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::SaveImage(_s) => vec![
                 ParameterDef { name: "path".to_string(), display_name: "Path".to_string(), description: "The destination filesystem path where the image will be written.".to_string(), value: _s.path.display().to_string(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "".to_string(), value: format!("{:?}", _s.source), param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "InstanceMap".to_string(), "SegmentationMask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::StructureTensor(_s) => vec![
-                ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "The mathematical output to be produced by the algorithm.".to_string(), value: format!("{:?}", _s.mode), param_type: ParamType::Dropdown, options: vec!["EigenvaluesX".to_string(), "EigenvaluesY".to_string(), "Coherence".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "The mathematical output to be produced by the algorithm.".to_string(), value: match _s.mode { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, param_type: ParamType::Dropdown, options: vec!["Eigenvalues X".to_string(), "Eigenvalues Y".to_string(), "Coherence".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the integration window used to average the local gradients.\n\nLarger windows provide more stability against noise but reduce\nspatial resolution.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation for the Gaussian weighting of the integration window.\n\nControls the spatial \"reach\" of the neighborhood analysis.".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::Threshold(_s) => vec![
                 ParameterDef { name: "thresholds".to_string(), display_name: "Thresholds".to_string(), description: "A list of thresholding layers. Overlapping ranges are resolved\nby the order of the vector (last-in priority).".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.thresholds.iter().map(|__item| vec![
-                    ParameterDef { name: "method".to_string(), display_name: "Method".to_string(), description: "The algorithm to use (Manual or Automatic).".to_string(), value: format!("{:?}", __item.method), param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Manual".to_string(), "Li".to_string(), "MinError".to_string(), "Triangle".to_string(), "Moments".to_string(), "Huang".to_string(), "Intermodes".to_string(), "IsoData".to_string(), "MaxEntropy".to_string(), "Mean".to_string(), "Minimum".to_string(), "Otsu".to_string(), "Percentile".to_string(), "RenyiEntropy".to_string(), "Shanbhag".to_string(), "Yen".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                    ParameterDef { name: "method".to_string(), display_name: "Method".to_string(), description: "The algorithm to use (Manual or Automatic).".to_string(), value: match __item.method { SegmentationThresholdThresholdMethodSettings::None => "None".to_string(), SegmentationThresholdThresholdMethodSettings::Manual => "Manual".to_string(), SegmentationThresholdThresholdMethodSettings::Li => "Li".to_string(), SegmentationThresholdThresholdMethodSettings::MinError => "Min Error".to_string(), SegmentationThresholdThresholdMethodSettings::Triangle => "Triangle".to_string(), SegmentationThresholdThresholdMethodSettings::Moments => "Moments".to_string(), SegmentationThresholdThresholdMethodSettings::Huang => "Huang".to_string(), SegmentationThresholdThresholdMethodSettings::Intermodes => "Intermodes".to_string(), SegmentationThresholdThresholdMethodSettings::IsoData => "Iso Data".to_string(), SegmentationThresholdThresholdMethodSettings::MaxEntropy => "Max Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Mean => "Mean".to_string(), SegmentationThresholdThresholdMethodSettings::Minimum => "Minimum".to_string(), SegmentationThresholdThresholdMethodSettings::Otsu => "Otsu".to_string(), SegmentationThresholdThresholdMethodSettings::Percentile => "Percentile".to_string(), SegmentationThresholdThresholdMethodSettings::RenyiEntropy => "Renyi Entropy".to_string(), SegmentationThresholdThresholdMethodSettings::Shanbhag => "Shanbhag".to_string(), SegmentationThresholdThresholdMethodSettings::Yen => "Yen".to_string() }, param_type: ParamType::Dropdown, options: vec!["None".to_string(), "Manual".to_string(), "Li".to_string(), "Min Error".to_string(), "Triangle".to_string(), "Moments".to_string(), "Huang".to_string(), "Intermodes".to_string(), "Iso Data".to_string(), "Max Entropy".to_string(), "Mean".to_string(), "Minimum".to_string(), "Otsu".to_string(), "Percentile".to_string(), "Renyi Entropy".to_string(), "Shanbhag".to_string(), "Yen".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                     ParameterDef { name: "min_threshold".to_string(), display_name: "Min Threshold".to_string(), description: "The lower intensity bound. Used directly in `Manual` mode, or as a\nfloor for auto-methods.".to_string(), value: format!("{}", __item.min_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![] },
                     ParameterDef { name: "max_threshold".to_string(), display_name: "Max Threshold".to_string(), description: "The upper intensity bound. Used directly in `Manual` mode, or as a\nceiling for auto-methods.".to_string(), value: format!("{}", __item.max_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![] },
                     ParameterDef { name: "unit".to_string(), display_name: "Unit".to_string(), description: "Unit used for the threshold value.\n\nbit: 0 - 255/65535\n%: 0 - 100.0\nrel: 0 - 1.0".to_string(), value: match __item.unit { PixelUnits::Bit => "bit".to_string(), PixelUnits::Percent => "%".to_string(), PixelUnits::Relative => "rel".to_string() }, param_type: ParamType::PixelUnits, options: vec!["bit".to_string(), "%".to_string(), "rel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
@@ -399,7 +396,7 @@ impl PipelineCommand {
     pub fn to_summary(&self) -> String {
         match self {
             Self::Blur(s) => format!("Kernel size: {}", format!("{:.3}", s.kernel_size)),
-            Self::ClassifyRois(s) => format!("Min Area: {} · Min Circularity: {} · Min Eccentricity: {} · Max Eccentricity: {} · Allow Edge Touching: {}", format!("{:.3}", s.min_area), format!("{:.3}", s.min_circularity), format!("{:.3}", s.min_eccentricity), format!("{:.3}", s.max_eccentricity), format!("{}", s.allow_edge_touching)),
+            Self::ClassifyRois(s) => format!("Min Area: {} · Min Eccentricity: {} · Max Eccentricity: {} · Allow Edge Touching: {}", format!("{:.3}", s.min_area), format!("{:.3}", s.min_eccentricity), format!("{:.3}", s.max_eccentricity), format!("{}", s.allow_edge_touching)),
             Self::Colocalization(_) => String::new(),
             Self::ColorFilterCommand(_) => String::new(),
             Self::ConnectedComponents(_) => String::new(),
@@ -437,41 +434,22 @@ impl PipelineCommand {
                 }
             }
             Self::ClassifyRois(s) => {
-                if param_name == "origin_segmentation" {
+                if param_name == "input_classes" {
                     if let Some(id) = value
                         .strip_prefix("toggle:")
                         .and_then(|x| x.trim().parse::<u32>().ok())
                     {
-                        if s.origin_segmentation.iter().any(|c| c.as_u32() == id) {
-                            s.origin_segmentation.retain(|c| c.as_u32() != id);
-                        } else {
-                            s.origin_segmentation.push(SegmentationClass(id));
-                        }
-                    } else {
-                        s.origin_segmentation = value
-                            .split(',')
-                            .filter(|x| !x.is_empty())
-                            .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| SegmentationClass(v))
-                            .collect();
-                    }
-                }
-                if param_name == "origin_class" {
-                    if let Some(id) = value
-                        .strip_prefix("toggle:")
-                        .and_then(|x| x.trim().parse::<u32>().ok())
-                    {
-                        if s.origin_class
+                        if s.input_classes
                             .iter()
                             .any(|c| c.to_u32().map_or(false, |v| v == id))
                         {
-                            s.origin_class
+                            s.input_classes
                                 .retain(|c| c.to_u32().map_or(true, |v| v != id));
                         } else {
-                            s.origin_class.push(ObjectClass::Valid(id));
+                            s.input_classes.push(ObjectClass::Valid(id));
                         }
                     } else {
-                        s.origin_class = value
+                        s.input_classes = value
                             .split(',')
                             .filter(|x| !x.is_empty())
                             .filter_map(|x| x.trim().parse::<u32>().ok())
@@ -479,11 +457,14 @@ impl PipelineCommand {
                             .collect();
                     }
                 }
-                if param_name == "target_class" {
+                if param_name == "match_handling" {
+                    s.match_handling = match value { "Add tag on match" => ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch, "Add tag on mismatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfNotMatch, "Remove class on match" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfMatch, "Remove class on mismatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch, "Remove tag on match" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfMatch, "Remove tag on mismatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch, "Remove ROIs matching criteria" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch, "Keep ROIs matching criteria" => ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch, "Reclassify on match" => ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfMatch, "Reclassify on mismatch" => ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfNotMatch, _ => s.match_handling.clone() };
+                }
+                if param_name == "output_class" {
                     if value == "-1" {
-                        s.target_class = ObjectClass::Unset;
+                        s.output_class = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
-                        s.target_class = ObjectClass::Valid(v);
+                        s.output_class = ObjectClass::Valid(v);
                     }
                 }
                 if param_name == "size_unit" {
@@ -530,23 +511,6 @@ impl PipelineCommand {
                 if param_name == "max_aspect_ratio" {
                     if let Ok(v) = value.parse::<f32>() {
                         s.max_aspect_ratio = v;
-                    }
-                }
-                if param_name == "intensity_unit" {
-                    s.intensity_unit = match value {
-                        "bit" => PixelUnits::Bit,
-                        "%" => PixelUnits::Percent,
-                        _ => PixelUnits::Relative,
-                    };
-                }
-                if param_name == "min_mean_intensity" {
-                    if let Ok(v) = value.parse::<f32>() {
-                        s.min_mean_intensity = v;
-                    }
-                }
-                if param_name == "max_mean_intensity" {
-                    if let Ok(v) = value.parse::<f32>() {
-                        s.max_mean_intensity = v;
                     }
                 }
                 if param_name == "min_eccentricity" {
@@ -745,8 +709,8 @@ impl PipelineCommand {
                 if param_name == "mode" {
                     s.mode = match value {
                         "Determinant" => FiltersHessianHessianModeSettings::Determinant,
-                        "EigenvaluesX" => FiltersHessianHessianModeSettings::EigenvaluesX,
-                        "EigenvaluesY" => FiltersHessianHessianModeSettings::EigenvaluesY,
+                        "Eigenvalues X" => FiltersHessianHessianModeSettings::EigenvaluesX,
+                        "Eigenvalues Y" => FiltersHessianHessianModeSettings::EigenvaluesY,
                         _ => s.mode.clone(),
                     };
                 }
@@ -769,13 +733,13 @@ impl PipelineCommand {
                         "Subtract" => MathImageMathOperandSettings::Subtract,
                         "Multiply" => MathImageMathOperandSettings::Multiply,
                         "Divide" => MathImageMathOperandSettings::Divide,
-                        "AND" => MathImageMathOperandSettings::AND,
-                        "OR" => MathImageMathOperandSettings::OR,
-                        "XOR" => MathImageMathOperandSettings::XOR,
-                        "MIN" => MathImageMathOperandSettings::MIN,
-                        "MAX" => MathImageMathOperandSettings::MAX,
+                        "And" => MathImageMathOperandSettings::And,
+                        "Or" => MathImageMathOperandSettings::Or,
+                        "Xor" => MathImageMathOperandSettings::Xor,
+                        "Min" => MathImageMathOperandSettings::Min,
+                        "Max" => MathImageMathOperandSettings::Max,
                         "Average" => MathImageMathOperandSettings::Average,
-                        "DifferenceType" => MathImageMathOperandSettings::DifferenceType,
+                        "Difference Type" => MathImageMathOperandSettings::DifferenceType,
                         _ => s.operand.clone(),
                     };
                 }
@@ -887,8 +851,8 @@ impl PipelineCommand {
                 if param_name == "source" {
                     s.source = match value {
                         "Image" => MathSaveImageImageSourceSettings::Image,
-                        "InstanceMap" => MathSaveImageImageSourceSettings::InstanceMap,
-                        "SegmentationMask" => MathSaveImageImageSourceSettings::SegmentationMask,
+                        "Instance Map" => MathSaveImageImageSourceSettings::InstanceMap,
+                        "Segmentation Mask" => MathSaveImageImageSourceSettings::SegmentationMask,
                         _ => s.source.clone(),
                     };
                 }
@@ -896,8 +860,8 @@ impl PipelineCommand {
             Self::StructureTensor(s) => {
                 if param_name == "mode" {
                     s.mode = match value {
-                        "EigenvaluesX" => FiltersStructureTensorTensorModeSettings::EigenvaluesX,
-                        "EigenvaluesY" => FiltersStructureTensorTensorModeSettings::EigenvaluesY,
+                        "Eigenvalues X" => FiltersStructureTensorTensorModeSettings::EigenvaluesX,
+                        "Eigenvalues Y" => FiltersStructureTensorTensorModeSettings::EigenvaluesY,
                         "Coherence" => FiltersStructureTensorTensorModeSettings::Coherence,
                         _ => s.mode.clone(),
                     };
@@ -921,7 +885,7 @@ impl PipelineCommand {
                         if let Ok(_idx) = _i.parse::<usize>() {
                             if let Some(item) = s.thresholds.get_mut(_idx) {
                                 if nested_name == "method" {
-                                    item.method = match value { "None" => SegmentationThresholdThresholdMethodSettings::None, "Manual" => SegmentationThresholdThresholdMethodSettings::Manual, "Li" => SegmentationThresholdThresholdMethodSettings::Li, "MinError" => SegmentationThresholdThresholdMethodSettings::MinError, "Triangle" => SegmentationThresholdThresholdMethodSettings::Triangle, "Moments" => SegmentationThresholdThresholdMethodSettings::Moments, "Huang" => SegmentationThresholdThresholdMethodSettings::Huang, "Intermodes" => SegmentationThresholdThresholdMethodSettings::Intermodes, "IsoData" => SegmentationThresholdThresholdMethodSettings::IsoData, "MaxEntropy" => SegmentationThresholdThresholdMethodSettings::MaxEntropy, "Mean" => SegmentationThresholdThresholdMethodSettings::Mean, "Minimum" => SegmentationThresholdThresholdMethodSettings::Minimum, "Otsu" => SegmentationThresholdThresholdMethodSettings::Otsu, "Percentile" => SegmentationThresholdThresholdMethodSettings::Percentile, "RenyiEntropy" => SegmentationThresholdThresholdMethodSettings::RenyiEntropy, "Shanbhag" => SegmentationThresholdThresholdMethodSettings::Shanbhag, "Yen" => SegmentationThresholdThresholdMethodSettings::Yen, _ => item.method.clone() };
+                                    item.method = match value { "None" => SegmentationThresholdThresholdMethodSettings::None, "Manual" => SegmentationThresholdThresholdMethodSettings::Manual, "Li" => SegmentationThresholdThresholdMethodSettings::Li, "Min Error" => SegmentationThresholdThresholdMethodSettings::MinError, "Triangle" => SegmentationThresholdThresholdMethodSettings::Triangle, "Moments" => SegmentationThresholdThresholdMethodSettings::Moments, "Huang" => SegmentationThresholdThresholdMethodSettings::Huang, "Intermodes" => SegmentationThresholdThresholdMethodSettings::Intermodes, "Iso Data" => SegmentationThresholdThresholdMethodSettings::IsoData, "Max Entropy" => SegmentationThresholdThresholdMethodSettings::MaxEntropy, "Mean" => SegmentationThresholdThresholdMethodSettings::Mean, "Minimum" => SegmentationThresholdThresholdMethodSettings::Minimum, "Otsu" => SegmentationThresholdThresholdMethodSettings::Otsu, "Percentile" => SegmentationThresholdThresholdMethodSettings::Percentile, "Renyi Entropy" => SegmentationThresholdThresholdMethodSettings::RenyiEntropy, "Shanbhag" => SegmentationThresholdThresholdMethodSettings::Shanbhag, "Yen" => SegmentationThresholdThresholdMethodSettings::Yen, _ => item.method.clone() };
                                 }
                                 if nested_name == "min_threshold" {
                                     if let Ok(v) = value.parse::<f32>() {

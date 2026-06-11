@@ -1,0 +1,77 @@
+{
+  "meta": {
+    "name": "Yeast cells brightfield",
+    "shortDescription": "Yeast cells brightfield",
+    "description": "Segments yeast cells from a brightfield image using contrast enhancement, Gaussian blur, Canny edge detection, manual thresholding and a Voronoi tessellation around detected cell centers. The output object class can be remapped after import (default class id used during conversion: 4). Approximation notes: Voronoi centers reference 'M01' (a Hough-transform output label) which has no equivalent class; centers set to UNSET and should be remapped manually $houghTransform has no equivalent in the new schema and was approximated with ConnectedComponents",
+    "authorFirstName": "EVAnalyzer",
+    "authorLastName": "Team",
+    "authorOrganization": "evanalyzer.org",
+    "creationTime": "2026-06-11T00:00:00Z"
+  },
+  "pipelineSteps": [
+    {
+      "enabled": true,
+      "command": {
+        "type": "intensityTransformation",
+        "mode": "MANUAL",
+        "contrast": 0.8,
+        "brightness": 0.0
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "gaussianBlur",
+        "kernelSize": 5,
+        "sigma": 1.0
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "edgeDetectionCanny",
+        "kernelSize": 3,
+        "thresholdMin": 0.0196078431372549,
+        "thresholdMax": 0.23529411764705882
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "threshold",
+        "thresholds": [
+          {
+            "method": "MANUAL",
+            "minThreshold": 4000.0,
+            "maxThreshold": 65535.0,
+            "unit": "bit",
+            "objectClassId": 1
+          }
+        ]
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "connectedComponents"
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "voronoi",
+        "centers": "UNSET",
+        "centerFilterClasses": [],
+        "mask": "UNSET",
+        "maskFilterClasses": [],
+        "outputClass": {
+          "VALID": 4
+        },
+        "unit": "px",
+        "maxRadius": 30.0,
+        "excludeAreasAtTheEdges": false,
+        "excludeAreasWithNoCenter": false
+      }
+    }
+  ]
+}

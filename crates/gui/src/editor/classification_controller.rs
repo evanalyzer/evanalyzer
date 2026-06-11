@@ -4,7 +4,6 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::prelude::*;
 use crate::{
     AppWindow, ClassItemData, ClassSettingsSlint, ClassificationSettingsState, ClassificationState,
-    StatValues,
 };
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
@@ -215,119 +214,7 @@ impl ClassificationController {
     pub fn update_class_settings_in_project(self: &Arc<Self>, class_settings: ClassSettingsSlint) {
         let mut project = self.app_state.get_project_write();
 
-        let mut measures: IndexMap<MeasurementChannels, Vec<MeasurementStatistics>> =
-            IndexMap::new();
-
-        let get_measure = |input: StatValues| -> Vec<MeasurementStatistics> {
-            let mut ret: Vec<MeasurementStatistics> = Vec::new();
-
-            if input.val == true {
-                ret.push(MeasurementStatistics::Val);
-            }
-            if input.avg == true {
-                ret.push(MeasurementStatistics::Avg);
-            }
-            if input.min == true {
-                ret.push(MeasurementStatistics::Min);
-            }
-            if input.max == true {
-                ret.push(MeasurementStatistics::Max);
-            }
-            if input.stdev == true {
-                ret.push(MeasurementStatistics::Stdev);
-            }
-            if input.median == true {
-                ret.push(MeasurementStatistics::Median);
-            }
-            if input.sum == true {
-                ret.push(MeasurementStatistics::Sum);
-            }
-
-            ret
-        };
-
-        let stats = get_measure(class_settings.measurement.object_count_stats);
-        if stats.len() > 0 {
-            measures.insert(MeasurementChannels::ObjectCount, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.intersecting_stats);
-        if stats.len() > 0 {
-            measures.insert(MeasurementChannels::Intersecting, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.area_size);
-        if stats.len() > 0 {
-            measures.insert(MeasurementChannels::AreaSize, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.perimeter_stats);
-        if stats.len() > 0 {
-            measures.insert(MeasurementChannels::Perimeter, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.circularity_stats);
-        if stats.len() > 0 {
-            measures.insert(MeasurementChannels::Circularity, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.intensity_min_stats);
-        if stats.len() > 0 {
-            measures.insert(MeasurementChannels::IntensityMin, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.intensity_max_stats);
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::IntensityMax, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.intensity_avg_stats);
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::IntensityAvg, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.intensity_sum_stats);
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::IntensitySum, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.position_stats);
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::Position, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.distance_center_center_stats);
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::DistanceCenterToCenter, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.distance_center_surface_min_stats);
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::DistanceCenterToSurfaceMin, stats);
-        }
-
-        let stats = get_measure(class_settings.measurement.distance_center_surface_max_stats);
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::DistanceCenterToSurfaceMax, stats);
-        }
-
-        let stats = get_measure(
-            class_settings
-                .measurement
-                .distance_surface_surface_min_stats,
-        );
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::DistanceSurfaceToSurfaceMin, stats);
-        }
-
-        let stats = get_measure(
-            class_settings
-                .measurement
-                .distance_surface_surface_max_stats,
-        );
-        if !stats.is_empty() {
-            measures.insert(MeasurementChannels::DistanceSurfaceToSurfaceMax, stats);
-        }
+        let measures: IndexMap<MeasurementChannels, Vec<MeasurementStatistics>> = IndexMap::new();
 
         let new_class = Class {
             id: AssignObjectClass!(class_settings.class_id),
@@ -374,82 +261,6 @@ impl ClassificationController {
                 class_settings_slint.color = Color::from_rgb_u8(r, g, b);
                 class_settings_slint.name = class.name.clone().into();
                 class_settings_slint.notes = class.notes.clone().into();
-
-                let calc = |stats: &Vec<MeasurementStatistics>| -> StatValues {
-                    let mut ret: StatValues = StatValues::default();
-                    for stat in stats {
-                        match stat {
-                            MeasurementStatistics::Avg => ret.avg = true,
-                            MeasurementStatistics::Min => ret.min = true,
-                            MeasurementStatistics::Max => ret.max = true,
-                            MeasurementStatistics::Stdev => ret.stdev = true,
-                            MeasurementStatistics::Median => ret.median = true,
-                            MeasurementStatistics::Sum => ret.sum = true,
-                            MeasurementStatistics::Val => ret.val = true,
-                        }
-                    }
-                    ret
-                };
-
-                for (measure, stats) in &class.measure {
-                    match measure {
-                        MeasurementChannels::ObjectCount => {
-                            class_settings_slint.measurement.object_count_stats = calc(stats);
-                        }
-                        MeasurementChannels::Intersecting => {
-                            class_settings_slint.measurement.intersecting_stats = calc(stats);
-                        }
-                        MeasurementChannels::AreaSize => {
-                            class_settings_slint.measurement.area_size = calc(stats);
-                        }
-                        MeasurementChannels::Perimeter => {
-                            class_settings_slint.measurement.perimeter_stats = calc(stats);
-                        }
-                        MeasurementChannels::Circularity => {
-                            class_settings_slint.measurement.circularity_stats = calc(stats);
-                        }
-                        MeasurementChannels::IntensityMin => {
-                            class_settings_slint.measurement.intensity_min_stats = calc(stats);
-                        }
-                        MeasurementChannels::IntensityMax => {
-                            class_settings_slint.measurement.intensity_max_stats = calc(stats);
-                        }
-                        MeasurementChannels::IntensityAvg => {
-                            class_settings_slint.measurement.intensity_avg_stats = calc(stats);
-                        }
-                        MeasurementChannels::IntensitySum => {
-                            class_settings_slint.measurement.intensity_sum_stats = calc(stats);
-                        }
-                        MeasurementChannels::Position => {
-                            class_settings_slint.measurement.position_stats = calc(stats);
-                        }
-                        MeasurementChannels::DistanceCenterToCenter => {
-                            class_settings_slint
-                                .measurement
-                                .distance_center_center_stats = calc(stats);
-                        }
-                        MeasurementChannels::DistanceCenterToSurfaceMin => {
-                            class_settings_slint
-                                .measurement
-                                .distance_center_surface_min_stats = calc(stats);
-                        }
-                        MeasurementChannels::DistanceCenterToSurfaceMax => {
-                            class_settings_slint
-                                .measurement
-                                .distance_center_surface_max_stats = calc(stats);
-                        }
-                        MeasurementChannels::DistanceSurfaceToSurfaceMin => {
-                            class_settings_slint
-                                .measurement
-                                .distance_surface_surface_min_stats = calc(stats);
-                        }
-                        MeasurementChannels::DistanceSurfaceToSurfaceMax => {
-                            class_settings_slint
-                                .measurement
-                                .distance_surface_surface_max_stats = calc(stats);
-                        }
-                    }
-                }
 
                 class_settings_state.set_settings(class_settings_slint);
             }

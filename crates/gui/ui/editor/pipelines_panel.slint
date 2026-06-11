@@ -958,12 +958,17 @@ component SpinnerInput inherits HorizontalLayout {
         dec := TouchArea {
             mouse-cursor: pointer;
             clicked => {
-                root.changed(root.value - root.step >= root.min ? "\{root.value - root.step}" : "\{root.min}");
+                // Read current displayed text (user may have typed a value different from root.value),
+                // compute the new value, write it back to input.text so the display updates,
+                // then notify the backend. Writing input.text here is intentional: after user typing,
+                // the text: binding on LineEdit is broken, so only a direct write keeps it in sync.
+                input.text = input.text.to-float() - root.step >= root.min ? "\{input.text.to-float() - root.step}" : "\{root.min}";
+                root.changed(input.text);
             }
         }
     }
 
-    LineEdit {
+    input := LineEdit {
         horizontal-stretch: 1;
         text: "\{root.value}";
         font-size: 11px;
@@ -991,7 +996,8 @@ component SpinnerInput inherits HorizontalLayout {
         inc := TouchArea {
             mouse-cursor: pointer;
             clicked => {
-                root.changed(root.value + root.step <= root.max ? "\{root.value + root.step}" : "\{root.max}");
+                input.text = input.text.to-float() + root.step <= root.max ? "\{input.text.to-float() + root.step}" : "\{root.max}";
+                root.changed(input.text);
             }
         }
     }
@@ -1560,10 +1566,7 @@ component StepRow inherits Rectangle {
                         // Click cycles: off → stop → snapshot → off
                         bp-btn := Rectangle {
                             // 0=off, 1=stop, 2=snapshot for this specific step
-                            property <int> bp-state: (
-                                PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id
-                                && PipelinesPanelState.breakpoint-step-id == root.step.id
-                            ) ? PipelinesPanelState.breakpoint-mode : 0;
+                            property <int> bp-state: (PipelinesPanelState.breakpoint-pipeline-id == root.pipeline-id && PipelinesPanelState.breakpoint-step-id == root.step.id) ? PipelinesPanelState.breakpoint-mode : 0;
                             width: 22px;
                             height: 22px;
                             border-radius: 4px;
@@ -1573,12 +1576,11 @@ component StepRow inherits Rectangle {
                                 width: 10px;
                                 height: 10px;
                                 border-radius: 5px;
-                                background: bp-btn.bp-state == 1 ? #e53e3e
-                                          : bp-btn.bp-state == 2 ? #ed8936
-                                          : Theme.text-faint;
+                                background: bp-btn.bp-state == 1 ? #e53e3e : bp-btn.bp-state == 2 ? #ed8936 : Theme.text-faint;
                                 border-width: bp-btn.bp-state == 0 ? 1.5px : 0px;
                                 border-color: Theme.text-faint;
                             }
+
                             bp-btn-ta := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
@@ -1588,7 +1590,7 @@ component StepRow inherits Rectangle {
                         }
 
                         GhostIconBtn {
-                            icon: step.enabled ? @image-url("../icons/regular-white/eye.svg") : @image-url("../icons/regular-white/eye-slash.svg");
+                            icon: step.enabled ? @image-url("../icons/regular-white/check-square.svg") : @image-url("../icons/regular-white/selection-slash.svg");
                             icon-sz: 13px;
                             tint: step.enabled ? Theme.text-dim : Theme.text-faint;
                             clicked => {
@@ -1870,6 +1872,8 @@ export global PipelinesPanelState {
     in-out property <bool> show-breakpoint-image: false;
     // True once a breakpoint image has been captured (enables the toggle).
     in-out property <bool> has-breakpoint-image: false;
+    // True once auto preview is enabled
+    in-out property <bool> auto-preview-enabled: false;
 
     // -- Outbound callbacks --
     // mode: 1 = Stop (pipeline halts at step), 2 = Snapshot (capture and continue)
@@ -1898,7 +1902,8 @@ export global PipelinesPanelState {
 
     callback run-all();
     callback dry-run();
-    callback save();
+    callback auto-preview(bool);
+    callback save-as-template();
 }
 
 
@@ -2235,8 +2240,7 @@ export component PipelinesPanel inherits Rectangle {
                                 PipelinesPanelState.param-changed(cmd.id, n, v);
                             }
                             toggle-breakpoint => {
-                                if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id
-                                        && PipelinesPanelState.breakpoint-step-id == cmd.id {
+                                if PipelinesPanelState.breakpoint-pipeline-id == PipelinesPanelState.active-pipeline-id && PipelinesPanelState.breakpoint-step-id == cmd.id {
                                     if PipelinesPanelState.breakpoint-mode == 1 {
                                         // Stop → Snapshot (capture image, pipeline continues)
                                         PipelinesPanelState.breakpoint-mode = 2;
@@ -2379,6 +2383,7 @@ export component PipelinesPanel inherits Rectangle {
                             background: #e53e3e;
                             y: 11px;
                         }
+
                         Text {
                             text: PipelinesPanelState.show-breakpoint-image ? "Breakpoint image" : "Original image";
                             font-size: 11px;
@@ -2386,6 +2391,7 @@ export component PipelinesPanel inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
+
                     bp-view-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
@@ -2398,56 +2404,117 @@ export component PipelinesPanel inherits Rectangle {
                 HorizontalLayout {
                     spacing: 6px;
 
-                    // Run all - primary
+                    // Combined preview control — one rounded unit:
+                    //   • left  : tap "Preview" to render once (dry-run)
+                    //   • right : toggle "Auto" to keep re-rendering on change
+                    // The Auto segment dims when off and gets a bright wash +
+                    // bold label when on, so its state reads without a switch.
                     Rectangle {
                         height: 34px;
                         border-radius: 6px;
-                        background: run-ta.has-hover ? Theme.accent.brighter(0.1) : Theme.accent;
                         horizontal-stretch: 1;
-                        animate background { duration: 100ms; }
+                        clip: true;
+                        background: Theme.accent;
+
                         HorizontalLayout {
-                            alignment: center;
-                            spacing: 6px;
-                            Image {
-                                y: 10px;
-                                source: @image-url("../icons/regular-white/lightning.svg");
-                                width: 13px;
-                                height: 13px;
-                                colorize: #ffffff;
+                            spacing: 0px;
+
+                            // -- One-shot preview --
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: preview-ta.has-hover ? #ffffff.with-alpha(0.12) : transparent;
+                                animate background { duration: 100ms; }
+
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 6px;
+                                    Image {
+                                        y: 10px;
+                                        source: @image-url("../icons/regular-white/eye.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: #ffffff;
+                                    }
+
+                                    Text {
+                                        text: "Preview";
+                                        color: #ffffff;
+                                        font-size: 12px;
+                                        font-weight: 500;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                preview-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        PipelinesPanelState.dry-run();
+                                    }
+                                }
                             }
 
-                            Text {
-                                text: "Run all";
-                                color: #ffffff;
-                                font-size: 12px;
-                                font-weight: 500;
-                                vertical-alignment: center;
+                            // Divider between the two segments
+                            Rectangle {
+                                width: 1px;
+                                background: #ffffff.with-alpha(0.25);
                             }
-                        }
 
-                        run-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                PipelinesPanelState.run-all();
+                            // -- Auto-preview toggle --
+                            Rectangle {
+                                width: 76px;
+                                background: PipelinesPanelState.auto-preview-enabled ? #ffffff.with-alpha(0.22) : (auto-ta.has-hover ? #ffffff.with-alpha(0.12) : transparent);
+                                animate background { duration: 100ms; }
+
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 5px;
+                                    Image {
+                                        y: 10px;
+                                        source: @image-url("../icons/regular-white/lightning.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: #ffffff;
+                                        opacity: PipelinesPanelState.auto-preview-enabled ? 1.0 : 0.55;
+                                    }
+
+                                    Text {
+                                        text: "Auto";
+                                        color: #ffffff;
+                                        opacity: PipelinesPanelState.auto-preview-enabled ? 1.0 : 0.55;
+                                        font-size: 12px;
+                                        font-weight: PipelinesPanelState.auto-preview-enabled ? 600 : 500;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                auto-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        PipelinesPanelState.auto-preview-enabled = !PipelinesPanelState.auto-preview-enabled;
+                                        PipelinesPanelState.auto-preview(PipelinesPanelState.auto-preview-enabled);
+                                    }
+                                }
                             }
                         }
                     }
 
+                    // Run analysis
                     GhostIconBtn {
                         sz: 34px;
                         icon-sz: 14px;
-                        icon: @image-url("../icons/regular-white/bug.svg");
+                        icon: @image-url("../icons/regular-white/person-simple-run.svg");
                         clicked => {
-                            PipelinesPanelState.dry-run();
+                            PipelinesPanelState.run-all();
                         }
                     }
 
+                    // Save pipeline as template
                     GhostIconBtn {
                         sz: 34px;
                         icon-sz: 14px;
                         icon: @image-url("../icons/regular-white/floppy-disk.svg");
                         clicked => {
-                            PipelinesPanelState.save();
+                            PipelinesPanelState.save-as-template();
                         }
                     }
                 }

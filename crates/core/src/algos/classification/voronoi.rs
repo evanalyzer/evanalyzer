@@ -16,7 +16,11 @@
 //! Each Voronoi region is labeled with the configured output class and linked back to its
 //! originating center object.
 //!
-use crate::{ImagePlane, algos::ImageAlgorithm, roi::Roi};
+use crate::{
+    ImagePlane,
+    algos::ImageAlgorithm,
+    roi::{Roi, RoiInit},
+};
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{
     InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
@@ -247,7 +251,7 @@ impl ImageAlgorithm for Voronoi {
             }
 
             let (center_id, _, _) = &centers[i];
-            let mut roi = Roi {
+            let mut roi = Roi::new(RoiInit {
                 id: ObjectId::next(),
                 segmentation_class: SegmentationClass::MANUAL_ANNOTATED,
                 bbox: [x_min, y_min, x_max, y_max],
@@ -261,8 +265,8 @@ impl ImageAlgorithm for Voronoi {
                 sum_y2,
                 sum_xy,
                 parent_id: Some(center_id.clone()),
-                ..Roi::default()
-            };
+                ..Default::default()
+            });
             roi.add_object_class(self.output_class);
             new_rois.push(roi);
         }
@@ -343,14 +347,14 @@ mod tests {
         let h = (y_max - y_min + 1) as usize;
         let area = w * h;
         let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
-        let mut roi = Roi {
+        let mut roi = Roi::new(RoiInit {
             id: ObjectId(id),
             bbox,
             mask_data,
             area,
             plane: ImagePlane::default(),
-            ..Roi::default()
-        };
+            ..Default::default()
+        });
         roi.add_object_class(class);
         roi
     }

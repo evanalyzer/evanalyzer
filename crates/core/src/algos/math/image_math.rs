@@ -20,15 +20,15 @@ pub enum Operand {
     /// Arithmetic division: `A / B`.
     Divide,
     /// Bitwise AND operation.
-    AND,
+    And,
     /// Bitwise OR operation.
-    OR,
+    Or,
     /// Bitwise XOR operation.
-    XOR,
+    Xor,
     /// Per-pixel minimum: `min(A, B)`. (Darkest Pixel).
-    MIN,
+    Min,
     /// Per-pixel maximum: `max(A, B)`. (Brightest Pixel).
-    MAX,
+    Max,
     /// Arithmetic mean: `(A + B) / 2`.
     Average,
     /// Absolute difference: `|A - B|`. Useful for change detection.
@@ -186,11 +186,11 @@ impl ImageMath {
                             a
                         }
                     } // Important!
-                    Operand::AND => f32::from_bits(a.to_bits() & b.to_bits()),
-                    Operand::OR => f32::from_bits(a.to_bits() | b.to_bits()),
-                    Operand::XOR => f32::from_bits(a.to_bits() ^ b.to_bits()),
-                    Operand::MIN => a.min(b),
-                    Operand::MAX => a.max(b),
+                    Operand::And => f32::from_bits(a.to_bits() & b.to_bits()),
+                    Operand::Or => f32::from_bits(a.to_bits() | b.to_bits()),
+                    Operand::Xor => f32::from_bits(a.to_bits() ^ b.to_bits()),
+                    Operand::Min => a.min(b),
+                    Operand::Max => a.max(b),
                     Operand::Average => (a + b) * 0.5,
                     Operand::DifferenceType => (a - b).abs(),
                     _ => a,
@@ -282,8 +282,8 @@ mod tests {
 
     #[test]
     fn test_logic_and_comparison() {
-        assert_eq!(run_math_test(Operand::MIN, 0.1, 0.9, false), 0.1);
-        assert_eq!(run_math_test(Operand::MAX, 0.1, 0.9, false), 0.9);
+        assert_eq!(run_math_test(Operand::Min, 0.1, 0.9, false), 0.1);
+        assert_eq!(run_math_test(Operand::Max, 0.1, 0.9, false), 0.9);
         assert_eq!(run_math_test(Operand::Average, 0.0, 1.0, false), 0.5);
         assert_eq!(run_math_test(Operand::DifferenceType, 0.2, 0.8, false), 0.6);
     }
@@ -303,17 +303,17 @@ mod tests {
 
         // 1010 AND 1100 = 1000 (8)
         assert_eq!(
-            run_math_test(Operand::AND, val_a, val_b, false),
+            run_math_test(Operand::And, val_a, val_b, false),
             f32::from_bits(0b1000)
         );
         // 1010 OR 1100 = 1110 (14)
         assert_eq!(
-            run_math_test(Operand::OR, val_a, val_b, false),
+            run_math_test(Operand::Or, val_a, val_b, false),
             f32::from_bits(0b1110)
         );
         // 1010 XOR 1100 = 0110 (6)
         assert_eq!(
-            run_math_test(Operand::XOR, val_a, val_b, false),
+            run_math_test(Operand::Xor, val_a, val_b, false),
             f32::from_bits(0b0110)
         );
     }

@@ -3,11 +3,15 @@ use crate::extensions::roi_ext::RoiExt;
 use crate::extensions::utils::{get_relative_key, is_in_root, wavelength_to_rgb_u32};
 use crate::project_owner::{ProjectTmpSettings, ProjectWithRuntime};
 use bitvec::{order::Lsb0, vec::BitVec};
-use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
+use evanalyzer_cfg::core_types::ImageAddress;
+use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackSettings,
 };
+use evanalyzer_cfg::settings::meta_data::MetaData;
+use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
+use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
 use evanalyzer_cfg::{
     core_types::ObjectClass,
     settings::{
@@ -157,6 +161,18 @@ pub trait ProjectExt {
 
     fn save_project(&mut self) -> SaveProjectActions;
     fn save_project_as(&mut self, path: &PathBuf) -> Result<(), InternalErrors>;
+    fn save_project_as_template(
+        &mut self,
+        meta: MetaData,
+        path: &PathBuf,
+    ) -> Result<(), InternalErrors>;
+    fn save_pipeline_as_template(
+        &mut self,
+        meta: MetaData,
+        pipeline_id: PipelineId,
+        path: &PathBuf,
+    ) -> Result<(), InternalErrors>;
+
     fn new(&self) -> Arc<ProjectWithRuntime>;
     fn new_project(&mut self, path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors>;
 
@@ -165,6 +181,13 @@ pub trait ProjectExt {
 
     fn enable_pipeline(&mut self, enabled: bool, pipeline_id: PipelineId);
     fn enable_pipeline_step(&mut self, enabled: bool, pipeline_id: PipelineId, step_id: usize);
+
+    fn add_pipeline(&mut self, pipeline_settings: PipelineSettings);
+    fn add_pipeline_from_template_file(&mut self, template_file: &PathBuf);
+
+    /// Replaces the classification, plate and pipeline settings of this project
+    /// with the ones from `template`. The image list and project path are kept.
+    fn apply_project_template(&mut self, template: &ProjectTemplate);
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass);
     fn is_class_visible(&self, class_id: &ObjectClass) -> bool;
@@ -1069,7 +1092,7 @@ impl ProjectExt for ProjectWithRuntime {
     fn save_project_as(&mut self, path: &PathBuf) -> Result<(), InternalErrors> {
         let mut final_path = path.clone();
 
-        // Check if the extension matches; if not, set it to improj
+        // Check if the extension matches; if not, set it to evaproj
         if final_path.extension().and_then(|s| s.to_str()) != Some(PROJECT_FILE_EXTENSIONS) {
             final_path.set_extension(PROJECT_FILE_EXTENSIONS);
         }
@@ -1079,6 +1102,70 @@ impl ProjectExt for ProjectWithRuntime {
         fs::write(final_path.clone(), json)?;
 
         let _ = self.tmp_settings.current_project.insert(final_path);
+        Ok(())
+    }
+
+    /// Stores the actual project as template project
+    fn save_project_as_template(
+        &mut self,
+        meta: MetaData,
+        path: &PathBuf,
+    ) -> Result<(), InternalErrors> {
+        let template = ProjectTemplate {
+            meta,
+            classification: self.classification.clone(),
+            plate: self.plate.clone(),
+            pipelines: self
+                .pipelines
+                .iter()
+                .map(|pipeline| PipelineTemplate {
+                    meta: MetaData {
+                        name: pipeline.name.clone().unwrap_or_default(),
+                        ..Default::default()
+                    },
+                    pipeline_steps: pipeline.steps.clone(),
+                })
+                .collect(),
+        };
+
+        let mut final_path = path.clone();
+        if final_path.extension().and_then(|s| s.to_str()) != Some(PROJECT_FILE_TEMPLATE_EXTENSIONS)
+        {
+            final_path.set_extension(PROJECT_FILE_TEMPLATE_EXTENSIONS);
+        }
+
+        let json = serde_json::to_string_pretty(&template)
+            .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
+        fs::write(final_path, json)?;
+        Ok(())
+    }
+
+    /// Stores the selected pipeline as template
+    fn save_pipeline_as_template(
+        &mut self,
+        meta: MetaData,
+        pipeline_id: PipelineId,
+        path: &PathBuf,
+    ) -> Result<(), InternalErrors> {
+        let pipeline = self
+            .pipelines
+            .iter()
+            .find(|p| p.id == pipeline_id)
+            .ok_or_else(|| InternalErrors::Internal("Pipeline not found".into()))?;
+
+        let template = PipelineTemplate {
+            meta,
+            pipeline_steps: pipeline.steps.clone(),
+        };
+
+        let mut final_path = path.clone();
+        if final_path.extension().and_then(|s| s.to_str()) != Some(PIPELINE_EXTENSIONS) {
+            final_path.set_extension(PIPELINE_EXTENSIONS);
+        }
+
+        let json = serde_json::to_string_pretty(&template)
+            .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
+        fs::write(final_path, json)?;
         Ok(())
     }
 
@@ -1128,6 +1215,62 @@ impl ProjectExt for ProjectWithRuntime {
                 step.enabled = enabled;
             }
         }
+    }
+
+    fn add_pipeline(&mut self, pipeline_settings: PipelineSettings) {
+        self.pipelines.push(pipeline_settings);
+    }
+    fn add_pipeline_from_template_file(&mut self, template_file: &PathBuf) {
+        let Ok(data) = fs::read_to_string(template_file) else {
+            warn!("Could not read pipeline template {:?}", template_file);
+            return;
+        };
+        let template: PipelineTemplate = match serde_json::from_str(&data) {
+            Ok(template) => template,
+            Err(err) => {
+                warn!("Could not parse pipeline template {:?}: {}", template_file, err);
+                return;
+            }
+        };
+
+        let next_id = self.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
+        let name = if template.meta.name.is_empty() {
+            None
+        } else {
+            Some(template.meta.name)
+        };
+
+        self.add_pipeline(PipelineSettings {
+            id: PipelineId(next_id),
+            name,
+            image_source: ImageAddress::default(),
+            enabled: true,
+            steps: template.pipeline_steps,
+        });
+    }
+
+    fn apply_project_template(&mut self, template: &ProjectTemplate) {
+        self.classification = template.classification.clone();
+        self.plate = template.plate.clone();
+        self.pipelines = template
+            .pipelines
+            .iter()
+            .enumerate()
+            .map(|(idx, pipeline)| {
+                let name = if pipeline.meta.name.is_empty() {
+                    None
+                } else {
+                    Some(pipeline.meta.name.clone())
+                };
+                PipelineSettings {
+                    id: PipelineId((idx + 1) as u32),
+                    name,
+                    image_source: ImageAddress::default(),
+                    enabled: true,
+                    steps: pipeline.pipeline_steps.clone(),
+                }
+            })
+            .collect();
     }
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass) {

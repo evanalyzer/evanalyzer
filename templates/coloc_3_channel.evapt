@@ -1,0 +1,995 @@
+{
+  "meta": {
+    "name": "Coloc 3 channels",
+    "shortDescription": "Spot colocalization with three image channels.",
+    "description": "Spot colocalization with three image channels.",
+    "authorFirstName": "Melanie",
+    "authorLastName": "Schuerz",
+    "authorOrganization": "University of Salzburg",
+    "creationTime": "2026-06-11T00:00:00Z"
+  },
+  "classification": {
+    "classes": [
+      {
+        "id": {
+          "VALID": 15
+        },
+        "color": "#5EFF00",
+        "name": "ch1@allspots",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG"
+          ],
+          "circularity": [
+            "AVG"
+          ],
+          "intensitySum": [
+            "AVG"
+          ],
+          "intensityAvg": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 1
+        },
+        "color": "#FF3333",
+        "name": "ch2@allspots",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG"
+          ],
+          "circularity": [
+            "AVG"
+          ],
+          "intensitySum": [
+            "AVG"
+          ],
+          "intensityAvg": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 5
+        },
+        "color": "#3399FF",
+        "name": "ch3@all spots",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG"
+          ],
+          "circularity": [
+            "AVG"
+          ],
+          "intensitySum": [
+            "AVG"
+          ],
+          "intensityAvg": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 16
+        },
+        "color": "#D2FF00",
+        "name": "tetraspeck@spot",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 7
+        },
+        "color": "#FFD200",
+        "name": "ch1@coloc_ch2",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG"
+          ],
+          "circularity": [
+            "AVG"
+          ],
+          "intensitySum": [
+            "AVG"
+          ],
+          "intensityAvg": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 8
+        },
+        "color": "#FFFF33",
+        "name": "ch1@coloc_ch3",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG",
+            "SUM"
+          ],
+          "intensitySum": [
+            "AVG",
+            "SUM"
+          ],
+          "intensityAvg": [
+            "AVG",
+            "SUM"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 4
+        },
+        "color": "#F6FF00",
+        "name": "ch1@coloc_ch2and3",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG"
+          ],
+          "circularity": [
+            "AVG"
+          ],
+          "intensitySum": [
+            "AVG"
+          ],
+          "intensityAvg": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 11
+        },
+        "color": "#FF33C4",
+        "name": "ch2@coloc_ch1",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG"
+          ],
+          "circularity": [
+            "AVG"
+          ],
+          "intensitySum": [
+            "AVG"
+          ],
+          "intensityAvg": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 2
+        },
+        "color": "#FF33FF",
+        "name": "ch2@coloc_ch3",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 3
+        },
+        "color": "#9933FF",
+        "name": "ch2@coloc_ch1and3",
+        "notes": "",
+        "measure": {
+          "areaSize": [
+            "AVG"
+          ],
+          "circularity": [
+            "AVG"
+          ],
+          "intensitySum": [
+            "AVG"
+          ],
+          "intensityAvg": [
+            "AVG"
+          ]
+        }
+      },
+      {
+        "id": {
+          "VALID": 6
+        },
+        "color": "#33FFD1",
+        "name": "ch3@coloc_ch1",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 9
+        },
+        "color": "#33FFCC",
+        "name": "ch3@coloc_ch2",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 10
+        },
+        "color": "#33FF99",
+        "name": "ch3@coloc_ch1and2",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 12
+        },
+        "color": "#33FF57",
+        "name": "ch1@noncoloc",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 13
+        },
+        "color": "#FF3380",
+        "name": "ch2@noncoloc",
+        "notes": "",
+        "measure": {}
+      },
+      {
+        "id": {
+          "VALID": 14
+        },
+        "color": "#33CFFF",
+        "name": "ch3@noncoloc",
+        "notes": "",
+        "measure": {}
+      }
+    ]
+  },
+  "plate": {
+    "groupingMode": "NO_GROUPING",
+    "groupingRegex": "",
+    "plateCols": 1,
+    "plateRows": 1,
+    "wellCols": 4,
+    "wellRows": 4,
+    "wellImageOrder": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ]
+  },
+  "pipelines": [
+    {
+      "meta": {
+        "name": "Channel1",
+        "shortDescription": "Channel1",
+        "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "rollingBall",
+            "radius": 4.0,
+            "ballType": "PARABOLOID",
+            "preSmooth": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MANUAL",
+                "minThreshold": 200.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 15
+            },
+            "sizeUnit": "px",
+            "minArea": 5.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "saveImage",
+            "path": "images/${imageName}/ev",
+            "source": "IMAGE"
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "Channel2",
+        "shortDescription": "Channel2",
+        "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "rollingBall",
+            "radius": 4.0,
+            "ballType": "PARABOLOID",
+            "preSmooth": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MANUAL",
+                "minThreshold": 200.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 1
+            },
+            "sizeUnit": "px",
+            "minArea": 5.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "saveImage",
+            "path": "images/${imageName}/ev",
+            "source": "IMAGE"
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "Channel3",
+        "shortDescription": "Channel3",
+        "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "rollingBall",
+            "radius": 4.0,
+            "ballType": "PARABOLOID",
+            "preSmooth": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MANUAL",
+                "minThreshold": 200.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 5
+            },
+            "sizeUnit": "px",
+            "minArea": 5.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "saveImage",
+            "path": "images/${imageName}/ev",
+            "source": "IMAGE"
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "Tetraspeck",
+        "shortDescription": "Tetraspeck",
+        "description": "This pipeline steps enables the removal of calibration beads (e.g. tetraspeck) that are fluorescent in all channels. \n1. Enable pipeline \ud83d\udc41\n2. Select Tetraspeck image channel (channel showing only tetraspecks)\n3. Adapt (manual) threshold \n4. Within the *Reclassify* command select the channels where tetraspeck need to be removed. Approximation notes: $reclassify was approximated via Colocalization",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "rollingBall",
+            "radius": 4.0,
+            "ballType": "PARABOLOID",
+            "preSmooth": false
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "blur",
+            "kernelSize": 3
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "threshold",
+            "thresholds": [
+              {
+                "method": "MANUAL",
+                "minThreshold": 200.0,
+                "maxThreshold": 65535.0,
+                "unit": "bit",
+                "objectClassId": 1
+              }
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "watershed",
+            "maximumFinderTolerance": 0.5
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "connectedComponents"
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "extractRois",
+            "maxObjectsBeforeFail": 100000
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "classifyRois",
+            "originSegmentation": [
+              1
+            ],
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": {
+              "VALID": 16
+            },
+            "sizeUnit": "px",
+            "minArea": 5.0,
+            "maxArea": 2147483648.0,
+            "minCircularity": 0.0,
+            "maxCircularity": 1.0,
+            "minSolidity": 0.0,
+            "maxSolidity": 1.0,
+            "minAspectRatio": 0.0,
+            "maxAspectRatio": 2147483648,
+            "minEccentricity": 0.0,
+            "maxEccentricity": 1.0,
+            "minFeret": 0.0,
+            "maxFeret": 2147483648,
+            "allowEdgeTouching": true
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 1
+              },
+              {
+                "VALID": 16
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": "UNSET",
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "name": "Coloc ",
+        "shortDescription": "Coloc ",
+        "description": "Colocalisation is set to 0.1 (0.1-1) as default and may be changed.\n\nWith these settings you will find the following groups:\nall spots: includes coloc and non-coloc spots\n- non colocalising ch1, ch2, ch3: spots only detected in the one respective channel\n- 2 channel coloc spots: e.g. ch1and 2 includes all spots that have channel 1 and 2 and also includes spots that might have ch3\n- 3 channel coloc spots: spots recognized in ch1, 2 and 3\n Approximation notes: $reclassify was approximated via Colocalization $reclassify was approximated via Colocalization $reclassify was approximated via Colocalization $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry)",
+        "authorFirstName": "EVAnalyzer",
+        "authorLastName": "Team",
+        "authorOrganization": "evanalyzer.org",
+        "creationTime": "2026-06-11T00:00:00Z"
+      },
+      "pipelineSteps": [
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 15
+              },
+              {
+                "VALID": 15
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 12
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 1
+              },
+              {
+                "VALID": 1
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 13
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 5
+              },
+              {
+                "VALID": 5
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 14
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 12
+              },
+              {
+                "VALID": 13
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 4
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 13
+              },
+              {
+                "VALID": 12
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 3
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 14
+              },
+              {
+                "VALID": 12
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 10
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 12
+              },
+              {
+                "VALID": 13
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 7
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 13
+              },
+              {
+                "VALID": 12
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 11
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 12
+              },
+              {
+                "VALID": 14
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 8
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 14
+              },
+              {
+                "VALID": 12
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 6
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 13
+              },
+              {
+                "VALID": 14
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 2
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        },
+        {
+          "enabled": true,
+          "command": {
+            "type": "colocalization",
+            "classesToColoc": [
+              {
+                "VALID": 14
+              },
+              {
+                "VALID": 13
+              }
+            ],
+            "filterClasses": [],
+            "classForOverlappingAreas": {
+              "VALID": 9
+            },
+            "allowMultiObjectColoc": true,
+            "sizeUnit": "px",
+            "minColocArea": 0.0
+          }
+        }
+      ]
+    }
+  ]
+}

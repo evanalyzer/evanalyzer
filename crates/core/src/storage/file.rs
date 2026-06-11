@@ -131,10 +131,6 @@ impl PipelineResultExporter for CsvExporter {
                 header.push(format!("ch{}_integrated_density_scaled", ch));
                 header.push(format!("ch{}_mean_intensity_raw", ch));
                 header.push(format!("ch{}_mean_intensity_scaled", ch));
-                header.push(format!("ch{}_median_intensity_raw", ch));
-                header.push(format!("ch{}_median_intensity_scaled", ch));
-                header.push(format!("ch{}_std_dev_raw", ch));
-                header.push(format!("ch{}_std_dev_scaled", ch));
                 header.push(format!("ch{}_min_intensity_raw", ch));
                 header.push(format!("ch{}_min_intensity_scaled", ch));
                 header.push(format!("ch{}_max_intensity_raw", ch));
@@ -239,8 +235,6 @@ impl PipelineResultExporter for CsvExporter {
             for ch in &channel_ids {
                 if let Some(intensity) = roi.intensities.get(ch) {
                     let mean_raw = intensity.sum_intensity / (roi.area as f64).max(1.0);
-                    let median_raw = intensity.median_intensity.unwrap_or(0.0) as f64;
-                    let std_raw = intensity.std_dev.unwrap_or(0.0) as f64;
                     let min_raw = intensity.min_intensity as f64;
                     let max_raw = intensity.max_intensity as f64;
 
@@ -248,17 +242,13 @@ impl PipelineResultExporter for CsvExporter {
                     row.push(format!("{:.2}", intensity.sum_intensity * bit_max));
                     row.push(format!("{:.6}", mean_raw));
                     row.push(format!("{:.2}", mean_raw * bit_max));
-                    row.push(format!("{:.6}", median_raw));
-                    row.push(format!("{:.2}", median_raw * bit_max));
-                    row.push(format!("{:.6}", std_raw));
-                    row.push(format!("{:.2}", std_raw * bit_max));
                     row.push(format!("{:.6}", min_raw));
                     row.push(format!("{:.2}", min_raw * bit_max));
                     row.push(format!("{:.6}", max_raw));
                     row.push(format!("{:.2}", max_raw * bit_max));
                 } else {
-                    // 12 empty cells (6 metrics × 2 scales)
-                    row.extend(std::iter::repeat_n("".to_string(), 12));
+                    // 8 empty cells (4 metrics × 2 scales)
+                    row.extend(std::iter::repeat_n("".to_string(), 8));
                 }
             }
 
