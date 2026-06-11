@@ -685,6 +685,9 @@ impl PipelinesController {
                             favorite: false,
                             recent: false,
                             default_params: ModelRc::default(),
+                            is_template: false,
+                            author: "".into(),
+                            organization: "".into(),
                         };
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_detail(detail);
@@ -1235,6 +1238,9 @@ impl PipelinesController {
                 favorite: false,
                 recent: false,
                 default_params: ModelRc::default(),
+                is_template: false,
+                author: "".into(),
+                organization: "".into(),
             }
         };
         let pre: Vec<CommandDef> = metas
@@ -1372,6 +1378,9 @@ impl PipelinesController {
                     favorite: false,
                     recent: false,
                     default_params: ModelRc::default(),
+                    is_template: false,
+                    author: "".into(),
+                    organization: "".into(),
                 };
                 let all: Vec<CommandDef> = raw.iter().map(make_def).collect();
                 let shown_pre: Vec<CommandDef> = raw
@@ -1701,6 +1710,13 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         })
         .unwrap_or(StepCategory::Preprocess);
 
+    let author = format!(
+        "{} {}",
+        template.meta.author_first_name, template.meta.author_last_name
+    )
+    .trim()
+    .to_string();
+
     CommandDef {
         id: -(idx as i32) - 1,
         name: template.meta.name.clone().into(),
@@ -1713,5 +1729,8 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         favorite: false,
         recent: false,
         default_params: ModelRc::default(),
+        is_template: true,
+        author: author.into(),
+        organization: template.meta.author_organization.clone().into(),
     }
 }

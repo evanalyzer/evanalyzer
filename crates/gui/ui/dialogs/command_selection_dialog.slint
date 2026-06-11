@@ -64,6 +64,10 @@ export struct CommandDef {
     favorite: bool,
     recent: bool,
     default-params: [DefaultParamPreview],
+    // Pipeline template entries (negative ids).
+    is-template: bool,
+    author: string,
+    organization: string,
 }
 
 // ---------- Command picker global state ----------
@@ -127,6 +131,14 @@ global PickerStyle {
             return Theme.cat-measure;
         }
         return Theme.cat-classify;
+    }
+    // Templates always use the accent color, regardless of the category of
+    // their first step.
+    public pure function cmd-color(cmd: CommandDef) -> color {
+        if cmd.is-template {
+            return Theme.accent;
+        }
+        return cat-color(cmd.category);
     }
     public pure function cat-name(c: StepCategory) -> string {
         if c == StepCategory.preprocess {
@@ -262,7 +274,7 @@ component CommandRow inherits Rectangle {
         y: 6px;
         width: 3px;
         height: parent.height - 12px;
-        background: PickerStyle.cat-color(cmd.category);
+        background: PickerStyle.cmd-color(cmd);
         border-radius: 1.5px;
     }
 
@@ -283,7 +295,7 @@ component CommandRow inherits Rectangle {
             border-color: Theme.border-soft;
             Text {
                 text: cmd.icon-glyph;
-                color: PickerStyle.cat-color(cmd.category);
+                color: PickerStyle.cmd-color(cmd);
                 font-size: 14px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -412,13 +424,13 @@ component DetailPane inherits Rectangle {
                 width: 6px;
                 height: 6px;
                 border-radius: 1.5px;
-                background: PickerStyle.cat-color(cmd.category);
+                background: PickerStyle.cmd-color(cmd);
                 y: (parent.height - 6px) / 2;
             }
 
             Text {
-                text: PickerStyle.cat-name(cmd.category);
-                color: PickerStyle.cat-color(cmd.category);
+                text: cmd.is-template ? "TEMPLATE" : PickerStyle.cat-name(cmd.category);
+                color: PickerStyle.cmd-color(cmd);
                 font-size: 10px;
                 font-weight: 600;
                 letter-spacing: 0.6px;
@@ -500,7 +512,43 @@ component DetailPane inherits Rectangle {
 
         VerticalLayout {
             spacing: 4px;
-            HorizontalLayout {
+            if cmd.is-template && cmd.author != "": HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: "Author";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                }
+
+                Text {
+                    text: cmd.author;
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    overflow: elide;
+                }
+            }
+
+            if cmd.is-template && cmd.organization != "": HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: "Organization";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                }
+
+                Text {
+                    text: cmd.organization;
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    overflow: elide;
+                }
+            }
+
+            if !cmd.is-template: HorizontalLayout {
                 spacing: 8px;
                 alignment: space-between;
                 Text {
