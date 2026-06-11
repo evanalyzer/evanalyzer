@@ -610,7 +610,7 @@ impl PipelinesController {
                             (String::new(), 0, -1i32, -1i32)
                         }
                     };
-                    manager.reload_pipeline_templates();
+                    manager.reload_pipeline_templates_async();
                     if let Some(ui) = manager.ui.upgrade() {
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_pipeline_id(pipeline_id);
@@ -1330,13 +1330,43 @@ impl PipelinesController {
         picker.set_cat_count_fav(cf);
     }
 
-    /// Reloads pipeline templates from the user and app templates folders.
-    fn reload_pipeline_templates(self: &Arc<Self>) {
-        let templates: Vec<PipelineTemplate> = load_pipeline_templates()
-            .into_iter()
-            .map(|(_path, template)| template)
-            .collect();
-        *self.pipeline_templates.lock().expect("Poisoned") = templates;
+    /// Reloads pipeline templates from the user and app templates folders in the
+    /// background, then refreshes the command picker if it is still open.
+    ///
+    /// Scanning the templates folders involves blocking filesystem I/O which can
+    /// be slow (e.g. on Windows with antivirus scanning or network drives), so it
+    /// must not run on the Slint event-loop thread - doing so would freeze the UI
+    /// while the "Add Step" dialog opens. The dialog opens immediately with the
+    /// previously cached templates and is updated in place once the reload
+    /// completes.
+    fn reload_pipeline_templates_async(self: &Arc<Self>) {
+        let manager = self.clone();
+        std::thread::spawn(move || {
+            let templates: Vec<PipelineTemplate> = load_pipeline_templates()
+                .into_iter()
+                .map(|(_path, template)| template)
+                .collect();
+            *manager.pipeline_templates.lock().expect("Poisoned") = templates;
+
+            let manager = manager.clone();
+            if let Err(e) = slint::invoke_from_event_loop(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                if ui.global::<GlobalAppState>().get_active_dialog()
+                    != DialogType::CommandSelectionDialog
+                {
+                    return;
+                }
+                let picker = ui.global::<CommandPickerState>();
+                let query = picker.get_query().to_string();
+                let filter_cat = picker.get_filter_category();
+                let filter_favorites = picker.get_filter_favorites();
+                manager.apply_picker_filter(&ui, &query, filter_cat, filter_favorites);
+            }) {
+                warn!("Failed to refresh pipeline templates in picker: {}", e);
+            }
+        });
     }
 
     fn sync_commands_to_selection_dialog_slint(self: &Arc<Self>) {
