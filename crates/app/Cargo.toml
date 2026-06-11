@@ -21,6 +21,7 @@ serde_json = "1.0.149"
 regex = "1"
 csv = "1"
 rust_xlsxwriter = "0"
+dirs = "6"
 
 
 

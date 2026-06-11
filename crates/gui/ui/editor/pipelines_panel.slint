@@ -1903,7 +1903,7 @@ export global PipelinesPanelState {
     callback run-all();
     callback dry-run();
     callback auto-preview(bool);
-    callback save();
+    callback save-as-template();
 }
 
 
@@ -2462,9 +2462,7 @@ export component PipelinesPanel inherits Rectangle {
                             // -- Auto-preview toggle --
                             Rectangle {
                                 width: 76px;
-                                background: PipelinesPanelState.auto-preview-enabled
-                                    ? #ffffff.with-alpha(0.22)
-                                    : (auto-ta.has-hover ? #ffffff.with-alpha(0.12) : transparent);
+                                background: PipelinesPanelState.auto-preview-enabled ? #ffffff.with-alpha(0.22) : (auto-ta.has-hover ? #ffffff.with-alpha(0.12) : transparent);
                                 animate background { duration: 100ms; }
 
                                 HorizontalLayout {
@@ -2516,7 +2514,7 @@ export component PipelinesPanel inherits Rectangle {
                         icon-sz: 14px;
                         icon: @image-url("../icons/regular-white/floppy-disk.svg");
                         clicked => {
-                            PipelinesPanelState.save();
+                            PipelinesPanelState.save-as-template();
                         }
                     }
                 }

@@ -2,6 +2,7 @@ use crate::AppWindow;
 use crate::DialogType;
 use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::roi_list_controller::RoiListController;
+use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CommandDef, CommandParameter, CommandPickerState, GlobalAppState, GroupItem, LeafParam,
@@ -44,6 +45,7 @@ pub struct PipelinesController {
     pub(crate) app_state: Arc<UiState>,
     pub(crate) _roi_list_controller: Arc<RoiListController>,
     pub(crate) viewport_controller: Arc<ViewportController>,
+    pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
     pub(crate) pipeline_cancel_flag: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     /// Currently active breakpoint: (pipeline_id, step_id, mode).  `None` = no breakpoint.
@@ -59,12 +61,14 @@ impl PipelinesController {
         app_state: Arc<UiState>,
         roi_list_controller: Arc<RoiListController>,
         viewport_controller: Arc<ViewportController>,
+        template_controller: Arc<TemplateController>,
     ) -> Self {
         Self {
             ui,
             app_state: app_state.clone(),
             _roi_list_controller: roi_list_controller,
             viewport_controller,
+            template_controller,
             task_request: Arc::new((Mutex::new(None), Condvar::new())),
             pipeline_cancel_flag: Arc::new(Mutex::new(None)),
             breakpoint: Arc::new(Mutex::new(None)),
@@ -75,6 +79,13 @@ impl PipelinesController {
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
+            // Save as template
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_save_as_template(move || {
+                    manager.save_pipeline_as_template();
+                });
+
             // Dry run pipeline
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_dry_run(move || {
@@ -184,7 +195,7 @@ impl PipelinesController {
                     let mut project = manager.app_state.get_project_write();
                     let next_id = project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
                     let name = format!("Pipeline {}", next_id);
-                    project.pipelines.push(PipelineSettings {
+                    project.add_pipeline(PipelineSettings {
                         id: PipelineId(next_id),
                         name: Some(name.clone()),
                         image_source: ImageAddress::Channel(0),
@@ -1586,5 +1597,18 @@ impl PipelinesController {
         }) {
             warn!("Failed to sync steps to Slint: {}", e);
         }
+    }
+
+    /// Opens the "Save as Template" flow for the currently active pipeline.
+    fn save_pipeline_as_template(self: &Arc<Self>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let panel = ui.global::<PipelinesPanelState>();
+        let pipeline_id = PipelineId(panel.get_active_pipeline_id() as u32);
+        let name = panel.get_active_pipeline_name().to_string();
+
+        self.template_controller
+            .start_pipeline_template_save(pipeline_id, name);
     }
 }

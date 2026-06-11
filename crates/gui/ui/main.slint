@@ -74,6 +74,11 @@ import {
     PipelineRunningDialog,
     PipelineRunningState,
 } from "dialogs/pipeline_running_dialog.slint";
+import {
+    TemplateMetaDialog,
+    TemplateMetaState,
+    TemplateMetaSlint,
+} from "dialogs/template_meta_dialog.slint";
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
 import { PreviewRendering } from "dialogs/preview_rendering_dialog.slint";
 import { WarningDialog } from "dialogs/warning_dialog.slint";
@@ -95,6 +100,7 @@ export {GlobalAppState,ProjectSettingsSlint, ProjectSettingsState,
         ToolbarState, ToolState, ViewportRoiState, PipelinesPanelState,
         CommandPickerState, CommandDef, DefaultParamPreview,
         PipelineEditState, PipelineDeleteConfirmState, PipelineRunningState,
+        TemplateMetaState, TemplateMetaSlint,
         ResultsListState, WarningState,
         ResultsWindow, ResultsState, ResultsColumnDef, ResultsRow, ResultsViewMode  }
 
@@ -225,6 +231,10 @@ export component AppWindow inherits Window {
             height: 100%;
         }
         if (GlobalAppState.active_dialog == DialogType.warning): WarningDialog {
+            width: 100%;
+            height: 100%;
+        }
+        if (GlobalAppState.active_dialog == DialogType.template-meta): TemplateMetaDialog {
             width: 100%;
             height: 100%;
         }

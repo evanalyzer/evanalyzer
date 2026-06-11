@@ -2,7 +2,7 @@ pub mod extensions;
 pub mod frontend;
 mod project_owner;
 mod results;
-mod templates;
+pub mod templates;
 
 pub use frontend::Frontend;
 pub use project_owner::{AppHandle, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime};

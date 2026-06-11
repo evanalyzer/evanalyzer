@@ -119,6 +119,16 @@ export component CustomMenuBar inherits Rectangle {
                             file-menu.close();
                         }
                     }
+
+                    MenuSeparator { }
+
+                    MenuItem {
+                        text: "Save as Template…";
+                        clicked => {
+                            ToolbarState.save_project_as_template_clicked();
+                            file-menu.close();
+                        }
+                    }
                 }
             }
         }

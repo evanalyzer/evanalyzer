@@ -8,6 +8,7 @@ use crate::{
         project_settings_controller::ProjectSettingsController,
         results_list_controller::ResultsListController,
         results_table_controller::ResultsTableController, roi_list_controller::RoiListController,
+        template_controller::TemplateController,
         viewport_controller::ViewportController,
         viewport_image_controller::ViewportImageController,
         viewport_roi_controller::ViewPortRoiController,
@@ -27,6 +28,7 @@ pub mod project_settings_controller;
 pub mod results_list_controller;
 pub mod results_table_controller;
 pub mod roi_list_controller;
+pub mod template_controller;
 pub mod viewport_cache;
 pub mod viewport_controller;
 pub mod viewport_image_controller;
@@ -49,6 +51,7 @@ pub struct Editor {
     pipeline_worker: Arc<PipelineWorker>,
     results_table_controller: Arc<ResultsTableController>,
     results_list_controller: Arc<ResultsListController>,
+    template_controller: Arc<TemplateController>,
 }
 
 impl Editor {
@@ -119,11 +122,17 @@ impl Editor {
             roi_list_controller.clone(),
         ));
 
+        let template_controller = Arc::new(TemplateController::new(
+            ui.clone(),
+            app_state.clone(),
+        ));
+
         let pipelines_controller = Arc::new(pipelines_controller::PipelinesController::new(
             ui.clone(),
             app_state.clone(),
             roi_list_controller.clone(),
             viewport_controller.clone(),
+            template_controller.clone(),
         ));
 
         let project_controller = Arc::new(project_controller::ProjectController::new(
@@ -134,6 +143,7 @@ impl Editor {
             classification_controller.clone(),
             pipelines_controller.clone(),
             results_list_controller.clone(),
+            template_controller.clone(),
         ));
 
         let viewport_image_controller = Arc::new(ViewportImageController::new(
@@ -176,6 +186,7 @@ impl Editor {
             pipeline_worker,
             results_table_controller,
             results_list_controller,
+            template_controller,
         }
     }
 
@@ -192,6 +203,7 @@ impl Editor {
         self.pipelines_controller.attach_callbacks();
         self.results_table_controller.attach_callbacks();
         self.results_list_controller.attach_callbacks();
+        self.template_controller.attach_callbacks();
 
         self.viewport_worker.start_worker();
         self.pipeline_worker.start_worker();

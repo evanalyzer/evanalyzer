@@ -7,6 +7,7 @@ use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
+use crate::editor::template_controller::TemplateController;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::extensions::project_ext::SaveProjectActions;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
@@ -24,6 +25,7 @@ pub struct ProjectController {
     pub(crate) classification_controller: Arc<ClassificationController>,
     pub(crate) pipelines_controller: Arc<PipelinesController>,
     pub(crate) results_list_controller: Arc<ResultsListController>,
+    pub(crate) template_controller: Arc<TemplateController>,
 }
 
 impl ProjectController {
@@ -35,6 +37,7 @@ impl ProjectController {
         classification_controller: Arc<ClassificationController>,
         pipelines_controller: Arc<PipelinesController>,
         results_list_controller: Arc<ResultsListController>,
+        template_controller: Arc<TemplateController>,
     ) -> Self {
         Self {
             ui,
@@ -44,6 +47,7 @@ impl ProjectController {
             classification_controller,
             pipelines_controller,
             results_list_controller,
+            template_controller,
         }
     }
 
@@ -140,6 +144,21 @@ impl ProjectController {
             ui.global::<ToolbarState>().on_save_as_file_clicked(move || {
                 manager.save_project_as_handler();
             });
+
+            // Save project as template
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_save_project_as_template_clicked(move || {
+                    let name = manager
+                        .app_state
+                        .get_project()
+                        .metadata
+                        .name
+                        .clone();
+                    manager
+                        .template_controller
+                        .start_project_template_save(name);
+                });
 
             // Open website in the system browser
             ui.global::<ToolbarState>().on_open_website(|| {
