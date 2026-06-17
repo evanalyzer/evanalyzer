@@ -9,14 +9,14 @@ build-linux-arm = ["build", "--target", "aarch64-unknown-linux-gnu",         "--
 rustflags = [
     "-C", "link-arg=-fuse-ld=lld",
     "-C", "target-feature=+crt-static",
-    "-L", "native=libs/win/libduckdb-windows-amd64",
+    "-L", "native=libs/duckdb/win/libduckdb-windows-amd64",
 ]
 
 # For Windows ARM64 (MSVC) — statically linked CRT
 [target.aarch64-pc-windows-msvc]
 rustflags = [
     "-C", "target-feature=+crt-static",
-    "-L", "native=libs/win/libduckdb-windows-arm64",
+    "-L", "native=libs/duckdb/win/libduckdb-windows-arm64",
 ]
 
 # For Linux x86_64

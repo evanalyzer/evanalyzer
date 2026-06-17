@@ -6,7 +6,7 @@ authors = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
-evanalyzer_core = { path = "../core" }
+evanalyzer_core = { workspace = true }
 evanalyzer_app = { path = "../app" }
 evanalyzer_cfg = { path = "../cfg" }
 evanalyzer_gui_slint = { path = "ui" }
