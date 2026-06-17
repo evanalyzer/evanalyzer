@@ -695,7 +695,7 @@ fn determine_category(file_path: &Path) -> String {
 fn normalize_category(raw: &str) -> String {
     match raw.to_ascii_lowercase().as_str() {
         "Preprocessing" | "preprocessing" => "Preprocessing".to_string(),
-        "segment" | "segmentation" => "Segmentation".to_string(),
+        "segment" | "segmentation" | "ai_segmentation" => "Segmentation".to_string(),
         "object" | "object_detection" | "detect" => "Object".to_string(),
         "measure" | "measurement" => "Measure".to_string(),
         "classify" | "classification" => "Classification".to_string(),

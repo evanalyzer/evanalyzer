@@ -1,6 +1,8 @@
 #![allow(unused_imports)]
 
 // Register algos
+#[cfg(feature = "ai")]
+mod ai_segmentation;
 mod classification;
 mod filters;
 mod math;
