@@ -32,6 +32,9 @@ jobs:
           sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
+      - name: Unzip libtorch
+        run: unzip -q "libs/libtorch-"*.zip -d libs
+
       - name: Build
         run: cargo build-linux
 
@@ -39,6 +42,9 @@ jobs:
         run: |
           mkdir -p dist/java dist/templates
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
+          # libtorch is dynamically linked; ship the .so files next to the
+          # binary so the $ORIGIN rpath (see .cargo/config.toml) finds them.
+          cp libs/libtorch/lib/*.so                                dist/ 2>/dev/null || true
           unzip -q libs/jre_linux.zip -d dist/java/jre_linux
           cp crates/core/java/bioformats.jar                       dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/
@@ -78,6 +84,9 @@ jobs:
       - name: Unzip DuckDB Windows library
         run: unzip -q libs/libduckdb-windows-amd64.zip -d libs/libduckdb-windows-amd64
 
+      - name: Unzip libtorch
+        run: unzip -q "libs/libtorch-"*.zip -d libs
+
       - name: Build
         run: cargo build-win
 
@@ -86,6 +95,7 @@ jobs:
           mkdir -p dist/java dist/templates
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
+          cp libs/libtorch/lib/*.dll                           dist/
           unzip -q libs/jre_win.zip -d dist/java/jre_win
           cp crates/core/java/bioformats.jar                       dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/

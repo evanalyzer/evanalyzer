@@ -1613,6 +1613,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "uNet"
+            }
+          },
+          "$ref": "#/$defs/UNetSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "voronoi"
             }
           },
@@ -2307,6 +2320,30 @@
         "id",
         "roiIds"
       ]
+    },
+    "UNetSettings": {
+      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return a `[1, 1, H, W]`\n tensor of per-pixel foreground probabilities (i.e. the model already applies\n its final sigmoid/softmax). Runs on GPU automatically if CUDA is available\n in the linked libtorch build, otherwise falls back to CPU.",
+      "type": "object",
+      "properties": {
+        "modelPath": {
+          "description": "Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).",
+          "type": "string",
+          "default": ""
+        },
+        "objectClassId": {
+          "description": "The class assigned to pixels whose predicted probability reaches\n `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
+        },
+        "probabilityThreshold": {
+          "description": "Probability above which a pixel is classified as foreground.",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        }
+      }
     },
     "VoronoiSettings": {
       "description": "Computes a Voronoi tessellation from segmented seed objects.\n\n Each seed center expands outward until it reaches another region, the optional mask\n boundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\n with `output_class` and linked to their originating center object.",

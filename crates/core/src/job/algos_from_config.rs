@@ -416,6 +416,17 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
     }
 }
 
+#[cfg(feature = "ai")]
+impl From<UNetSettings> for UNet {
+    fn from(_s: UNetSettings) -> Self {
+        UNet {
+            model_path: _s.model_path,
+            object_class_id: _s.object_class_id,
+            probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
+        }
+    }
+}
+
 impl From<VoronoiSettings> for Voronoi {
     fn from(_s: VoronoiSettings) -> Self {
         Voronoi {
@@ -529,6 +540,12 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::Threshold(settings) => {
             Ok(Box::new(crate::algos::Threshold::from(settings)))
         }
+        #[cfg(feature = "ai")]
+        PipelineCommand::UNet(settings) => Ok(Box::new(crate::algos::UNet::from(settings))),
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::UNet(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; UNet is unavailable.".into(),
+        )),
         PipelineCommand::Voronoi(settings) => Ok(Box::new(crate::algos::Voronoi::from(settings))),
         PipelineCommand::Watershed(settings) => {
             Ok(Box::new(crate::algos::Watershed::from(settings)))

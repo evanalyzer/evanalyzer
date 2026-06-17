@@ -871,6 +871,37 @@ impl Default for ThresholdEntrySettings {
     }
 }
 
+///  Semantic segmentation using a pretrained U-Net exported as TorchScript.
+///
+///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
+///  same normalization as the rest of the pipeline) and return a `[1, 1, H, W]`
+///  tensor of per-pixel foreground probabilities (i.e. the model already applies
+///  its final sigmoid/softmax). Runs on GPU automatically if CUDA is available
+///  in the linked libtorch build, otherwise falls back to CPU.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct UNetSettings {
+    ///  Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).
+    pub model_path: PathBuf,
+    ///  The class assigned to pixels whose predicted probability reaches
+    ///  `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.
+    pub object_class_id: SegmentationClass,
+    ///  Probability above which a pixel is classified as foreground.
+    #[schemars(range(min = 0, max = 1))]
+    pub probability_threshold: f32,
+}
+
+impl Default for UNetSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            object_class_id: SegmentationClass(1),
+            probability_threshold: 0.5f32,
+        }
+    }
+}
+
 // ============ OBJECT ============
 
 ///  Identifies and labels discrete objects within a binary or multi-class image.

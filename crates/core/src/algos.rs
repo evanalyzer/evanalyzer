@@ -10,6 +10,8 @@ mod morphology;
 mod segmentation;
 mod spartial_transform;
 
+#[cfg(feature = "ai")]
+pub use self::ai_segmentation::unet::UNet;
 pub use self::classification::classify_rois::ClassifyMatchHandling;
 pub use self::classification::classify_rois::ClassifyRois;
 pub use self::classification::coloc_rois::Colocalization;

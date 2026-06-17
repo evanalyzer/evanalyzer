@@ -3,16 +3,23 @@ use syn::{GenericArgument, Item, ItemEnum, ItemStruct, PathArguments, Type, pars
 
 pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
     let algos_path = Path::new("../core/src/algos");
+    let module_features = parse_module_features(Path::new("../core/src/algos.rs"));
     let mut commands = Vec::new();
     let mut enums = Vec::new();
 
     if let Ok(entries) = fs::read_dir(algos_path) {
         for entry in entries.flatten() {
             let path = entry.path();
+            // Top-level module name as declared in algos.rs (`mod <name>;` /
+            // `mod <name>.rs`), used to look up an optional `#[cfg(feature = "...")]`
+            // gate that must be propagated onto the generated glue code.
+            let module_name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+            let feature = module_features.get(module_name).and_then(|f| f.clone());
+
             if path.is_dir() {
-                scan_directory(&path, &mut commands, &mut enums);
+                scan_directory(&path, &mut commands, &mut enums, feature.as_deref());
             } else if path.extension().map_or(false, |ext| ext == "rs") {
-                extract_command_structs(&path, &mut commands, &mut enums);
+                extract_command_structs(&path, &mut commands, &mut enums, feature.as_deref());
             }
         }
     }
@@ -410,6 +417,9 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     for cmd in &filtered_commands {
         let settings_name = format!("{}Settings", cmd.struct_name);
 
+        if let Some(feature) = &cmd.feature {
+            out.push_str(&format!("#[cfg(feature = {feature:?})]\n"));
+        }
         out.push_str(&format!(
             "impl From<{settings_name}> for {} {{\n",
             cmd.struct_name
@@ -454,10 +464,26 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     );
     out.push_str("    match cmd {\n");
     for cmd in filtered_commands.iter().filter(|c| c.is_algo) {
-        out.push_str(&format!(
-            "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
-            cmd.struct_name, cmd.struct_name
-        ));
+        match &cmd.feature {
+            Some(feature) => {
+                out.push_str(&format!("        #[cfg(feature = {feature:?})]\n"));
+                out.push_str(&format!(
+                    "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
+                    cmd.struct_name, cmd.struct_name
+                ));
+                out.push_str(&format!("        #[cfg(not(feature = {feature:?}))]\n"));
+                out.push_str(&format!(
+                    "        PipelineCommand::{}(_settings) => Err(InternalErrors::Generic(\"This build was compiled without the {feature} feature; {} is unavailable.\".into())),\n",
+                    cmd.struct_name, cmd.struct_name
+                ));
+            }
+            None => {
+                out.push_str(&format!(
+                    "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
+                    cmd.struct_name, cmd.struct_name
+                ));
+            }
+        }
     }
     out.push_str("    }\n}\n");
 
@@ -468,16 +494,50 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
 // All helpers unchanged from your original
 // ============================================================
 
-fn scan_directory(dir: &Path, commands: &mut Vec<CommandInfo>, enums: &mut Vec<EnumInfo>) {
+/// Scans `algos.rs` for top-level `#[cfg(feature = "...")] mod <name>;` declarations,
+/// returning a map from module name to the gating feature (if any). A module with
+/// no `#[cfg(feature = ...)]` attribute maps to `None`.
+fn parse_module_features(algos_rs_path: &Path) -> HashMap<String, Option<String>> {
+    let mut map = HashMap::new();
+    let Ok(content) = fs::read_to_string(algos_rs_path) else {
+        return map;
+    };
+    let Ok(file) = parse_file(&content) else {
+        return map;
+    };
+    for item in &file.items {
+        if let Item::Mod(item_mod) = item {
+            let name = item_mod.ident.to_string();
+            let feature = item_mod.attrs.iter().find_map(|attr| {
+                if !attr.path().is_ident("cfg") {
+                    return None;
+                }
+                let tokens = attr.meta.require_list().ok()?.tokens.to_string();
+                let start = tokens.find('"')?;
+                let end = tokens[start + 1..].find('"')?;
+                Some(tokens[start + 1..start + 1 + end].to_string())
+            });
+            map.insert(name, feature);
+        }
+    }
+    map
+}
+
+fn scan_directory(
+    dir: &Path,
+    commands: &mut Vec<CommandInfo>,
+    enums: &mut Vec<EnumInfo>,
+    feature: Option<&str>,
+) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                scan_directory(&path, commands, enums);
+                scan_directory(&path, commands, enums, feature);
             } else if path.extension().map_or(false, |ext| ext == "rs")
                 && path.file_name().map_or(false, |n| n != "mod.rs")
             {
-                extract_command_structs(&path, commands, enums);
+                extract_command_structs(&path, commands, enums, feature);
             }
         }
     }
@@ -534,6 +594,9 @@ struct CommandInfo {
     doc_comments: Vec<String>,
     is_algo: bool,
     _struct_meta: StructMetadata,
+    /// Cargo feature (in the `core` crate) that must be enabled for this command's
+    /// `crate::algos::<struct_name>` to exist, e.g. `Some("ai")` for U-Net/Cellpose/StarDist.
+    feature: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -564,6 +627,7 @@ fn extract_command_structs(
     file_path: &Path,
     commands: &mut Vec<CommandInfo>,
     enums: &mut Vec<EnumInfo>,
+    feature: Option<&str>,
 ) {
     let content = match fs::read_to_string(file_path) {
         Ok(c) => c,
@@ -642,6 +706,7 @@ fn extract_command_structs(
                     doc_comments,
                     is_algo,
                     _struct_meta: struct_meta,
+                    feature: feature.map(str::to_string),
                 });
             }
             Item::Enum(item_enum) => {

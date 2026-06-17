@@ -81,6 +81,7 @@ pub enum PipelineCommand {
     SaveImage(SaveImageSettings),
     StructureTensor(StructureTensorSettings),
     Threshold(ThresholdSettings),
+    UNet(UNetSettings),
     Voronoi(VoronoiSettings),
     Watershed(WatershedSettings),
     WeightedDeviation(WeightedDeviationSettings),
@@ -121,9 +122,10 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta { id: 20, name: "SaveImage", category: CommandCategory::Preprocess, summary: "A command that exports the current image to a persistent file on disk.", description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```" },
         CommandMeta { id: 21, name: "StructureTensor", category: CommandCategory::Preprocess, summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.", description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```" },
         CommandMeta { id: 22, name: "Threshold", category: CommandCategory::Segment, summary: "A filter that segments an image into discrete classes based on intensity.", description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.\n\n# Examples\n\n```\nuse imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\nlet binary = Threshold {\nthresholds: vec![ThresholdSettings {\nmethod: ThresholdMethod::Otsu,\nmin_threshold: 0.0,\nmax_threshold: 1.0,\nobject_class_id: ObjectLabel::Foreground,\n}]\n};\n```" },
-        CommandMeta { id: 23, name: "Voronoi", category: CommandCategory::Classify, summary: "Computes a Voronoi tessellation from segmented seed objects.", description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object." },
-        CommandMeta { id: 24, name: "Watershed", category: CommandCategory::Object, summary: "A morphological segmentation algorithm that splits touching objects using distance topography.", description: "The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).\nBy analyzing the \"shape\" of an object via a Distance Transform, it identifies centers of mass\nand establishes boundaries at the narrowest points of connection.\n\nThis implementation is adaptive:\n* It can **auto-detect** objects from grayscale intensity peaks.\n* It can **refine** existing segments if a `U32Label` image is provided as input." },
-        CommandMeta { id: 25, name: "WeightedDeviation", category: CommandCategory::Preprocess, summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.", description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n# Examples\n\n```\nuse imagec::backend::algos::WeightedDeviation;\nlet settings = WeightedDeviation {\nkernel_size: 7,\nsigma: 2.0,\n};\n```" },
+        CommandMeta { id: 23, name: "UNet", category: CommandCategory::Segment, summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return a `[1, 1, H, W]`\ntensor of per-pixel foreground probabilities (i.e. the model already applies\nits final sigmoid/softmax). Runs on GPU automatically if CUDA is available\nin the linked libtorch build, otherwise falls back to CPU." },
+        CommandMeta { id: 24, name: "Voronoi", category: CommandCategory::Classify, summary: "Computes a Voronoi tessellation from segmented seed objects.", description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object." },
+        CommandMeta { id: 25, name: "Watershed", category: CommandCategory::Object, summary: "A morphological segmentation algorithm that splits touching objects using distance topography.", description: "The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).\nBy analyzing the \"shape\" of an object via a Distance Transform, it identifies centers of mass\nand establishes boundaries at the narrowest points of connection.\n\nThis implementation is adaptive:\n* It can **auto-detect** objects from grayscale intensity peaks.\n* It can **refine** existing segments if a `U32Label` image is provided as input." },
+        CommandMeta { id: 26, name: "WeightedDeviation", category: CommandCategory::Preprocess, summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.", description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n# Examples\n\n```\nuse imagec::backend::algos::WeightedDeviation;\nlet settings = WeightedDeviation {\nkernel_size: 7,\nsigma: 2.0,\n};\n```" },
     ]
 }
 
@@ -179,9 +181,10 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
             StructureTensorSettings::default(),
         )),
         22 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        23 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        24 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        25 => Some(PipelineCommand::WeightedDeviation(
+        23 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        24 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        25 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        26 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
         _ => None,
@@ -215,6 +218,7 @@ impl PipelineCommand {
             Self::SaveImage(_) => "SaveImage",
             Self::StructureTensor(_) => "StructureTensor",
             Self::Threshold(_) => "Threshold",
+            Self::UNet(_) => "UNet",
             Self::Voronoi(_) => "Voronoi",
             Self::Watershed(_) => "Watershed",
             Self::WeightedDeviation(_) => "WeightedDeviation",
@@ -246,6 +250,7 @@ impl PipelineCommand {
             Self::SaveImage(_) => &CommandCategory::Preprocess,
             Self::StructureTensor(_) => &CommandCategory::Preprocess,
             Self::Threshold(_) => &CommandCategory::Segment,
+            Self::UNet(_) => &CommandCategory::Segment,
             Self::Voronoi(_) => &CommandCategory::Classify,
             Self::Watershed(_) => &CommandCategory::Object,
             Self::WeightedDeviation(_) => &CommandCategory::Preprocess,
@@ -372,6 +377,11 @@ impl PipelineCommand {
                     ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The classification ID assigned to pixels falling within this threshold range.".to_string(), value: format!("{}", __item.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                     ]).collect() },
             ],
+            Self::UNet(_s) => vec![
+                ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The class assigned to pixels whose predicted probability reaches\n`probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a pixel is classified as foreground.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] },
+            ],
             Self::Voronoi(_s) => vec![
                 ParameterDef { name: "centers".to_string(), display_name: "Centers".to_string(), description: "Object class whose instances act as Voronoi seed points.".to_string(), value: match _s.centers.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "center_filter_classes".to_string(), display_name: "Center Filter Classes".to_string(), description: "Additional label filters applied to center objects before tessellation.\n\nOnly center objects that carry all listed classes pass the filter.\nLeave empty to include all objects of `centers`.".to_string(), value: _s.center_filter_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.center_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
@@ -418,6 +428,7 @@ impl PipelineCommand {
             Self::SaveImage(_) => String::new(),
             Self::StructureTensor(_) => String::new(),
             Self::Threshold(_) => String::new(),
+            Self::UNet(_) => String::new(),
             Self::Voronoi(_) => String::new(),
             Self::Watershed(_) => String::new(),
             Self::WeightedDeviation(_) => String::new(),
@@ -914,6 +925,21 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::UNet(s) => {
+                if param_name == "model_path" {
+                    s.model_path = std::path::PathBuf::from(value);
+                }
+                if param_name == "object_class_id" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.object_class_id = SegmentationClass(v);
+                    }
+                }
+                if param_name == "probability_threshold" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.probability_threshold = v;
+                    }
+                }
+            }
             Self::Voronoi(s) => {
                 if param_name == "centers" {
                     if value == "-1" {
@@ -1055,6 +1081,7 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::UNet(_) => {}
             Self::Voronoi(_) => {}
             Self::Watershed(_) => {}
             Self::WeightedDeviation(_) => {}
@@ -1090,6 +1117,7 @@ impl PipelineCommand {
                     s.thresholds.remove(idx);
                 }
             }
+            Self::UNet(_) => {}
             Self::Voronoi(_) => {}
             Self::Watershed(_) => {}
             Self::WeightedDeviation(_) => {}
