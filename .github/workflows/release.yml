@@ -39,7 +39,7 @@ jobs:
         run: |
           mkdir -p dist/java dist/templates
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
-          unzip -q crates/core/java/jre_linux.zip -d dist/java/jre_linux
+          unzip -q libs/jre_linux.zip -d dist/java/jre_linux
           cp crates/core/java/bioformats.jar                       dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
@@ -76,7 +76,7 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Unzip DuckDB Windows library
-        run: unzip -q libs/duckdb/win/libduckdb-windows-amd64.zip -d libs/duckdb/win/libduckdb-windows-amd64
+        run: unzip -q libs/libduckdb-windows-amd64.zip -d libs/libduckdb-windows-amd64
 
       - name: Build
         run: cargo build-win
@@ -85,8 +85,8 @@ jobs:
         run: |
           mkdir -p dist/java dist/templates
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
-          cp libs/duckdb/win/libduckdb-windows-amd64/duckdb.dll           dist/
-          unzip -q crates/core/java/jre_win.zip -d dist/java/jre_win
+          cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
+          unzip -q libs/jre_win.zip -d dist/java/jre_win
           cp crates/core/java/bioformats.jar                       dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
