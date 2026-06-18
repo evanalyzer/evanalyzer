@@ -28,9 +28,10 @@ use crate::{
 /// Runs on GPU automatically if CUDA is available in the linked libtorch build,
 /// otherwise falls back to CPU.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment")]
+#[cmdsmeta(category = "segment", display_name = "AI UNet Segmentation")]
 pub struct UNet {
     /// Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).
+    #[cmdsmeta(file_extensions = "pt,pth")]
     pub model_path: PathBuf,
 
     /// The class assigned to pixels whose predicted probability reaches

@@ -6,7 +6,7 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     // Keys allowed on struct-level #[cmdsmeta(...)]
-    let struct_allowed_keys = ["category"];
+    let struct_allowed_keys = ["category", "display_name"];
 
     // Keys allowed on field-level #[cmdsmeta(...)]
     let field_allowed_keys = [
@@ -21,6 +21,7 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
         "summary",
         "optional",
         "visible",
+        "file_extensions",
     ];
 
     // Validate struct-level #[cmdsmeta(...)]

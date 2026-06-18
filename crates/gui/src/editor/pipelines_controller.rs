@@ -921,6 +921,42 @@ impl PipelinesController {
                     }
                 },
             );
+
+            // Browse for a file (e.g. a TorchScript model path) - opens a native
+            // file picker filtered by the given comma-separated extensions,
+            // starting from current_path's directory.
+            ui.global::<PipelinesPanelState>()
+                .on_browse_file(move |extensions_csv, current_path| {
+                    let extensions: Vec<String> = extensions_csv
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|e| !e.is_empty())
+                        .map(str::to_string)
+                        .collect();
+
+                    let mut dialog = rfd::FileDialog::new();
+                    if !extensions.is_empty() {
+                        dialog = dialog.add_filter("Allowed Files", &extensions);
+                    }
+
+                    let current = std::path::Path::new(current_path.as_str());
+                    let start_dir = if current.is_dir() {
+                        Some(current.to_path_buf())
+                    } else {
+                        current
+                            .parent()
+                            .filter(|p| p.is_dir())
+                            .map(|p| p.to_path_buf())
+                    };
+                    if let Some(dir) = start_dir {
+                        dialog = dialog.set_directory(dir);
+                    }
+
+                    match dialog.pick_file() {
+                        Some(path) => SharedString::from(path.display().to_string()),
+                        None => SharedString::new(),
+                    }
+                });
         }
 
         // Must be called onece at startup
@@ -1627,6 +1663,9 @@ impl PipelinesController {
                                                             ParamType::SizeUnits
                                                         }
                                                         CfgParamType::Label => ParamType::Label,
+                                                        CfgParamType::FilePath => {
+                                                            ParamType::FilePath
+                                                        }
                                                     },
                                                     options: ModelRc::new(VecModel::from(
                                                         lp.options
@@ -1662,6 +1701,7 @@ impl PipelinesController {
                                         CfgParamType::PixelUnits => ParamType::PixelUnits,
                                         CfgParamType::SizeUnits => ParamType::SizeUnits,
                                         CfgParamType::Label => ParamType::Label,
+                                        CfgParamType::FilePath => ParamType::FilePath,
                                     },
                                     options: ModelRc::new(VecModel::from(
                                         p.options

@@ -558,6 +558,10 @@ struct FieldMetadata {
     summary: bool,
     optional: bool,
     visible: bool,
+    /// Comma-separated list of file extensions (no leading dot, e.g. "pt,pth")
+    /// for `PathBuf` fields rendered with a "Browse…" button. Empty/absent
+    /// means any file is selectable.
+    file_extensions: Option<String>,
 }
 
 impl Default for FieldMetadata {
@@ -575,6 +579,7 @@ impl Default for FieldMetadata {
             summary: false,
             optional: false,
             visible: true,
+            file_extensions: None,
         }
     }
 }
@@ -583,6 +588,9 @@ impl Default for FieldMetadata {
 struct StructMetadata {
     /// Explicit category override from #[cmdsmeta(category = "...")]
     category: Option<String>,
+    /// Explicit display name override from #[cmdsmeta(display_name = "...")],
+    /// shown in the command picker/header instead of the bare struct name.
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -593,7 +601,7 @@ struct CommandInfo {
     _source_file: String,
     doc_comments: Vec<String>,
     is_algo: bool,
-    _struct_meta: StructMetadata,
+    struct_meta: StructMetadata,
     /// Cargo feature (in the `core` crate) that must be enabled for this command's
     /// `crate::algos::<struct_name>` to exist, e.g. `Some("ai")` for U-Net/Cellpose/StarDist.
     feature: Option<String>,
@@ -705,7 +713,7 @@ fn extract_command_structs(
                     _source_file: source_file.clone(),
                     doc_comments,
                     is_algo,
-                    _struct_meta: struct_meta,
+                    struct_meta,
                     feature: feature.map(str::to_string),
                 });
             }
@@ -777,6 +785,9 @@ fn parse_struct_meta(attrs: &[syn::Attribute]) -> StructMetadata {
                 if m.path.is_ident("category") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.category = Some(value.value());
+                } else if m.path.is_ident("display_name") {
+                    let value: syn::LitStr = m.value()?.parse()?;
+                    meta.display_name = Some(value.value());
                 }
                 // Consume any value so the parser advances even for unknown keys
                 if m.input.peek(syn::Token![=]) {
@@ -1020,6 +1031,9 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                             metadata.visible = b.value;
                         }
                     }
+                } else if meta.path.is_ident("file_extensions") {
+                    let value: syn::LitStr = meta.value()?.parse()?;
+                    metadata.file_extensions = Some(value.value());
                 }
                 Ok(())
             });
@@ -1375,13 +1389,27 @@ fn field_to_param_def(
             0.0_f32,
             0.0_f32,
         ),
-        "PathBuf" => (
-            "ParamType::Text",
-            format!("{var}.{name}.display().to_string()"),
-            "vec![]".to_string(),
-            0.0_f32,
-            0.0_f32,
-        ),
+        "PathBuf" => {
+            let extensions_expr = match &meta.file_extensions {
+                Some(exts) => {
+                    let items: Vec<String> = exts
+                        .split(',')
+                        .map(|e| e.trim())
+                        .filter(|e| !e.is_empty())
+                        .map(|e| format!("\"{}\".to_string()", e))
+                        .collect();
+                    format!("vec![{}]", items.join(", "))
+                }
+                None => "vec![]".to_string(),
+            };
+            (
+                "ParamType::FilePath",
+                format!("{var}.{name}.display().to_string()"),
+                extensions_expr,
+                0.0_f32,
+                0.0_f32,
+            )
+        }
         "ObjectClass" => (
             "ParamType::ObjClass",
             format!(
@@ -1746,6 +1774,16 @@ fn field_to_apply_change(
     vec![branch]
 }
 
+/// The name shown to the user for a command: the `#[cmdsmeta(display_name = "...")]`
+/// override if present and non-empty, otherwise the bare struct name.
+fn command_display_name(cmd: &CommandInfo) -> &str {
+    cmd.struct_meta
+        .display_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&cmd.struct_name)
+}
+
 fn category_to_enum_variant(category: &str) -> &str {
     match category {
         "Preprocessing" => "Preprocess",
@@ -1867,9 +1905,9 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
                 .join("\\n")
         };
         let cat = category_to_enum_variant(&cmd.category);
+        let display_name = command_display_name(cmd);
         out.push_str(&format!(
-            "        CommandMeta {{ id: {i}, name: \"{}\", category: CommandCategory::{cat}, summary: \"{summary}\", description: \"{description}\" }},\n",
-            cmd.struct_name
+            "        CommandMeta {{ id: {i}, name: \"{display_name}\", category: CommandCategory::{cat}, summary: \"{summary}\", description: \"{description}\" }},\n",
         ));
     }
     out.push_str("    ]\n}\n\n");
@@ -1894,7 +1932,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     for cmd in &algo_commands {
         out.push_str(&format!(
             "            Self::{}(_) => \"{}\",\n",
-            cmd.struct_name, cmd.struct_name
+            cmd.struct_name,
+            command_display_name(cmd)
         ));
     }
     out.push_str("        }\n    }\n\n");
