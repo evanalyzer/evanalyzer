@@ -874,10 +874,13 @@ impl Default for ThresholdEntrySettings {
 ///  Semantic segmentation using a pretrained U-Net exported as TorchScript.
 ///
 ///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-///  same normalization as the rest of the pipeline) and return a `[1, 1, H, W]`
-///  tensor of per-pixel foreground probabilities (i.e. the model already applies
-///  its final sigmoid/softmax). Runs on GPU automatically if CUDA is available
-///  in the linked libtorch build, otherwise falls back to CPU.
+///  same normalization as the rest of the pipeline) and return either a
+///  `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
+///  applies its final sigmoid) or a `[1, C, H, W]` tensor of per-class logits/scores
+///  (e.g. background/foreground), in which case a softmax is applied over the
+///  channel dimension and the last channel is taken as the foreground probability.
+///  Runs on GPU automatically if CUDA is available in the linked libtorch build,
+///  otherwise falls back to CPU.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]

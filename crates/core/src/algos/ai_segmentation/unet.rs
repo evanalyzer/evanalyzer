@@ -20,10 +20,13 @@ use crate::{
 /// Semantic segmentation using a pretrained U-Net exported as TorchScript.
 ///
 /// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-/// same normalization as the rest of the pipeline) and return a `[1, 1, H, W]`
-/// tensor of per-pixel foreground probabilities (i.e. the model already applies
-/// its final sigmoid/softmax). Runs on GPU automatically if CUDA is available
-/// in the linked libtorch build, otherwise falls back to CPU.
+/// same normalization as the rest of the pipeline) and return either a
+/// `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
+/// applies its final sigmoid) or a `[1, C, H, W]` tensor of per-class logits/scores
+/// (e.g. background/foreground), in which case a softmax is applied over the
+/// channel dimension and the last channel is taken as the foreground probability.
+/// Runs on GPU automatically if CUDA is available in the linked libtorch build,
+/// otherwise falls back to CPU.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment")]
 pub struct UNet {
@@ -63,9 +66,19 @@ impl ImageAlgorithm for UNet {
             .to_kind(Kind::Float)
             .reshape([1, 1, height as i64, width as i64]);
 
-        let probabilities: Vec<f32> = model
+        let output = model
             .forward_ts(&[input])
-            .and_then(|out| out.f_to_device(Device::Cpu))
+            .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))?;
+
+        let channels = *output.size().get(1).unwrap_or(&1);
+        let foreground = if channels > 1 {
+            output.softmax(1, Kind::Float).narrow(1, channels - 1, 1)
+        } else {
+            output
+        };
+
+        let probabilities: Vec<f32> = foreground
+            .f_to_device(Device::Cpu)
             .and_then(|out| out.f_reshape([(width * height) as i64]))
             .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))
             .and_then(|out| {

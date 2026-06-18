@@ -2322,7 +2322,7 @@
       ]
     },
     "UNetSettings": {
-      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return a `[1, 1, H, W]`\n tensor of per-pixel foreground probabilities (i.e. the model already applies\n its final sigmoid/softmax). Runs on GPU automatically if CUDA is available\n in the linked libtorch build, otherwise falls back to CPU.",
+      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return either a\n `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\n applies its final sigmoid) or a `[1, C, H, W]` tensor of per-class logits/scores\n (e.g. background/foreground), in which case a softmax is applied over the\n channel dimension and the last channel is taken as the foreground probability.\n Runs on GPU automatically if CUDA is available in the linked libtorch build,\n otherwise falls back to CPU.",
       "type": "object",
       "properties": {
         "modelPath": {
