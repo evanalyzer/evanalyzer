@@ -76,6 +76,27 @@ pub struct UNet {
     ///   models, which conventionally output mask before boundary.
     #[cmdsmeta(default = 1, min = 0, max = 16, step = 1)]
     pub foreground_channel: i32,
+
+    /// Index of an optional **boundary** channel for boundary-aware models
+    /// (e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,
+    /// which outputs mask in channel 0 and boundary in channel 1). Set to `-1`
+    /// to disable.
+    ///
+    /// When enabled, a pixel is classified as foreground only where the
+    /// foreground probability reaches `probability_threshold` **and** the
+    /// boundary probability stays below `boundary_threshold`. This carves the
+    /// predicted boundaries out as thin gaps, so a following `ConnectedComponents`
+    /// separates touching objects directly — which is the whole point of a
+    /// boundary model and the only way to split nuclei a plain mask merges.
+    #[cmdsmeta(default = -1, min = -1, max = 16, step = 1)]
+    pub boundary_channel: i32,
+
+    /// Boundary probability at or above which a pixel is treated as an object
+    /// boundary and excluded from the foreground. Only used when
+    /// `boundary_channel` is enabled (>= 0). Lower values cut wider gaps
+    /// (separate more aggressively); higher values cut thinner gaps.
+    #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01)]
+    pub boundary_threshold: f32,
 }
 
 impl ImageAlgorithm for UNet {
@@ -113,22 +134,33 @@ impl ImageAlgorithm for UNet {
                 UNetOutputMode::IndependentChannels => output.narrow(1, idx, 1),
             }
         } else {
-            output
+            output.shallow_clone()
         };
 
-        let probabilities: Vec<f32> = foreground
-            .f_to_device(Device::Cpu)
-            .and_then(|out| out.f_reshape([(width * height) as i64]))
-            .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))
-            .and_then(|out| {
-                Vec::try_from(&out)
-                    .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))
-            })?;
+        let probabilities = Self::channel_to_vec(&foreground, width, height)?;
+
+        // Optional boundary channel: boundary-aware models (e.g. affable-shark)
+        // predict an independent boundary map. Subtracting it from the foreground
+        // opens thin gaps between touching objects so they separate downstream.
+        let boundary: Option<Vec<f32>> = if self.boundary_channel >= 0
+            && channels > 1
+            && (self.boundary_channel as i64) < channels
+        {
+            let b = output.narrow(1, self.boundary_channel as i64, 1);
+            Some(Self::channel_to_vec(&b, width, height)?)
+        } else {
+            None
+        };
 
         let foreground_class = self.object_class_id.as_u32();
         let output_slice = segmentation_map.as_slice_mut();
-        for (out_pixel, &probability) in output_slice.iter_mut().zip(probabilities.iter()) {
-            *out_pixel = if probability >= self.probability_threshold {
+        for (i, out_pixel) in output_slice.iter_mut().enumerate() {
+            let is_foreground = probabilities[i] >= self.probability_threshold
+                && boundary
+                    .as_ref()
+                    .map(|b| b[i] < self.boundary_threshold)
+                    .unwrap_or(true);
+            *out_pixel = if is_foreground {
                 foreground_class
             } else {
                 SegmentationClass::BACKGROUND.as_u32()
@@ -140,5 +172,24 @@ impl ImageAlgorithm for UNet {
 
     fn name(&self) -> &'static str {
         "UNet"
+    }
+}
+
+impl UNet {
+    /// Moves a single-channel `[1, 1, H, W]` tensor to the CPU and flattens it
+    /// into a `width * height` vector.
+    fn channel_to_vec(
+        tensor: &Tensor,
+        width: usize,
+        height: usize,
+    ) -> Result<Vec<f32>, InternalErrors> {
+        tensor
+            .f_to_device(Device::Cpu)
+            .and_then(|out| out.f_reshape([(width * height) as i64]))
+            .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))
+            .and_then(|out| {
+                Vec::try_from(&out)
+                    .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))
+            })
     }
 }

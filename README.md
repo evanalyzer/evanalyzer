@@ -64,15 +64,25 @@ Two AI segmentation algorithms are available (built with the `ai` Cargo feature,
    - **Plain background/foreground classifier** (a mutually-exclusive softmax head): use `output_mode: SoftmaxClasses` and set `foreground_channel` to the foreground class index (usually `1` for a 2-class head — this is the default).
    - **Boundary-aware model** (e.g. bioimage.io nucleus-boundary models, which export an independent mask channel *and* a separate boundary channel — these are two unrelated probabilities, not softmax classes): use `output_mode: IndependentChannels` and set `foreground_channel` to the mask channel's index (commonly `0`; check the model's `rdf.yaml` if unsure). Running softmax across mask+boundary, or picking the boundary channel by mistake, is the most common cause of "I get outlines, not filled objects".
 
-2. **Separate touching objects with a downstream step.** `UNet` only ever emits one shared class for "foreground", so two touching nuclei become one connected blob. Chain:
+2. **Separate touching objects.** `UNet` emits one shared class for "foreground", so two touching nuclei become one connected blob. How you split them depends on the model:
 
-   ```
-   UNet → ConnectedComponents → Watershed → ExtractRois
-   ```
+   - **Boundary-aware models — use the boundary channel (recommended).** Models like bioimage.io's [`affable-shark`](https://bioimage.io/#/?id=affable-shark) (*NucleiSegmentationBoundaryModel* — a U-Net, **not** StarDist) predict an explicit boundary in a second channel **specifically so you can separate touching nuclei**. Set `boundary_channel` to that channel (commonly `1`) and `boundary_threshold` (~`0.5`): a pixel is foreground only where the mask is high *and* the boundary is low, carving thin gaps between objects. Then a plain `ConnectedComponents` separates them — no watershed needed:
 
-   `ConnectedComponents` labels each blob; `Watershed` then re-splits any blob containing more than one object. The watershed is a faithful port of ImageJ's `Process > Binary > Watershed` (the `MaximumFinder` distance-map algorithm), so the default `Watershed.maximum_finder_tolerance` of `0.5` works for most nuclei — raise it only if a single object is being split into several pieces.
+     ```
+     UNet (foreground_channel: 0, boundary_channel: 1) → ConnectedComponents → ExtractRois
+     ```
 
-This *semantic mask → connected components → watershed declumping* pattern is the standard approach for boundary/U-Net-style models — the same idea used by CellProfiler's "IdentifyPrimaryObjects" and ilastik's pixel-classification + object-splitting workflows. `Stardist`, by contrast, predicts per-object instances directly and skips all of this.
+     Discarding the boundary channel and relying on watershed instead is the most common reason touching nuclei "won't split": a distance-map watershed can't separate a blob that has no waist, and the waist information lives in the boundary channel you didn't use.
+
+   - **Mask-only models — distance-map watershed.** If the model gives only a foreground mask (no boundary), chain a watershed:
+
+     ```
+     UNet → ConnectedComponents → Watershed → ExtractRois
+     ```
+
+     `ConnectedComponents` labels each blob; `Watershed` re-splits any blob with more than one object. It's a faithful port of ImageJ's `Process > Binary > Watershed` (the `MaximumFinder` distance-map algorithm), so the default `maximum_finder_tolerance` of `0.5` works for most nuclei. Note this only works when touching nuclei actually form a pinched "peanut"; heavily overlapping nuclei with no waist cannot be split from the mask alone.
+
+These patterns (boundary-carving, and distance-map declumping) are the standard approaches for U-Net-style models — the same ideas used by CellProfiler and ilastik. `Stardist`, by contrast, predicts per-object instances directly and skips all of this — but only genuine StarDist exports (object probability + radial distances) work with the `Stardist` command; a boundary U-Net like `affable-shark` will **not**.
 
 ---
 

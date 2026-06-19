@@ -451,6 +451,8 @@ impl From<UNetSettings> for UNet {
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             output_mode: UNetOutputMode::from(_s.output_mode),
             foreground_channel: _s.foreground_channel,
+            boundary_channel: _s.boundary_channel,
+            boundary_threshold: _s.boundary_threshold.clamp(0.0, 1.0),
         }
     }
 }

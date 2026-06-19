@@ -2385,6 +2385,22 @@
       "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return either a\n `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\n applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\n channel, in which case `output_mode` and `foreground_channel` decide how the\n foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\n automatically if CUDA is available in the linked libtorch build, otherwise\n falls back to CPU.",
       "type": "object",
       "properties": {
+        "boundaryChannel": {
+          "description": "Index of an optional **boundary** channel for boundary-aware models\n (e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,\n which outputs mask in channel 0 and boundary in channel 1). Set to `-1`\n to disable.\n\n When enabled, a pixel is classified as foreground only where the\n foreground probability reaches `probability_threshold` **and** the\n boundary probability stays below `boundary_threshold`. This carves the\n predicted boundaries out as thin gaps, so a following `ConnectedComponents`\n separates touching objects directly — which is the whole point of a\n boundary model and the only way to split nuclei a plain mask merges.",
+          "type": "integer",
+          "format": "int32",
+          "default": -1,
+          "maximum": 16,
+          "minimum": -1
+        },
+        "boundaryThreshold": {
+          "description": "Boundary probability at or above which a pixel is treated as an object\n boundary and excluded from the foreground. Only used when\n `boundary_channel` is enabled (>= 0). Lower values cut wider gaps\n (separate more aggressively); higher values cut thinner gaps.",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        },
         "foregroundChannel": {
           "description": "Index of the channel holding the foreground probability, used only\n when the model output has more than one channel. Out-of-range values\n are clamped to the last available channel.\n\n * For `SoftmaxClasses`, this is typically the last channel (e.g. `1`\n   for a 2-class background/foreground head).\n * For `IndependentChannels`, this is whichever channel the model\n   dedicates to the foreground mask — commonly `0` for boundary-aware\n   models, which conventionally output mask before boundary.",
           "type": "integer",

@@ -4,9 +4,6 @@
 - [ ] feat: "old" or non used objects in the respective pipelines should not be displayed.
 - [ ] feat: channel should change with pipeline automatically
 - [ ] fix: Cy5 displayed in yellow
-- [ ] fix:Fix watershed algorithm which is not working yet
-
-
 
 ## Results
 

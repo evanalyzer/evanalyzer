@@ -977,6 +977,25 @@ pub struct UNetSettings {
     ///    models, which conventionally output mask before boundary.
     #[schemars(range(min = 0, max = 16))]
     pub foreground_channel: i32,
+    ///  Index of an optional **boundary** channel for boundary-aware models
+    ///  (e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,
+    ///  which outputs mask in channel 0 and boundary in channel 1). Set to `-1`
+    ///  to disable.
+    ///
+    ///  When enabled, a pixel is classified as foreground only where the
+    ///  foreground probability reaches `probability_threshold` **and** the
+    ///  boundary probability stays below `boundary_threshold`. This carves the
+    ///  predicted boundaries out as thin gaps, so a following `ConnectedComponents`
+    ///  separates touching objects directly — which is the whole point of a
+    ///  boundary model and the only way to split nuclei a plain mask merges.
+    #[schemars(range(min = -1, max = 16))]
+    pub boundary_channel: i32,
+    ///  Boundary probability at or above which a pixel is treated as an object
+    ///  boundary and excluded from the foreground. Only used when
+    ///  `boundary_channel` is enabled (>= 0). Lower values cut wider gaps
+    ///  (separate more aggressively); higher values cut thinner gaps.
+    #[schemars(range(min = 0, max = 1))]
+    pub boundary_threshold: f32,
 }
 
 impl Default for UNetSettings {
@@ -987,6 +1006,8 @@ impl Default for UNetSettings {
             probability_threshold: 0.5f32,
             output_mode: AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses,
             foreground_channel: 1i32,
+            boundary_channel: -1i32,
+            boundary_threshold: 0.5f32,
         }
     }
 }

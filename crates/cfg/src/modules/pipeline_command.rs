@@ -394,6 +394,8 @@ impl PipelineCommand {
                 ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a pixel is classified as foreground.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] },
                 ParameterDef { name: "output_mode".to_string(), display_name: "Output Mode".to_string(), description: "How to interpret the model output when it has more than one channel.\nIgnored for single-channel outputs.".to_string(), value: match _s.output_mode { AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses => "Softmax Classes".to_string(), AiSegmentationUnetUNetOutputModeSettings::IndependentChannels => "Independent Channels".to_string() }, param_type: ParamType::Dropdown, options: vec!["Softmax Classes".to_string(), "Independent Channels".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "foreground_channel".to_string(), display_name: "Foreground Channel".to_string(), description: "Index of the channel holding the foreground probability, used only\nwhen the model output has more than one channel. Out-of-range values\nare clamped to the last available channel.\n\n* For `SoftmaxClasses`, this is typically the last channel (e.g. `1`\nfor a 2-class background/foreground head).\n* For `IndependentChannels`, this is whichever channel the model\ndedicates to the foreground mask — commonly `0` for boundary-aware\nmodels, which conventionally output mask before boundary.".to_string(), value: format!("{}", _s.foreground_channel), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 16.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "boundary_channel".to_string(), display_name: "Boundary Channel".to_string(), description: "Index of an optional **boundary** channel for boundary-aware models\n(e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,\nwhich outputs mask in channel 0 and boundary in channel 1). Set to `-1`\nto disable.\n\nWhen enabled, a pixel is classified as foreground only where the\nforeground probability reaches `probability_threshold` **and** the\nboundary probability stays below `boundary_threshold`. This carves the\npredicted boundaries out as thin gaps, so a following `ConnectedComponents`\nseparates touching objects directly — which is the whole point of a\nboundary model and the only way to split nuclei a plain mask merges.".to_string(), value: format!("{}", _s.boundary_channel), param_type: ParamType::Spinner, options: vec![], min: -1.0f32, max: 16.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "boundary_threshold".to_string(), display_name: "Boundary Threshold".to_string(), description: "Boundary probability at or above which a pixel is treated as an object\nboundary and excluded from the foreground. Only used when\n`boundary_channel` is enabled (>= 0). Lower values cut wider gaps\n(separate more aggressively); higher values cut thinner gaps.".to_string(), value: format!("{}", _s.boundary_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] },
             ],
             Self::Voronoi(_s) => vec![
                 ParameterDef { name: "centers".to_string(), display_name: "Centers".to_string(), description: "Object class whose instances act as Voronoi seed points.".to_string(), value: match _s.centers.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
@@ -989,6 +991,16 @@ impl PipelineCommand {
                 if param_name == "foreground_channel" {
                     if let Ok(v) = value.parse::<i32>() {
                         s.foreground_channel = v;
+                    }
+                }
+                if param_name == "boundary_channel" {
+                    if let Ok(v) = value.parse::<i32>() {
+                        s.boundary_channel = v;
+                    }
+                }
+                if param_name == "boundary_threshold" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.boundary_threshold = v;
                     }
                 }
             }
