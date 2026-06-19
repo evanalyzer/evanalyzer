@@ -390,6 +390,9 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
             enum_info.enum_name
         );
 
+        if let Some(feature) = &enum_info.feature {
+            out.push_str(&format!("#[cfg(feature = {feature:?})]\n"));
+        }
         out.push_str(&format!(
             "impl From<{settings_name}> for {} {{\n",
             enum_info.enum_name
@@ -621,6 +624,7 @@ struct EnumInfo {
     variants: Vec<EnumVariant>,
     source_file: String,
     doc_comments: Vec<String>,
+    feature: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -734,6 +738,7 @@ fn extract_command_structs(
                         variants,
                         source_file: source_file.clone(),
                         doc_comments,
+                        feature: feature.map(str::to_string),
                     });
                 }
             }

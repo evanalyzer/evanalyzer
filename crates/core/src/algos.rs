@@ -14,6 +14,8 @@ mod spartial_transform;
 pub use self::ai_segmentation::stardist::Stardist;
 #[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNet;
+#[cfg(feature = "ai")]
+pub use self::ai_segmentation::unet::UNetOutputMode;
 pub use self::classification::classify_rois::ClassifyMatchHandling;
 pub use self::classification::classify_rois::ClassifyRois;
 pub use self::classification::coloc_rois::Colocalization;

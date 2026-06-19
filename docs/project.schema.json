@@ -33,6 +33,21 @@
     "pipelines"
   ],
   "$defs": {
+    "AiSegmentationUnetUNetOutputModeSettings": {
+      "description": "How a multi-channel U-Net output should be turned into a single foreground\n probability map. Ignored for single-channel outputs, which are always\n treated as already-activated foreground probabilities.",
+      "oneOf": [
+        {
+          "description": "Channels are mutually-exclusive class scores (e.g. a background/foreground\nclassification head). `softmax` is applied over the channel dimension\nfirst, then the channel at `foreground_channel` is taken as the\nforeground probability.",
+          "type": "string",
+          "const": "SOFTMAX_CLASSES"
+        },
+        {
+          "description": "Channels are independent, already-activated probability maps — e.g. a\nforeground-mask channel plus a separate boundary channel, as produced by\nboundary-aware models (mask + boundary heads are *not* mutually\nexclusive, so they must never be put through a softmax together). The\nchannel at `foreground_channel` is used directly.",
+          "type": "string",
+          "const": "INDEPENDENT_CHANNELS"
+        }
+      ]
+    },
     "BlurSettings": {
       "description": "Smooths an image by averaging pixel intensities within a local neighborhood.\n\n This algorithm applies a uniform box filter where every pixel within the moving\n window contributes equally to the final value. It is a computationally fast\n method used for general image smoothing, blending variations, and rapid noise\n suppression where edge precision is less critical.",
       "type": "object",
@@ -2367,9 +2382,17 @@
       ]
     },
     "UNetSettings": {
-      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return either a\n `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\n applies its final sigmoid) or a `[1, C, H, W]` tensor of per-class logits/scores\n (e.g. background/foreground), in which case a softmax is applied over the\n channel dimension and the last channel is taken as the foreground probability.\n Runs on GPU automatically if CUDA is available in the linked libtorch build,\n otherwise falls back to CPU.",
+      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return either a\n `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\n applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\n channel, in which case `output_mode` and `foreground_channel` decide how the\n foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\n automatically if CUDA is available in the linked libtorch build, otherwise\n falls back to CPU.",
       "type": "object",
       "properties": {
+        "foregroundChannel": {
+          "description": "Index of the channel holding the foreground probability, used only\n when the model output has more than one channel. Out-of-range values\n are clamped to the last available channel.\n\n * For `SoftmaxClasses`, this is typically the last channel (e.g. `1`\n   for a 2-class background/foreground head).\n * For `IndependentChannels`, this is whichever channel the model\n   dedicates to the foreground mask — commonly `0` for boundary-aware\n   models, which conventionally output mask before boundary.",
+          "type": "integer",
+          "format": "int32",
+          "default": 1,
+          "maximum": 16,
+          "minimum": 0
+        },
         "modelPath": {
           "description": "Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).",
           "type": "string",
@@ -2379,6 +2402,11 @@
           "description": "The class assigned to pixels whose predicted probability reaches\n `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.",
           "$ref": "#/$defs/SegmentationClass",
           "default": 1
+        },
+        "outputMode": {
+          "description": "How to interpret the model output when it has more than one channel.\n Ignored for single-channel outputs.",
+          "$ref": "#/$defs/AiSegmentationUnetUNetOutputModeSettings",
+          "default": "SOFTMAX_CLASSES"
         },
         "probabilityThreshold": {
           "description": "Probability above which a pixel is classified as foreground.",

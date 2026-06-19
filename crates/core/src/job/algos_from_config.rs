@@ -163,6 +163,20 @@ impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
     }
 }
 
+#[cfg(feature = "ai")]
+impl From<AiSegmentationUnetUNetOutputModeSettings> for UNetOutputMode {
+    fn from(_s: AiSegmentationUnetUNetOutputModeSettings) -> Self {
+        match _s {
+            AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses => {
+                UNetOutputMode::SoftmaxClasses
+            }
+            AiSegmentationUnetUNetOutputModeSettings::IndependentChannels => {
+                UNetOutputMode::IndependentChannels
+            }
+        }
+    }
+}
+
 // ============ STRUCT FROM IMPLS ============
 
 impl From<BlurSettings> for Blur {
@@ -435,6 +449,8 @@ impl From<UNetSettings> for UNet {
             model_path: _s.model_path,
             object_class_id: _s.object_class_id,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
+            output_mode: UNetOutputMode::from(_s.output_mode),
+            foreground_channel: _s.foreground_channel,
         }
     }
 }

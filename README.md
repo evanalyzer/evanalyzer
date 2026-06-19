@@ -43,9 +43,36 @@ EVAnalyzer is the Rust reimplementation of [ImageC](https://github.com/imagec) a
 | Category | Algorithms |
 |---|---|
 | **Filters** | Gaussian blur, rank filter (min/median/max), rolling-ball background subtraction, enhance contrast, colour filter, intensity transform, Canny/Sobel edge detection, Hessian, Laplacian, structure tensor, weighted deviation |
-| **Segmentation** | Manual & automatic thresholding, connected components, watershed |
+| **Segmentation** | Manual & automatic thresholding, connected components, watershed, AI segmentation (Stardist, U-Net — requires the `ai` build feature) |
 | **Morphology** | Dilation, erosion, opening, closing |
 | **Classification** | Rule-based object classification with configurable measurements |
+
+### AI Segmentation
+
+Two AI segmentation algorithms are available (built with the `ai` Cargo feature, via [tch-rs](https://github.com/LaurentMazare/tch-rs)/libtorch):
+
+| Algorithm | What the model predicts | What you get |
+|---|---|---|
+| **Stardist** | Star-convex polygon parameters per grid cell | Separated object instances directly — no further steps needed |
+| **UNet** | Per-pixel semantic mask | A single foreground mask — touching objects are **not** separated yet |
+
+#### Using `UNet` correctly
+
+`UNet` only produces a semantic mask (foreground vs. background); it has no notion of individual object instances. Getting good results requires two things:
+
+1. **Match `output_mode`/`foreground_channel` to your model's export.**
+   - **Plain background/foreground classifier** (a mutually-exclusive softmax head): use `output_mode: SoftmaxClasses` and set `foreground_channel` to the foreground class index (usually `1` for a 2-class head — this is the default).
+   - **Boundary-aware model** (e.g. bioimage.io nucleus-boundary models, which export an independent mask channel *and* a separate boundary channel — these are two unrelated probabilities, not softmax classes): use `output_mode: IndependentChannels` and set `foreground_channel` to the mask channel's index (commonly `0`; check the model's `rdf.yaml` if unsure). Running softmax across mask+boundary, or picking the boundary channel by mistake, is the most common cause of "I get outlines, not filled objects".
+
+2. **Separate touching objects with a downstream step.** `UNet` only ever emits one shared class for "foreground", so two touching nuclei become one connected blob. Chain:
+
+   ```
+   UNet → ConnectedComponents → Watershed → ExtractRois
+   ```
+
+   `ConnectedComponents` labels each blob; `Watershed` then re-splits any blob containing more than one object, using a distance-transform peak per object. This works well for round/convex nuclei. Tune `Watershed.maximum_finder_tolerance` (start around `0.3`–`0.5`): lower values split more aggressively, higher values under-split.
+
+This *semantic mask → connected components → watershed declumping* pattern is the standard approach for boundary/U-Net-style models — the same idea used by CellProfiler's "IdentifyPrimaryObjects" and ilastik's pixel-classification + object-splitting workflows. `Stardist`, by contrast, predicts per-object instances directly and skips all of this.
 
 ---
 

@@ -17,16 +17,33 @@ use crate::{
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 
+/// How a multi-channel U-Net output should be turned into a single foreground
+/// probability map. Ignored for single-channel outputs, which are always
+/// treated as already-activated foreground probabilities.
+pub enum UNetOutputMode {
+    /// Channels are mutually-exclusive class scores (e.g. a background/foreground
+    /// classification head). `softmax` is applied over the channel dimension
+    /// first, then the channel at `foreground_channel` is taken as the
+    /// foreground probability.
+    SoftmaxClasses,
+    /// Channels are independent, already-activated probability maps — e.g. a
+    /// foreground-mask channel plus a separate boundary channel, as produced by
+    /// boundary-aware models (mask + boundary heads are *not* mutually
+    /// exclusive, so they must never be put through a softmax together). The
+    /// channel at `foreground_channel` is used directly.
+    IndependentChannels,
+}
+
 /// Semantic segmentation using a pretrained U-Net exported as TorchScript.
 ///
 /// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
 /// same normalization as the rest of the pipeline) and return either a
 /// `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
-/// applies its final sigmoid) or a `[1, C, H, W]` tensor of per-class logits/scores
-/// (e.g. background/foreground), in which case a softmax is applied over the
-/// channel dimension and the last channel is taken as the foreground probability.
-/// Runs on GPU automatically if CUDA is available in the linked libtorch build,
-/// otherwise falls back to CPU.
+/// applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
+/// channel, in which case `output_mode` and `foreground_channel` decide how the
+/// foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
+/// automatically if CUDA is available in the linked libtorch build, otherwise
+/// falls back to CPU.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "segment", display_name = "AI UNet Segmentation")]
 pub struct UNet {
@@ -42,6 +59,23 @@ pub struct UNet {
     /// Probability above which a pixel is classified as foreground.
     #[cmdsmeta(default = 0.5, min = 0.0, max = 1.0, step = 0.01)]
     pub probability_threshold: f32,
+
+    /// How to interpret the model output when it has more than one channel.
+    /// Ignored for single-channel outputs.
+    #[cmdsmeta(default = UNetOutputMode::SoftmaxClasses)]
+    pub output_mode: UNetOutputMode,
+
+    /// Index of the channel holding the foreground probability, used only
+    /// when the model output has more than one channel. Out-of-range values
+    /// are clamped to the last available channel.
+    ///
+    /// * For `SoftmaxClasses`, this is typically the last channel (e.g. `1`
+    ///   for a 2-class background/foreground head).
+    /// * For `IndependentChannels`, this is whichever channel the model
+    ///   dedicates to the foreground mask — commonly `0` for boundary-aware
+    ///   models, which conventionally output mask before boundary.
+    #[cmdsmeta(default = 1, min = 0, max = 16, step = 1)]
+    pub foreground_channel: i32,
 }
 
 impl ImageAlgorithm for UNet {
@@ -73,7 +107,11 @@ impl ImageAlgorithm for UNet {
 
         let channels = *output.size().get(1).unwrap_or(&1);
         let foreground = if channels > 1 {
-            output.softmax(1, Kind::Float).narrow(1, channels - 1, 1)
+            let idx = (self.foreground_channel as i64).clamp(0, channels - 1);
+            match self.output_mode {
+                UNetOutputMode::SoftmaxClasses => output.softmax(1, Kind::Float).narrow(1, idx, 1),
+                UNetOutputMode::IndependentChannels => output.narrow(1, idx, 1),
+            }
         } else {
             output
         };

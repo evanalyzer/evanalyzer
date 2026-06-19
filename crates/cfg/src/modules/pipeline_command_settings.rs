@@ -257,6 +257,26 @@ pub enum SegmentationThresholdThresholdMethodSettings {
     Yen,
 }
 
+///  How a multi-channel U-Net output should be turned into a single foreground
+///  probability map. Ignored for single-channel outputs, which are always
+///  treated as already-activated foreground probabilities.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AiSegmentationUnetUNetOutputModeSettings {
+    /// Channels are mutually-exclusive class scores (e.g. a background/foreground
+    /// classification head). `softmax` is applied over the channel dimension
+    /// first, then the channel at `foreground_channel` is taken as the
+    /// foreground probability.
+    #[default]
+    SoftmaxClasses,
+    /// Channels are independent, already-activated probability maps — e.g. a
+    /// foreground-mask channel plus a separate boundary channel, as produced by
+    /// boundary-aware models (mask + boundary heads are *not* mutually
+    /// exclusive, so they must never be put through a softmax together). The
+    /// channel at `foreground_channel` is used directly.
+    IndependentChannels,
+}
+
 // ============ PREPROCESSING ============
 
 ///  Smooths an image by averaging pixel intensities within a local neighborhood.
@@ -926,11 +946,11 @@ impl Default for ThresholdEntrySettings {
 ///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
 ///  same normalization as the rest of the pipeline) and return either a
 ///  `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
-///  applies its final sigmoid) or a `[1, C, H, W]` tensor of per-class logits/scores
-///  (e.g. background/foreground), in which case a softmax is applied over the
-///  channel dimension and the last channel is taken as the foreground probability.
-///  Runs on GPU automatically if CUDA is available in the linked libtorch build,
-///  otherwise falls back to CPU.
+///  applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
+///  channel, in which case `output_mode` and `foreground_channel` decide how the
+///  foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
+///  automatically if CUDA is available in the linked libtorch build, otherwise
+///  falls back to CPU.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
@@ -943,6 +963,20 @@ pub struct UNetSettings {
     ///  Probability above which a pixel is classified as foreground.
     #[schemars(range(min = 0, max = 1))]
     pub probability_threshold: f32,
+    ///  How to interpret the model output when it has more than one channel.
+    ///  Ignored for single-channel outputs.
+    pub output_mode: AiSegmentationUnetUNetOutputModeSettings,
+    ///  Index of the channel holding the foreground probability, used only
+    ///  when the model output has more than one channel. Out-of-range values
+    ///  are clamped to the last available channel.
+    ///
+    ///  * For `SoftmaxClasses`, this is typically the last channel (e.g. `1`
+    ///    for a 2-class background/foreground head).
+    ///  * For `IndependentChannels`, this is whichever channel the model
+    ///    dedicates to the foreground mask — commonly `0` for boundary-aware
+    ///    models, which conventionally output mask before boundary.
+    #[schemars(range(min = 0, max = 16))]
+    pub foreground_channel: i32,
 }
 
 impl Default for UNetSettings {
@@ -951,6 +985,8 @@ impl Default for UNetSettings {
             model_path: PathBuf::default(),
             object_class_id: SegmentationClass(1),
             probability_threshold: 0.5f32,
+            output_mode: AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses,
+            foreground_channel: 1i32,
         }
     }
 }
