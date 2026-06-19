@@ -386,6 +386,18 @@ impl From<SaveImageSettings> for SaveImage {
     }
 }
 
+#[cfg(feature = "ai")]
+impl From<StardistSettings> for Stardist {
+    fn from(_s: StardistSettings) -> Self {
+        Stardist {
+            model_path: _s.model_path,
+            object_class_id: _s.object_class_id,
+            probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
+            nms_threshold: _s.nms_threshold.clamp(0.0, 1.0),
+        }
+    }
+}
+
 impl From<StructureTensorSettings> for StructureTensor {
     fn from(_s: StructureTensorSettings) -> Self {
         StructureTensor {
@@ -534,6 +546,12 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::SaveImage(settings) => {
             Ok(Box::new(crate::algos::SaveImage::from(settings)))
         }
+        #[cfg(feature = "ai")]
+        PipelineCommand::Stardist(settings) => Ok(Box::new(crate::algos::Stardist::from(settings))),
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::Stardist(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; Stardist is unavailable.".into(),
+        )),
         PipelineCommand::StructureTensor(settings) => {
             Ok(Box::new(crate::algos::StructureTensor::from(settings)))
         }

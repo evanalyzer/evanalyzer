@@ -16,16 +16,16 @@
 //   │  All · Preprocess · Segment · Classify · Measure · Recents · ★   │   ← filter chips (40)
 //   ├----------------------------┬-------------------------------------┤
 //   │ PREPROCESS  ---------------│   Gaussian Blur                     │
-//   │ ▭ Gaussian Blur     σ ▸    │   ------------------------------    │
-//   │ ▭ Median Filter            │   Smooth an image with an isotropic │
-//   │ ▭ Background Subtract      │   Gaussian kernel. Reduces shot     │   ← list  +  detail
+//   │ ƒ Gaussian Blur     σ ▸    │   ------------------------------    │
+//   │ ƒ Median Filter            │   Smooth an image with an isotropic │
+//   │ ƒ Background Subtract      │   Gaussian kernel. Reduces shot     │   ← list  +  detail
 //   │ SEGMENT     ---------------│   noise before thresholding.        │     pane (split)
-//   │ ▭ Threshold (Otsu)         │                                     │
-//   │ ▭ Watershed                │   DEFAULT PARAMETERS                │
-//   │ ▭ Cellpose            ★    │     σ              2.0  px          │
+//   │ ƒ Threshold (Otsu)         │                                     │
+//   │ ƒ Watershed                │   DEFAULT PARAMETERS                │
+//   │ ƒ Cellpose            ★    │     σ              2.0  px          │
 //   │ MEASURE     ---------------│     Per channel    on               │
-//   │ ▭ Intensity Stats          │     Edge handling  reflect          │
-//   │ ▭ Area & Perimeter         │                                     │
+//   │ ƒ Intensity Stats          │     Edge handling  reflect          │
+//   │ ƒ Area & Perimeter         │                                     │
 //   │                            │   Category   Preprocess             │
 //   │                            │   Source     skimage · v0.22        │
 //   ├----------------------------┴-------------------------------------┤

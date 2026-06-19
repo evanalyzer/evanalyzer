@@ -807,6 +807,56 @@ pub struct WeightedDeviationSettings {
 
 // ============ SEGMENTATION ============
 
+///  Instance segmentation using a pretrained StarDist model exported as TorchScript.
+///
+///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
+///  same normalization as the rest of the pipeline) and return two tensors:
+///  an object-probability map `[1, 1, H', W']` and a ray-distance map
+///  `[1, n_rays, H', W']` giving, for each grid cell, the distance to the object
+///  boundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon
+///  representation). `H'`/`W'` may be smaller than the input size if the model
+///  predicts on a coarser grid; this is detected from the output shape and the
+///  polygons are rescaled back to image resolution automatically.
+///
+///  Some TorchScript exports concatenate both outputs into a single
+///  `[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =
+///  distances); this is also supported.
+///
+///  Per grid cell candidates above `probability_threshold` are converted to
+///  star-convex polygons, then greedily filtered with non-maximum suppression
+///  (polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds
+///  `nms_threshold` are discarded) before being rasterized into the pipeline's
+///  segmentation and instance maps. Runs on GPU automatically if CUDA is
+///  available in the linked libtorch build, otherwise falls back to CPU.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct StardistSettings {
+    ///  Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
+    pub model_path: PathBuf,
+    ///  The class assigned to pixels of every detected object. All other
+    ///  pixels are assigned `SegmentationClass::BACKGROUND`.
+    pub object_class_id: SegmentationClass,
+    ///  Probability above which a grid cell is considered a candidate object center.
+    #[schemars(range(min = 0, max = 1))]
+    pub probability_threshold: f32,
+    ///  Pixel-overlap ratio (intersection / union) above which a lower-scoring
+    ///  candidate polygon is suppressed in favor of an overlapping higher-scoring one.
+    #[schemars(range(min = 0, max = 1))]
+    pub nms_threshold: f32,
+}
+
+impl Default for StardistSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            object_class_id: SegmentationClass(1),
+            probability_threshold: 0.5f32,
+            nms_threshold: 0.3f32,
+        }
+    }
+}
+
 ///  A filter that segments an image into discrete classes based on intensity.
 ///
 ///  This supports "Multi-Otsu" style behavior by allowing a vector of

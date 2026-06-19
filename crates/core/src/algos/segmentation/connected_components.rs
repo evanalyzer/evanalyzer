@@ -50,13 +50,13 @@ impl ImageAlgorithm for ConnectedComponents {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        let (labels, classes) = ctx.get_segmentation_and_instances_mut(false)?;
+        let (segmentation, instances) = ctx.get_segmentation_and_instances_mut(false)?;
 
         self.compute_ccl(
-            labels.as_slice(),
-            classes.as_slice_mut(),
-            labels.size().width,
-            labels.size().height,
+            segmentation.as_slice(),
+            instances.as_slice_mut(),
+            segmentation.size().width,
+            segmentation.size().height,
         );
 
         ctx.swap()?;

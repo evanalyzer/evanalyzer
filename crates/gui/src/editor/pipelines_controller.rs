@@ -16,6 +16,7 @@ use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use evanalyzer_cfg::settings::parameter_def::{ParamType as CfgParamType, ParameterDef};
+use evanalyzer_cfg::settings::pipeline_command::CommandMeta;
 use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, all_command_meta, default_command,
 };
@@ -666,30 +667,7 @@ impl PipelinesController {
                     }
                     let metas = all_command_meta();
                     if let Some(m) = metas.iter().find(|m| m.id == command_id) {
-                        let cat = match m.category {
-                            CommandCategory::Preprocess => StepCategory::Preprocess,
-                            CommandCategory::Segment => StepCategory::Segment,
-                            CommandCategory::Object => StepCategory::Object,
-                            CommandCategory::Measure => StepCategory::Measure,
-                            CommandCategory::Classify => StepCategory::Classify,
-                        };
-                        let detail = CommandDef {
-                            id: m.id,
-                            name: m.name.into(),
-                            summary: m.summary.into(),
-                            description: m.description.into(),
-                            category: cat,
-                            icon_glyph: "▭".into(),
-                            keywords: m.name.to_ascii_lowercase().into(),
-                            source: "built-in".into(),
-                            favorite: false,
-                            recent: false,
-                            default_params: ModelRc::default(),
-                            is_template: false,
-                            author: "".into(),
-                            organization: "".into(),
-                            creation_time: "".into(),
-                        };
+                        let detail = to_command_def(m);
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_detail(detail);
                         picker.set_has_detail(true);
@@ -925,8 +903,8 @@ impl PipelinesController {
             // Browse for a file (e.g. a TorchScript model path) - opens a native
             // file picker filtered by the given comma-separated extensions,
             // starting from current_path's directory.
-            ui.global::<PipelinesPanelState>()
-                .on_browse_file(move |extensions_csv, current_path| {
+            ui.global::<PipelinesPanelState>().on_browse_file(
+                move |extensions_csv, current_path| {
                     let extensions: Vec<String> = extensions_csv
                         .split(',')
                         .map(str::trim)
@@ -956,7 +934,8 @@ impl PipelinesController {
                         Some(path) => SharedString::from(path.display().to_string()),
                         None => SharedString::new(),
                     }
-                });
+                },
+            );
         }
 
         // Must be called onece at startup
@@ -1261,26 +1240,8 @@ impl PipelinesController {
             }
         };
         let make = |m: &evanalyzer_cfg::settings::pipeline_command::CommandMeta,
-                    cat: StepCategory|
-         -> CommandDef {
-            CommandDef {
-                id: m.id,
-                name: m.name.into(),
-                summary: m.summary.into(),
-                description: m.description.into(),
-                category: cat,
-                icon_glyph: "▭".into(),
-                keywords: m.name.to_ascii_lowercase().into(),
-                source: "built-in".into(),
-                favorite: false,
-                recent: false,
-                default_params: ModelRc::default(),
-                is_template: false,
-                author: "".into(),
-                organization: "".into(),
-                creation_time: "".into(),
-            }
-        };
+                    _cat: StepCategory|
+         -> CommandDef { to_command_def(m) };
         let pre: Vec<CommandDef> = metas
             .iter()
             .filter(|m| {
@@ -1408,74 +1369,36 @@ impl PipelinesController {
     }
 
     fn sync_commands_to_selection_dialog_slint(self: &Arc<Self>) {
-        // Collect only Send-safe primitives outside the event loop closure.
-        struct RawCmd {
-            id: i32,
-            name: &'static str,
-            summary: &'static str,
-            category: StepCategory,
-        }
-        let raw: Vec<RawCmd> = all_command_meta()
-            .into_iter()
-            .map(|m| RawCmd {
-                id: m.id,
-                name: m.name,
-                summary: m.summary,
-                category: match m.category {
-                    CommandCategory::Preprocess => StepCategory::Preprocess,
-                    CommandCategory::Segment => StepCategory::Segment,
-                    CommandCategory::Object => StepCategory::Object,
-                    CommandCategory::Measure => StepCategory::Measure,
-                    CommandCategory::Classify => StepCategory::Classify,
-                },
-            })
-            .collect();
+        let raw = all_command_meta();
 
         let ui_weak = self.ui.clone();
         if let Err(e) = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let make_def = |r: &RawCmd| CommandDef {
-                    id: r.id,
-                    name: r.name.into(),
-                    summary: r.summary.into(),
-                    description: "".into(),
-                    category: r.category,
-                    icon_glyph: "▭".into(),
-                    keywords: r.name.to_ascii_lowercase().into(),
-                    source: "built-in".into(),
-                    favorite: false,
-                    recent: false,
-                    default_params: ModelRc::default(),
-                    is_template: false,
-                    author: "".into(),
-                    organization: "".into(),
-                    creation_time: "".into(),
-                };
-                let all: Vec<CommandDef> = raw.iter().map(make_def).collect();
+                let all: Vec<CommandDef> = raw.iter().map(to_command_def).collect();
                 let shown_pre: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Preprocess)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Preprocess))
+                    .map(to_command_def)
                     .collect();
                 let shown_seg: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Segment)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Segment))
+                    .map(to_command_def)
                     .collect();
                 let shown_obj: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Object)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Object))
+                    .map(to_command_def)
                     .collect();
                 let shown_mea: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Measure)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Measure))
+                    .map(to_command_def)
                     .collect();
                 let shown_cls: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Classify)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Classify))
+                    .map(to_command_def)
                     .collect();
                 let total = all.len() as i32;
                 let (cp, cs, co, cm, cc) = (
@@ -1812,4 +1735,32 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
             .to_string()
             .into(),
     }
+}
+
+fn to_command_def(m: &CommandMeta) -> CommandDef {
+    let cat = match m.category {
+        CommandCategory::Preprocess => StepCategory::Preprocess,
+        CommandCategory::Segment => StepCategory::Segment,
+        CommandCategory::Object => StepCategory::Object,
+        CommandCategory::Measure => StepCategory::Measure,
+        CommandCategory::Classify => StepCategory::Classify,
+    };
+    let detail = CommandDef {
+        id: m.id,
+        name: m.name.into(),
+        summary: m.summary.into(),
+        description: m.description.into(),
+        category: cat,
+        icon_glyph: "ƒ".into(),
+        keywords: m.name.to_ascii_lowercase().into(),
+        source: "built-in".into(),
+        favorite: false,
+        recent: false,
+        default_params: ModelRc::default(),
+        is_template: false,
+        author: "".into(),
+        organization: "".into(),
+        creation_time: "".into(),
+    };
+    detail
 }

@@ -407,6 +407,58 @@ impl PipelineContext {
         Ok((&image, segmentation_ref))
     }
 
+    /// Like [`Self::get_f32_gray_and_segmentation_mask_mut`], but also exposes a
+    /// mutable instance map for algorithms (e.g. StarDist) that assign both a
+    /// semantic class and a unique per-object instance ID in one pass.
+    pub fn get_f32_gray_segmentation_and_instances_mut(
+        &mut self,
+    ) -> Result<
+        (
+            &Image<f32, 1, CpuAllocator>,
+            &mut Image<u32, 1, CpuAllocator>,
+            &mut Image<u32, 1, CpuAllocator>,
+        ),
+        InternalErrors,
+    > {
+        let image = match &self.image {
+            ImageContainer::F32Gray(img) => Ok(img),
+            _ => Err(InternalErrors::FormatMismatch {
+                expected: "F32Gray".into(),
+                found: format!("{:?}", self.image),
+            }),
+        }?;
+
+        let size = self.image.size();
+        let pixel_count = size.width * size.height;
+
+        if self.segmentation_map.is_none() {
+            self.segmentation_map = Some(
+                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    .map_err(|e| InternalErrors::Internal(e.to_string()))?,
+            );
+        }
+        if self.instance_map.is_none() {
+            self.instance_map = Some(
+                Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
+                    .map_err(|e| InternalErrors::Internal(e.to_string()))?,
+            );
+        }
+
+        let segmentation_mut =
+            self.segmentation_map
+                .as_mut()
+                .ok_or(InternalErrors::FormatMismatch {
+                    expected: "Initialized segmentation buffer".into(),
+                    found: "None (Buffer not initialized)".into(),
+                })?;
+        let instance_mut = self.instance_map.as_mut().ok_or(InternalErrors::FormatMismatch {
+            expected: "Initialized instance buffer".into(),
+            found: "None (Buffer not initialized)".into(),
+        })?;
+
+        Ok((image, segmentation_mut, instance_mut))
+    }
+
     pub fn get_instance_map(&self) -> Result<&Image<u32, 1, CpuAllocator>, InternalErrors> {
         let classes = self
             .instance_map

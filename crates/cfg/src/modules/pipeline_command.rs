@@ -79,6 +79,7 @@ pub enum PipelineCommand {
     RankFilter(RankFilterSettings),
     RollingBall(RollingBallSettings),
     SaveImage(SaveImageSettings),
+    Stardist(StardistSettings),
     StructureTensor(StructureTensorSettings),
     Threshold(ThresholdSettings),
     UNet(UNetSettings),
@@ -120,12 +121,13 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta { id: 18, name: "RankFilter", category: CommandCategory::Preprocess, summary: "A filter that transforms pixels based on the statistical rank of their neighbors.", description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges." },
         CommandMeta { id: 19, name: "RollingBall", category: CommandCategory::Preprocess, summary: "Removes non-uniform background illumination by calculating a local intensity baseline.", description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features." },
         CommandMeta { id: 20, name: "SaveImage", category: CommandCategory::Preprocess, summary: "A command that exports the current image to a persistent file on disk.", description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```" },
-        CommandMeta { id: 21, name: "StructureTensor", category: CommandCategory::Preprocess, summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.", description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```" },
-        CommandMeta { id: 22, name: "Threshold", category: CommandCategory::Segment, summary: "A filter that segments an image into discrete classes based on intensity.", description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.\n\n# Examples\n\n```\nuse imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\nlet binary = Threshold {\nthresholds: vec![ThresholdSettings {\nmethod: ThresholdMethod::Otsu,\nmin_threshold: 0.0,\nmax_threshold: 1.0,\nobject_class_id: ObjectLabel::Foreground,\n}]\n};\n```" },
-        CommandMeta { id: 23, name: "AI UNet Segmentation", category: CommandCategory::Segment, summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor of per-class logits/scores\n(e.g. background/foreground), in which case a softmax is applied over the\nchannel dimension and the last channel is taken as the foreground probability.\nRuns on GPU automatically if CUDA is available in the linked libtorch build,\notherwise falls back to CPU." },
-        CommandMeta { id: 24, name: "Voronoi", category: CommandCategory::Classify, summary: "Computes a Voronoi tessellation from segmented seed objects.", description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object." },
-        CommandMeta { id: 25, name: "Watershed", category: CommandCategory::Object, summary: "A morphological segmentation algorithm that splits touching objects using distance topography.", description: "The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).\nBy analyzing the \"shape\" of an object via a Distance Transform, it identifies centers of mass\nand establishes boundaries at the narrowest points of connection.\n\nThis implementation is adaptive:\n* It can **auto-detect** objects from grayscale intensity peaks.\n* It can **refine** existing segments if a `U32Label` image is provided as input." },
-        CommandMeta { id: 26, name: "WeightedDeviation", category: CommandCategory::Preprocess, summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.", description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n# Examples\n\n```\nuse imagec::backend::algos::WeightedDeviation;\nlet settings = WeightedDeviation {\nkernel_size: 7,\nsigma: 2.0,\n};\n```" },
+        CommandMeta { id: 21, name: "AI Stardist Segmentation", category: CommandCategory::Segment, summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU." },
+        CommandMeta { id: 22, name: "StructureTensor", category: CommandCategory::Preprocess, summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.", description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```" },
+        CommandMeta { id: 23, name: "Threshold", category: CommandCategory::Segment, summary: "A filter that segments an image into discrete classes based on intensity.", description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.\n\n# Examples\n\n```\nuse imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\nlet binary = Threshold {\nthresholds: vec![ThresholdSettings {\nmethod: ThresholdMethod::Otsu,\nmin_threshold: 0.0,\nmax_threshold: 1.0,\nobject_class_id: ObjectLabel::Foreground,\n}]\n};\n```" },
+        CommandMeta { id: 24, name: "AI UNet Segmentation", category: CommandCategory::Segment, summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor of per-class logits/scores\n(e.g. background/foreground), in which case a softmax is applied over the\nchannel dimension and the last channel is taken as the foreground probability.\nRuns on GPU automatically if CUDA is available in the linked libtorch build,\notherwise falls back to CPU." },
+        CommandMeta { id: 25, name: "Voronoi", category: CommandCategory::Classify, summary: "Computes a Voronoi tessellation from segmented seed objects.", description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object." },
+        CommandMeta { id: 26, name: "Watershed", category: CommandCategory::Object, summary: "A morphological segmentation algorithm that splits touching objects using distance topography.", description: "The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).\nBy analyzing the \"shape\" of an object via a Distance Transform, it identifies centers of mass\nand establishes boundaries at the narrowest points of connection.\n\nThis implementation is adaptive:\n* It can **auto-detect** objects from grayscale intensity peaks.\n* It can **refine** existing segments if a `U32Label` image is provided as input." },
+        CommandMeta { id: 27, name: "WeightedDeviation", category: CommandCategory::Preprocess, summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.", description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n# Examples\n\n```\nuse imagec::backend::algos::WeightedDeviation;\nlet settings = WeightedDeviation {\nkernel_size: 7,\nsigma: 2.0,\n};\n```" },
     ]
 }
 
@@ -177,14 +179,15 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         18 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
         19 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
         20 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        21 => Some(PipelineCommand::StructureTensor(
+        21 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        22 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        22 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        23 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        24 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        25 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        26 => Some(PipelineCommand::WeightedDeviation(
+        23 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        24 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        25 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        26 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        27 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
         _ => None,
@@ -216,6 +219,7 @@ impl PipelineCommand {
             Self::RankFilter(_) => "RankFilter",
             Self::RollingBall(_) => "RollingBall",
             Self::SaveImage(_) => "SaveImage",
+            Self::Stardist(_) => "AI Stardist Segmentation",
             Self::StructureTensor(_) => "StructureTensor",
             Self::Threshold(_) => "Threshold",
             Self::UNet(_) => "AI UNet Segmentation",
@@ -248,6 +252,7 @@ impl PipelineCommand {
             Self::RankFilter(_) => &CommandCategory::Preprocess,
             Self::RollingBall(_) => &CommandCategory::Preprocess,
             Self::SaveImage(_) => &CommandCategory::Preprocess,
+            Self::Stardist(_) => &CommandCategory::Segment,
             Self::StructureTensor(_) => &CommandCategory::Preprocess,
             Self::Threshold(_) => &CommandCategory::Segment,
             Self::UNet(_) => &CommandCategory::Segment,
@@ -363,6 +368,12 @@ impl PipelineCommand {
                 ParameterDef { name: "path".to_string(), display_name: "Path".to_string(), description: "The destination filesystem path where the image will be written.".to_string(), value: _s.path.display().to_string(), param_type: ParamType::FilePath, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
+            Self::Stardist(_s) => vec![
+                ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt".to_string(), "pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a grid cell is considered a candidate object center.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] },
+                ParameterDef { name: "nms_threshold".to_string(), display_name: "Nms Threshold".to_string(), description: "Pixel-overlap ratio (intersection / union) above which a lower-scoring\ncandidate polygon is suppressed in favor of an overlapping higher-scoring one.".to_string(), value: format!("{}", _s.nms_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] },
+            ],
             Self::StructureTensor(_s) => vec![
                 ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "The mathematical output to be produced by the algorithm.".to_string(), value: match _s.mode { FiltersStructureTensorTensorModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersStructureTensorTensorModeSettings::EigenvaluesY => "Eigenvalues Y".to_string(), FiltersStructureTensorTensorModeSettings::Coherence => "Coherence".to_string() }, param_type: ParamType::Dropdown, options: vec!["Eigenvalues X".to_string(), "Eigenvalues Y".to_string(), "Coherence".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the integration window used to average the local gradients.\n\nLarger windows provide more stability against noise but reduce\nspatial resolution.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
@@ -426,6 +437,7 @@ impl PipelineCommand {
             Self::RankFilter(_) => String::new(),
             Self::RollingBall(_) => String::new(),
             Self::SaveImage(_) => String::new(),
+            Self::Stardist(_) => String::new(),
             Self::StructureTensor(_) => String::new(),
             Self::Threshold(_) => String::new(),
             Self::UNet(_) => String::new(),
@@ -868,6 +880,26 @@ impl PipelineCommand {
                     };
                 }
             }
+            Self::Stardist(s) => {
+                if param_name == "model_path" {
+                    s.model_path = std::path::PathBuf::from(value);
+                }
+                if param_name == "object_class_id" {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.object_class_id = SegmentationClass(v);
+                    }
+                }
+                if param_name == "probability_threshold" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.probability_threshold = v;
+                    }
+                }
+                if param_name == "nms_threshold" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.nms_threshold = v;
+                    }
+                }
+            }
             Self::StructureTensor(s) => {
                 if param_name == "mode" {
                     s.mode = match value {
@@ -1071,6 +1103,7 @@ impl PipelineCommand {
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
+            Self::Stardist(_) => {}
             Self::StructureTensor(_) => {}
             Self::Threshold(s) => {
                 if param_name == "thresholds" {
@@ -1111,6 +1144,7 @@ impl PipelineCommand {
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
+            Self::Stardist(_) => {}
             Self::StructureTensor(_) => {}
             Self::Threshold(s) => {
                 if param_name == "thresholds" && idx < s.thresholds.len() {
