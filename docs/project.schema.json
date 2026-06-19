@@ -2479,16 +2479,32 @@
       ]
     },
     "WatershedSettings": {
-      "description": "A morphological segmentation algorithm that splits touching objects using distance topography.\n\n The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).\n By analyzing the \"shape\" of an object via a Distance Transform, it identifies centers of mass\n and establishes boundaries at the narrowest points of connection.\n\n This implementation is adaptive:\n * It can **auto-detect** objects from grayscale intensity peaks.\n * It can **refine** existing segments if a `U32Label` image is provided as input.",
+      "description": "A morphological segmentation algorithm that splits touching objects using distance topography.\n\n This is a faithful port of ImageJ's `Process > Binary > Watershed`\n (`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n `ConnectedComponents` merged into a single blob are split at their \"necks\":\n the distance map's local maxima are the seeds, maxima protruding less than\n `maximum_finder_tolerance` above the ridge connecting them to a higher maximum\n are merged, and a constrained flood draws 1-pixel watershed lines between the\n surviving basins. The split blob is then re-labeled into separate instances.",
       "type": "object",
       "properties": {
         "maximumFinderTolerance": {
-          "description": "The prominence threshold for peak detection.\n\n This value determines how \"deep\" the valley between two peaks must be to\n keep them as separate objects.\n\n * **Low values**: Sensitive to small variations; may cause over-segmentation (splitting one object into many).\n * **High values**: More robust to noise; may cause under-segmentation (failing to split touching objects).\n\n In an EDM (Euclidean Distance Map), this value directly corresponds to the\n pixel distance from the edge of the object.",
+          "description": "Prominence tolerance for the maximum finder, in pixels of distance.\n\n A local maximum of the distance map is treated as a separate object only\n if it protrudes more than this value above the ridge connecting it to a\n higher maximum. This is ImageJ's \"prominence\"/\"noise tolerance\" parameter.\n\n * **Low values**: more sensitive; may over-segment ragged objects.\n * **High values**: more robust; may fail to split genuinely touching objects.\n\n ImageJ's default of `0.5` works well for most distance maps; raise it if a\n single object is being split into several pieces.",
           "type": "number",
           "format": "float",
           "default": 0.5,
-          "maximum": 1,
+          "maximum": 20,
           "minimum": 0.1
+        },
+        "minObjectSize": {
+          "description": "Minimum object size, in pixels. After segmentation, any object smaller than\n this is removed (its pixels become background). `0` disables the filter.\n\n Use it to drop tiny fragments left by very ragged masks.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "smoothingSigma": {
+          "description": "Standard deviation (px) of an optional Gaussian blur applied to the\n distance map *before* the maximum finder. `0` disables it.\n\n ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\n boundaries, so this is rarely needed; for extremely noisy AI masks a value\n of `1.0`–`2.0` can further suppress spurious maxima.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 10,
+          "minimum": 0
         }
       }
     },

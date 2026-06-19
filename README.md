@@ -70,7 +70,7 @@ Two AI segmentation algorithms are available (built with the `ai` Cargo feature,
    UNet → ConnectedComponents → Watershed → ExtractRois
    ```
 
-   `ConnectedComponents` labels each blob; `Watershed` then re-splits any blob containing more than one object, using a distance-transform peak per object. This works well for round/convex nuclei. Tune `Watershed.maximum_finder_tolerance` (start around `0.3`–`0.5`): lower values split more aggressively, higher values under-split.
+   `ConnectedComponents` labels each blob; `Watershed` then re-splits any blob containing more than one object. The watershed is a faithful port of ImageJ's `Process > Binary > Watershed` (the `MaximumFinder` distance-map algorithm), so the default `Watershed.maximum_finder_tolerance` of `0.5` works for most nuclei — raise it only if a single object is being split into several pieces.
 
 This *semantic mask → connected components → watershed declumping* pattern is the standard approach for boundary/U-Net-style models — the same idea used by CellProfiler's "IdentifyPrimaryObjects" and ilastik's pixel-classification + object-splitting workflows. `Stardist`, by contrast, predicts per-object instances directly and skips all of this.
 

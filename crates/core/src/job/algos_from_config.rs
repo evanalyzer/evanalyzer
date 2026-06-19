@@ -482,7 +482,9 @@ impl From<VoronoiSettings> for Voronoi {
 impl From<WatershedSettings> for Watershed {
     fn from(_s: WatershedSettings) -> Self {
         Watershed {
-            maximum_finder_tolerance: _s.maximum_finder_tolerance.clamp(0.1, 1.0),
+            maximum_finder_tolerance: _s.maximum_finder_tolerance.clamp(0.1, 20.0),
+            smoothing_sigma: _s.smoothing_sigma.clamp(0.0, 10.0),
+            min_object_size: _s.min_object_size,
         }
     }
 }

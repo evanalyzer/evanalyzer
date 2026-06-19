@@ -1000,35 +1000,52 @@ pub struct ConnectedComponentsSettings {}
 
 ///  A morphological segmentation algorithm that splits touching objects using distance topography.
 ///
-///  The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).
-///  By analyzing the "shape" of an object via a Distance Transform, it identifies centers of mass
-///  and establishes boundaries at the narrowest points of connection.
-///
-///  This implementation is adaptive:
-///  * It can **auto-detect** objects from grayscale intensity peaks.
-///  * It can **refine** existing segments if a `U32Label` image is provided as input.
+///  This is a faithful port of ImageJ's `Process > Binary > Watershed`
+///  (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
+///  `ConnectedComponents` merged into a single blob are split at their "necks":
+///  the distance map's local maxima are the seeds, maxima protruding less than
+///  `maximum_finder_tolerance` above the ridge connecting them to a higher maximum
+///  are merged, and a constrained flood draws 1-pixel watershed lines between the
+///  surviving basins. The split blob is then re-labeled into separate instances.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct WatershedSettings {
-    ///  The prominence threshold for peak detection.
+    ///  Prominence tolerance for the maximum finder, in pixels of distance.
     ///
-    ///  This value determines how "deep" the valley between two peaks must be to
-    ///  keep them as separate objects.
+    ///  A local maximum of the distance map is treated as a separate object only
+    ///  if it protrudes more than this value above the ridge connecting it to a
+    ///  higher maximum. This is ImageJ's "prominence"/"noise tolerance" parameter.
     ///
-    ///  * **Low values**: Sensitive to small variations; may cause over-segmentation (splitting one object into many).
-    ///  * **High values**: More robust to noise; may cause under-segmentation (failing to split touching objects).
+    ///  * **Low values**: more sensitive; may over-segment ragged objects.
+    ///  * **High values**: more robust; may fail to split genuinely touching objects.
     ///
-    ///  In an EDM (Euclidean Distance Map), this value directly corresponds to the
-    ///  pixel distance from the edge of the object.
-    #[schemars(range(min = 0.1, max = 1))]
+    ///  ImageJ's default of `0.5` works well for most distance maps; raise it if a
+    ///  single object is being split into several pieces.
+    #[schemars(range(min = 0.1, max = 20))]
     pub maximum_finder_tolerance: f32,
+    ///  Standard deviation (px) of an optional Gaussian blur applied to the
+    ///  distance map *before* the maximum finder. `0` disables it.
+    ///
+    ///  ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
+    ///  boundaries, so this is rarely needed; for extremely noisy AI masks a value
+    ///  of `1.0`–`2.0` can further suppress spurious maxima.
+    #[schemars(range(min = 0, max = 10))]
+    pub smoothing_sigma: f32,
+    ///  Minimum object size, in pixels. After segmentation, any object smaller than
+    ///  this is removed (its pixels become background). `0` disables the filter.
+    ///
+    ///  Use it to drop tiny fragments left by very ragged masks.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_object_size: i32,
 }
 
 impl Default for WatershedSettings {
     fn default() -> Self {
         Self {
             maximum_finder_tolerance: 0.5f32,
+            smoothing_sigma: 0.0f32,
+            min_object_size: 0i32,
         }
     }
 }

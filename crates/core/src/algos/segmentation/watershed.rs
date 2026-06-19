@@ -7,71 +7,80 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use std::collections::BinaryHeap;
-
 use crate::{
-    algos::{ImageAlgorithm, spartial_transform::edm::DistanceTransform},
+    algos::{
+        ImageAlgorithm, segmentation::maximum_finder::watershed_segment_edm,
+        spartial_transform::edm::DistanceTransform,
+    },
     image::ImageContainer,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_image::Image;
+use kornia_imgproc::filter::gaussian_blur;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
-use std::cmp::Ordering;
 
 /// A morphological segmentation algorithm that splits touching objects using distance topography.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "object")]
 ///
-/// The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).
-/// By analyzing the "shape" of an object via a Distance Transform, it identifies centers of mass
-/// and establishes boundaries at the narrowest points of connection.
-///
-/// This implementation is adaptive:
-/// * It can **auto-detect** objects from grayscale intensity peaks.
-/// * It can **refine** existing segments if a `U32Label` image is provided as input.
+/// This is a faithful port of ImageJ's `Process > Binary > Watershed`
+/// (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
+/// `ConnectedComponents` merged into a single blob are split at their "necks":
+/// the distance map's local maxima are the seeds, maxima protruding less than
+/// `maximum_finder_tolerance` above the ridge connecting them to a higher maximum
+/// are merged, and a constrained flood draws 1-pixel watershed lines between the
+/// surviving basins. The split blob is then re-labeled into separate instances.
 #[derive(CommandsMeta)]
 pub struct Watershed {
-    /// The prominence threshold for peak detection.
+    /// Prominence tolerance for the maximum finder, in pixels of distance.
     ///
-    /// This value determines how "deep" the valley between two peaks must be to
-    /// keep them as separate objects.
+    /// A local maximum of the distance map is treated as a separate object only
+    /// if it protrudes more than this value above the ridge connecting it to a
+    /// higher maximum. This is ImageJ's "prominence"/"noise tolerance" parameter.
     ///
-    /// * **Low values**: Sensitive to small variations; may cause over-segmentation (splitting one object into many).
-    /// * **High values**: More robust to noise; may cause under-segmentation (failing to split touching objects).
+    /// * **Low values**: more sensitive; may over-segment ragged objects.
+    /// * **High values**: more robust; may fail to split genuinely touching objects.
     ///
-    /// In an EDM (Euclidean Distance Map), this value directly corresponds to the
-    /// pixel distance from the edge of the object.
-    #[cmdsmeta(default = 0.5, min = 0.1, max = 1.0, step = 0.1)]
+    /// ImageJ's default of `0.5` works well for most distance maps; raise it if a
+    /// single object is being split into several pieces.
+    #[cmdsmeta(default = 0.5, min = 0.1, max = 20.0, step = 0.5)]
     pub maximum_finder_tolerance: f32,
+
+    /// Standard deviation (px) of an optional Gaussian blur applied to the
+    /// distance map *before* the maximum finder. `0` disables it.
+    ///
+    /// ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
+    /// boundaries, so this is rarely needed; for extremely noisy AI masks a value
+    /// of `1.0`–`2.0` can further suppress spurious maxima.
+    #[cmdsmeta(default = 0.0, min = 0.0, max = 10.0, step = 0.5)]
+    pub smoothing_sigma: f32,
+
+    /// Minimum object size, in pixels. After segmentation, any object smaller than
+    /// this is removed (its pixels become background). `0` disables the filter.
+    ///
+    /// Use it to drop tiny fragments left by very ragged masks.
+    #[cmdsmeta(default = 0, min = 0, max = 100000, step = 1)]
+    pub min_object_size: i32,
 }
 
 impl ImageAlgorithm for Watershed {
-    /// Segments the image by identifying and expanding object seeds based on topological distance.
+    /// Splits touching objects via ImageJ's EDM watershed.
     ///
-    /// The execution follows a dual-strategy process depending on the input type:
-    /// 1. **Topography Generation**: Regardless of input, a Euclidean Distance Map (EDM) is
-    ///    generated. If the input is `U32Label`, a binary mask is used as the topography source;
-    ///    if `F32Gray`, intensities are used directly.
-    /// 2. **Seeding Strategy**:
-    ///    * **Auto-Seeding (Grayscale)**: Analyzes the EDM for local peaks. Peaks are filtered
-    ///      using the `maximum_finder_tolerance` to prevent noise-driven over-segmentation.
-    ///    * **Seeded Growth (Labeled)**: Uses existing `U32Label` values as initial seeds,
-    ///      preserving pre-defined object identities.
-    /// 3. **Segmentation**: A priority-queue based flooding algorithm expands seeds through
-    ///    the EDM. When two different labels meet, a watershed boundary (value 0) is created.
-    /// 4. **Context Transformation**: The `ctx.image` is converted to a `U32Label` image,
-    ///    transforming the pipeline from a pixel-intensity state to a discrete object state.
-    ///
-    /// # Tolerance Logic
-    /// The `maximum_finder_tolerance` defines the minimum "prominence" a peak must have
-    /// relative to the surrounding valleys to be considered a unique object. This is
-    /// critical for preventing a single irregular object from being shattered into multiple labels.
+    /// 1. **Topography**: a Euclidean Distance Map (EDM) is computed from the
+    ///    binary footprint of the current instance map (any instance > 0 is foreground).
+    /// 2. **Watershed**: [`watershed_segment_edm`] runs ImageJ's `MaximumFinder`
+    ///    on the EDM, producing a mask in which particles are `255` and 1-pixel
+    ///    watershed lines (plus background) are `0`.
+    /// 3. **Re-labeling**: the cut foreground is re-labeled into separate
+    ///    instances with 8-connectivity, constrained so two pixels are only joined
+    ///    if they shared the same original instance (already-separated objects are
+    ///    never merged).
     ///
     /// # Errors
-    /// Returns [`InternalErrors::InvalidImageType`] if the input container is not `F32Gray`
-    /// or `U32Label`, or if the underlying `DistanceTransform` fails.
+    /// Returns an error if the instance map is missing or the underlying
+    /// `DistanceTransform` fails.
     fn execute(
         &self,
         ctx: &mut PipelineContext,
@@ -111,12 +120,32 @@ impl ImageAlgorithm for Watershed {
 
         // Get the EDM result (which is now in ctx.image after transform.execute)
         let edm_image = ctx.get_f32_gray_image()?;
+        let width = edm_image.width();
+        let height = edm_image.height();
 
-        // Run the Watershed logic
-        let final_instances = self.grow_existing_labels(&edm_image, &seed_instances);
+        // Optionally smooth the distance map to further suppress spurious maxima
+        // from very ragged masks (ImageJ's trueEdmHeight already handles ordinary
+        // roughness, so this is usually unnecessary).
+        let smoothed;
+        let edm: &[f32] = if self.smoothing_sigma > 0.0 {
+            smoothed = Self::smooth_edm(&edm_image, self.smoothing_sigma)?;
+            smoothed.as_slice()
+        } else {
+            edm_image.as_slice()
+        };
 
-        // Write directly back into the classes buffer
-        // We use get_labels_and_classes_mut just at the end to finalize
+        // ImageJ MaximumFinder watershed: particles = 255, watershed lines = 0.
+        let mask = watershed_segment_edm(edm, width, height, self.maximum_finder_tolerance);
+
+        // Re-label the cut foreground into separate instances.
+        let final_instances = self.label_cut_foreground(
+            &mask,
+            seed_instances.as_slice(),
+            width,
+            height,
+            self.min_object_size.max(0) as usize,
+        );
+
         let (_, classes) = ctx.get_segmentation_and_instances_mut(false)?;
         classes.as_slice_mut().copy_from_slice(&final_instances);
 
@@ -130,282 +159,95 @@ impl ImageAlgorithm for Watershed {
 
 // --- Internal Logic ---
 
-struct DSU {
-    parent: Vec<u32>,
-    peak_values: Vec<f32>,
-}
-
-impl DSU {
-    fn new(size: usize, values: &[f32]) -> Self {
-        Self {
-            parent: (0..size as u32).collect(),
-            peak_values: values.to_vec(),
-        }
-    }
-
-    fn find(&mut self, i: u32) -> u32 {
-        if self.parent[i as usize] == i {
-            i
-        } else {
-            self.parent[i as usize] = self.find(self.parent[i as usize]);
-            self.parent[i as usize]
-        }
-    }
-
-    fn union(&mut self, i: u32, j: u32) {
-        let root_i = self.find(i);
-        let root_j = self.find(j);
-        if root_i != root_j {
-            if self.peak_values[root_i as usize] < self.peak_values[root_j as usize] {
-                self.parent[root_i as usize] = root_j;
-            } else {
-                self.parent[root_j as usize] = root_i;
-            }
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq)]
-struct Node {
-    val: f32,
-    idx: usize,
-}
-
-// Max-heap for Priority Queue (highest EDM values first)
-impl Eq for Node {}
-impl Ord for Node {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.val.partial_cmp(&other.val).unwrap_or(Ordering::Equal)
-    }
-}
-impl PartialOrd for Node {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
 impl Watershed {
-    fn grow_existing_labels(
-        &self,
+    /// Gaussian-blurs the distance map into a fresh buffer. The kernel size is
+    /// derived from `sigma` (`2·round(3σ)+1`, forced odd, min 3).
+    fn smooth_edm(
         edm: &Image<f32, 1, CpuAllocator>,
-        class_mask: &Image<u32, 1, CpuAllocator>,
+        sigma: f32,
+    ) -> Result<Image<f32, 1, CpuAllocator>, InternalErrors> {
+        let radius = (3.0 * sigma).round().max(1.0) as usize;
+        let ksize = 2 * radius + 1;
+        let size = edm.size();
+        let mut out = Image::<f32, 1, CpuAllocator>::new(
+            size,
+            vec![0.0; size.width * size.height],
+            CpuAllocator,
+        )
+        .map_err(InternalErrors::from_kornia)?;
+        gaussian_blur(edm, &mut out, (ksize, ksize), (sigma, sigma))
+            .map_err(InternalErrors::from_kornia)?;
+        Ok(out)
+    }
+
+    /// Labels the watershed-cut foreground (`mask == 255`) into separate instances
+    /// using 8-connectivity. Two pixels are only joined if they belonged to the
+    /// same original instance, so distinct upstream objects are never merged.
+    /// Objects smaller than `min_object_size` (when > 1) are removed and the
+    /// remaining ids are compacted to a contiguous `1..=n` range.
+    fn label_cut_foreground(
+        &self,
+        mask: &[u8],
+        seed: &[u32],
+        width: usize,
+        height: usize,
+        min_object_size: usize,
     ) -> Vec<u32> {
-        let (width, height) = (edm.width(), edm.height());
-        let edm_slice = edm.as_slice();
-        let class_slice = class_mask.as_slice();
+        let n = width * height;
+        let mut labels = vec![0u32; n];
+        let mut next_id = 1u32;
+        let mut stack: Vec<usize> = Vec::new();
 
-        let mut labels = vec![0u32; width * height];
-        let mut pq = BinaryHeap::new();
-        let mut current_max_id = 0;
-
-        // 1. Initialize
-        for i in 0..edm_slice.len() {
-            let val = edm_slice[i];
-            if val <= 0.0 {
+        for start in 0..n {
+            if mask[start] != 255 || labels[start] != 0 || seed[start] == 0 {
                 continue;
             }
-            // Simple Local Maxima check: Is this pixel >= all its neighbors?
-            let is_max = self.is_local_maximum(edm, i);
-            if is_max {
-                // We found a peak! Assign a unique label.
-                current_max_id += 1;
-                labels[i] = current_max_id;
-                pq.push(Node {
-                    val: edm_slice[i],
-                    idx: i,
-                });
-            }
-        }
-
-        // 2. Flood Fill
-        while let Some(Node { val: _, idx }) = pq.pop() {
-            let x = (idx % width) as i32;
-            let y = (idx / width) as i32;
-            let current_label = labels[idx];
-            let current_class = class_slice[idx];
-
-            for dy in -1..=1 {
-                for dx in -1..=1 {
-                    if dx == 0 && dy == 0 {
-                        continue;
-                    }
-                    let nx = x + dx;
-                    let ny = y + dy;
-
-                    if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
-                        let n_idx = (ny as usize * width) + nx as usize;
-
-                        // 1. Only grow into the SAME semantic class
-                        if class_slice[n_idx] != current_class {
+            let instance = seed[start];
+            labels[start] = next_id;
+            stack.push(start);
+            while let Some(p) = stack.pop() {
+                let x = (p % width) as i32;
+                let y = (p / width) as i32;
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        if dx == 0 && dy == 0 {
                             continue;
                         }
-
-                        // 2. Touching Logic: If it's unlabeled (0), claim it immediately.
-                        // Because we use a Max-Heap PQ, the "strongest" growth front
-                        // will reach the shared boundary pixels first.
-                        if labels[n_idx] == 0 {
-                            labels[n_idx] = current_label;
-                            pq.push(Node {
-                                val: edm_slice[n_idx],
-                                idx: n_idx,
-                            });
+                        let nx = x + dx;
+                        let ny = y + dy;
+                        if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
+                            continue;
                         }
-                        // 3. If labels[n_idx] is already > 0 and != current_label,
-                        // we do nothing. The boundary is already established.
+                        let q = ny as usize * width + nx as usize;
+                        if mask[q] == 255 && labels[q] == 0 && seed[q] == instance {
+                            labels[q] = next_id;
+                            stack.push(q);
+                        }
                     }
                 }
             }
+            next_id += 1;
         }
+
+        if min_object_size > 1 {
+            let mut sizes = vec![0usize; next_id as usize];
+            for &l in &labels {
+                sizes[l as usize] += 1;
+            }
+            let mut remap = vec![0u32; next_id as usize];
+            let mut compact = 1u32;
+            for (id, remap_id) in remap.iter_mut().enumerate().skip(1) {
+                if sizes[id] >= min_object_size {
+                    *remap_id = compact;
+                    compact += 1;
+                }
+            }
+            for l in labels.iter_mut() {
+                *l = remap[*l as usize];
+            }
+        }
+
         labels
-    }
-
-    /// Strategy B: Auto-detect seeds from EDM peaks
-    fn find_maxima_labeled(
-        &self,
-        edm: &Image<f32, 1, CpuAllocator>,
-        tolerance: f32,
-    ) -> Image<u32, 1, CpuAllocator> {
-        let width = edm.width();
-        let height = edm.height();
-        let num_pixels = width * height;
-        let edm_slice = edm.as_slice();
-
-        let mut indices: Vec<usize> = (0..num_pixels).collect();
-        indices.sort_by(|&a, &b| edm_slice[b].partial_cmp(&edm_slice[a]).unwrap());
-
-        let mut dsu = DSU::new(num_pixels, edm_slice);
-        let mut labels = vec![0u32; num_pixels];
-        let mut current_id = 1;
-
-        for &idx in &indices {
-            let val = edm_slice[idx];
-            if val <= 0.0 {
-                continue;
-            }
-
-            let x = (idx % width) as i32;
-            let y = (idx / width) as i32;
-            let mut neighbors = Vec::new();
-
-            for dy in -1..=1 {
-                for dx in -1..=1 {
-                    if dx == 0 && dy == 0 {
-                        continue;
-                    }
-                    let nx = x + dx;
-                    let ny = y + dy;
-                    if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
-                        let n_idx = (ny as usize * width) + nx as usize;
-                        if labels[n_idx] != 0 {
-                            neighbors.push(n_idx);
-                        }
-                    }
-                }
-            }
-
-            if neighbors.is_empty() {
-                labels[idx] = current_id;
-                current_id += 1;
-            } else {
-                let mut neighbor_roots: Vec<u32> =
-                    neighbors.iter().map(|&n| dsu.find(n as u32)).collect();
-                neighbor_roots.sort_unstable();
-                neighbor_roots.dedup();
-
-                if neighbor_roots.len() == 1 {
-                    let root = neighbor_roots[0];
-                    labels[idx] = labels[root as usize];
-                    dsu.union(idx as u32, root);
-                } else {
-                    let current_pixel_val = edm_slice[idx];
-                    let mut can_merge_all = true;
-                    for &root in &neighbor_roots {
-                        if dsu.peak_values[root as usize] - current_pixel_val > tolerance {
-                            can_merge_all = false;
-                            break;
-                        }
-                    }
-
-                    if can_merge_all {
-                        let first_root = neighbor_roots[0];
-                        labels[idx] = labels[first_root as usize];
-                        for &root in &neighbor_roots {
-                            dsu.union(idx as u32, root);
-                        }
-                    } else {
-                        // Watershed boundary: Choose the best neighbor instead of just the first.
-                        let mut best_root = neighbor_roots[0];
-                        let mut max_edm_val = -1.0;
-
-                        for &root in &neighbor_roots {
-                            let root_idx = root as usize;
-                            // Optimization: Assign to the neighbor that belongs to the "steepest" peak
-                            // This prevents smaller noise objects from "stealing" pixels from larger ones.
-                            if dsu.peak_values[root_idx] > max_edm_val {
-                                max_edm_val = dsu.peak_values[root_idx];
-                                best_root = root;
-                            }
-                        }
-                        labels[idx] = labels[best_root as usize];
-                    }
-                }
-            }
-        }
-        Image::<u32, 1, CpuAllocator>::new(edm.size(), labels, CpuAllocator).unwrap()
-    }
-
-    fn is_local_maximum(&self, edm: &Image<f32, 1, CpuAllocator>, idx: usize) -> bool {
-        let width = edm.width();
-        let height = edm.height();
-        let edm_slice = edm.as_slice();
-
-        let x = (idx % width) as i32;
-        let y = (idx / width) as i32;
-        let val = edm_slice[idx];
-
-        // Don't detect background as maxima
-        if val <= 0.0 {
-            return false;
-        }
-
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                if dx == 0 && dy == 0 {
-                    continue;
-                }
-
-                let nx = x + dx;
-                let ny = y + dy;
-
-                if nx >= 0 && nx < width as i32 && ny >= 0 && ny < height as i32 {
-                    let n_idx = (ny as usize * width) + nx as usize;
-                    let neighbor_val = edm_slice[n_idx];
-
-                    // 1. Strict Peak Check: If any neighbor is significantly higher than
-                    // the current pixel, this cannot be a local maximum.
-                    // This tolerance helps ignore small "bumps" or noise in the EDM
-                    // that would otherwise cause a single object to split into multiple pieces.
-                    if neighbor_val > val + self.maximum_finder_tolerance {
-                        return false;
-                    }
-
-                    // 2. Tie-breaking so each hill or plateau produces exactly one seed.
-                    //
-                    // (a) A lower-indexed neighbour is at least as high as us →
-                    //     we are on the downslope or a plateau; defer to that pixel.
-                    if neighbor_val >= val && n_idx < idx {
-                        return false;
-                    }
-                    // (b) A higher-indexed neighbour is strictly higher than us →
-                    //     we are on the upslope; the true peak lies ahead in scan
-                    //     order and will not be suppressed by (a).
-                    if neighbor_val > val && n_idx > idx {
-                        return false;
-                    }
-                }
-            }
-        }
-        true
     }
 }
 #[cfg(test)]
@@ -457,6 +299,8 @@ mod tests {
 
         let watershed = Watershed {
             maximum_finder_tolerance: 0.1,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -466,65 +310,22 @@ mod tests {
         result_labels.print_window();
         let label_slice = result_labels.as_slice();
 
-        // Check Boundary between B (Class 1) and C (Class 2)
-        // x=13 should be Class 1 ID. x=14 should be Class 2 ID.
-        let center_y = 5;
-        let center_x = 7; // The mathematical intersection point
+        // Three diamonds: A=(4,5) and B=(10,5) (class 1, touching), C=(17,5) (class 2).
+        // Watershed must split A|B; the constrained re-labeling keeps C separate.
+        // So the three centres must carry three distinct, non-zero instance ids.
+        let a = label_slice[5 * 25 + 4];
+        let b = label_slice[5 * 25 + 10];
+        let c = label_slice[5 * 25 + 17];
 
-        let val_left = label_slice[center_y * 25 + (center_x - 1)];
-        let val_split = label_slice[center_y * 25 + center_x];
-        let val_right = label_slice[center_y * 25 + (center_x + 1)];
+        assert!(a > 0, "diamond A centre should be labeled");
+        assert!(b > 0, "diamond B centre should be labeled");
+        assert!(c > 0, "diamond C centre should be labeled");
+        assert_ne!(a, b, "touching same-class diamonds A and B must be split");
+        assert_ne!(a, c, "A and C must be distinct instances");
+        assert_ne!(b, c, "B and C must be distinct instances");
 
-        // A. The split line itself must be 0 (background/watershed)
-        assert_eq!(
-            val_split, 2,
-            "Pixel at separation point (5, 7) should be 1 (first element)"
-        );
-
-        // B. The pixels to the left and right must be valid objects
-        assert_eq!(
-            val_left, 1,
-            "Pixel to the left of split should be an object"
-        );
-        assert_eq!(
-            val_right, 2,
-            "Pixel to the right of split should the second object"
-        );
-
-        // C. The split must separate different instances
-        assert_ne!(
-            val_left, val_right,
-            "The split line did not separate two different labels!"
-        );
-
-        let center_y = 5;
-        let center_x = 14; // The mathematical intersection point
-
-        let val_left = label_slice[center_y * 25 + (center_x - 1)];
-        let val_split = label_slice[center_y * 25 + center_x];
-        let val_right = label_slice[center_y * 25 + (center_x + 1)];
-
-        // A. The split line itself must be 0 (background/watershed)
-        assert_eq!(
-            val_split, 3,
-            "Pixel at separation point (5, 14) should be 1 (first element)"
-        );
-
-        // B. The pixels to the left and right must be valid objects
-        assert_eq!(
-            val_left, 2,
-            "Pixel to the left of split should be an object"
-        );
-        assert_eq!(
-            val_right, 3,
-            "Pixel to the right of split should the third object"
-        );
-
-        // C. The split must separate different instances
-        assert_ne!(
-            val_left, val_right,
-            "The split line did not separate two different labels!"
-        );
+        let unique: HashSet<u32> = label_slice.iter().copied().filter(|&v| v > 0).collect();
+        assert_eq!(unique.len(), 3, "expected exactly 3 instances, found {}", unique.len());
     }
 
     #[test]
@@ -576,6 +377,8 @@ mod tests {
         let mut cache = PipelineCache::default();
         let watershed = Watershed {
             maximum_finder_tolerance: 0.8,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
         };
 
         // Execute CCL
@@ -591,17 +394,19 @@ mod tests {
 
         // --- ASSERTIONS ---
 
-        // 1. U-Shape: Watershed identified these as two separate basins (ID 2 and 3)
+        // 1. U-Shape: a single-pixel-wide skeleton has a perfectly flat EDM
+        // (every foreground pixel is exactly 1.0 px from the background, with
+        // zero prominence anywhere) — there is no real peak to split on, so
+        // both legs must stay one object.
         let id_u_left = out_slice[2 * w + 2];
         let id_u_right = out_slice[2 * w + 4];
 
         assert!(id_u_left > 0, "Left tip of U-shape should be labeled");
         assert!(id_u_right > 0, "Right tip of U-shape should be labeled");
 
-        // In Watershed, these are separate because of the distance transform peaks
-        assert_ne!(
+        assert_eq!(
             id_u_left, id_u_right,
-            "Watershed should have split the U-shape into separate IDs at the bottleneck"
+            "a flat-EDM skeleton has no prominence to split on; both legs should stay one object"
         );
 
         // 2. 8-Connectivity: (7,7) and (8,8) must have the same ID
@@ -635,7 +440,7 @@ mod tests {
         let unique_ids: HashSet<_> = out_slice.iter().filter(|&&x| x > 0).collect();
         assert_eq!(
             unique_ids.len(),
-            5,
+            4,
             "Found {} objects, expected 4",
             unique_ids.len()
         );
@@ -781,10 +586,11 @@ mod tests {
     /// that failed to separate touching blobs.  The algorithm must find the two
     /// EDM peaks independently and flood-fill them into distinct labels.
     ///
-    /// This test would have failed before the `is_local_maximum` plateau fix:
-    /// the old `abs()` condition suppressed the true EDM peak when a
-    /// lower-indexed neighbour happened to fall within `tolerance`, displacing
-    /// the seed and, in asymmetric geometries, preventing a correct split.
+    /// This test would have failed under the old PQ-based flood, which assigned
+    /// a brand-new seed to every raw local maximum with no prominence check —
+    /// a noisy/asymmetric EDM landscape could shatter a single disc into extra
+    /// labels, or (with this exact symmetric geometry) just barely survive.
+    /// `watershed_labels`'s tolerance-based peak merging makes the result robust.
     #[test]
     fn test_watershed_matches_imagej_two_touching_discs() {
         let width = 17usize;
@@ -816,6 +622,8 @@ mod tests {
         let mut cache = PipelineCache::default();
         let watershed = Watershed {
             maximum_finder_tolerance: 0.5,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -841,6 +649,262 @@ mod tests {
             unique.len(),
             2,
             "expected exactly 2 instances after split, found {}",
+            unique.len()
+        );
+    }
+
+    /// Same touching-discs geometry as above, but with a `maximum_finder_tolerance`
+    /// large enough to exceed the prominence of the saddle between the two peaks.
+    ///
+    /// Before the tolerance-based peak merging fix, `Watershed` always created a
+    /// brand-new seed for every detected local maximum regardless of `tolerance`
+    /// (the parameter only ever loosened a per-pixel neighbor check), so two
+    /// touching, similarly-shaped objects — or one irregular/jagged object with
+    /// more than one bump in its distance map — were reliably over-segmented no
+    /// matter how high `tolerance` was set. This is the bug reported against
+    /// real AI-segmented nuclei masks: single nuclei were being sliced in half.
+    #[test]
+    fn test_watershed_merges_shallow_peaks_within_tolerance() {
+        let width = 17usize;
+        let height = 13usize;
+        let size = ImageSize { width, height };
+
+        let c1 = (5i32, 6i32);
+        let c2 = (11i32, 6i32);
+        let r: i32 = 4;
+
+        let mut data = vec![0u32; width * height];
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                let in1 = (x - c1.0).pow(2) + (y - c1.1).pow(2) <= r * r;
+                let in2 = (x - c2.0).pow(2) + (y - c2.1).pow(2) <= r * r;
+                if in1 || in2 {
+                    data[y as usize * width + x as usize] = 1;
+                }
+            }
+        }
+
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+
+        let mut cache = PipelineCache::default();
+        // High enough to swallow the shallow saddle between the two disc peaks
+        // (which split correctly at tolerance = 0.5 in the test above).
+        let watershed = Watershed {
+            maximum_finder_tolerance: 3.0,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+        };
+        watershed
+            .execute(&mut ctx, &mut cache)
+            .expect("Watershed failed");
+
+        let result = ctx.instance_map.expect("No instance map after watershed");
+        let out = result.as_slice();
+
+        let unique: std::collections::HashSet<u32> =
+            out.iter().copied().filter(|&v| v > 0).collect();
+        assert_eq!(
+            unique.len(),
+            1,
+            "a high tolerance should merge the two shallow-saddle peaks back into \
+             one object, found {} instances",
+            unique.len()
+        );
+    }
+
+    /// A small, low (radius 2) bump touching a much taller (radius 6) dominant
+    /// disc — modeling a tiny jagged-boundary noise blob attached to a real
+    /// nucleus. The bump's own peak (~2.24) is barely above the saddle (~2.0)
+    /// where it meets the big disc, so it should be absorbed regardless of how
+    /// much taller the dominant peak is.
+    ///
+    /// Before fixing the merge criterion to compare against the *weakest*
+    /// competing peak, the check required every competing peak (including the
+    /// big disc's ~6.08) to be within `tolerance` of the saddle. That can never
+    /// hold at any sane tolerance, so the tiny bump survived forever as a
+    /// permanent one-object "island" — exactly the bug reported against real
+    /// AI-segmented nuclei with jagged mask boundaries.
+    #[test]
+    fn test_watershed_absorbs_low_prominence_bump_into_dominant_peak() {
+        let width = 20usize;
+        let height = 20usize;
+        let size = ImageSize { width, height };
+
+        let c1 = (6i32, 10i32); // dominant disc
+        let r1: i32 = 6;
+        let c2 = (13i32, 10i32); // small bump, touching the dominant disc
+        let r2: i32 = 2;
+
+        let mut data = vec![0u32; width * height];
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                let in1 = (x - c1.0).pow(2) + (y - c1.1).pow(2) <= r1 * r1;
+                let in2 = (x - c2.0).pow(2) + (y - c2.1).pow(2) <= r2 * r2;
+                if in1 || in2 {
+                    data[y as usize * width + x as usize] = 1;
+                }
+            }
+        }
+
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+
+        let mut cache = PipelineCache::default();
+        // Comfortably above the bump's own prominence (~0.24) but far below
+        // the dominant peak's height above the saddle (~4.08) — a tolerance
+        // a user would plausibly pick for real nuclei, not an extreme value.
+        let watershed = Watershed {
+            maximum_finder_tolerance: 1.0,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+        };
+        watershed
+            .execute(&mut ctx, &mut cache)
+            .expect("Watershed failed");
+
+        let result = ctx.instance_map.expect("No instance map after watershed");
+        let out = result.as_slice();
+
+        let unique: std::collections::HashSet<u32> =
+            out.iter().copied().filter(|&v| v > 0).collect();
+        assert_eq!(
+            unique.len(),
+            1,
+            "the low-prominence bump should be absorbed into the dominant peak's \
+             basin instead of surviving as its own instance, found {} instances",
+            unique.len()
+        );
+    }
+
+    /// `min_object_size` deterministically dissolves a tiny spurious inner basin
+    /// (the "island" artifact) into the larger object surrounding it.
+    ///
+    /// Geometry: a dominant disc (r=6) touching a small bump (r=2). At a *low*
+    /// prominence tolerance the bump survives as a 1-px basin nested inside the
+    /// dominant object — exactly the inner-island artifact seen on real nuclei.
+    /// With `min_object_size` set above the island size it is merged away,
+    /// leaving a single clean object.
+    #[test]
+    fn test_watershed_min_object_size_dissolves_inner_island() {
+        let width = 20usize;
+        let height = 20usize;
+        let size = ImageSize { width, height };
+
+        let c1 = (6i32, 10i32);
+        let r1: i32 = 6;
+        let c2 = (13i32, 10i32);
+        let r2: i32 = 2;
+
+        let build = || {
+            let mut data = vec![0u32; width * height];
+            for y in 0..height as i32 {
+                for x in 0..width as i32 {
+                    let in1 = (x - c1.0).pow(2) + (y - c1.1).pow(2) <= r1 * r1;
+                    let in2 = (x - c2.0).pow(2) + (y - c2.1).pow(2) <= r2 * r2;
+                    if in1 || in2 {
+                        data[y as usize * width + x as usize] = 1;
+                    }
+                }
+            }
+            data
+        };
+
+        let count_instances = |min_object_size: i32| -> usize {
+            let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+            ctx.instance_map =
+                Some(Image::<u32, 1, CpuAllocator>::new(size, build(), CpuAllocator).unwrap());
+            let mut cache = PipelineCache::default();
+            Watershed {
+                // Low enough that the bump's ~0.24px prominence is NOT merged,
+                // so it survives as a separate basin without the size filter.
+                maximum_finder_tolerance: 0.1,
+                smoothing_sigma: 0.0,
+                min_object_size,
+            }
+            .execute(&mut ctx, &mut cache)
+            .expect("Watershed failed");
+            let result = ctx.instance_map.expect("No instance map after watershed");
+            result
+                .as_slice()
+                .iter()
+                .copied()
+                .filter(|&v| v > 0)
+                .collect::<std::collections::HashSet<u32>>()
+                .len()
+        };
+
+        assert_eq!(
+            count_instances(0),
+            2,
+            "without the size filter the spurious bump basin should survive as an inner island"
+        );
+        assert_eq!(
+            count_instances(20),
+            1,
+            "min_object_size should dissolve the inner island into the dominant object"
+        );
+    }
+
+    /// Smoothing the distance map must not corrupt a clean split: two well-separated
+    /// touching discs still resolve to exactly two instances with `smoothing_sigma`
+    /// enabled, and the object footprint stays within the original mask (no pixel
+    /// outside the mask gets labeled despite the blur bleeding values outward).
+    #[test]
+    fn test_watershed_smoothing_preserves_split_and_footprint() {
+        let width = 17usize;
+        let height = 13usize;
+        let size = ImageSize { width, height };
+
+        let c1 = (5i32, 6i32);
+        let c2 = (11i32, 6i32);
+        let r: i32 = 4;
+
+        let mut data = vec![0u32; width * height];
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                let in1 = (x - c1.0).pow(2) + (y - c1.1).pow(2) <= r * r;
+                let in2 = (x - c2.0).pow(2) + (y - c2.1).pow(2) <= r * r;
+                if in1 || in2 {
+                    data[y as usize * width + x as usize] = 1;
+                }
+            }
+        }
+        let footprint = data.clone();
+
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+        let mut cache = PipelineCache::default();
+        Watershed {
+            maximum_finder_tolerance: 0.5,
+            smoothing_sigma: 1.0,
+            min_object_size: 0,
+        }
+        .execute(&mut ctx, &mut cache)
+        .expect("Watershed failed");
+
+        let result = ctx.instance_map.expect("No instance map after watershed");
+        let out = result.as_slice();
+
+        // No label may fall outside the original mask (the blur bleeds EDM values
+        // into the background, but the segmentation must stay within the footprint).
+        // Note: ImageJ removes the 1-px watershed line, so not every foreground
+        // pixel stays labeled — we only assert the no-leak direction.
+        for (i, (&label, &fg)) in out.iter().zip(footprint.iter()).enumerate() {
+            if label > 0 {
+                assert!(fg > 0, "label leaked outside the mask at pixel {i}");
+            }
+        }
+
+        let unique: std::collections::HashSet<u32> =
+            out.iter().copied().filter(|&v| v > 0).collect();
+        assert_eq!(
+            unique.len(),
+            2,
+            "smoothing should still split the two touching discs, found {}",
             unique.len()
         );
     }
@@ -876,6 +940,8 @@ mod tests {
 
         let watershed = Watershed {
             maximum_finder_tolerance: 0.5,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
         };
 
         watershed
@@ -924,4 +990,64 @@ mod tests {
             label_mid
         );
     }
+
+    /// Regression for the reported failure: an elongated "peanut" nucleus (two
+    /// fused lobes with a waist) must split into exactly two clean instances at
+    /// the default tolerance — with NO spurious tiny inner-island objects, which
+    /// is what the previous prominence-based implementation produced.
+    #[test]
+    fn test_watershed_splits_peanut_without_islands() {
+        let width = 24usize;
+        let height = 40usize;
+        let size = ImageSize { width, height };
+
+        // Two vertically-stacked lobes (r=8) whose centres are 13 px apart, so
+        // they overlap into one connected blob with a narrow waist — the shape of
+        // the middle object in the report.
+        let c1 = (12i32, 13i32);
+        let c2 = (12i32, 26i32);
+        let r: i32 = 8;
+
+        let mut data = vec![0u32; width * height];
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                let in1 = (x - c1.0).pow(2) + (y - c1.1).pow(2) <= r * r;
+                let in2 = (x - c2.0).pow(2) + (y - c2.1).pow(2) <= r * r;
+                if in1 || in2 {
+                    data[y as usize * width + x as usize] = 1;
+                }
+            }
+        }
+
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+        let mut cache = PipelineCache::default();
+
+        Watershed {
+            maximum_finder_tolerance: 0.5, // ImageJ default
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+        }
+        .execute(&mut ctx, &mut cache)
+        .expect("Watershed failed");
+
+        let result = ctx.instance_map.expect("No instance map after watershed");
+        let out = result.as_slice();
+
+        let top = out[c1.1 as usize * width + c1.0 as usize];
+        let bottom = out[c2.1 as usize * width + c2.0 as usize];
+        assert!(top > 0 && bottom > 0, "both lobe centres must be labeled");
+        assert_ne!(top, bottom, "the peanut must be split into two lobes");
+
+        // Exactly two instances — no spurious inner islands.
+        let unique: HashSet<u32> = out.iter().copied().filter(|&v| v > 0).collect();
+        assert_eq!(
+            unique.len(),
+            2,
+            "expected exactly 2 instances with no inner islands, found {}",
+            unique.len()
+        );
+    }
+// temp debug
 }
