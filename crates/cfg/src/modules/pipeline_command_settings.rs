@@ -828,6 +828,62 @@ pub struct WeightedDeviationSettings {
 
 // ============ SEGMENTATION ============
 
+///  Instance segmentation using a pretrained Cellpose model exported as TorchScript.
+///
+///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
+///  same normalization as the rest of the pipeline) and return a `[1, C, H, W]`
+///  tensor with `C >= 3` channels: the vertical flow `dY` (channel 0), the
+///  horizontal flow `dX` (channel 1) and the cell-probability logits (channel 2),
+///  which is Cellpose's spatial-gradient representation. Exports that wrap the
+///  output in a tuple (e.g. `(flows, style)`) are also supported — the first
+///  tensor with at least three channels is used.
+///
+///  Instances are recovered with Cellpose's *dynamics*: every pixel whose
+///  cell probability reaches `probability_threshold` is advected for
+///  `flow_iterations` Euler steps along the (down-scaled) flow field until it
+///  converges to the sink at its cell's center. Pixels whose trajectories end in
+///  the same sink basin — found by connected components over the final-position
+///  density map — form one instance. Instances smaller than `min_object_size`
+///  pixels are discarded. Runs on GPU automatically if CUDA is available in the
+///  linked libtorch build, otherwise falls back to CPU.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct CellposeSettings {
+    ///  Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
+    pub model_path: PathBuf,
+    ///  The class assigned to pixels of every detected object. All other
+    ///  pixels are assigned `SegmentationClass::BACKGROUND`.
+    pub object_class_id: SegmentationClass,
+    ///  Cell probability above which a pixel takes part in the flow dynamics and
+    ///  can be assigned to an object. The raw cell-probability logits are passed
+    ///  through a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's
+    ///  default logit threshold of `0` corresponds to `0.5`).
+    #[schemars(range(min = 0, max = 1))]
+    pub probability_threshold: f32,
+    ///  Number of Euler integration steps used to follow the flow field. Higher
+    ///  values let pixels of large cells reach their sink at the cost of runtime;
+    ///  Cellpose's default is `200`.
+    #[schemars(range(min = 1, max = 1000))]
+    pub flow_iterations: i32,
+    ///  Minimum object size, in pixels. After the dynamics, any instance smaller
+    ///  than this is removed (its pixels become background). `0` disables the filter.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_object_size: i32,
+}
+
+impl Default for CellposeSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            object_class_id: SegmentationClass(1),
+            probability_threshold: 0.5f32,
+            flow_iterations: 200i32,
+            min_object_size: 15i32,
+        }
+    }
+}
+
 ///  Instance segmentation using a pretrained StarDist model exported as TorchScript.
 ///
 ///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
