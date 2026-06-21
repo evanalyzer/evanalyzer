@@ -195,7 +195,7 @@
             "type": "threshold",
             "thresholds": [
               {
-                "method": "triangle",
+                "method": "TRIANGLE",
                 "minThreshold": 0.0,
                 "maxThreshold": 1.0,
                 "objectClassId": 0,
@@ -208,9 +208,9 @@
           "enabled": false,
           "command": {
             "type": "morphologicalCommand",
-            "op": "open",
+            "op": "OPEN",
             "kernelSize": 3,
-            "kernelShape": "ellipse",
+            "kernelShape": "ELLIPSE",
             "useGrayscale": false
           }
         },
@@ -225,8 +225,9 @@
           "command": {
             "type": "classifyRois",
             "originSegmentation": [1],
-            "originClass": [],
-            "targetClass": { "VALID": 2 },
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": { "VALID": 2 },
             "sizeUnit": "px",
             "intensityUnit": "rel",
             "minArea": 1.0,
@@ -275,7 +276,7 @@
           "command": {
             "type": "rollingBall",
             "radius": 60.0,
-            "ballType": "paraboloid",
+            "ballType": "PARABOLOID",
             "preSmooth": true
           }
         },
@@ -285,7 +286,7 @@
             "type": "threshold",
             "thresholds": [
               {
-                "method": "otsu",
+                "method": "OTSU",
                 "minThreshold": 0.0,
                 "maxThreshold": 100.0,
                 "objectClassId": 0,
@@ -305,8 +306,9 @@
           "command": {
             "type": "classifyRois",
             "originSegmentation": [1],
-            "originClass": [],
-            "targetClass": { "VALID": 0 },
+            "inputClasses": [],
+            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+            "outputClass": { "VALID": 0 },
             "sizeUnit": "px",
             "intensityUnit": "rel",
             "minArea": 50.0,

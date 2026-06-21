@@ -119,10 +119,7 @@ impl ResultsListController {
 
 /// Recursively walks `dir`, appending every file whose extension matches
 /// [`RESULTS_FILE_EXTENSION`] to `items` together with its modification time.
-fn collect_results_files(
-    dir: &Path,
-    items: &mut Vec<(std::time::SystemTime, ResultItemData)>,
-) {
+fn collect_results_files(dir: &Path, items: &mut Vec<(std::time::SystemTime, ResultItemData)>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -203,7 +200,8 @@ fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
     let file_stem = Path::new(file_name).file_stem()?.to_str()?;
 
     // Split at the "__" and return everything to the right
-    let (_, name_part) = file_stem.split_once("__")?;
-
-    Some(name_part)
+    match file_stem.split_once("__") {
+        Some((_, name_part)) if !name_part.is_empty() => Some(name_part),
+        _ => Some(file_stem),
+    }
 }
