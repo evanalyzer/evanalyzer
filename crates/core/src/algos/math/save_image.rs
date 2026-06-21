@@ -236,6 +236,8 @@ mod tests {
 
         // 2. Setup PipelineContext
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        // Write into the current directory so the relative `test_path` below matches.
+        ctx.output_path = Some(PathBuf::default());
 
         let mut cache = PipelineCache::default();
 
@@ -282,6 +284,7 @@ mod tests {
         .expect("Failed to create test RGB image");
 
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
+        ctx.output_path = Some(PathBuf::default());
         let mut cache = PipelineCache::default();
         let test_path = PathBuf::from("test_output_rgb_deleteme.png");
 
@@ -368,6 +371,7 @@ mod tests {
 
         let input_img = Image::new(size, data, CpuAllocator).unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
+        ctx.output_path = Some(PathBuf::default());
         let mut cache = PipelineCache::default();
 
         // Try saving to an illegal path (e.g., a directory that doesn't exist)
