@@ -749,8 +749,9 @@ impl Default for RollingBallSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveImageSettings {
-    ///  The destination filesystem path where the image will be written.
-    pub path: PathBuf,
+    ///  Name the image should be stord under
+    pub name: String,
+    ///  Which image from the pipeline should be stored
     pub source: MathSaveImageImageSourceSettings,
 }
 

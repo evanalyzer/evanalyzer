@@ -37,8 +37,10 @@ pub enum ImageSource {
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "Preprocessing")]
 pub struct SaveImage {
-    /// The destination filesystem path where the image will be written.
-    pub path: PathBuf,
+    /// Name the image should be stord under
+    pub name: String,
+
+    /// Which image from the pipeline should be stored
     pub source: ImageSource,
 }
 
@@ -88,9 +90,11 @@ impl ImageAlgorithm for SaveImage {
                     .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
 
                     // Save to disk
-                    buffer
-                        .save(&self.path)
-                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+                    if let Some(out_path) = &ctx.output_path {
+                        buffer
+                            .save(out_path.join(format!("{}.png", self.name)))
+                            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+                    }
                     return Ok(());
                 }
 
@@ -111,9 +115,11 @@ impl ImageAlgorithm for SaveImage {
                     )
                     .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
 
-                    buffer
-                        .save(&self.path)
-                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+                    if let Some(out_path) = &ctx.output_path {
+                        buffer
+                            .save(out_path.join(format!("{}.png", self.name)))
+                            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+                    }
                     return Ok(());
                 }
                 _ => {
@@ -138,9 +144,11 @@ impl ImageAlgorithm for SaveImage {
             .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
 
             // Save to disk
-            buffer
-                .save(&self.path)
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            if let Some(out_path) = &ctx.output_path {
+                buffer
+                    .save(out_path.join(format!("{}.png", self.name)))
+                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            }
 
             return Ok(());
         } else if self.source == ImageSource::SegmentationMask {
@@ -157,9 +165,11 @@ impl ImageAlgorithm for SaveImage {
             .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
 
             // Save to disk
-            buffer
-                .save(&self.path)
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            if let Some(out_path) = &ctx.output_path {
+                buffer
+                    .save(out_path.join(format!("{}.png", self.name)))
+                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            }
 
             return Ok(());
         } else {
@@ -234,7 +244,7 @@ mod tests {
 
         // 4. Run the command
         let saver = SaveImage {
-            path: test_path.clone(),
+            name: "test_output_deleteme".into(),
             source: ImageSource::Image,
         };
         let result = saver.execute(&mut ctx, &mut cache);
@@ -277,7 +287,7 @@ mod tests {
 
         // 2. Run the command
         let saver = SaveImage {
-            path: test_path.clone(),
+            name: "test_output_rgb_deleteme".into(),
             source: ImageSource::Image,
         };
         let result = saver.execute(&mut ctx, &mut cache);
@@ -305,7 +315,7 @@ mod tests {
         let mut ctx = PipelineContext::new_from_u32_image_test(unsupported_img).unwrap();
         let mut cache = PipelineCache::default();
         let saver = SaveImage {
-            path: PathBuf::from("fail.png"),
+            name: "fail".into(),
             source: ImageSource::Image,
         };
 
@@ -362,7 +372,7 @@ mod tests {
 
         // Try saving to an illegal path (e.g., a directory that doesn't exist)
         let saver = SaveImage {
-            path: PathBuf::from("/non_existent_folder/file.png"),
+            name: "/non_existent_folder/file.png".into(),
             source: ImageSource::Image,
         };
 
@@ -393,7 +403,7 @@ mod tests {
         let mut cache = PipelineCache::default();
 
         let saver = SaveImage {
-            path: PathBuf::from("fail.png"),
+            name: "fail".into(),
             source: ImageSource::Image,
         };
         let result = saver.execute(&mut ctx, &mut cache);
@@ -412,7 +422,7 @@ mod tests {
     #[test]
     fn test_save_image_name() {
         let saver = SaveImage {
-            path: PathBuf::from("test.png"),
+            name: "test".into(),
             source: ImageSource::Image,
         };
         assert_eq!(saver.name(), "Save Image");

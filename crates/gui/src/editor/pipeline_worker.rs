@@ -6,11 +6,7 @@ use crate::{
         roi_list_controller::RoiListController, viewport_controller::ViewportController,
     },
 };
-use chrono::Utc;
-use evanalyzer_cfg::{
-    RESULTS_FILE_EXTENSION, core_types::InternalErrors, settings::roi_settings::RoiSettings,
-};
-use evanalyzer_core::{DuckDbExporter, MemoryExporter, PipelineResultExporter};
+use evanalyzer_cfg::core_types::InternalErrors;
 use log::{error, info};
 use slint::ComponentHandle;
 use std::sync::{Arc, Condvar, Mutex};
@@ -56,57 +52,21 @@ impl PipelineWorker {
         let self_handle = Arc::clone(self);
         loop {
             let task = wait_for_task(task_request.clone());
-
-            let out_rois: Arc<Mutex<Vec<RoiSettings>>> = Arc::new(Mutex::new(vec![]));
             let is_preview = task.preview;
-
-            let class_names: std::collections::HashMap<_, _> = task
-                .project_settings
-                .classification
-                .classes
-                .iter()
-                .filter_map(|c| {
-                    c.id.to_u32().map(|n| {
-                        (
-                            evanalyzer_cfg::core_types::ObjectClass::Valid(n),
-                            c.name.clone(),
-                        )
-                    })
-                })
-                .collect();
-
-            let results_out: Arc<Mutex<dyn PipelineResultExporter>> = if is_preview {
-                Arc::new(Mutex::new(MemoryExporter {
-                    out_rois: out_rois.clone(),
-                }))
+            let job = if is_preview {
+                evanalyzer_core::generate_preview_job_from_project_settings(
+                    task.project_settings,
+                    task.project_path,
+                )
             } else {
-                let output_dir = task.project_path.join("results");
-                info!("Creating output directory: {:?}", output_dir);
-                if let Err(e) = std::fs::create_dir_all(&output_dir) {
-                    error!("Failed to create output directory: {e}");
-                }
-                let now = Utc::now();
-                let file_date = now.format("%Y%m%dT%H%M%SZ").to_string();
-                let job_name =
-                    petname::petname(2, "_").expect("Problem in random job name generator");
-                let out_path =
-                    output_dir.join(format!("{file_date}__{job_name}.{RESULTS_FILE_EXTENSION}"));
-                match DuckDbExporter::new(&out_path, class_names) {
-                    Ok(exp) => Arc::new(Mutex::new(exp)),
-                    Err(e) => {
-                        error!("Failed to open result database {}: {e}", out_path.display());
-                        continue;
-                    }
-                }
+                evanalyzer_core::generate_analyze_job_from_project_settings(
+                    task.project_settings,
+                    task.project_path,
+                )
             };
 
             info!("Started pipeline worker task");
 
-            let job = evanalyzer_core::generate_job_from_project_settings(
-                task.project_settings,
-                task.project_path,
-                results_out,
-            );
             let Ok(mut job_exec) = job else {
                 error!("Could not execute job!");
                 continue;

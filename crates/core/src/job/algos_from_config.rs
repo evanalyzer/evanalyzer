@@ -394,7 +394,7 @@ impl From<RollingBallSettings> for RollingBall {
 impl From<SaveImageSettings> for SaveImage {
     fn from(_s: SaveImageSettings) -> Self {
         SaveImage {
-            path: _s.path,
+            name: _s.name,
             source: ImageSource::from(_s.source),
         }
     }

@@ -2027,16 +2027,17 @@
       "description": "A command that exports the current image to a persistent file on disk.\n\n This is a **transparent command**: it does not modify the image data in the\n pipeline context, nor does it perform a buffer swap. It acts as a tap\n to view the state of the image at a specific point in the pipeline.\n\n # Examples\n\n ```\n use imagec::backend::algos::SaveImage;\n let saver = SaveImage {path:\"output/processed_cell.png\"};\n ```",
       "type": "object",
       "properties": {
-        "path": {
-          "description": "The destination filesystem path where the image will be written.",
+        "name": {
+          "description": "Name the image should be stord under",
           "type": "string"
         },
         "source": {
+          "description": "Which image from the pipeline should be stored",
           "$ref": "#/$defs/MathSaveImageImageSourceSettings"
         }
       },
       "required": [
-        "path",
+        "name",
         "source"
       ]
     },

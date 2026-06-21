@@ -2178,6 +2178,7 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "bitvec",
+ "chrono",
  "csv",
  "duckdb",
  "env_logger",
@@ -2199,6 +2200,7 @@ dependencies = [
  "macros",
  "ndarray 0.17.2",
  "pathdiff",
+ "petname",
  "proc-macro2",
  "quick-xml 0.39.2",
  "quote",
@@ -2230,7 +2232,6 @@ dependencies = [
  "kornia-image",
  "kornia-imgproc",
  "log",
- "petname",
  "rayon",
  "rfd",
  "serde_json",

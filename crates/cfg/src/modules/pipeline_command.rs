@@ -365,8 +365,8 @@ impl PipelineCommand {
                 ParameterDef { name: "pre_smooth".to_string(), display_name: "Pre Smooth".to_string(), description: "".to_string(), value: format!("{}", _s.pre_smooth), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::SaveImage(_s) => vec![
-                ParameterDef { name: "path".to_string(), display_name: "Path".to_string(), description: "The destination filesystem path where the image will be written.".to_string(), value: _s.path.display().to_string(), param_type: ParamType::FilePath, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
-                ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "Name the image should be stord under".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Which image from the pipeline should be stored".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
             ],
             Self::Stardist(_s) => vec![
                 ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt".to_string(), "pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
@@ -874,8 +874,8 @@ impl PipelineCommand {
                 }
             }
             Self::SaveImage(s) => {
-                if param_name == "path" {
-                    s.path = std::path::PathBuf::from(value);
+                if param_name == "name" {
+                    s.name = value.to_string();
                 }
                 if param_name == "source" {
                     s.source = match value {

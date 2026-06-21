@@ -389,6 +389,8 @@ impl RollingBall {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::{ImageContainer, image::PixelSizes, pipeline::pipeline::PipelineImageMeta};
     use kornia_image::{Image, ImageSize};
@@ -423,6 +425,7 @@ mod tests {
             Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
 
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,
@@ -499,6 +502,7 @@ mod tests {
         let image =
             Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

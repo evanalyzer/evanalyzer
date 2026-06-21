@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::{
     ImagePlane,
     image::{ImageContainer, ImageTypeMarker, ManagedImage, PixelSizes},
@@ -9,6 +11,9 @@ use kornia_image::{Image, ImageSize};
 use kornia_tensor::CpuAllocator;
 
 pub struct PipelineContext {
+    // Output path where pipeline artifacts are stored in
+    pub output_path: Option<PathBuf>,
+    // Image meta data
     pub image_meta: PipelineImageMeta,
     // The "main" image being processed
     pub image: ImageContainer,
@@ -30,6 +35,7 @@ impl PipelineContext {
     }
 
     pub fn new<T: ImageTypeMarker>(
+        output_path: PathBuf,
         size: kornia_image::ImageSize,
         tile_offset: Point2d,
         plane: ImagePlane,
@@ -37,6 +43,7 @@ impl PipelineContext {
     ) -> Result<Self, InternalErrors> {
         let pixel_count: usize = size.width * size.height;
         Ok(Self {
+            output_path: Some(output_path),
             image_meta,
             image: T::create_container(size, tile_offset, plane)?,
             scratch_pad: T::create_container(size, tile_offset, plane)?,
@@ -52,6 +59,7 @@ impl PipelineContext {
     }
 
     pub fn new_from_image(
+        output_path: PathBuf,
         image_meta: PipelineImageMeta,
         image: ImageContainer,
     ) -> Result<Self, InternalErrors> {
@@ -59,6 +67,7 @@ impl PipelineContext {
         let size = image.size();
         let pixel_count: usize = size.width * size.height;
         Ok(Self {
+            output_path: Some(output_path),
             image_meta,
             image: image,
             scratch_pad: empty_image,
@@ -451,10 +460,13 @@ impl PipelineContext {
                     expected: "Initialized segmentation buffer".into(),
                     found: "None (Buffer not initialized)".into(),
                 })?;
-        let instance_mut = self.instance_map.as_mut().ok_or(InternalErrors::FormatMismatch {
-            expected: "Initialized instance buffer".into(),
-            found: "None (Buffer not initialized)".into(),
-        })?;
+        let instance_mut = self
+            .instance_map
+            .as_mut()
+            .ok_or(InternalErrors::FormatMismatch {
+                expected: "Initialized instance buffer".into(),
+                found: "None (Buffer not initialized)".into(),
+            })?;
 
         Ok((image, segmentation_mut, instance_mut))
     }
@@ -567,6 +579,7 @@ mod tests {
             let size = image.size();
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
+                output_path: None,
                 image: image,
                 scratch_pad: empty_image,
                 segmentation_map: Some(
@@ -612,6 +625,7 @@ mod tests {
             let size = image.size();
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
+                output_path: None,
                 image: image,
                 scratch_pad: empty_image,
                 segmentation_map: Some(
@@ -657,6 +671,7 @@ mod tests {
             let size = image.size();
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
+                output_path: None,
                 image: image,
                 scratch_pad: empty_image,
                 segmentation_map: Some(
@@ -694,6 +709,7 @@ mod tests {
         ) -> Result<Self, InternalErrors> {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
+                output_path: Some(PathBuf::default()),
                 image: T::create_container(
                     size,
                     Point2d { x: 0, y: 0 },
@@ -741,6 +757,7 @@ mod tests {
         ) -> Result<Self, InternalErrors> {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
+                output_path: Some(PathBuf::default()),
                 image: T::create_container(size, offset, ImagePlane { z: 0, c: 0, t: 0 })?,
                 scratch_pad: T::create_container(size, offset, ImagePlane { z: 0, c: 0, t: 0 })?,
                 segmentation_map: Some(
