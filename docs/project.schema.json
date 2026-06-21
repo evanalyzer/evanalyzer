@@ -62,6 +62,46 @@
         }
       }
     },
+    "CellposeSettings": {
+      "description": "Instance segmentation using a pretrained Cellpose model exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return a `[1, C, H, W]`\n tensor with `C >= 3` channels: the vertical flow `dY` (channel 0), the\n horizontal flow `dX` (channel 1) and the cell-probability logits (channel 2),\n which is Cellpose's spatial-gradient representation. Exports that wrap the\n output in a tuple (e.g. `(flows, style)`) are also supported — the first\n tensor with at least three channels is used.\n\n Instances are recovered with Cellpose's *dynamics*: every pixel whose\n cell probability reaches `probability_threshold` is advected for\n `flow_iterations` Euler steps along the (down-scaled) flow field until it\n converges to the sink at its cell's center. Pixels whose trajectories end in\n the same sink basin — found by connected components over the final-position\n density map — form one instance. Instances smaller than `min_object_size`\n pixels are discarded. Runs on GPU automatically if CUDA is available in the\n linked libtorch build, otherwise falls back to CPU.",
+      "type": "object",
+      "properties": {
+        "flowIterations": {
+          "description": "Number of Euler integration steps used to follow the flow field. Higher\n values let pixels of large cells reach their sink at the cost of runtime;\n Cellpose's default is `200`.",
+          "type": "integer",
+          "format": "int32",
+          "default": 200,
+          "maximum": 1000,
+          "minimum": 1
+        },
+        "minObjectSize": {
+          "description": "Minimum object size, in pixels. After the dynamics, any instance smaller\n than this is removed (its pixels become background). `0` disables the filter.",
+          "type": "integer",
+          "format": "int32",
+          "default": 15,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "modelPath": {
+          "description": "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).",
+          "type": "string",
+          "default": ""
+        },
+        "objectClassId": {
+          "description": "The class assigned to pixels of every detected object. All other\n pixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
+        },
+        "probabilityThreshold": {
+          "description": "Cell probability above which a pixel takes part in the flow dynamics and\n can be assigned to an object. The raw cell-probability logits are passed\n through a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\n default logit threshold of `0` corresponds to `0.5`).",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        }
+      }
+    },
     "ChannelSettings": {
       "type": "object",
       "properties": {
@@ -1333,6 +1373,19 @@
             }
           },
           "$ref": "#/$defs/BlurSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "cellpose"
+            }
+          },
+          "$ref": "#/$defs/CellposeSettings",
           "required": [
             "type"
           ]

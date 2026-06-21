@@ -187,6 +187,19 @@ impl From<BlurSettings> for Blur {
     }
 }
 
+#[cfg(feature = "ai")]
+impl From<CellposeSettings> for Cellpose {
+    fn from(_s: CellposeSettings) -> Self {
+        Cellpose {
+            model_path: _s.model_path,
+            object_class_id: _s.object_class_id,
+            probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
+            flow_iterations: _s.flow_iterations,
+            min_object_size: _s.min_object_size,
+        }
+    }
+}
+
 impl From<ClassifyRoisSettings> for ClassifyRois {
     fn from(_s: ClassifyRoisSettings) -> Self {
         ClassifyRois {
@@ -508,6 +521,12 @@ use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, InternalErrors> {
     match cmd {
         PipelineCommand::Blur(settings) => Ok(Box::new(crate::algos::Blur::from(settings))),
+        #[cfg(feature = "ai")]
+        PipelineCommand::Cellpose(settings) => Ok(Box::new(crate::algos::Cellpose::from(settings))),
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::Cellpose(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; Cellpose is unavailable.".into(),
+        )),
         PipelineCommand::ClassifyRois(settings) => {
             Ok(Box::new(crate::algos::ClassifyRois::from(settings)))
         }

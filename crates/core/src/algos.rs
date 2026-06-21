@@ -11,6 +11,8 @@ mod segmentation;
 mod spartial_transform;
 
 #[cfg(feature = "ai")]
+pub use self::ai_segmentation::cellpose::Cellpose;
+#[cfg(feature = "ai")]
 pub use self::ai_segmentation::stardist::Stardist;
 #[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNet;
