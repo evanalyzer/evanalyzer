@@ -1,78 +1,80 @@
 {
   "metadata": {
-    "firstName": "Jane",
-    "lastName": "Doe",
-    "organization": "Biotech Research Institute",
     "name": "EV Characterization Study 2024",
-    "notes": "Extracellular vesicle quantification from HEK293 cells. Three channels: DAPI (nuclei), FITC (cell membrane), Cy5 (EVs)."
+    "shortDescription": "Extracellular vesicle quantification from HEK293 cells.",
+    "description": "Extracellular vesicle quantification from HEK293 cells. Three channels: DAPI (nuclei), FITC (cell membrane), Cy5 (EVs).",
+    "authorFirstName": "Jane",
+    "authorLastName": "Doe",
+    "authorOrganization": "Biotech Research Institute",
+    "creationTime": "2024-01-15T09:30:00Z"
   },
   "classification": {
     "classes": [
       {
         "id": {
-          "Valid": 0
+          "VALID": 0
         },
         "color": "#4a90d9",
         "name": "Nucleus",
         "notes": "DAPI-stained cell nuclei",
         "measure": {
           "areaSize": [
-            "val",
-            "avg"
+            "VAL",
+            "AVG"
           ],
           "circularity": [
-            "val"
+            "VAL"
           ],
           "objectCount": [
-            "val"
+            "VAL"
           ]
         }
       },
       {
         "id": {
-          "Valid": 1
+          "VALID": 1
         },
         "color": "#7ed321",
         "name": "Cell",
         "notes": "Full cell body including cytoplasm",
         "measure": {
           "areaSize": [
-            "val",
-            "avg"
+            "VAL",
+            "AVG"
           ],
           "intensityAvg": [
-            "val",
-            "avg"
+            "VAL",
+            "AVG"
           ]
         }
       },
       {
         "id": {
-          "Valid": 2
+          "VALID": 2
         },
         "color": "#d0021b",
         "name": "EV",
         "notes": "Extracellular vesicles detected in Cy5 channel",
         "measure": {
           "areaSize": [
-            "val",
-            "avg",
-            "min",
-            "max"
+            "VAL",
+            "AVG",
+            "MIN",
+            "MAX"
           ],
           "objectCount": [
-            "val"
+            "VAL"
           ],
           "intensityAvg": [
-            "val",
-            "avg"
+            "VAL",
+            "AVG"
           ]
         }
       }
     ]
   },
   "plate": {
-    "groupingMode": "folderName",
+    "groupingMode": "FOLDER_NAME",
     "groupingRegex": "^(?P<well>[A-H]\\d{2})_",
     "plateCols": 12,
     "plateRows": 8,
@@ -167,7 +169,7 @@
       "id": 2,
       "name": null,
       "imageSource": {
-        "Channel": 2
+        "CHANNEL": 2
       },
       "enabled": true,
       "steps": [
@@ -224,7 +226,7 @@
             "type": "classifyRois",
             "originSegmentation": [1],
             "originClass": [],
-            "targetClass": { "Valid": 2 },
+            "targetClass": { "VALID": 2 },
             "sizeUnit": "px",
             "intensityUnit": "rel",
             "minArea": 1.0,
@@ -256,7 +258,7 @@
       "id": 1,
       "name": "EV  detection",
       "imageSource": {
-        "Channel": 4
+        "CHANNEL": 4
       },
       "enabled": true,
       "steps": [
@@ -304,7 +306,7 @@
             "type": "classifyRois",
             "originSegmentation": [1],
             "originClass": [],
-            "targetClass": { "Valid": 0 },
+            "targetClass": { "VALID": 0 },
             "sizeUnit": "px",
             "intensityUnit": "rel",
             "minArea": 50.0,

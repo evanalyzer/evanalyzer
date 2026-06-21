@@ -30,6 +30,11 @@ pub fn generate_preview_job_from_project_settings(
     }));
 
     let output_path = project_path.join("results").join("preview");
+    if let Err(e) = std::fs::create_dir_all(&output_path) {
+        error!("Failed to create preview output directory: {e}");
+        return Err(InternalErrors::Io(format!("{e}")));
+    }
+
     generate_job_from_project_settings_intenal(config, project_path, output_path, memory_storage)
 }
 
