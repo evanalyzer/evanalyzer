@@ -789,7 +789,7 @@
           "enabled": true,
           "command": {
             "type": "saveImage",
-            "path": "images/${imageName}/Ch1",
+            "name": "Ch1",
             "source": "IMAGE"
           }
         }
@@ -915,7 +915,7 @@
           "enabled": true,
           "command": {
             "type": "saveImage",
-            "path": "images/${imageName}/Ch2",
+            "name": "Ch2",
             "source": "IMAGE"
           }
         }
@@ -1041,7 +1041,7 @@
           "enabled": true,
           "command": {
             "type": "saveImage",
-            "path": "images/${imageName}/Ch3",
+            "name": "Ch3",
             "source": "IMAGE"
           }
         }

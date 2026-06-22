@@ -171,7 +171,7 @@
           "enabled": true,
           "command": {
             "type": "saveImage",
-            "path": "images/${imageName}/ev",
+            "name": "ev",
             "source": "IMAGE"
           }
         }
