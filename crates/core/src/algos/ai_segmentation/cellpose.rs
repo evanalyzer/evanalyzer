@@ -19,13 +19,16 @@ use crate::{
 
 /// Instance segmentation using a pretrained Cellpose model exported as TorchScript.
 ///
-/// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-/// same normalization as the rest of the pipeline) and return a `[1, C, H, W]`
-/// tensor with `C >= 3` channels: the vertical flow `dY` (channel 0), the
-/// horizontal flow `dX` (channel 1) and the cell-probability logits (channel 2),
-/// which is Cellpose's spatial-gradient representation. Exports that wrap the
-/// output in a tuple (e.g. `(flows, style)`) are also supported — the first
-/// tensor with at least three channels is used.
+/// The model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)
+/// grayscale image is placed in channel 0 and any remaining channels are filled
+/// with zeros. Standard Cellpose networks expect **two** channels (cytoplasm +
+/// optional nucleus), which is the default; single-channel exports use
+/// `input_channels = 1`. The model must return a `[1, C, H, W]` tensor with
+/// `C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow
+/// `dX` (channel 1) and the cell-probability logits (channel 2), which is
+/// Cellpose's spatial-gradient representation. Exports that wrap the output in a
+/// tuple (e.g. `(flows, style)`) are also supported — the first tensor with at
+/// least three channels is used.
 ///
 /// Instances are recovered with Cellpose's *dynamics*: every pixel whose
 /// cell probability reaches `probability_threshold` is advected for
@@ -46,6 +49,13 @@ pub struct Cellpose {
     /// pixels are assigned `SegmentationClass::BACKGROUND`.
     #[cmdsmeta(default = SegmentationClass(1))]
     pub object_class_id: SegmentationClass,
+
+    /// Number of input channels the model expects. The grayscale image goes in
+    /// channel 0; any further channels are zero-filled. Standard Cellpose models
+    /// take `2` (cytoplasm + optional nucleus); set `1` for single-channel
+    /// exports, or higher to match a custom model.
+    #[cmdsmeta(default = 2, min = 1, max = 8, step = 1)]
+    pub input_channels: i32,
 
     /// Cell probability above which a pixel takes part in the flow dynamics and
     /// can be assigned to an object. The raw cell-probability logits are passed
@@ -89,10 +99,24 @@ impl ImageAlgorithm for Cellpose {
         let size = input_image.size();
         let (width, height) = (size.width, size.height);
 
-        let input = Tensor::from_slice(input_image.as_slice())
+        let image = Tensor::from_slice(input_image.as_slice())
             .to_device(device)
             .to_kind(Kind::Float)
             .reshape([1, 1, height as i64, width as i64]);
+
+        // The image is the first channel; standard Cellpose models expect a
+        // second (nucleus) channel, and custom models may want more. Zero-fill
+        // any extra channels so the tensor matches the model's input width.
+        let in_channels = self.input_channels.max(1) as i64;
+        let input = if in_channels <= 1 {
+            image
+        } else {
+            let extra = Tensor::zeros(
+                [1, in_channels - 1, height as i64, width as i64],
+                (Kind::Float, device),
+            );
+            Tensor::cat(&[image, extra], 1)
+        };
 
         let output = Self::run_model(&model, input)?;
         let out_sizes = output.size();

@@ -193,6 +193,7 @@ impl From<CellposeSettings> for Cellpose {
         Cellpose {
             model_path: _s.model_path,
             object_class_id: _s.object_class_id,
+            input_channels: _s.input_channels,
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             flow_iterations: _s.flow_iterations,
             min_object_size: _s.min_object_size,
