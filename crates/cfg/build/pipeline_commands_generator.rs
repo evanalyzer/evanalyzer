@@ -1412,15 +1412,23 @@ fn field_to_param_def(
             0.0_f32,
         ),
         "PathBuf" => {
+            // The Slint browse button reads a single comma-separated string from
+            // `options[0]` (it splits on ',' itself), so emit one CSV element
+            // rather than one element per extension — otherwise only the first
+            // extension reaches the file dialog filter.
             let extensions_expr = match &meta.file_extensions {
                 Some(exts) => {
-                    let items: Vec<String> = exts
+                    let csv = exts
                         .split(',')
                         .map(|e| e.trim())
                         .filter(|e| !e.is_empty())
-                        .map(|e| format!("\"{}\".to_string()", e))
-                        .collect();
-                    format!("vec![{}]", items.join(", "))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    if csv.is_empty() {
+                        "vec![]".to_string()
+                    } else {
+                        format!("vec![\"{csv}\".to_string()]")
+                    }
                 }
                 None => "vec![]".to_string(),
             };

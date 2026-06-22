@@ -75,7 +75,11 @@ impl ImageAlgorithm for Cellpose {
         let device = Device::cuda_if_available();
         let model = CModule::load_on_device(&self.model_path, device).map_err(|e| {
             InternalErrors::Generic(format!(
-                "Failed to load Cellpose model from {}: {e}",
+                "Failed to load Cellpose model from {}: {e}. The model must be a \
+                 TorchScript export (torch.jit.script/trace), not a raw weights file. \
+                 A bioimage.io `pytorch_state_dict` (.pth) holds only weights and no \
+                 graph — load it into the Cellpose architecture in Python and re-save \
+                 it with torch.jit before using it here.",
                 self.model_path.display()
             ))
         })?;
