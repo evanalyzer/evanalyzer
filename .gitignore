@@ -8,3 +8,4 @@ lcov.info
 .claude/settings.json
 .claude/settings.local.json
 /libs
+/crates/core/java

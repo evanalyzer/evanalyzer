@@ -588,27 +588,29 @@ impl PipelinesController {
                             } else {
                                 usize::MAX
                             };
-                            let (ctx_cat, suggested) = if p.steps.is_empty() {
-                                (-1i32, -1i32)
-                            } else if context_idx == usize::MAX {
-                                (-1i32, -1i32)
+                            // Pre-select the chips for *all* categories that may
+                            // follow the previous step (its `allowed_next`, which is
+                            // decoupled from the display `category` — e.g.
+                            // ConnectedComponents suggests Object + Measure so both
+                            // Watershed and ExtractRois are in view). These are only
+                            // suggestions: the user can toggle any chip, and clearing
+                            // them all shows every command.
+                            let (ctx_cat, suggested) = if p.steps.is_empty()
+                                || context_idx == usize::MAX
+                            {
+                                (-1i32, [false; 5])
                             } else {
-                                let last_cat = p.steps[context_idx].command.category();
-                                let ctx_order = last_cat.display_order() as i32;
-                                // Preprocess can be followed by another Preprocess or Segment,
-                                // so show All (-1) rather than locking to Segment.
-                                // All other stages have a single clear next stage.
-                                let next_order = if matches!(last_cat, CommandCategory::Preprocess)
-                                {
-                                    -1i32
-                                } else {
-                                    last_cat.suggested_next().display_order() as i32
-                                };
-                                (ctx_order, next_order)
+                                let prev = &p.steps[context_idx].command;
+                                let ctx_order = prev.category().display_order() as i32;
+                                let mut flags = [false; 5];
+                                for c in prev.allowed_next() {
+                                    flags[c.display_order() as usize] = true;
+                                }
+                                (ctx_order, flags)
                             };
                             (name, p.steps.len() as i32, ctx_cat, suggested)
                         } else {
-                            (String::new(), 0, -1i32, -1i32)
+                            (String::new(), 0, -1i32, [false; 5])
                         }
                     };
                     manager.reload_pipeline_templates_async();
@@ -621,12 +623,16 @@ impl PipelinesController {
                         picker.set_context_category(context_cat);
                         picker.set_query("".into());
                         picker.set_filter_favorites(false);
-                        // Auto-select the filter for the suggested next category.
-                        // -1 keeps the "All" view (empty pipeline or unknown context).
-                        picker.set_filter_category(suggested_filter);
+                        // Pre-select the suggested next categories (all of them); an
+                        // empty set leaves the "All" view.
+                        picker.set_fcat_pre(suggested_filter[0]);
+                        picker.set_fcat_seg(suggested_filter[1]);
+                        picker.set_fcat_obj(suggested_filter[2]);
+                        picker.set_fcat_mea(suggested_filter[3]);
+                        picker.set_fcat_cls(suggested_filter[4]);
                         picker.set_selected_id(-1);
-                        // Apply the filter immediately so the list matches the pre-selected chip.
-                        manager.apply_picker_filter(&ui, "", suggested_filter, false);
+                        // Apply the filter immediately so the list matches the chips.
+                        manager.apply_picker_filter(&ui, "", false);
                         ui.global::<GlobalAppState>()
                             .set_active_dialog(DialogType::CommandSelectionDialog);
                     }
@@ -641,9 +647,8 @@ impl PipelinesController {
                         return;
                     };
                     let picker = ui.global::<CommandPickerState>();
-                    let filter_cat = picker.get_filter_category();
                     let filter_favorites = picker.get_filter_favorites();
-                    manager.apply_picker_filter(&ui, query.as_str(), filter_cat, filter_favorites);
+                    manager.apply_picker_filter(&ui, query.as_str(), filter_favorites);
                 });
 
             // Picker: select - update detail pane
@@ -1217,7 +1222,6 @@ impl PipelinesController {
         self: &Arc<Self>,
         ui: &AppWindow,
         query: &str,
-        filter_cat: i32,
         filter_favorites: bool,
     ) {
         let q = query.to_ascii_lowercase();
@@ -1228,15 +1232,27 @@ impl PipelinesController {
                 || m.name.to_ascii_lowercase().contains(&q)
                 || m.summary.to_ascii_lowercase().contains(&q)
         };
-        let cat_enabled = |target: CommandCategory| -> bool {
-            match filter_cat {
-                -1 => true,
-                0 => matches!(target, CommandCategory::Preprocess),
-                1 => matches!(target, CommandCategory::Segment),
-                2 => matches!(target, CommandCategory::Object),
-                3 => matches!(target, CommandCategory::Measure),
-                4 => matches!(target, CommandCategory::Classify),
-                _ => false,
+        // Per-category chip state (multi-select). When no chip is active the
+        // picker shows every category ("All").
+        let picker_state = ui.global::<CommandPickerState>();
+        let (fc_pre, fc_seg, fc_obj, fc_mea, fc_cls) = (
+            picker_state.get_fcat_pre(),
+            picker_state.get_fcat_seg(),
+            picker_state.get_fcat_obj(),
+            picker_state.get_fcat_mea(),
+            picker_state.get_fcat_cls(),
+        );
+        let any_active = fc_pre || fc_seg || fc_obj || fc_mea || fc_cls;
+        let cat_enabled = move |target: CommandCategory| -> bool {
+            if !any_active {
+                return true;
+            }
+            match target {
+                CommandCategory::Preprocess => fc_pre,
+                CommandCategory::Segment => fc_seg,
+                CommandCategory::Object => fc_obj,
+                CommandCategory::Measure => fc_mea,
+                CommandCategory::Classify => fc_cls,
             }
         };
         let make = |m: &evanalyzer_cfg::settings::pipeline_command::CommandMeta,
@@ -1359,9 +1375,8 @@ impl PipelinesController {
                 }
                 let picker = ui.global::<CommandPickerState>();
                 let query = picker.get_query().to_string();
-                let filter_cat = picker.get_filter_category();
                 let filter_favorites = picker.get_filter_favorites();
-                manager.apply_picker_filter(&ui, &query, filter_cat, filter_favorites);
+                manager.apply_picker_filter(&ui, &query, filter_favorites);
             }) {
                 warn!("Failed to refresh pipeline templates in picker: {}", e);
             }

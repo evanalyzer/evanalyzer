@@ -39,7 +39,7 @@ use crate::{
 /// segmentation and instance maps. Runs on GPU automatically if CUDA is
 /// available in the linked libtorch build, otherwise falls back to CPU.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment", display_name = "AI Stardist Segmentation")]
+#[cmdsmeta(category = "segment", next = "measure", display_name = "AI Stardist Segmentation")]
 pub struct Stardist {
     /// Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
     #[cmdsmeta(file_extensions = "pt,pth")]

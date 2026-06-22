@@ -267,6 +267,45 @@ impl PipelineCommand {
         }
     }
 
+    /// Categories that may be inserted immediately after this command.
+    pub fn allowed_next(&self) -> &'static [CommandCategory] {
+        match self {
+            Self::Blur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::Cellpose(_) => &[CommandCategory::Measure],
+            Self::ClassifyRois(_) => &[CommandCategory::Classify],
+            Self::Colocalization(_) => &[CommandCategory::Classify],
+            Self::ColorFilterCommand(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::ConnectedComponents(_) => &[CommandCategory::Object, CommandCategory::Measure],
+            Self::DistanceTransform(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::EdgeDetectionCanny(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::EdgeDetectionSobel(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::EnhanceContrast(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::ExtractRois(_) => &[CommandCategory::Classify, CommandCategory::Measure],
+            Self::GaussianBlur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::Hessian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::ImageCache(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::ImageMath(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::IntensityTransformation(_) => {
+                &[CommandCategory::Segment, CommandCategory::Preprocess]
+            }
+            Self::Laplacian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::MedianSubtract(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::MorphologicalCommand(_) => {
+                &[CommandCategory::Segment, CommandCategory::Preprocess]
+            }
+            Self::RankFilter(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::RollingBall(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::SaveImage(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::Stardist(_) => &[CommandCategory::Measure],
+            Self::StructureTensor(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+            Self::Threshold(_) => &[CommandCategory::Object],
+            Self::UNet(_) => &[CommandCategory::Object],
+            Self::Voronoi(_) => &[CommandCategory::Classify],
+            Self::Watershed(_) => &[CommandCategory::Measure, CommandCategory::Object],
+            Self::WeightedDeviation(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
+        }
+    }
+
     pub fn to_parameters(&self) -> Vec<ParameterDef> {
         match self {
             Self::Blur(_s) => vec![

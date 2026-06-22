@@ -6,7 +6,7 @@ pub fn commands_meta_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     // Keys allowed on struct-level #[cmdsmeta(...)]
-    let struct_allowed_keys = ["category", "display_name"];
+    let struct_allowed_keys = ["category", "display_name", "next"];
 
     // Keys allowed on field-level #[cmdsmeta(...)]
     let field_allowed_keys = [

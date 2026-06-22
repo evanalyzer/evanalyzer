@@ -36,7 +36,7 @@ use crate::{
 /// pixels are discarded. Runs on GPU automatically if CUDA is available in the
 /// linked libtorch build, otherwise falls back to CPU.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment", display_name = "AI Cellpose Segmentation")]
+#[cmdsmeta(category = "segment", next = "measure", display_name = "AI Cellpose Segmentation")]
 pub struct Cellpose {
     /// Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
     #[cmdsmeta(file_extensions = "pt,pth")]

@@ -594,6 +594,13 @@ struct StructMetadata {
     /// Explicit display name override from #[cmdsmeta(display_name = "...")],
     /// shown in the command picker/header instead of the bare struct name.
     display_name: Option<String>,
+    /// Explicit list of categories that may follow this command, from
+    /// #[cmdsmeta(next = "measure,classify")]. Overrides the category-derived
+    /// default successors (see `default_next_for_category`). Used to decouple a
+    /// command's display `category` from what is allowed to come after it — e.g.
+    /// StarDist/Cellpose live in `segment` for grouping but flow straight to
+    /// `measure`, while U-Net (also `segment`) flows to `object`.
+    next: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -793,6 +800,16 @@ fn parse_struct_meta(attrs: &[syn::Attribute]) -> StructMetadata {
                 } else if m.path.is_ident("display_name") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.display_name = Some(value.value());
+                } else if m.path.is_ident("next") {
+                    let value: syn::LitStr = m.value()?.parse()?;
+                    meta.next = Some(
+                        value
+                            .value()
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect(),
+                    );
                 }
                 // Consume any value so the parser advances even for unknown keys
                 if m.input.peek(syn::Token![=]) {
@@ -1800,6 +1817,26 @@ fn category_to_enum_variant(category: &str) -> &str {
     }
 }
 
+/// Default successor categories for a command that does not declare an explicit
+/// `#[cmdsmeta(next = "...")]`. Mirrors the linear pipeline order
+/// (Preprocess → Segment → Object → Measure → Classify) but lets a stage repeat
+/// (e.g. Object → Object so Watershed can follow ConnectedComponents).
+///
+/// Ordering is significant: the **first** entry is the *suggested* next category
+/// (the command picker pre-selects its chip), the rest are merely allowed. So the
+/// default after an Object step suggests Measure but still permits another Object;
+/// ConnectedComponents overrides this to suggest Object (Watershed) first.
+fn default_next_for_category(variant: &str) -> &'static [&'static str] {
+    match variant {
+        "Preprocess" => &["Segment", "Preprocess"],
+        "Segment" => &["Object"],
+        "Object" => &["Measure", "Object"],
+        "Measure" => &["Classify", "Measure"],
+        "Classify" => &["Classify"],
+        _ => &["Segment"],
+    }
+}
+
 fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     let mut out = String::new();
     const GENERATE_ALL_DEFAULT: bool = false;
@@ -1951,6 +1988,36 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         out.push_str(&format!(
             "            Self::{}(_) => &CommandCategory::{},\n",
             cmd.struct_name, variant
+        ));
+    }
+    out.push_str("        }\n    }\n\n");
+
+    // allowed_next(): which categories may follow this specific command in a
+    // pipeline. Defaults to the category's natural successors, but a command can
+    // override this via #[cmdsmeta(next = "...")] to decouple display grouping
+    // from flow — e.g. StarDist/Cellpose are shown under `segment` yet flow
+    // straight to `measure`, while U-Net (also `segment`) flows to `object`.
+    out.push_str(
+        "    /// Categories that may be inserted immediately after this command.\n",
+    );
+    out.push_str("    pub fn allowed_next(&self) -> &'static [CommandCategory] {\n");
+    out.push_str("        match self {\n");
+    for cmd in &algo_commands {
+        let variant = category_to_enum_variant(&cmd.category);
+        let next_variants: Vec<String> = match &cmd.struct_meta.next {
+            Some(list) => list
+                .iter()
+                .map(|c| format!("CommandCategory::{}", category_to_enum_variant(&normalize_category(c))))
+                .collect(),
+            None => default_next_for_category(variant)
+                .iter()
+                .map(|c| format!("CommandCategory::{c}"))
+                .collect(),
+        };
+        out.push_str(&format!(
+            "            Self::{}(_) => &[{}],\n",
+            cmd.struct_name,
+            next_variants.join(", ")
         ));
     }
     out.push_str("        }\n    }\n\n");
