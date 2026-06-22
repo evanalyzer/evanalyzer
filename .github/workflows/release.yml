@@ -45,9 +45,11 @@ jobs:
         run: |
           mkdir -p dist/java dist/templates
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
-          # libtorch is dynamically linked; ship the .so files next to the
-          # binary so the $ORIGIN rpath (see .cargo/config.toml) finds them.
-          cp libs/libtorch/lib/*.so                                dist/ 2>/dev/null || true
+          # libtorch is dynamically linked; ship every shared object next to the
+          # binary so the $ORIGIN rpath (see .cargo/config.toml) finds them. The
+          # glob must be *.so* (not *.so) to include versioned deps like
+          # libgomp-<hash>.so.1 that libtorch_cpu.so requires.
+          cp libs/libtorch/lib/*.so*                               dist/ 2>/dev/null || true
           unzip -q libs/jre_linux.zip -d dist/java/jre_linux
           cp crates/core/java/src/bioformats.jar                   dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/
@@ -151,9 +153,11 @@ jobs:
         run: |
           mkdir -p dist/java dist/templates
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
-          # CUDA libtorch ships extra .so files (cudart, cublas, …); copy them all
-          # so the $ORIGIN rpath (see .cargo/config.toml) finds them at runtime.
-          cp libs/libtorch/lib/*.so                                dist/ 2>/dev/null || true
+          # CUDA libtorch ships its runtime as versioned objects (libcudart.so.12,
+          # libcublas.so.12, libcudnn*.so.9, libnccl.so.2, libgomp-<hash>.so.1, …),
+          # so the glob must be *.so* to catch the .so.N files - a plain *.so would
+          # ship none of the CUDA libs and the binary would fail to start.
+          cp libs/libtorch/lib/*.so*                               dist/ 2>/dev/null || true
           unzip -q libs/jre_linux.zip -d dist/java/jre_linux
           cp crates/core/java/src/bioformats.jar                   dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/
