@@ -280,7 +280,7 @@ impl PipelineCommand {
             Self::EdgeDetectionCanny(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EdgeDetectionSobel(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EnhanceContrast(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::ExtractRois(_) => &[CommandCategory::Classify, CommandCategory::Measure],
+            Self::ExtractRois(_) => &[CommandCategory::Classify],
             Self::GaussianBlur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Hessian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::ImageCache(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
@@ -301,7 +301,7 @@ impl PipelineCommand {
             Self::Threshold(_) => &[CommandCategory::Object],
             Self::UNet(_) => &[CommandCategory::Object],
             Self::Voronoi(_) => &[CommandCategory::Classify],
-            Self::Watershed(_) => &[CommandCategory::Measure, CommandCategory::Object],
+            Self::Watershed(_) => &[CommandCategory::Measure],
             Self::WeightedDeviation(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
         }
     }

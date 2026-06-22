@@ -23,7 +23,7 @@ use macros::CommandsMeta;
 
 /// A morphological segmentation algorithm that splits touching objects using distance topography.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "object")]
+#[cmdsmeta(category = "object", next = "measure")]
 ///
 /// This is a faithful port of ImageJ's `Process > Binary > Watershed`
 /// (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
@@ -325,7 +325,12 @@ mod tests {
         assert_ne!(b, c, "B and C must be distinct instances");
 
         let unique: HashSet<u32> = label_slice.iter().copied().filter(|&v| v > 0).collect();
-        assert_eq!(unique.len(), 3, "expected exactly 3 instances, found {}", unique.len());
+        assert_eq!(
+            unique.len(),
+            3,
+            "expected exactly 3 instances, found {}",
+            unique.len()
+        );
     }
 
     #[test]
@@ -1049,5 +1054,5 @@ mod tests {
             unique.len()
         );
     }
-// temp debug
+    // temp debug
 }
