@@ -1,3 +1,4 @@
+pub mod bioimageio;
 pub mod extensions;
 pub mod frontend;
 mod project_owner;
