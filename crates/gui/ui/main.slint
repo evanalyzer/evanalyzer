@@ -226,6 +226,9 @@ export component AppWindow inherits Window {
             cancel => {
                 CommandPickerState.cancel();
             }
+            import-bioimageio => {
+                CommandPickerState.import-bioimageio();
+            }
         }
         if (GlobalAppState.active_dialog == DialogType.pipeline-edit): PipelineEditDialog {
             width: 100%;

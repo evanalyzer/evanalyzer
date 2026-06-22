@@ -739,6 +739,85 @@ impl PipelinesController {
                 }
             });
 
+            // Picker: import a bioimage.io model - pick its rdf.yaml, configure an
+            // AI segmentation command from it, and insert it like a normal step.
+            let manager = self.clone();
+            ui.global::<CommandPickerState>().on_import_bioimageio(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let picker = ui.global::<CommandPickerState>();
+                let pipeline_id = picker.get_pipeline_id() as u32;
+                let after_idx = picker.get_insert_after_idx();
+
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("bioimage.io RDF", &["yaml", "yml"])
+                    .pick_file()
+                else {
+                    return; // user cancelled the file picker; leave the command picker open
+                };
+
+                match evanalyzer_app::bioimageio::configure_from_file(&path) {
+                    Ok(configured) => {
+                        let step = PipelineStepSettings {
+                            enabled: true,
+                            command: configured.command,
+                        };
+                        {
+                            let mut project = manager.app_state.get_project_write();
+                            if let Some(pipeline) =
+                                project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
+                            {
+                                let insert_at = if after_idx < 0 {
+                                    0
+                                } else {
+                                    ((after_idx as usize) + 1).min(pipeline.steps.len())
+                                };
+                                pipeline.steps.insert(insert_at, step);
+                            }
+                        }
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::None);
+                        manager.pipeline_settings_changed();
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+
+                        // Surface any caveats (assumed defaults, required
+                        // normalization, remote weights) so the user can verify.
+                        if !configured.notes.is_empty() {
+                            let body = configured
+                                .notes
+                                .iter()
+                                .map(|n| format!("• {n}"))
+                                .collect::<Vec<_>>()
+                                .join("\n\n");
+                            let msg = format!(
+                                "Imported a model from {}.\n\nPlease review:\n\n{body}",
+                                path.display()
+                            );
+                            let warning = ui.global::<WarningState>();
+                            warning.set_info(true);
+                            warning.set_title("bioimage.io model imported".into());
+                            warning.set_message(msg.into());
+                            ui.global::<GlobalAppState>()
+                                .set_active_dialog(DialogType::Warning);
+                        }
+                    }
+                    Err(e) => {
+                        let warning = ui.global::<WarningState>();
+                        warning.set_info(false);
+                        warning.set_title("bioimage.io import failed".into());
+                        warning.set_message(
+                            format!("Could not import the bioimage.io model:\n\n{e}").into(),
+                        );
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::Warning);
+                    }
+                }
+            });
+
             // Step parameter changed
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_param_changed(
@@ -1123,7 +1202,10 @@ impl PipelinesController {
         let ui_weak = self.ui.clone();
         if let Err(e) = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<WarningState>().set_message(message.into());
+                let warning = ui.global::<WarningState>();
+                warning.set_info(false);
+                warning.set_title("Cannot start analysis".into());
+                warning.set_message(message.into());
                 ui.global::<GlobalAppState>()
                     .set_active_dialog(DialogType::Warning);
             }

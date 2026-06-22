@@ -115,6 +115,7 @@ export global CommandPickerState {
     callback select(int);
     callback confirm(int);
     callback cancel();
+    callback import-bioimageio();
 }
 
 // ---------- Local visual constants ----------
@@ -662,6 +663,7 @@ export component CommandSelectionDialog inherits Rectangle {
     callback toggle-favorite(int);
     callback confirm(int);           // commit: insert this id
     callback cancel();
+    callback import-bioimageio();    // open a bioimage.io rdf.yaml and insert the configured command
 
     // Dimmed background
     background: Theme.modal-overlay;
@@ -1050,6 +1052,21 @@ export component CommandSelectionDialog inherits Rectangle {
                                             root.toggle-favorite(c.id);
                                         }
                                     }
+
+                                    // Auto-configure an AI segmentation command from a
+                                    // downloaded bioimage.io model's rdf.yaml.
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-top: 6px;
+                                        padding-bottom: 4px;
+                                        alignment: start;
+                                        AppButton {
+                                            text: "Import bioimage.io model…";
+                                            clicked => {
+                                                root.import-bioimageio();
+                                            }
+                                        }
+                                    }
                                 }
 
                                 // Object
@@ -1387,6 +1404,7 @@ export component CommandPickerModal inherits Rectangle {
     callback toggle-favorite(int);
     callback confirm(int);
     callback cancel();
+    callback import-bioimageio();
 
     // Scrim (full-screen darkening)
     background: #000000.with-alpha(0.55);
@@ -1447,6 +1465,9 @@ export component CommandPickerModal inherits Rectangle {
         }
         cancel => {
             root.cancel();
+        }
+        import-bioimageio => {
+            root.import-bioimageio();
         }
     }
 }
