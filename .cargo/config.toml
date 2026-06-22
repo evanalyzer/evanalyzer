@@ -11,6 +11,7 @@ build-win       = ["xwin", "build", "--target", "x86_64-pc-windows-msvc",   "--r
 build-win-arm   = ["xwin", "build", "--target", "aarch64-pc-windows-msvc",   "--release"]
 build-linux     = ["build", "--target", "x86_64-unknown-linux-gnu",          "--release"]
 build-linux-arm = ["build", "--target", "aarch64-unknown-linux-gnu",         "--release"]
+build-mac       = ["build", "--target", "aarch64-apple-darwin",              "--release"]
 
 # For Windows (MSVC) — statically linked CRT, lld linker
 [target.x86_64-pc-windows-msvc]
@@ -38,3 +39,9 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-rpath,$ORIGIN"
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
 rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+
+# For macOS ARM64 (Apple Silicon)
+# @loader_path is macOS's equivalent of $ORIGIN: it lets the binary find the
+# libtorch / libduckdb .dylib files shipped next to it (see release.yml packaging).
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-rpath,@loader_path"]
