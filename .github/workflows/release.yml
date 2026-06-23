@@ -116,9 +116,6 @@ jobs:
           path: evanalyzer-windows-x86_64.zip
 
   build-linux-cuda:
-    # TEMPORARILY DISABLED - re-enable by removing this `if` and adding the job
-    # back to `release.needs` + `release.files`.
-    if: false
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.1.5
@@ -165,17 +162,20 @@ jobs:
           cp crates/core/java/src/bioformats.jar                   dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
-          tar -czf evanalyzer-linux-x86_64-cuda.tar.gz -C dist .
+          # The CUDA runtime is multiple GB even compressed, so pack with 7-Zip
+          # at maximum compression (-mx=9) and split into <2 GiB volumes
+          # (-v1900m) so no single asset exceeds GitHub's 2 GiB release limit.
+          # Produces evanalyzer-linux-x86_64-cuda.7z.001, .002, … - extract the
+          # set with `7z x evanalyzer-linux-x86_64-cuda.7z.001`.
+          command -v 7z >/dev/null || { apt-get update -qq && apt-get install -y -qq p7zip-full; }
+          ( cd dist && 7z a -t7z -mx=9 -v1900m ../evanalyzer-linux-x86_64-cuda.7z . )
 
       - uses: actions/upload-artifact@v4
         with:
           name: evanalyzer-linux-x86_64-cuda
-          path: evanalyzer-linux-x86_64-cuda.tar.gz
+          path: evanalyzer-linux-x86_64-cuda.7z.*
 
   build-windows-cuda:
-    # TEMPORARILY DISABLED - re-enable by removing this `if` and adding the job
-    # back to `release.needs` + `release.files`.
-    if: false
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.1.5
@@ -222,12 +222,18 @@ jobs:
           cp crates/core/java/src/bioformats.jar                   dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
-          (cd dist && zip -r ../evanalyzer-windows-x86_64-cuda.zip .)
+          # The CUDA runtime DLLs are multiple GB even compressed, so pack with
+          # 7-Zip at maximum compression (-mx=9) and split into <2 GiB volumes
+          # (-v1900m) so no single asset exceeds GitHub's 2 GiB release limit.
+          # Produces evanalyzer-windows-x86_64-cuda.7z.001, .002, … - extract the
+          # set with `7z x evanalyzer-windows-x86_64-cuda.7z.001`.
+          command -v 7z >/dev/null || { apt-get update -qq && apt-get install -y -qq p7zip-full; }
+          ( cd dist && 7z a -t7z -mx=9 -v1900m ../evanalyzer-windows-x86_64-cuda.7z . )
 
       - uses: actions/upload-artifact@v4
         with:
           name: evanalyzer-windows-x86_64-cuda
-          path: evanalyzer-windows-x86_64-cuda.zip
+          path: evanalyzer-windows-x86_64-cuda.7z.*
 
   build-macos:
     runs-on: macos-14   # Apple Silicon (arm64)
@@ -342,8 +348,7 @@ jobs:
           path: evanalyzer-macos-arm64.tar.gz
 
   release:
-    # CUDA jobs temporarily disabled - re-add build-linux-cuda, build-windows-cuda here.
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows, build-linux-cuda, build-windows-cuda, build-macos]
     runs-on: ubuntu-latest
     # Only publish a GitHub release when triggered by a version tag
     if: startsWith(github.ref, 'refs/tags/v')
@@ -357,11 +362,11 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          # CUDA artifacts temporarily disabled - when re-enabling the cuda jobs,
-          # add these two lines back into `files`:
-          #   artifacts/evanalyzer-linux-x86_64-cuda/evanalyzer-linux-x86_64-cuda.tar.gz
-          #   artifacts/evanalyzer-windows-x86_64-cuda/evanalyzer-windows-x86_64-cuda.zip
+          # CUDA artifacts are multi-volume 7z archives (.7z.001, .002, …); the
+          # glob uploads every volume.
           files: |
             artifacts/evanalyzer-linux-x86_64/evanalyzer-linux-x86_64.tar.gz
             artifacts/evanalyzer-windows-x86_64/evanalyzer-windows-x86_64.zip
             artifacts/evanalyzer-macos-arm64/evanalyzer-macos-arm64.tar.gz
+            artifacts/evanalyzer-linux-x86_64-cuda/evanalyzer-linux-x86_64-cuda.7z.*
+            artifacts/evanalyzer-windows-x86_64-cuda/evanalyzer-windows-x86_64-cuda.7z.*

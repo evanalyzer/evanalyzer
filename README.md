@@ -167,6 +167,20 @@ xattr -dr com.apple.quarantine evanalyzer
 > Keep every file from the archive in the same folder — the bundled `.dylib`
 > libraries are resolved relative to the `evanalyzer` binary.
 
+### GPU (CUDA) builds — Linux / Windows
+
+The CUDA builds bundle the (multi-GB) NVIDIA runtime, so they are published as
+**split 7-Zip archives** (`…-cuda.7z.001`, `.002`, …) to stay under GitHub's
+per-file limit. Download **all** volumes into one folder and extract with
+[7-Zip](https://www.7-zip.org/) pointed at the first part:
+
+```sh
+7z x evanalyzer-linux-x86_64-cuda.7z.001     # finds .002, .003, … automatically
+```
+
+Then run the `evanalyzer` binary as for the CPU build. A matching NVIDIA driver
+(CUDA 12.x) must be installed on the machine.
+
 ---
 
 ## Building
