@@ -8,7 +8,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/evanalyzer/evanalyzer?include_prereleases)](https://github.com/evanalyzer/evanalyzer/releases/latest)
 [![License: AGPL-3.0 for non-commercial | Commercial license available](https://img.shields.io/badge/License-AGPL--3.0_%7C_Commercial-blue)](#license)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange?logo=rust)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey)](#building)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](#installing-a-release)
 
 **A high-performance bioimage analysis desktop application written in Rust.**
 
@@ -139,6 +139,36 @@ The workspace is organised into focused crates:
 
 ---
 
+## Installing a release
+
+Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies (libtorch, DuckDB), the bundled Java runtime and Bio-Formats all ship **inside the archive, next to the binary**, so there is nothing else to install.
+
+### Linux x86-64 — `evanalyzer-linux-x86_64.tar.gz`
+
+```sh
+tar xzf evanalyzer-linux-x86_64.tar.gz
+./evanalyzer
+```
+
+### Windows x86-64 — `evanalyzer-windows-x86_64.zip`
+
+Unzip the archive and run `evanalyzer.exe` (keep the `.dll` files next to it).
+
+### macOS, Apple Silicon — `evanalyzer-macos-arm64.tar.gz`
+
+```sh
+tar xzf evanalyzer-macos-arm64.tar.gz
+# The build is ad-hoc signed but not notarized, so macOS Gatekeeper quarantines
+# it after download. Clear the quarantine flag once, then launch it:
+xattr -dr com.apple.quarantine evanalyzer
+./evanalyzer
+```
+
+> Keep every file from the archive in the same folder — the bundled `.dylib`
+> libraries are resolved relative to the `evanalyzer` binary.
+
+---
+
 ## Building
 
 ### Linux x86-64
@@ -162,6 +192,16 @@ cargo build-linux-arm
 ```
 
 > Requires the cross-toolchain: `apt install gcc-aarch64-linux-gnu` and `rustup target add aarch64-unknown-linux-gnu`
+
+### macOS, Apple Silicon
+
+```sh
+cargo build-mac
+```
+
+> Build natively on an Apple-Silicon Mac. DuckDB is not bundled on macOS, so set
+> `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` to a prebuilt libduckdb (see
+> `libs/download.sh mac-cpu` and the `build-macos` CI job).
 
 ---
 

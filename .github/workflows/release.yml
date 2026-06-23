@@ -315,6 +315,25 @@ jobs:
             codesign --force --sign - "$f"
           done
 
+          # First-run instructions for end users (Gatekeeper quarantine).
+          cat > dist/README.txt <<'EOF'
+          EVAnalyzer for macOS (Apple Silicon)
+          ====================================
+
+          This build is ad-hoc signed but NOT notarized, so after you download it
+          macOS Gatekeeper will quarantine it. To run it:
+
+            1. Open Terminal in this folder.
+            2. Clear the quarantine flag (only needed once):
+                 xattr -dr com.apple.quarantine evanalyzer
+            3. Start the app:
+                 ./evanalyzer
+
+          Keep every file in this folder together - the bundled libraries
+          (*.dylib) and the Java runtime are resolved relative to the
+          `evanalyzer` binary.
+          EOF
+
           tar -czf evanalyzer-macos-arm64.tar.gz -C dist .
 
       - uses: actions/upload-artifact@v4
