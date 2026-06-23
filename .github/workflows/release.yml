@@ -273,16 +273,48 @@ jobs:
 
       - name: Package
         run: |
+          set -euo pipefail
           mkdir -p dist/java dist/templates
           cp target/aarch64-apple-darwin/release/evanalyzer       dist/
-          # Ship libtorch + DuckDB dylibs next to the binary; the @loader_path
-          # rpath (see .cargo/config.toml) resolves them at runtime.
+          # Ship the libtorch + DuckDB dylibs flat next to the binary.
           cp libs/libtorch/lib/*.dylib                             dist/ 2>/dev/null || true
           cp libs/libduckdb-osx-universal/*.dylib                  dist/ 2>/dev/null || true
           unzip -q libs/jre_macos_arm.zip -d dist/java/jre_macos_arm
           cp crates/core/java/src/bioformats.jar                   dist/java/
           cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
+
+          # ---- Make the bundle relocatable (adapted from the legacy mac packer) ----
+          # libtorch's / DuckDB's dylibs and the binary reference each other by
+          # their install names, which on a build machine are @rpath/... or
+          # absolute paths that don't exist on a user's Mac. Since everything is
+          # shipped flat in one folder, rewrite every non-system dependency to
+          # @executable_path (the binary) / @loader_path (the dylibs) so it
+          # resolves wherever the folder is unzipped - no install, just run.
+          relink() {                       # relink <macho-file> <path-prefix>
+            local file="$1" prefix="$2" dep base
+            otool -L "$file" | tail -n +2 | awk '{print $1}' | while read -r dep; do
+              case "$dep" in
+                /System/*|/usr/lib/*) continue ;;
+              esac
+              base="$(basename "$dep")"
+              if [ -f "dist/$base" ]; then
+                install_name_tool -change "$dep" "${prefix}/${base}" "$file" || true
+              fi
+            done
+          }
+          for lib in dist/*.dylib; do
+            install_name_tool -id "@loader_path/$(basename "$lib")" "$lib" || true
+            relink "$lib" "@loader_path"
+          done
+          relink dist/evanalyzer "@executable_path"
+
+          # install_name_tool invalidates code signatures - re-sign ad-hoc so
+          # macOS will load the rewritten binaries.
+          for f in dist/evanalyzer dist/*.dylib; do
+            codesign --force --sign - "$f"
+          done
+
           tar -czf evanalyzer-macos-arm64.tar.gz -C dist .
 
       - uses: actions/upload-artifact@v4
