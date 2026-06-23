@@ -116,6 +116,9 @@ jobs:
           path: evanalyzer-windows-x86_64.zip
 
   build-linux-cuda:
+    # TEMPORARILY DISABLED - re-enable by removing this `if` and adding the job
+    # back to `release.needs` + `release.files`.
+    if: false
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.1.5
@@ -170,6 +173,9 @@ jobs:
           path: evanalyzer-linux-x86_64-cuda.tar.gz
 
   build-windows-cuda:
+    # TEMPORARILY DISABLED - re-enable by removing this `if` and adding the job
+    # back to `release.needs` + `release.files`.
+    if: false
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.1.5
@@ -285,7 +291,8 @@ jobs:
           path: evanalyzer-macos-arm64.tar.gz
 
   release:
-    needs: [build-linux, build-windows, build-linux-cuda, build-windows-cuda, build-macos]
+    # CUDA jobs temporarily disabled - re-add build-linux-cuda, build-windows-cuda here.
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     # Only publish a GitHub release when triggered by a version tag
     if: startsWith(github.ref, 'refs/tags/v')
@@ -299,9 +306,11 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          # CUDA artifacts temporarily disabled - when re-enabling the cuda jobs,
+          # add these two lines back into `files`:
+          #   artifacts/evanalyzer-linux-x86_64-cuda/evanalyzer-linux-x86_64-cuda.tar.gz
+          #   artifacts/evanalyzer-windows-x86_64-cuda/evanalyzer-windows-x86_64-cuda.zip
           files: |
             artifacts/evanalyzer-linux-x86_64/evanalyzer-linux-x86_64.tar.gz
             artifacts/evanalyzer-windows-x86_64/evanalyzer-windows-x86_64.zip
-            artifacts/evanalyzer-linux-x86_64-cuda/evanalyzer-linux-x86_64-cuda.tar.gz
-            artifacts/evanalyzer-windows-x86_64-cuda/evanalyzer-windows-x86_64-cuda.zip
             artifacts/evanalyzer-macos-arm64/evanalyzer-macos-arm64.tar.gz
