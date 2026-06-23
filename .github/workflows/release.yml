@@ -96,25 +96,36 @@ jobs:
         run: unzip -q "libs/libtorch-"*.zip -d libs
 
       - name: Work around torch-sys clang-cl define bug
+        # torch-sys 0.24.0 hands clang-cl an MSBuild property
+        # (/p:DefineConstants=GLOG_USE_GLOG_EXPORT) instead of a /D define, which
+        # clang-cl rejects as a missing input file (its Linux/macOS path uses the
+        # correct -DGLOG_USE_GLOG_EXPORT). Shim clang-cl on PATH to rewrite just
+        # that one argument to /DGLOG_USE_GLOG_EXPORT. POSIX sh only - the
+        # toolchain container has no bash (steps run under `sh`).
         run: |
-          # torch-sys 0.24.0 hands clang-cl an MSBuild property
-          # (/p:DefineConstants=GLOG_USE_GLOG_EXPORT) instead of a /D define, which
-          # clang-cl rejects as a missing input file (its Linux/macOS path uses the
-          # correct -DGLOG_USE_GLOG_EXPORT). Shim clang-cl on PATH to rewrite just
-          # that one argument to /DGLOG_USE_GLOG_EXPORT.
           mkdir -p "$HOME/ccshim"
-          REAL_CLANG_CL="$(command -v clang-cl)"
-          cat > "$HOME/ccshim/clang-cl" <<EOF
-          #!/usr/bin/env bash
-          args=()
-          for a in "\$@"; do
-            if [ "\$a" = "/p:DefineConstants=GLOG_USE_GLOG_EXPORT" ]; then
-              args+=("/DGLOG_USE_GLOG_EXPORT")
-            else
-              args+=("\$a")
-            fi
+          cat > "$HOME/ccshim/clang-cl" <<'EOF'
+          #!/bin/sh
+          # Locate the real clang-cl: first one on PATH that isn't this shim.
+          selfdir=$(cd "$(dirname "$0")" && pwd)
+          real=
+          IFS=:
+          for d in $PATH; do
+            if [ "$d" != "$selfdir" ] && [ -x "$d/clang-cl" ]; then real="$d/clang-cl"; break; fi
           done
-          exec "$REAL_CLANG_CL" "\${args[@]}"
+          unset IFS
+          # Rebuild the argument list, swapping the bad flag for the real define.
+          n=0
+          for a in "$@"; do
+            if [ "$a" = "/p:DefineConstants=GLOG_USE_GLOG_EXPORT" ]; then
+              set -- "$@" "/DGLOG_USE_GLOG_EXPORT"
+            else
+              set -- "$@" "$a"
+            fi
+            n=$((n + 1))
+          done
+          shift "$n"
+          exec "$real" "$@"
           EOF
           chmod +x "$HOME/ccshim/clang-cl"
           echo "$HOME/ccshim" >> "$GITHUB_PATH"
@@ -234,25 +245,36 @@ jobs:
         run: unzip -q "libs/libtorch-"*.zip -d libs
 
       - name: Work around torch-sys clang-cl define bug
+        # torch-sys 0.24.0 hands clang-cl an MSBuild property
+        # (/p:DefineConstants=GLOG_USE_GLOG_EXPORT) instead of a /D define, which
+        # clang-cl rejects as a missing input file (its Linux/macOS path uses the
+        # correct -DGLOG_USE_GLOG_EXPORT). Shim clang-cl on PATH to rewrite just
+        # that one argument to /DGLOG_USE_GLOG_EXPORT. POSIX sh only - the
+        # toolchain container has no bash (steps run under `sh`).
         run: |
-          # torch-sys 0.24.0 hands clang-cl an MSBuild property
-          # (/p:DefineConstants=GLOG_USE_GLOG_EXPORT) instead of a /D define, which
-          # clang-cl rejects as a missing input file (its Linux/macOS path uses the
-          # correct -DGLOG_USE_GLOG_EXPORT). Shim clang-cl on PATH to rewrite just
-          # that one argument to /DGLOG_USE_GLOG_EXPORT.
           mkdir -p "$HOME/ccshim"
-          REAL_CLANG_CL="$(command -v clang-cl)"
-          cat > "$HOME/ccshim/clang-cl" <<EOF
-          #!/usr/bin/env bash
-          args=()
-          for a in "\$@"; do
-            if [ "\$a" = "/p:DefineConstants=GLOG_USE_GLOG_EXPORT" ]; then
-              args+=("/DGLOG_USE_GLOG_EXPORT")
-            else
-              args+=("\$a")
-            fi
+          cat > "$HOME/ccshim/clang-cl" <<'EOF'
+          #!/bin/sh
+          # Locate the real clang-cl: first one on PATH that isn't this shim.
+          selfdir=$(cd "$(dirname "$0")" && pwd)
+          real=
+          IFS=:
+          for d in $PATH; do
+            if [ "$d" != "$selfdir" ] && [ -x "$d/clang-cl" ]; then real="$d/clang-cl"; break; fi
           done
-          exec "$REAL_CLANG_CL" "\${args[@]}"
+          unset IFS
+          # Rebuild the argument list, swapping the bad flag for the real define.
+          n=0
+          for a in "$@"; do
+            if [ "$a" = "/p:DefineConstants=GLOG_USE_GLOG_EXPORT" ]; then
+              set -- "$@" "/DGLOG_USE_GLOG_EXPORT"
+            else
+              set -- "$@" "$a"
+            fi
+            n=$((n + 1))
+          done
+          shift "$n"
+          exec "$real" "$@"
           EOF
           chmod +x "$HOME/ccshim/clang-cl"
           echo "$HOME/ccshim" >> "$GITHUB_PATH"
