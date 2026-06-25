@@ -8,6 +8,8 @@ export struct ResultsColumnDef {
     label: string,
     visible: bool,
     filterable: bool,
+    // Column width in logical pixels, user-resizable via the header's right-edge handle.
+    width: float,
 }
 
 export struct ResultsRow {
@@ -27,19 +29,20 @@ export enum ResultsGroupBy { none, image, folder, regex }
 
 export global ResultsState {
     in-out property <[ResultsColumnDef]> columns: [
-        { id: "roi_id", label: "ROI ID", visible: true, filterable: false },
-        { id: "image", label: "Image", visible: true, filterable: true },
-        { id: "class", label: "Class", visible: true, filterable: true },
-        { id: "area_px", label: "Area (px²)", visible: true, filterable: false },
-        { id: "area_nm2", label: "Area (nm²)", visible: true, filterable: false },
-        { id: "circularity", label: "Circularity", visible: true, filterable: false },
+        { id: "roi_id", label: "ROI ID", visible: true, filterable: false, width: 100.0 },
+        { id: "image", label: "Image", visible: true, filterable: true, width: 100.0 },
+        { id: "class", label: "Class", visible: true, filterable: true, width: 100.0 },
+        { id: "area_px", label: "Area (px²)", visible: true, filterable: false, width: 100.0 },
+        { id: "area_nm2", label: "Area (nm²)", visible: true, filterable: false, width: 100.0 },
+        { id: "circularity", label: "Circularity", visible: true, filterable: false, width: 100.0 },
+        { id: "colocalized", label: "Colocalized", visible: true, filterable: true, width: 100.0 },
     ];
 
     in property <[ResultsRow]> rows: [
-        { roi_id: 1, values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92"] },
-        { roi_id: 2, values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71"] },
-        { roi_id: 3, values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88"] },
-        { roi_id: 4, values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43"] },
+        { roi_id: 1, values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"] },
+        { roi_id: 2, values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"] },
+        { roi_id: 3, values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"] },
+        { roi_id: 4, values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"] },
     ];
 
     in-out property <int> selected_roi_id:     0;
@@ -61,6 +64,12 @@ export global ResultsState {
     in-out property <bool> filter_class_active: false;
     in-out property <bool> filter_class_all_popup_checked: true;
 
+    // -- Colocalized-column filter ----------------------------------------------
+    in-out property <[FilterItem]> filter_coloc_items: [];
+    in-out property <[FilterItem]> filter_coloc_popup: [];
+    in-out property <bool> filter_coloc_active: false;
+    in-out property <bool> filter_coloc_all_popup_checked: true;
+
     callback roi_row_selected(int);
     callback sort_requested(string, bool);
     callback export_csv();
@@ -74,7 +83,11 @@ export global ResultsState {
 
     in-out property <bool> loading_more:    false;
     in-out property <bool> all_rows_loaded: false;
-    in-out property <int>  visible_column_count: 6;
+    in-out property <int>  visible_column_count: 7;
+    // Sum of visible columns' widths (logical px), recomputed whenever `columns` is rebuilt.
+    in-out property <float> columns_total_width: 700.0;
+    // User dragged a column's right-edge resize handle to a new width (logical px).
+    callback column_width_changed(string, float);
 
     callback image_filter_label_toggled(string);
     callback image_filter_search_changed(string);
@@ -85,6 +98,11 @@ export global ResultsState {
     callback class_filter_search_changed(string);
     callback class_select_all();
     callback class_clear_all();
+
+    callback coloc_filter_label_toggled(string);
+    callback coloc_filter_search_changed(string);
+    callback coloc_select_all();
+    callback coloc_clear_all();
 
     // -- Column-visibility popup -------------------------------------------
     in-out property <[FilterItem]> column_items: [];
@@ -108,6 +126,9 @@ export global ResultsState {
     in-out property <bool> group_agg_median:     false;
     in-out property <bool> group_agg_stdev:      false;
     in-out property <bool> group_agg_sum:        false;
+    // When true, each group is additionally split into a colocalizing and a
+    // non-colocalizing row.
+    in-out property <bool> group_split_colocalized: false;
     // True while a non-`none` grouping is applied (drives the status badge).
     in-out property <bool> group_active:         false;
     // Applies the current group_by / group_regex / aggregate selection.
@@ -197,6 +218,8 @@ component ResultsHeaderCell inherits Rectangle {
     callback filter-select-all();
     callback filter-clear-all();
     callback filter-apply;
+    // Emits the live width (logical px) while the right-edge handle is being dragged.
+    callback width-changed(float);
 
     min-width: root.col-visible ? root.cell-width : 0px;
     max-width: root.col-visible ? root.cell-width : 0px;
@@ -268,6 +291,33 @@ component ResultsHeaderCell inherits Rectangle {
         width: 1px;
         height: parent.height - 12px;
         background: Theme.border;
+    }
+
+    // Excel-style right-edge resize handle. Declared last so it takes pointer-event
+    // priority over `header-ta` in its narrow strip. Each `moved` event (while pressed)
+    // nudges the width by the cursor's offset from the handle's own center — the edge
+    // self-corrects to track the cursor without needing to remember the press-start width.
+    resize-ta := TouchArea {
+        x: parent.width - 4px;
+        width: 8px;
+        height: parent.height;
+        mouse-cursor: col-resize;
+        property <bool> dragging: false;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left) {
+                if (event.kind == PointerEventKind.down) {
+                    self.dragging = true;
+                } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    self.dragging = false;
+                }
+            }
+        }
+        moved => {
+            if (self.dragging) {
+                let delta = (self.mouse-x - self.width / 2) / 1px;
+                root.width-changed(Math.max(40.0, root.cell-width / 1px + delta));
+            }
+        }
     }
 
     // Excel-style dropdown popup -----------------------------------------------
@@ -555,11 +605,11 @@ component ResultsDataRow inherits Rectangle {
     in property <bool> selected;
     // Horizontal scroll offset supplied by the parent table component.
     in property <length> h-offset: 0px;
-    // Total content width and per-column width, supplied by the parent so the
-    // row matches the header exactly. Both are computed once in ResultsTable;
-    // deriving width from this row's own size would diverge from the header.
+    // Total content width, supplied by the parent so the row matches the header exactly
+    // (computed once in ResultsTable; deriving it from this row's own size would diverge).
+    // Per-column width comes straight from `ResultsState.columns[i].width` below, the same
+    // source the header reads, so the two can never drift apart.
     in property <length> content-width: 0px;
-    in property <length> col-width: 100px;
     callback row-clicked;
 
     height: 32px;
@@ -590,7 +640,7 @@ component ResultsDataRow inherits Rectangle {
         for col[i] in ResultsState.columns: ResultsDataCell {
             visible: col.visible;
             col-visible: col.visible;
-            cell-width: root.col-width;
+            cell-width: col.width * 1px;
             value: root.data.values.length > i ? root.data.values[i] : "";
             selected: root.selected;
             mono: i == 0;
@@ -607,16 +657,11 @@ component ResultsDataRow inherits Rectangle {
 // -- Public export -------------------------------------------------------------
 
 export component ResultsTable inherits Rectangle {
-    // Single source of truth for column sizing. Both the sticky header and
-    // every data row use `col-width` as an EXPLICIT, pre-rounded width per
-    // column (no stretch), so the two are laid out identically and can never
-    // drift apart due to independent fractional-stretch rounding.
-    property <length> content-width: max(table-scroll.visible-width, ResultsState.visible_column_count * 100px);
-    // Whole-pixel width per visible column. Rounded here once so header and
-    // rows share the exact same integer value.
-    property <length> col-width: ResultsState.visible_column_count > 0
-        ? round(content-width / 1px / ResultsState.visible_column_count) * 1px
-        : 100px;
+    // Total width is the sum of every visible column's own (user-resizable) width, kept
+    // in sync by Rust whenever `columns` is rebuilt. Both the sticky header and every data
+    // row read each column's width directly off `ResultsState.columns[i].width`, so the two
+    // can never drift apart.
+    property <length> content-width: max(table-scroll.visible-width, ResultsState.columns_total_width * 1px);
 
     VerticalLayout {
         spacing: 0;
@@ -634,15 +679,15 @@ export component ResultsTable inherits Rectangle {
                 for col in ResultsState.columns: ResultsHeaderCell {
                     visible: col.visible;
                     col-visible: col.visible;
-                    cell-width: root.col-width;
+                    cell-width: col.width * 1px;
                     label: col.label;
                     col-id: col.id;
                     sorted: ResultsState.sort_column_id == col.id;
                     sort-asc: ResultsState.sort_ascending;
                     filterable: col.filterable;
-                    filter-active: col.id == "image" ? ResultsState.filter_image_active : ResultsState.filter_class_active;
-                    popup-items: col.filterable ? (col.id == "image" ? ResultsState.filter_image_popup : ResultsState.filter_class_popup) : [];
-                    all-popup-checked: col.id == "image" ? ResultsState.filter_image_all_popup_checked : ResultsState.filter_class_all_popup_checked;
+                    filter-active: col.id == "image" ? ResultsState.filter_image_active : (col.id == "class" ? ResultsState.filter_class_active : ResultsState.filter_coloc_active);
+                    popup-items: col.filterable ? (col.id == "image" ? ResultsState.filter_image_popup : (col.id == "class" ? ResultsState.filter_class_popup : ResultsState.filter_coloc_popup)) : [];
+                    all-popup-checked: col.id == "image" ? ResultsState.filter_image_all_popup_checked : (col.id == "class" ? ResultsState.filter_class_all_popup_checked : ResultsState.filter_coloc_all_popup_checked);
 
                     clicked => {
                         if (ResultsState.sort_column_id == col.id) {
@@ -660,6 +705,9 @@ export component ResultsTable inherits Rectangle {
                         if (col.id == "class") {
                             ResultsState.class_filter_label_toggled(lbl);
                         }
+                        if (col.id == "colocalized") {
+                            ResultsState.coloc_filter_label_toggled(lbl);
+                        }
                     }
                     filter-search-changed(txt) => {
                         if (col.id == "image") {
@@ -667,6 +715,9 @@ export component ResultsTable inherits Rectangle {
                         }
                         if (col.id == "class") {
                             ResultsState.class_filter_search_changed(txt);
+                        }
+                        if (col.id == "colocalized") {
+                            ResultsState.coloc_filter_search_changed(txt);
                         }
                     }
                     filter-select-all => {
@@ -676,6 +727,9 @@ export component ResultsTable inherits Rectangle {
                         if (col.id == "class") {
                             ResultsState.class_select_all();
                         }
+                        if (col.id == "colocalized") {
+                            ResultsState.coloc_select_all();
+                        }
                     }
                     filter-clear-all => {
                         if (col.id == "image") {
@@ -684,9 +738,15 @@ export component ResultsTable inherits Rectangle {
                         if (col.id == "class") {
                             ResultsState.class_clear_all();
                         }
+                        if (col.id == "colocalized") {
+                            ResultsState.coloc_clear_all();
+                        }
                     }
                     filter-apply => {
                         ResultsState.filter_apply();
+                    }
+                    width-changed(new-width) => {
+                        ResultsState.column_width_changed(col.id, new-width);
                     }
                 }
             }
@@ -730,7 +790,6 @@ export component ResultsTable inherits Rectangle {
                     selected: ResultsState.selected_roi_id == data.roi_id;
                     h-offset: -h-scroll-view.viewport-x;
                     content-width: root.content-width;
-                    col-width: root.col-width;
                     row-clicked => {
                         ResultsState.selected_roi_id = data.roi_id;
                         ResultsState.roi_row_selected(data.roi_id);
@@ -782,7 +841,7 @@ export component ResultsTable inherits Rectangle {
             height: 14px;
             horizontal-scrollbar-policy: as-needed;
             vertical-scrollbar-policy: always-off;
-            viewport-width: max(self.width, ResultsState.visible_column_count * 100px);
+            viewport-width: max(self.width, ResultsState.columns_total_width * 1px);
         }
     }
 }

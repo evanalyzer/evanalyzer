@@ -7,6 +7,10 @@ use indexmap::IndexMap;
 use kornia_image::ImageSize;
 use std::collections::HashSet;
 
+use crate::pipeline::{
+    pipeline_cache::{sample_channel_pixel, PipelineCache},
+    pipeline_context::PipelineContext,
+};
 use crate::ImagePlane;
 
 #[derive(Debug, Default, Clone)]
@@ -676,6 +680,85 @@ impl Roi {
         }))
     }
 
+    /// Samples per-channel pixel intensities for this ROI's mask against the channel images
+    /// held in `cache`. For ROIs assembled by [`ExtractRois`](crate::algos::classification::extract_rois::ExtractRois)
+    /// this is redundant (it already measures intensities in the same pass that builds the
+    /// mask). It exists for ROIs synthesized later in the pipeline — e.g. the intersection
+    /// ROIs colocalization creates via [`overlaps`](Self::overlaps) — which have a valid
+    /// mask/bbox but never had a chance to sample pixel data.
+    pub fn measure_intensities(
+        &self,
+        ctx: &PipelineContext,
+        cache: &PipelineCache,
+    ) -> IndexMap<i32, Intensity> {
+        let tile_offset = ctx.get_image_tile_offset();
+        let size = ctx.get_image_size();
+        let full_image_size = ctx.full_image_size();
+        let origin_width = size.width;
+        let zoom_x = size.width / full_image_size.width;
+        let zoom_y = size.height / full_image_size.height;
+
+        let channel_views = cache.image_cache.resolve_channel_views();
+
+        let [xmin, ymin, xmax, ymax] = self.bbox;
+        let rw = (xmax - xmin + 1) as usize;
+        let rh = (ymax - ymin + 1) as usize;
+
+        let mut sum = vec![0f64; channel_views.len()];
+        let mut min = vec![f32::MAX; channel_views.len()];
+        let mut max = vec![f32::MIN; channel_views.len()];
+        let mut area = 0usize;
+
+        for ry in 0..rh {
+            for rx in 0..rw {
+                if !self
+                    .mask_data
+                    .get(ry * rw + rx)
+                    .map(|b| *b)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                area += 1;
+
+                let x_abs = xmin as usize + rx;
+                let y_abs = ymin as usize + ry;
+                let tile_x = x_abs - tile_offset.x;
+                let tile_y = y_abs - tile_offset.y;
+                let sample = (tile_y * zoom_y) * origin_width + tile_x * zoom_x;
+
+                for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
+                    let val = sample_channel_pixel(*is_rgb, slice, sample);
+                    sum[ci] += val as f64;
+                    if val < min[ci] {
+                        min[ci] = val;
+                    }
+                    if val > max[ci] {
+                        max[ci] = val;
+                    }
+                }
+            }
+        }
+
+        let n = area.max(1) as f64;
+        channel_views
+            .iter()
+            .enumerate()
+            .map(|(ci, (ch_idx, _, _))| {
+                (
+                    *ch_idx,
+                    Intensity {
+                        sum_intensity: sum[ci],
+                        min_intensity: min[ci],
+                        max_intensity: max[ci],
+                        avg_intensity: (sum[ci] / n) as f32,
+                        pixel_values: Vec::new(),
+                    },
+                )
+            })
+            .collect()
+    }
+
     /// Builds the rasterized geometry of `self` scaled by `(scale_x, scale_y)` around its
     /// bounding-box center.
     ///
@@ -802,8 +885,7 @@ fn rasterize_geometry(
     let mut mask_data = BitVec::<u64, Lsb0>::repeat(false, width * height);
 
     let mut area = 0usize;
-    let (mut sum_x, mut sum_y, mut sum_x2, mut sum_y2, mut sum_xy) =
-        (0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut sum_x, mut sum_y, mut sum_x2, mut sum_y2, mut sum_xy) = (0u64, 0u64, 0u64, 0u64, 0u64);
     // Tracks the actual extent of set pixels so the candidate scan window (which floor/ceil
     // padded outward to not miss any boundary pixel) can be cropped down to a tight bbox below
     // — callers like `get_feret_diameter`/`get_centroid` read `bbox` directly, so a loose box

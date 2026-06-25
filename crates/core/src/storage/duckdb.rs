@@ -481,7 +481,7 @@ pub struct RoiRow {
 
 /// Filter criteria for [`DuckDbReader::get_rois`].
 ///
-/// For both `image_filter` and `class_filter`:
+/// For `image_filter`, `class_filter` and `coloc_filter`:
 /// - `None`       → no restriction (return all)
 /// - `Some([])`   → active filter with nothing selected → return 0 rows
 /// - `Some([..])` → return only rows matching these values
@@ -489,6 +489,8 @@ pub struct RoiRow {
 pub struct RoiFilter {
     pub image_filter: Option<Vec<String>>,
     pub class_filter: Option<Vec<String>>,
+    /// Restricts to rows whose colocalization status label ("Yes"/"No") is in this set.
+    pub coloc_filter: Option<Vec<String>>,
     /// Rows per page; 0 means return all.
     pub page_size: usize,
     /// Zero-based page index.
@@ -503,6 +505,7 @@ impl Default for RoiFilter {
         Self {
             image_filter: None,
             class_filter: None,
+            coloc_filter: None,
             page_size: 500,
             page: 0,
             fetch_intensities: true,
@@ -573,6 +576,13 @@ impl DuckDbReader {
         {
             return Ok(vec![]);
         }
+        if filter
+            .coloc_filter
+            .as_deref()
+            .map_or(false, |v| v.is_empty())
+        {
+            return Ok(vec![]);
+        }
 
         let mut conditions: Vec<String> = Vec::new();
 
@@ -585,6 +595,16 @@ impl DuckDbReader {
                  THEN COALESCE(seg_class_name, '') \
                  ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END IN ({})",
                 sql_in_list(classes)
+            ));
+        }
+        if let Some(statuses) = &filter.coloc_filter {
+            // Every entry `Colocalization` ever writes into `colocalized_with` has a non-empty
+            // ID list (see coloc_rois.rs), so `coloc_json` is exactly "{}" / empty iff the ROI
+            // has no colocalization partner — no need to parse the object to check.
+            conditions.push(format!(
+                "CASE WHEN coloc_json IS NULL OR coloc_json = '' OR coloc_json = '{{}}' \
+                 THEN 'No' ELSE 'Yes' END IN ({})",
+                sql_in_list(statuses)
             ));
         }
 
@@ -706,5 +726,93 @@ fn extract_int_list(val: Value) -> Vec<i32> {
             .filter_map(|v| if let Value::Int(n) = v { Some(n) } else { None })
             .collect(),
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::roi::{Roi, RoiInit};
+    use bitvec::prelude::*;
+    use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
+    use tempfile::TempDir;
+
+    fn make_filled_roi(id: u128, bbox: [u32; 4]) -> Roi {
+        let [x_min, y_min, x_max, y_max] = bbox;
+        let w = (x_max - x_min + 1) as usize;
+        let h = (y_max - y_min + 1) as usize;
+        let area = w * h;
+        let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
+        Roi::new(RoiInit {
+            id: ObjectId(id),
+            bbox,
+            mask_data,
+            area,
+            ..Default::default()
+        })
+    }
+
+    fn export_and_open(rois: Vec<Roi>) -> (TempDir, DuckDbReader) {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let mut cache = PipelineCache::default();
+        for roi in rois {
+            cache.roi_cache.insert(roi.id.clone(), roi);
+        }
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+        exporter.export(&cache).expect("export failed");
+        drop(exporter); // flushes the appenders / closes the connection
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        (dir, reader)
+    }
+
+    #[test]
+    fn coloc_filter_restricts_to_matching_status() {
+        const ID_COLOC: u128 = 1;
+        const ID_NOT_COLOC: u128 = 2;
+        const PARTNER_CLASS: ObjectClass = ObjectClass::Valid(1);
+        let coloc_id = ObjectId(ID_COLOC).to_string();
+        let not_coloc_id = ObjectId(ID_NOT_COLOC).to_string();
+
+        let mut coloc_roi = make_filled_roi(ID_COLOC, [0, 0, 1, 1]);
+        coloc_roi.add_colocalizing_object(PARTNER_CLASS, ObjectId(99));
+        let not_coloc_roi = make_filled_roi(ID_NOT_COLOC, [5, 5, 6, 6]);
+
+        let (_dir, reader) = export_and_open(vec![coloc_roi, not_coloc_roi]);
+
+        let yes = reader
+            .get_rois(&RoiFilter {
+                coloc_filter: Some(vec!["Yes".into()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(yes.len(), 1);
+        assert_eq!(yes[0].object_id, coloc_id);
+
+        let no = reader
+            .get_rois(&RoiFilter {
+                coloc_filter: Some(vec!["No".into()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(no.len(), 1);
+        assert_eq!(no[0].object_id, not_coloc_id);
+
+        let all = reader.get_rois(&RoiFilter::default()).unwrap();
+        assert_eq!(all.len(), 2, "no coloc_filter set → both rows returned");
+
+        let none_selected = reader
+            .get_rois(&RoiFilter {
+                coloc_filter: Some(vec![]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            none_selected.is_empty(),
+            "active filter with nothing selected → 0 rows"
+        );
     }
 }

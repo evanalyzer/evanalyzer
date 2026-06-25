@@ -137,19 +137,31 @@ impl ImageCache {
         })
     }
 
-    /// Returns a snapshot of all Channel images as a Vector of (index, reference).
-    pub fn get_channel_slice(&self) -> Vec<(i32, Arc<ImageContainer>)> {
-        self.images
-            .iter()
-            .filter_map(|(key, container)| {
-                if let ImageAddress::Channel(index) = key {
-                    // Convert &Arc<ImageContainer> to &ImageContainer
-                    Some((*index, container.clone()))
-                } else {
-                    None
-                }
+    /// Resolves the registered channel images into flat pixel slices ready for
+    /// direct-index sampling, paired with whether each is RGB (needing luminance
+    /// conversion via [`sample_channel_pixel`]). Shared by every algorithm that
+    /// samples per-channel intensities for a set of pixels (`ExtractRois`,
+    /// colocalization intersection ROIs, ...) so the channel resolution and the
+    /// RGB-luminance formula live in exactly one place.
+    pub fn resolve_channel_views(&self) -> Vec<(i32, bool, &[f32])> {
+        self.iter_channels()
+            .filter_map(|(idx, container)| match container {
+                ImageContainer::F32Gray(img) => Some((idx, false, img.as_slice())),
+                ImageContainer::F32Rgb(img) => Some((idx, true, img.as_slice())),
+                ImageContainer::U32(_) => None,
             })
-            .collect() // Collects into a Vec
+            .collect()
+    }
+}
+
+/// Samples one pixel from a channel view resolved by [`ImageCache::resolve_channel_views`],
+/// converting RGB to perceptual luminance (BT.709) when `is_rgb` is set.
+pub fn sample_channel_pixel(is_rgb: bool, slice: &[f32], sample: usize) -> f32 {
+    if is_rgb {
+        let idx = sample * 3;
+        (0.2126 * slice[idx] + 0.7152 * slice[idx + 1] + 0.0722 * slice[idx + 2]).max(0.0)
+    } else {
+        slice[sample]
     }
 }
 

@@ -9,7 +9,7 @@ use evanalyzer_app::result::{
 };
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -26,13 +26,20 @@ pub struct ResultsTableController {
     pub(crate) displayed_rois: Arc<Mutex<Vec<RoiRow>>>,
     pub(crate) channels: Arc<Mutex<Vec<i32>>>,
     pub(crate) column_specs: Arc<Mutex<Vec<ColumnSpec>>>,
+    /// User-resized column widths (logical px), keyed by column id. Pure presentation
+    /// state — applied on top of `column_specs`/grouped specs when building the Slint
+    /// model, never touching `evanalyzer_app::ColumnSpec` (which CSV/XLSX export also
+    /// uses, where a pixel width is meaningless). Columns absent here use the default.
+    pub(crate) column_widths: Arc<Mutex<HashMap<String, f32>>>,
     pub(crate) current_page: Arc<Mutex<usize>>,
     pub(crate) all_loaded: Arc<Mutex<bool>>,
     pub(crate) image_filter: Arc<Mutex<Option<Vec<String>>>>,
     pub(crate) class_filter: Arc<Mutex<Option<Vec<String>>>>,
+    pub(crate) coloc_filter: Arc<Mutex<Option<Vec<String>>>>,
     pub(crate) group_config: Arc<Mutex<GroupConfig>>,
     pub(crate) image_search: Mutex<String>,
     pub(crate) class_search: Mutex<String>,
+    pub(crate) coloc_search: Mutex<String>,
     pub(crate) column_search: Mutex<String>,
 }
 
@@ -50,13 +57,16 @@ impl ResultsTableController {
             displayed_rois: Arc::new(Mutex::new(Vec::new())),
             channels: Arc::new(Mutex::new(Vec::new())),
             column_specs: Arc::new(Mutex::new(Vec::new())),
+            column_widths: Arc::new(Mutex::new(HashMap::new())),
             current_page: Arc::new(Mutex::new(0)),
             all_loaded: Arc::new(Mutex::new(false)),
             image_filter: Arc::new(Mutex::new(None)),
             class_filter: Arc::new(Mutex::new(None)),
+            coloc_filter: Arc::new(Mutex::new(None)),
             group_config: Arc::new(Mutex::new(GroupConfig::default())),
             image_search: Mutex::new(String::new()),
             class_search: Mutex::new(String::new()),
+            coloc_search: Mutex::new(String::new()),
             column_search: Mutex::new(String::new()),
         }
     }
@@ -92,11 +102,17 @@ impl ResultsTableController {
         state.on_class_select_all(cb!(class_select_all));
         state.on_class_clear_all(cb!(class_clear_all));
 
+        state.on_coloc_filter_label_toggled(cb!(toggle_coloc_label, SharedString));
+        state.on_coloc_filter_search_changed(cb!(coloc_search_changed, SharedString));
+        state.on_coloc_select_all(cb!(coloc_select_all));
+        state.on_coloc_clear_all(cb!(coloc_clear_all));
+
         state.on_column_label_toggled(cb!(toggle_column_label, SharedString));
         state.on_column_search_changed(cb!(column_search_changed, SharedString));
         state.on_column_select_all(cb!(column_select_all));
         state.on_column_clear_all(cb!(column_clear_all));
         state.on_column_filter_apply(cb!(column_filter_apply));
+        state.on_column_width_changed(cb!(on_column_width_changed, SharedString, f32));
 
         state.on_sort_requested(cb!(on_sort_column_changed, SharedString, bool));
 
@@ -113,6 +129,7 @@ impl ResultsTableController {
                     group_by: map_group_by(state.get_group_by()),
                     regex: state.get_group_regex().to_string(),
                     aggs: selected_aggs(&state),
+                    split_colocalized: state.get_group_split_colocalized(),
                 };
                 *this.group_config.lock().unwrap() = config;
                 *this.current_page.lock().unwrap() = 0;
@@ -135,8 +152,10 @@ impl ResultsTableController {
 
                 let img_model = state.get_filter_image_items();
                 let cls_model = state.get_filter_class_items();
+                let coloc_model = state.get_filter_coloc_items();
                 let total_img = img_model.row_count();
                 let total_cls = cls_model.row_count();
+                let total_coloc = coloc_model.row_count();
 
                 let checked_img: Vec<String> = (0..total_img)
                     .filter_map(|i| {
@@ -154,15 +173,27 @@ impl ResultsTableController {
                             .then_some(cls_model.row_data(i)?.label.to_string())
                     })
                     .collect();
+                let checked_coloc: Vec<String> = (0..total_coloc)
+                    .filter_map(|i| {
+                        coloc_model
+                            .row_data(i)?
+                            .checked
+                            .then_some(coloc_model.row_data(i)?.label.to_string())
+                    })
+                    .collect();
 
                 let image_filter: Option<Vec<String>> =
                     (checked_img.len() < total_img).then_some(checked_img);
                 let class_filter: Option<Vec<String>> =
                     (checked_cls.len() < total_cls).then_some(checked_cls);
+                let coloc_filter: Option<Vec<String>> =
+                    (checked_coloc.len() < total_coloc).then_some(checked_coloc);
 
-                let is_filtered = image_filter.is_some() || class_filter.is_some();
+                let is_filtered =
+                    image_filter.is_some() || class_filter.is_some() || coloc_filter.is_some();
                 *this.image_filter.lock().unwrap() = image_filter;
                 *this.class_filter.lock().unwrap() = class_filter;
+                *this.coloc_filter.lock().unwrap() = coloc_filter;
                 *this.current_page.lock().unwrap() = 0;
 
                 state.set_filter_active(is_filtered);
@@ -184,6 +215,7 @@ impl ResultsTableController {
 
                 *this.image_search.lock().unwrap() = String::new();
                 *this.class_search.lock().unwrap() = String::new();
+                *this.coloc_search.lock().unwrap() = String::new();
 
                 let img = set_all_checked(&model_to_vec(&state.get_filter_image_items()), true);
                 state.set_filter_image_active(false);
@@ -197,11 +229,18 @@ impl ResultsTableController {
                 state.set_filter_class_items(to_model(cls.clone()));
                 state.set_filter_class_popup(to_model(cls));
 
+                let coloc = set_all_checked(&model_to_vec(&state.get_filter_coloc_items()), true);
+                state.set_filter_coloc_active(false);
+                state.set_filter_coloc_all_popup_checked(true);
+                state.set_filter_coloc_items(to_model(coloc.clone()));
+                state.set_filter_coloc_popup(to_model(coloc));
+
                 state.set_filter_active(false);
                 state.set_loading_more(true);
 
                 *this.image_filter.lock().unwrap() = None;
                 *this.class_filter.lock().unwrap() = None;
+                *this.coloc_filter.lock().unwrap() = None;
                 *this.current_page.lock().unwrap() = 0;
 
                 Self::spawn_reload(Arc::clone(&this));
@@ -275,6 +314,7 @@ impl ResultsTableController {
                 let Some(path) = this.path.lock().unwrap().clone() else { return };
                 let image_filter = this.image_filter.lock().unwrap().clone();
                 let class_filter = this.class_filter.lock().unwrap().clone();
+                let coloc_filter = this.coloc_filter.lock().unwrap().clone();
                 let group = this.group_config.lock().unwrap().clone();
                 let base_specs = this.column_specs.lock().unwrap().clone();
 
@@ -292,6 +332,7 @@ impl ResultsTableController {
                     let filter = DatabaseFilter {
                         image_filter,
                         class_filter,
+                        coloc_filter,
                         ..Default::default()
                     };
                     if let Err(e) =
@@ -310,6 +351,7 @@ impl ResultsTableController {
                 let Some(path) = this.path.lock().unwrap().clone() else { return };
                 let image_filter = this.image_filter.lock().unwrap().clone();
                 let class_filter = this.class_filter.lock().unwrap().clone();
+                let coloc_filter = this.coloc_filter.lock().unwrap().clone();
                 let group = this.group_config.lock().unwrap().clone();
                 let base_specs = this.column_specs.lock().unwrap().clone();
 
@@ -327,6 +369,7 @@ impl ResultsTableController {
                     let filter = DatabaseFilter {
                         image_filter,
                         class_filter,
+                        coloc_filter,
                         ..Default::default()
                     };
                     if let Err(e) =
@@ -353,9 +396,11 @@ impl ResultsTableController {
         *self.all_loaded.lock().unwrap() = false;
         *self.image_filter.lock().unwrap() = None;
         *self.class_filter.lock().unwrap() = None;
+        *self.coloc_filter.lock().unwrap() = None;
         *self.group_config.lock().unwrap() = GroupConfig::default();
         *self.image_search.lock().unwrap() = String::new();
         *self.class_search.lock().unwrap() = String::new();
+        *self.coloc_search.lock().unwrap() = String::new();
         self.displayed_rois.lock().unwrap().clear();
 
         let ui = self.ui.clone();
@@ -363,6 +408,7 @@ impl ResultsTableController {
         let channels_arc = Arc::clone(&self.channels);
         let all_loaded_arc = Arc::clone(&self.all_loaded);
         let column_specs_arc = Arc::clone(&self.column_specs);
+        let column_widths_arc = Arc::clone(&self.column_widths);
         let displayed_rois_arc = Arc::clone(&self.displayed_rois);
 
         std::thread::spawn(move || {
@@ -399,10 +445,16 @@ impl ResultsTableController {
                                 .map(|(i, r)| to_slint_row(to_display_row(i, r, &specs)))
                                 .collect();
 
+                            let widths = column_widths_arc.lock().unwrap().clone();
                             let slint_cols: Vec<ResultsColumnDef> =
-                                specs_to_slint_cols(&specs);
+                                specs_to_slint_cols(&specs, &widths);
                             let visible_count =
                                 specs.iter().filter(|c| c.visible).count() as i32;
+                            let total_width: f32 = slint_cols
+                                .iter()
+                                .filter(|c| c.visible)
+                                .map(|c| c.width)
+                                .sum();
 
                             let column_items: Vec<FilterItem> = specs
                                 .iter()
@@ -416,6 +468,7 @@ impl ResultsTableController {
                                 slint::VecModel::from(slint_cols),
                             ));
                             state.set_visible_column_count(visible_count);
+                            state.set_columns_total_width(total_width);
                             state.set_column_items(slint::ModelRc::new(
                                 slint::VecModel::from(column_items.clone()),
                             ));
@@ -443,6 +496,19 @@ impl ResultsTableController {
                             ));
                             state.set_filter_class_active(false);
                             state.set_filter_class_all_popup_checked(true);
+
+                            // The colocalized column only ever has two possible values, so
+                            // (unlike image/class) this list isn't sourced from the database.
+                            let coloc_items =
+                                names_to_filter_items(&["Yes".to_string(), "No".to_string()]);
+                            state.set_filter_coloc_items(slint::ModelRc::new(
+                                slint::VecModel::from(coloc_items.clone()),
+                            ));
+                            state.set_filter_coloc_popup(slint::ModelRc::new(
+                                slint::VecModel::from(coloc_items),
+                            ));
+                            state.set_filter_coloc_active(false);
+                            state.set_filter_coloc_all_popup_checked(true);
 
                             state.set_filter_active(false);
                             state.set_group_active(false);
@@ -509,6 +575,7 @@ impl ResultsTableController {
 
         let image_filter = this.image_filter.lock().unwrap().clone();
         let class_filter = this.class_filter.lock().unwrap().clone();
+        let coloc_filter = this.coloc_filter.lock().unwrap().clone();
         let config = this.group_config.lock().unwrap().clone();
         // Per-ROI specs carry the column-visibility selection; only visible
         // metrics become grouped columns.
@@ -519,6 +586,7 @@ impl ResultsTableController {
         match loader.get_rois(DatabaseFilter {
             image_filter,
             class_filter,
+            coloc_filter,
             page_size: 0,
             page: 0,
             needs_intensities: true,
@@ -530,6 +598,7 @@ impl ResultsTableController {
                 // Grouped rows aggregate many ROIs, so there is no single source
                 // ROI to open/highlight when one is selected.
                 this.displayed_rois.lock().unwrap().clear();
+                let widths = this.column_widths.lock().unwrap().clone();
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
@@ -537,11 +606,18 @@ impl ResultsTableController {
                         let visible_count = specs.len() as i32;
                         let slint_rows: Vec<ResultsRow> =
                             display_rows.into_iter().map(to_slint_row).collect();
+                        let slint_cols = specs_to_slint_cols(&specs, &widths);
+                        let total_width: f32 = slint_cols
+                            .iter()
+                            .filter(|c| c.visible)
+                            .map(|c| c.width)
+                            .sum();
 
                         state.set_columns(slint::ModelRc::new(slint::VecModel::from(
-                            specs_to_slint_cols(&specs),
+                            slint_cols,
                         )));
                         state.set_visible_column_count(visible_count);
+                        state.set_columns_total_width(total_width);
                         state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
                         state.set_all_rows_loaded(true);
                         state.set_loading_more(false);
@@ -572,6 +648,7 @@ impl ResultsTableController {
 
         let image_filter = this.image_filter.lock().unwrap().clone();
         let class_filter = this.class_filter.lock().unwrap().clone();
+        let coloc_filter = this.coloc_filter.lock().unwrap().clone();
         let specs = this.column_specs.lock().unwrap().clone();
         let needs_intensities = specs.iter().any(|c| c.visible && c.id.starts_with("ch"));
         let ui = this.ui.clone();
@@ -580,6 +657,7 @@ impl ResultsTableController {
         match loader.get_rois(DatabaseFilter {
             image_filter,
             class_filter,
+            coloc_filter,
             page_size: PAGE_SIZE,
             page: 0,
             needs_intensities,
@@ -588,6 +666,7 @@ impl ResultsTableController {
                 let all_loaded = rois.len() < PAGE_SIZE;
                 *this.all_loaded.lock().unwrap() = all_loaded;
                 *this.displayed_rois.lock().unwrap() = rois.clone();
+                let widths = this.column_widths.lock().unwrap().clone();
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
@@ -599,10 +678,15 @@ impl ResultsTableController {
                         let state = window.global::<ResultsState>();
                         // Restore the per-ROI columns (grouped mode may have replaced them).
                         let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
-                        state.set_columns(slint::ModelRc::new(slint::VecModel::from(
-                            specs_to_slint_cols(&specs),
-                        )));
+                        let slint_cols = specs_to_slint_cols(&specs, &widths);
+                        let total_width: f32 = slint_cols
+                            .iter()
+                            .filter(|c| c.visible)
+                            .map(|c| c.width)
+                            .sum();
+                        state.set_columns(slint::ModelRc::new(slint::VecModel::from(slint_cols)));
                         state.set_visible_column_count(visible_count);
+                        state.set_columns_total_width(total_width);
                         state.set_group_active(false);
                         state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
                         state.set_all_rows_loaded(all_loaded);
@@ -638,6 +722,7 @@ impl ResultsTableController {
 
         let image_filter = this.image_filter.lock().unwrap().clone();
         let class_filter = this.class_filter.lock().unwrap().clone();
+        let coloc_filter = this.coloc_filter.lock().unwrap().clone();
         let specs = this.column_specs.lock().unwrap().clone();
         let needs_intensities = specs.iter().any(|c| c.visible && c.id.starts_with("ch"));
         let ui = this.ui.clone();
@@ -655,6 +740,7 @@ impl ResultsTableController {
         match loader.get_rois(DatabaseFilter {
             image_filter,
             class_filter,
+            coloc_filter,
             page_size: PAGE_SIZE,
             page: next_page,
             needs_intensities,
@@ -844,6 +930,59 @@ impl ResultsTableController {
     }
 
     // -------------------------------------------------------------------------
+    // Colocalized-column filter popup management
+    // -------------------------------------------------------------------------
+
+    fn toggle_coloc_label(&self, label: SharedString) {
+        let Some(window) = self.ui.upgrade() else { return };
+        let state = window.global::<ResultsState>();
+        let current = model_to_vec(&state.get_filter_coloc_items());
+        let current_popup = model_to_vec(&state.get_filter_coloc_popup());
+        let items = toggle_item_by_label(&current, label.as_str());
+        let popup = sync_popup_checked(&items, &current_popup);
+        state.set_filter_coloc_active(any_unchecked(&items));
+        state.set_filter_coloc_all_popup_checked(all_checked(&popup));
+        state.set_filter_coloc_items(to_model(items));
+        state.set_filter_coloc_popup(to_model(popup));
+    }
+
+    fn coloc_search_changed(&self, search: SharedString) {
+        *self.coloc_search.lock().unwrap() = search.to_string();
+        let Some(window) = self.ui.upgrade() else { return };
+        let state = window.global::<ResultsState>();
+        let current = model_to_vec(&state.get_filter_coloc_items());
+        let popup = filter_popup_by_search(&current, search.as_str());
+        state.set_filter_coloc_all_popup_checked(all_checked(&popup));
+        state.set_filter_coloc_popup(to_model(popup));
+    }
+
+    fn coloc_select_all(&self) {
+        let Some(window) = self.ui.upgrade() else { return };
+        let state = window.global::<ResultsState>();
+        let search = self.coloc_search.lock().unwrap().clone();
+        let current = model_to_vec(&state.get_filter_coloc_items());
+        let items = set_checked_for_search(&current, &search, true);
+        let popup = filter_popup_by_search(&items, &search);
+        state.set_filter_coloc_active(any_unchecked(&items));
+        state.set_filter_coloc_all_popup_checked(all_checked(&popup));
+        state.set_filter_coloc_items(to_model(items));
+        state.set_filter_coloc_popup(to_model(popup));
+    }
+
+    fn coloc_clear_all(&self) {
+        let Some(window) = self.ui.upgrade() else { return };
+        let state = window.global::<ResultsState>();
+        let search = self.coloc_search.lock().unwrap().clone();
+        let current = model_to_vec(&state.get_filter_coloc_items());
+        let items = set_checked_for_search(&current, &search, false);
+        let popup = filter_popup_by_search(&items, &search);
+        state.set_filter_coloc_active(any_unchecked(&items));
+        state.set_filter_coloc_all_popup_checked(all_checked(&popup));
+        state.set_filter_coloc_items(to_model(items));
+        state.set_filter_coloc_popup(to_model(popup));
+    }
+
+    // -------------------------------------------------------------------------
     // Column-visibility popup management
     // -------------------------------------------------------------------------
 
@@ -929,11 +1068,43 @@ impl ResultsTableController {
             Self::spawn_reload(Arc::clone(self));
         } else {
             let specs = self.column_specs.lock().unwrap().clone();
-            let slint_cols = specs_to_slint_cols(&specs);
+            let widths = self.column_widths.lock().unwrap().clone();
+            let slint_cols = specs_to_slint_cols(&specs, &widths);
             let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
+            let total_width: f32 = slint_cols.iter().filter(|c| c.visible).map(|c| c.width).sum();
             state.set_columns(slint::ModelRc::new(slint::VecModel::from(slint_cols)));
             state.set_visible_column_count(visible_count);
+            state.set_columns_total_width(total_width);
         }
+    }
+
+    /// Live-updates one column's width as the user drags its header's resize handle.
+    /// Operates directly on whatever `ResultsState.columns` currently holds — the per-ROI
+    /// specs or a grouped/aggregated column list — so it works in both view modes without
+    /// needing to know which is active. The chosen width is also remembered in
+    /// `column_widths` so it survives the next reload/filter/group-apply.
+    fn on_column_width_changed(&self, col_id: SharedString, new_width: f32) {
+        let clamped = new_width.max(40.0);
+        self.column_widths
+            .lock()
+            .unwrap()
+            .insert(col_id.to_string(), clamped);
+
+        let Some(window) = self.ui.upgrade() else { return };
+        let state = window.global::<ResultsState>();
+        let model = state.get_columns();
+        let cols: Vec<ResultsColumnDef> = (0..model.row_count())
+            .filter_map(|i| {
+                let mut c = model.row_data(i)?;
+                if c.id == col_id {
+                    c.width = clamped;
+                }
+                Some(c)
+            })
+            .collect();
+        let total_width: f32 = cols.iter().filter(|c| c.visible).map(|c| c.width).sum();
+        state.set_columns(slint::ModelRc::new(slint::VecModel::from(cols)));
+        state.set_columns_total_width(total_width);
     }
 }
 
@@ -987,7 +1158,7 @@ fn to_slint_row(row: evanalyzer_app::result::DisplayRow) -> ResultsRow {
     }
 }
 
-fn specs_to_slint_cols(specs: &[ColumnSpec]) -> Vec<ResultsColumnDef> {
+fn specs_to_slint_cols(specs: &[ColumnSpec], widths: &HashMap<String, f32>) -> Vec<ResultsColumnDef> {
     specs
         .iter()
         .map(|c| ResultsColumnDef {
@@ -995,6 +1166,7 @@ fn specs_to_slint_cols(specs: &[ColumnSpec]) -> Vec<ResultsColumnDef> {
             label: c.label.as_str().into(),
             visible: c.visible,
             filterable: c.filterable,
+            width: widths.get(&c.id).copied().unwrap_or(100.0),
         })
         .collect()
 }

@@ -8,10 +8,13 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::{
-    ImageContainer, ImagePlane,
     algos::ImageAlgorithm,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{
+        pipeline_cache::{sample_channel_pixel, PipelineCache},
+        pipeline_context::PipelineContext,
+    },
     roi::{Intensity, Roi, RoiInit},
+    ImagePlane,
 };
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SegmentationClass};
@@ -84,11 +87,10 @@ impl ImageAlgorithm for ExtractRois {
         }
 
         // Hoist loop-invariant lookups out of the per-pixel hot path. In particular
-        // `get_channel_slice()` allocates a Vec and bumps Arc refcounts on every call,
-        // so calling it once per pixel dominated the runtime.
+        // resolving the channel views allocates a Vec, so doing it once per pixel
+        // would dominate the runtime.
         let tile_offset = ctx.get_image_tile_offset();
         let full_image_size = ctx.full_image_size();
-        let channels = cache.image_cache.get_channel_slice();
         let plane = ctx.get_image_plane().unwrap_or(ImagePlane {
             z: -1,
             c: -1,
@@ -97,19 +99,11 @@ impl ImageAlgorithm for ExtractRois {
 
         // Resolve each channel's pixel slice and sampling geometry once. The previous
         // per-pixel path re-matched the container type and recomputed zoom for every
-        // pixel — all loop-invariant per channel. `is_rgb` selects the luminance vs.
-        // direct-sample branch below.
+        // pixel — all loop-invariant per channel.
         let origin_width = size.width;
         let zoom_x = size.width / full_image_size.width;
         let zoom_y = size.height / full_image_size.height;
-        let channel_views: Vec<(i32, bool, &[f32])> = channels
-            .iter()
-            .filter_map(|(idx, container)| match container.as_ref() {
-                ImageContainer::F32Gray(img) => Some((*idx, false, img.as_slice())),
-                ImageContainer::F32Rgb(img) => Some((*idx, true, img.as_slice())),
-                ImageContainer::U32(_) => None, // no intensity contribution
-            })
-            .collect();
+        let channel_views = cache.image_cache.resolve_channel_views();
         let n_ch = channel_views.len();
         let n_obj = max_id + 1;
 
@@ -155,14 +149,7 @@ impl ImageAlgorithm for ExtractRois {
                 let sample = sample_row + x * zoom_x;
                 let base = id * n_ch;
                 for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
-                    let val = if *is_rgb {
-                        let idx = sample * 3;
-                        // Perceptual luminance (BT.709); background_level = 0.
-                        (0.2126 * slice[idx] + 0.7152 * slice[idx + 1] + 0.0722 * slice[idx + 2])
-                            .max(0.0)
-                    } else {
-                        slice[sample]
-                    };
+                    let val = sample_channel_pixel(*is_rgb, slice, sample);
                     let k = base + ci;
                     i_sum[k] += val as f64;
                     if val < i_min[k] {
@@ -425,8 +412,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        F32Gray, ImagePlane,
         image::{ManagedImage, PixelSizes},
+        F32Gray, ImagePlane,
     };
     use bitvec::slice::BitSlice;
     use kornia_image::{Image, ImageSize};

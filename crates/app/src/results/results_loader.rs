@@ -95,6 +95,12 @@ pub fn build_column_specs(channels: &[i32]) -> Vec<ColumnSpec> {
             filterable: false,
             visible: true,
         },
+        ColumnSpec {
+            id: "colocalized".into(),
+            label: "Colocalized".into(),
+            filterable: true,
+            visible: true,
+        },
     ];
     for &ch in channels {
         cols.push(ColumnSpec {
@@ -151,6 +157,7 @@ pub fn to_display_row(row_idx: usize, roi: &RoiRow, columns: &[ColumnSpec]) -> D
                 "area_px" => roi.area_px.to_string(),
                 "area_nm2" => format!("{:.2}", roi.area_nm2),
                 "circularity" => format!("{:.3}", roi.circularity),
+                "colocalized" => coloc_label(is_colocalized(&roi.coloc_json)),
                 id => channel_value(id, &intensities),
             }
         })
@@ -168,6 +175,26 @@ fn compute_class(roi: &RoiRow) -> String {
     } else {
         roi.object_class_name.join(", ")
     }
+}
+
+/// True if `coloc_json` (the per-ROI `colocalized_with` map, keyed by partner class label)
+/// records at least one colocalization partner for any class.
+fn is_colocalized(coloc_json: &str) -> bool {
+    if coloc_json.is_empty() || coloc_json == "{}" {
+        return false;
+    }
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(coloc_json) else {
+        return false;
+    };
+    let Some(obj) = val.as_object() else {
+        return false;
+    };
+    obj.values()
+        .any(|v| v.as_array().is_some_and(|a| !a.is_empty()))
+}
+
+fn coloc_label(colocalized: bool) -> String {
+    if colocalized { "Yes" } else { "No" }.to_string()
 }
 
 /// Parses `intensities_json` into a map of channel → (min_scaled, max_scaled, mean_scaled).
@@ -233,6 +260,9 @@ pub struct DatabaseFilter {
     pub image_filter: Option<Vec<String>>,
     /// `None` = no class filter; `Some([])` = nothing passes; `Some([..])` = restrict to these.
     pub class_filter: Option<Vec<String>>,
+    /// `None` = no coloc filter; `Some([])` = nothing passes; `Some([..])` = restrict to
+    /// rows whose colocalization status ("Yes"/"No") is in this set.
+    pub coloc_filter: Option<Vec<String>>,
     pub page_size: usize,
     pub page: usize,
     /// When false the database omits `intensities_json` from the SELECT, avoiding
@@ -245,6 +275,7 @@ impl Default for DatabaseFilter {
         Self {
             image_filter: None,
             class_filter: None,
+            coloc_filter: None,
             page_size: 500,
             page: 0,
             needs_intensities: true,
@@ -320,6 +351,10 @@ pub struct GroupConfig {
     /// column per entry here (e.g. selecting Min+Max+Avg yields three columns
     /// per metric).
     pub aggs: Vec<AggFunc>,
+    /// When true, each group is additionally split into a colocalizing and a
+    /// non-colocalizing bucket (based on `RoiRow::coloc_json`), producing two
+    /// rows per group instead of one.
+    pub split_colocalized: bool,
 }
 
 impl Default for GroupConfig {
@@ -328,6 +363,7 @@ impl Default for GroupConfig {
             group_by: GroupBy::None,
             regex: String::new(),
             aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
         }
     }
 }
@@ -460,21 +496,28 @@ pub fn aggregate_rows(
         .filter(|c| c.visible && is_numeric_metric(&c.id))
         .collect();
 
-    // Grouped columns: key, count, then each metric × each selected aggregate.
-    let mut specs = vec![
-        ColumnSpec {
-            id: "group".into(),
-            label: group_label.into(),
+    // Grouped columns: key, (optionally) colocalized split, count, then each
+    // metric × each selected aggregate.
+    let mut specs = vec![ColumnSpec {
+        id: "group".into(),
+        label: group_label.into(),
+        filterable: false,
+        visible: true,
+    }];
+    if config.split_colocalized {
+        specs.push(ColumnSpec {
+            id: "colocalized".into(),
+            label: "Colocalized".into(),
             filterable: false,
             visible: true,
-        },
-        ColumnSpec {
-            id: "count".into(),
-            label: "ROIs".into(),
-            filterable: false,
-            visible: true,
-        },
-    ];
+        });
+    }
+    specs.push(ColumnSpec {
+        id: "count".into(),
+        label: "ROIs".into(),
+        filterable: false,
+        visible: true,
+    });
     for m in &metrics {
         for agg in &config.aggs {
             specs.push(ColumnSpec {
@@ -493,13 +536,17 @@ pub fn aggregate_rows(
     };
     let needs_intensities = metrics.iter().any(|m| m.id.starts_with("ch"));
 
-    // group key -> (ROI count, base metric id -> collected values)
-    let mut groups: BTreeMap<String, (usize, BTreeMap<String, Vec<f64>>)> = BTreeMap::new();
+    // (group key, colocalized flag) -> (ROI count, base metric id -> collected values).
+    // The flag is `None` (a single bucket per group) unless `split_colocalized` is set,
+    // in which case it is `Some(is_colocalized)`, splitting each group in two.
+    let mut groups: BTreeMap<(String, Option<bool>), (usize, BTreeMap<String, Vec<f64>>)> =
+        BTreeMap::new();
     for roi in rois {
         let Some(key) = group_key(roi, config.group_by, regex.as_ref()) else {
             continue;
         };
-        let entry = groups.entry(key).or_default();
+        let coloc_flag = config.split_colocalized.then(|| is_colocalized(&roi.coloc_json));
+        let entry = groups.entry((key, coloc_flag)).or_default();
         entry.0 += 1;
 
         let intensities = if needs_intensities {
@@ -517,11 +564,12 @@ pub fn aggregate_rows(
     let rows = groups
         .into_iter()
         .enumerate()
-        .map(|(idx, (key, (count, metric_vals)))| {
+        .map(|(idx, ((key, coloc_flag), (count, metric_vals)))| {
             let values = specs
                 .iter()
                 .map(|col| match col.id.as_str() {
                     "group" => key.clone(),
+                    "colocalized" => coloc_label(coloc_flag.unwrap_or(false)),
                     "count" => count.to_string(),
                     id => {
                         // id is "<base_id>__<agg>"
@@ -563,6 +611,7 @@ impl ResultsLoader {
         DuckDbReader::open(&self.path)?.get_rois(&RoiFilter {
             image_filter: filter.image_filter,
             class_filter: filter.class_filter,
+            coloc_filter: filter.coloc_filter,
             page_size: filter.page_size,
             page: filter.page,
             fetch_intensities: filter.needs_intensities,
@@ -682,19 +731,20 @@ mod tests {
     // ---- build_column_specs ----
 
     #[test]
-    fn build_column_specs_no_channels_has_six_fixed_cols() {
+    fn build_column_specs_no_channels_has_seven_fixed_cols() {
         let specs = build_column_specs(&[]);
-        assert_eq!(specs.len(), 6);
+        assert_eq!(specs.len(), 7);
         assert_eq!(specs[0].id, "roi_id");
         assert_eq!(specs[5].id, "circularity");
+        assert_eq!(specs[6].id, "colocalized");
         assert!(specs.iter().all(|c| c.visible));
     }
 
     #[test]
     fn build_column_specs_with_channels_adds_three_cols_per_channel() {
         let specs = build_column_specs(&[0, 1]);
-        assert_eq!(specs.len(), 6 + 3 * 2);
-        let ch_ids: Vec<&str> = specs[6..].iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(specs.len(), 7 + 3 * 2);
+        let ch_ids: Vec<&str> = specs[7..].iter().map(|c| c.id.as_str()).collect();
         assert_eq!(
             ch_ids,
             [
@@ -731,6 +781,22 @@ mod tests {
         assert_eq!(row.values[3], "1234"); // area_px
         assert_eq!(row.values[4], "567.89"); // area_nm2
         assert_eq!(row.values[5], "0.923"); // circularity
+        assert_eq!(row.values[6], "No"); // colocalized (coloc_json is "{}")
+    }
+
+    #[test]
+    fn to_display_row_colocalized_column_reflects_coloc_json() {
+        let roi = make_roi("img.tif", vec![], None, 0, 0.0, 0.0, "{}");
+        let mut roi = roi;
+        roi.coloc_json = r#"{"Target (1)":["00000000-0000-0000-0000-000000000002"]}"#.into();
+        let specs = build_column_specs(&[]);
+        let row = to_display_row(0, &roi, &specs);
+        assert_eq!(row.values[6], "Yes");
+
+        let mut not_colocalized = roi.clone();
+        not_colocalized.coloc_json = r#"{"Target (1)":[]}"#.into();
+        let row = to_display_row(0, &not_colocalized, &specs);
+        assert_eq!(row.values[6], "No");
     }
 
     #[test]
@@ -756,9 +822,9 @@ mod tests {
         let roi = make_roi("img.tif", vec![], None, 0, 0.0, 0.0, json);
         let specs = build_column_specs(&[0]);
         let row = to_display_row(0, &roi, &specs);
-        // index 6 = ch0_min_bit, 7 = ch0_max_bit, 8 = ch0_avg_bit
-        assert_eq!(row.values[6], "100"); // min_scaled rounded
-        assert_eq!(row.values[7], "200"); // max_scaled rounded
+        // index 7 = ch0_min_bit, 8 = ch0_max_bit, 9 = ch0_avg_bit
+        assert_eq!(row.values[7], "100"); // min_scaled rounded
+        assert_eq!(row.values[8], "200"); // max_scaled rounded
     }
 
     #[test]
@@ -831,6 +897,7 @@ mod tests {
             group_by: GroupBy::Regex,
             regex: r"^([A-Z]\d+)_".into(),
             aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
         };
         let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[]));
 
@@ -863,6 +930,7 @@ mod tests {
             group_by: GroupBy::Image,
             regex: String::new(),
             aggs: vec![AggFunc::Min],
+            split_colocalized: false,
         };
         let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[0]));
         // group, count, area_px, area_nm2, circularity, ch0_min, ch0_max, ch0_avg
@@ -884,6 +952,7 @@ mod tests {
             group_by: GroupBy::Image,
             regex: String::new(),
             aggs: vec![AggFunc::Min, AggFunc::Max, AggFunc::Avg],
+            split_colocalized: false,
         };
         let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[]));
         // group, count, then 3 metrics (area_px, area_nm2, circularity) × 3 aggs
@@ -909,10 +978,44 @@ mod tests {
             group_by: GroupBy::Image,
             regex: String::new(),
             aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
         };
         let (specs, _rows) = aggregate_rows(&rois, &config, &base_specs);
         // group, count, area_px__avg — area_nm2/circularity hidden.
         assert_eq!(specs.len(), 3);
         assert_eq!(specs[2].id, "area_px__avg");
+    }
+
+    #[test]
+    fn aggregate_rows_split_colocalized_produces_two_rows_per_group() {
+        let mut coloc_roi_1 = make_roi("img", vec![], None, 100, 0.0, 0.0, "{}");
+        coloc_roi_1.coloc_json = r#"{"Target (1)":["00000000-0000-0000-0000-000000000002"]}"#.into();
+        let mut coloc_roi_2 = make_roi("img", vec![], None, 200, 0.0, 0.0, "{}");
+        coloc_roi_2.coloc_json = r#"{"Target (1)":["00000000-0000-0000-0000-000000000003"]}"#.into();
+        let not_coloc_roi = make_roi("img", vec![], None, 300, 0.0, 0.0, "{}"); // coloc_json "{}"
+
+        let rois = vec![coloc_roi_1, coloc_roi_2, not_coloc_roi];
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            regex: String::new(),
+            aggs: vec![AggFunc::Avg],
+            split_colocalized: true,
+        };
+        let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[]));
+
+        // group, colocalized, count, area_px__avg, area_nm2__avg, circularity__avg
+        assert_eq!(specs[0].id, "group");
+        assert_eq!(specs[1].id, "colocalized");
+        assert_eq!(specs[2].id, "count");
+
+        assert_eq!(rows.len(), 2, "one colocalizing + one non-colocalizing bucket");
+        // BTreeMap orders Option<bool> as None < Some(false) < Some(true), so the
+        // non-colocalizing bucket sorts first.
+        assert_eq!(rows[0].values[1], "No");
+        assert_eq!(rows[0].values[2], "1"); // count
+        assert_eq!(rows[0].values[3], "300.0"); // area_px avg
+        assert_eq!(rows[1].values[1], "Yes");
+        assert_eq!(rows[1].values[2], "2");
+        assert_eq!(rows[1].values[3], "150.0"); // avg(100,200)
     }
 }
