@@ -292,31 +292,127 @@
       ]
     },
     "ClassificationTransformRoisTransformFunctionSettings": {
+      "description": "Each variant carries only the parameters it actually uses, so there's no shared field whose\n meaning shifts depending on which function is selected (e.g. a \"factor\" that's a unitless\n multiplier for `Scale` but a length in `size_unit` for `SnapArea`).",
       "oneOf": [
         {
           "description": "Scale the ROI by the given scale factor.\n\nShape keeps and center of the ROI keeps the same, it is just shrinked or expanded.",
-          "type": "string",
-          "const": "SCALE"
+          "type": "object",
+          "properties": {
+            "factor": {
+              "description": "Unitless scale factor",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "scale"
+            }
+          },
+          "required": [
+            "type",
+            "factor"
+          ]
         },
         {
-          "description": "Draws a circle around the ROI which is `size_factor` bigger than the ROI's bounding box.",
-          "type": "string",
-          "const": "SNAP_AREA"
+          "description": "Draws a circle around the ROI which is `extra_size` bigger than the ROI's bounding box.",
+          "type": "object",
+          "properties": {
+            "extraSize": {
+              "description": "Size added on top of the ROI's bounding-box diameter",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "snapArea"
+            },
+            "unit": {
+              "description": "Unit `extra_size` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "extraSize",
+            "unit"
+          ]
         },
         {
-          "description": "Draws a circle around the ROI's bounding box, with `size_factor` as the minimum diameter.",
-          "type": "string",
-          "const": "MIN_CIRCLE"
+          "description": "Draws a circle around the ROI's bounding box, with `min_diameter` as the minimum diameter.",
+          "type": "object",
+          "properties": {
+            "minDiameter": {
+              "description": "Minimum circle diameter",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "minCircle"
+            },
+            "unit": {
+              "description": "Unit `min_diameter` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "minDiameter",
+            "unit"
+          ]
         },
         {
-          "description": "Draws a circle with exactly `size_factor` as diameter around the ROI.\n\nIf `size_factor` is 0, the ROI's bounding box is used as the diameter instead.",
-          "type": "string",
-          "const": "DRAW_CIRCLE"
+          "description": "Draws a circle with exactly `diameter` as diameter around the ROI.\n\nIf `diameter` is 0, the ROI's bounding box is used as the diameter instead.",
+          "type": "object",
+          "properties": {
+            "diameter": {
+              "description": "Circle diameter (0 = use the ROI's bounding box)",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "drawCircle"
+            },
+            "unit": {
+              "description": "Unit `diameter` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "diameter",
+            "unit"
+          ]
         },
         {
           "description": "Replaces the ROI with the ellipse fitted to its mask.",
-          "type": "string",
-          "const": "FITTING_ELLIPSE"
+          "type": "object",
+          "properties": {
+            "scale": {
+              "description": "Unitless scale factor for the fitted ellipse",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "fittingEllipse"
+            }
+          },
+          "required": [
+            "type",
+            "scale"
+          ]
         }
       ]
     },
@@ -2492,7 +2588,10 @@
         "function": {
           "description": "Geometric transform applied to each input ROI",
           "$ref": "#/$defs/ClassificationTransformRoisTransformFunctionSettings",
-          "default": "SCALE"
+          "default": {
+            "factor": 1.0,
+            "type": "scale"
+          }
         },
         "inputClass": {
           "description": "ROIs carrying this class are the input to the transform",
@@ -2503,19 +2602,6 @@
           "description": "If unset, the transformed shape replaces the input ROI in place.\n\n If set, a new ROI carrying this class is created for each transformed input ROI instead,\n leaving the input ROI untouched.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
-        },
-        "sizeFactor": {
-          "description": "Factor based on the selected function\n\n - scale: unitless scale factor, value between 0.0 and 65535.0\n - snapArea: the snap area size in `size_unit`, added to the ROI's bounding box diameter\n - minCircle: the minimum circle diameter in `size_unit`\n - drawCircle: the circle diameter in `size_unit` (0 = use the ROI's bounding box)\n - fittingEllipse: unitless scale factor for the fitted ellipse (default = 1)",
-          "type": "number",
-          "format": "float",
-          "default": 1.0,
-          "maximum": 65535,
-          "minimum": 0
-        },
-        "sizeUnit": {
-          "description": "Unit for `size_factor` when it represents a length (snapArea / minCircle / drawCircle)\n\n Has no effect for scale and fittingEllipse, where `size_factor` is a unitless multiplier.",
-          "$ref": "#/$defs/SizeUnits",
-          "default": "nm"
         }
       }
     },

@@ -166,18 +166,34 @@ impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
 impl From<ClassificationTransformRoisTransformFunctionSettings> for TransformFunction {
     fn from(_s: ClassificationTransformRoisTransformFunctionSettings) -> Self {
         match _s {
-            ClassificationTransformRoisTransformFunctionSettings::Scale => TransformFunction::Scale,
-            ClassificationTransformRoisTransformFunctionSettings::SnapArea => {
-                TransformFunction::SnapArea
+            ClassificationTransformRoisTransformFunctionSettings::Scale { factor } => {
+                TransformFunction::Scale {
+                    factor: factor.clamp(0.0, 65535.0),
+                }
             }
-            ClassificationTransformRoisTransformFunctionSettings::MinCircle => {
-                TransformFunction::MinCircle
+            ClassificationTransformRoisTransformFunctionSettings::SnapArea { extra_size, unit } => {
+                TransformFunction::SnapArea {
+                    extra_size: extra_size.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
             }
-            ClassificationTransformRoisTransformFunctionSettings::DrawCircle => {
-                TransformFunction::DrawCircle
+            ClassificationTransformRoisTransformFunctionSettings::MinCircle {
+                min_diameter,
+                unit,
+            } => TransformFunction::MinCircle {
+                min_diameter: min_diameter.clamp(0.0, 65535.0),
+                unit: unit,
+            },
+            ClassificationTransformRoisTransformFunctionSettings::DrawCircle { diameter, unit } => {
+                TransformFunction::DrawCircle {
+                    diameter: diameter.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
             }
-            ClassificationTransformRoisTransformFunctionSettings::FittingEllipse => {
-                TransformFunction::FittingEllipse
+            ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale } => {
+                TransformFunction::FittingEllipse {
+                    scale: scale.clamp(0.0, 65535.0),
+                }
             }
         }
     }
@@ -482,8 +498,6 @@ impl From<TransformRoisSettings> for TransformRois {
             function: TransformFunction::from(_s.function),
             input_class: _s.input_class,
             output_class: _s.output_class,
-            size_unit: _s.size_unit,
-            size_factor: _s.size_factor.clamp(0.0, 65535.0),
         }
     }
 }

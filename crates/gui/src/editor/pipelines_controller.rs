@@ -851,7 +851,7 @@ impl PipelinesController {
                         }
                     };
 
-                    let (new_summary, new_param_value) = {
+                    let (new_summary, params_now) = {
                         let mut project = manager.app_state.get_project_write();
                         let Some(pipeline) =
                             project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
@@ -862,82 +862,101 @@ impl PipelinesController {
                             return;
                         };
                         step.command.apply_param_change(&param_name, &value_str);
-                        let summary = step.command.to_summary();
-                        let params_now = step.command.to_parameters();
-                        let updated_value = if let Some((g, idx, f)) = &nested_path {
-                            params_now
-                                .iter()
-                                .find(|p| p.name == *g)
-                                .and_then(|p| p.groups.get(*idx))
-                                .and_then(|item| item.iter().find(|fd| fd.name == *f))
-                                .map(|fd| fd.value.clone())
-                                .unwrap_or_default()
-                        } else {
-                            params_now
-                                .into_iter()
-                                .find(|p| p.name == param_name)
-                                .map(|p| p.value)
-                                .unwrap_or_default()
-                        };
-                        (summary, updated_value)
+                        (step.command.to_summary(), step.command.to_parameters())
                     }; // write lock dropped here
 
                     // Update the affected step in the Slint model: summary + the
                     // changed param's value (and, for multi-select toggles, its flags).
                     let model = ui.global::<PipelinesPanelState>().get_active_commands();
-                    if let Some(mut cmd) = model.row_data(step_idx as usize) {
-                        cmd.summary = new_summary.into();
-                        let params = cmd.parameters.clone();
+                    let Some(mut cmd) = model.row_data(step_idx as usize) else {
+                        return;
+                    };
+                    cmd.summary = new_summary.into();
+                    let params = cmd.parameters.clone();
 
-                        if let Some((group_name, idx, field_name)) = nested_path {
-                            // Nested group field: find the group CommandParameter, then
-                            // update fields[k].value inside group_items[idx].
-                            for i in 0..params.row_count() {
-                                if let Some(p) = params.row_data(i) {
-                                    if p.name.as_str() == group_name {
-                                        let items = p.group_items.clone();
-                                        if let Some(item) = items.row_data(idx) {
-                                            let fields = item.fields.clone();
-                                            for k in 0..fields.row_count() {
-                                                if let Some(mut lp) = fields.row_data(k) {
-                                                    if lp.name.as_str() == field_name {
-                                                        lp.value = new_param_value.clone().into();
-                                                        fields.set_row_data(k, lp);
-                                                        break;
-                                                    }
+                    if let Some((group_name, idx, field_name)) = nested_path {
+                        // Nested group field: find the group CommandParameter, then
+                        // update fields[k].value inside group_items[idx].
+                        let new_param_value = params_now
+                            .iter()
+                            .find(|p| p.name == group_name)
+                            .and_then(|p| p.groups.get(idx))
+                            .and_then(|item| item.iter().find(|fd| fd.name == field_name))
+                            .map(|fd| fd.value.clone())
+                            .unwrap_or_default();
+                        for i in 0..params.row_count() {
+                            if let Some(p) = params.row_data(i) {
+                                if p.name.as_str() == group_name {
+                                    let items = p.group_items.clone();
+                                    if let Some(item) = items.row_data(idx) {
+                                        let fields = item.fields.clone();
+                                        for k in 0..fields.row_count() {
+                                            if let Some(mut lp) = fields.row_data(k) {
+                                                if lp.name.as_str() == field_name {
+                                                    lp.value = new_param_value.clone().into();
+                                                    fields.set_row_data(k, lp);
+                                                    break;
                                                 }
                                             }
                                         }
-                                        break;
                                     }
+                                    break;
                                 }
                             }
-                        } else {
-                            // Flat parameter: update value (and flags for multi-select).
-                            for i in 0..params.row_count() {
-                                if let Some(mut p) = params.row_data(i) {
-                                    if p.name.as_str() == param_name {
-                                        p.value = new_param_value.clone().into();
-                                        if is_toggle {
-                                            let selected: std::collections::HashSet<u32> =
-                                                new_param_value
-                                                    .split(',')
-                                                    .filter_map(|s| s.trim().parse::<u32>().ok())
-                                                    .collect();
-                                            let new_flags: Vec<SharedString> = (0u32..33u32)
-                                                .map(|idx| {
-                                                    if selected.contains(&idx) {
-                                                        "1".into()
-                                                    } else {
-                                                        "0".into()
-                                                    }
-                                                })
+                        }
+                        model.set_row_data(step_idx as usize, cmd);
+                    } else {
+                        // Some fields (e.g. a "function" dropdown backed by a Rust enum whose
+                        // variants each carry their own sub-fields) change *which* parameters
+                        // exist, not just one value, when switched. Patching a single row in
+                        // that case would leave stale fields on screen or miss new ones, so
+                        // detect a changed field set and fall back to a full resync — the same
+                        // thing add_group_item/remove_group_item already do for the other case
+                        // where the parameter list's shape can change.
+                        let old_names: Vec<String> = (0..params.row_count())
+                            .filter_map(|i| params.row_data(i).map(|p| p.name.to_string()))
+                            .collect();
+                        let new_names: Vec<String> =
+                            params_now.iter().map(|p| p.name.clone()).collect();
+                        if old_names != new_names {
+                            manager.sync_steps_of_selected_pipeline_to_slint(
+                                PipelineId(pipeline_id),
+                                false,
+                            );
+                            manager.pipeline_settings_changed();
+                            return;
+                        }
+
+                        // Flat parameter, field set unchanged: patch the single value (and
+                        // flags for multi-select) in place.
+                        let new_param_value = params_now
+                            .into_iter()
+                            .find(|p| p.name == param_name)
+                            .map(|p| p.value)
+                            .unwrap_or_default();
+                        for i in 0..params.row_count() {
+                            if let Some(mut p) = params.row_data(i) {
+                                if p.name.as_str() == param_name {
+                                    p.value = new_param_value.clone().into();
+                                    if is_toggle {
+                                        let selected: std::collections::HashSet<u32> =
+                                            new_param_value
+                                                .split(',')
+                                                .filter_map(|s| s.trim().parse::<u32>().ok())
                                                 .collect();
-                                            p.options = ModelRc::new(VecModel::from(new_flags));
-                                        }
-                                        params.set_row_data(i, p);
-                                        break;
+                                        let new_flags: Vec<SharedString> = (0u32..33u32)
+                                            .map(|idx| {
+                                                if selected.contains(&idx) {
+                                                    "1".into()
+                                                } else {
+                                                    "0".into()
+                                                }
+                                            })
+                                            .collect();
+                                        p.options = ModelRc::new(VecModel::from(new_flags));
                                     }
+                                    params.set_row_data(i, p);
+                                    break;
                                 }
                             }
                         }

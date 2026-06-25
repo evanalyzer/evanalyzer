@@ -257,24 +257,63 @@ pub enum SegmentationThresholdThresholdMethodSettings {
     Yen,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+///  Each variant carries only the parameters it actually uses, so there's no shared field whose
+///  meaning shifts depending on which function is selected (e.g. a "factor" that's a unitless
+///  multiplier for `Scale` but a length in `size_unit` for `SnapArea`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum ClassificationTransformRoisTransformFunctionSettings {
     /// Scale the ROI by the given scale factor.
     ///
     /// Shape keeps and center of the ROI keeps the same, it is just shrinked or expanded.
-    #[default]
-    Scale,
-    /// Draws a circle around the ROI which is `size_factor` bigger than the ROI's bounding box.
-    SnapArea,
-    /// Draws a circle around the ROI's bounding box, with `size_factor` as the minimum diameter.
-    MinCircle,
-    /// Draws a circle with exactly `size_factor` as diameter around the ROI.
+    #[serde(rename_all = "camelCase")]
+    Scale {
+        ///  Unitless scale factor
+        #[schemars(range(min = 0, max = 65535))]
+        factor: f32,
+    },
+    /// Draws a circle around the ROI which is `extra_size` bigger than the ROI's bounding box.
+    #[serde(rename_all = "camelCase")]
+    SnapArea {
+        ///  Size added on top of the ROI's bounding-box diameter
+        #[schemars(range(min = 0, max = 65535))]
+        extra_size: f32,
+        ///  Unit `extra_size` is expressed in
+        unit: SizeUnits,
+    },
+    /// Draws a circle around the ROI's bounding box, with `min_diameter` as the minimum diameter.
+    #[serde(rename_all = "camelCase")]
+    MinCircle {
+        ///  Minimum circle diameter
+        #[schemars(range(min = 0, max = 65535))]
+        min_diameter: f32,
+        ///  Unit `min_diameter` is expressed in
+        unit: SizeUnits,
+    },
+    /// Draws a circle with exactly `diameter` as diameter around the ROI.
     ///
-    /// If `size_factor` is 0, the ROI's bounding box is used as the diameter instead.
-    DrawCircle,
+    /// If `diameter` is 0, the ROI's bounding box is used as the diameter instead.
+    #[serde(rename_all = "camelCase")]
+    DrawCircle {
+        ///  Circle diameter (0 = use the ROI's bounding box)
+        #[schemars(range(min = 0, max = 65535))]
+        diameter: f32,
+        ///  Unit `diameter` is expressed in
+        unit: SizeUnits,
+    },
     /// Replaces the ROI with the ellipse fitted to its mask.
-    FittingEllipse,
+    #[serde(rename_all = "camelCase")]
+    FittingEllipse {
+        ///  Unitless scale factor for the fitted ellipse
+        #[schemars(range(min = 0, max = 65535))]
+        scale: f32,
+    },
+}
+
+impl Default for ClassificationTransformRoisTransformFunctionSettings {
+    fn default() -> Self {
+        Self::Scale { factor: 1.0f32 }
+    }
 }
 
 ///  How a multi-channel U-Net output should be turned into a single foreground
@@ -1392,19 +1431,6 @@ pub struct TransformRoisSettings {
     ///  If set, a new ROI carrying this class is created for each transformed input ROI instead,
     ///  leaving the input ROI untouched.
     pub output_class: ObjectClass,
-    ///  Unit for `size_factor` when it represents a length (snapArea / minCircle / drawCircle)
-    ///
-    ///  Has no effect for scale and fittingEllipse, where `size_factor` is a unitless multiplier.
-    pub size_unit: SizeUnits,
-    ///  Factor based on the selected function
-    ///
-    ///  - scale: unitless scale factor, value between 0.0 and 65535.0
-    ///  - snapArea: the snap area size in `size_unit`, added to the ROI's bounding box diameter
-    ///  - minCircle: the minimum circle diameter in `size_unit`
-    ///  - drawCircle: the circle diameter in `size_unit` (0 = use the ROI's bounding box)
-    ///  - fittingEllipse: unitless scale factor for the fitted ellipse (default = 1)
-    #[schemars(range(min = 0, max = 65535))]
-    pub size_factor: f32,
 }
 
 impl Default for TransformRoisSettings {
@@ -1413,8 +1439,6 @@ impl Default for TransformRoisSettings {
             function: ClassificationTransformRoisTransformFunctionSettings::default(),
             input_class: ObjectClass::default(),
             output_class: ObjectClass::Unset,
-            size_unit: SizeUnits::NanoMeter,
-            size_factor: 1.0f32,
         }
     }
 }

@@ -17,32 +17,65 @@
 //!
 use crate::{
     algos::ImageAlgorithm,
+    image::PixelSizes,
     roi::{Roi, RoiInit, TransformedGeometry},
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SizeUnits};
 use kornia_image::ImageSize;
 use macros::CommandsMeta;
 
+/// Each variant carries only the parameters it actually uses, so there's no shared field whose
+/// meaning shifts depending on which function is selected (e.g. a "factor" that's a unitless
+/// multiplier for `Scale` but a length in `size_unit` for `SnapArea`).
 #[derive(CommandsMeta)]
 pub enum TransformFunction {
     /// Scale the ROI by the given scale factor.
     ///
     /// Shape keeps and center of the ROI keeps the same, it is just shrinked or expanded.
-    Scale,
+    Scale {
+        /// Unitless scale factor
+        #[cmdsmeta(default = 1.0, min = 0.0, max = 65535.0, step = 1.0)]
+        factor: f32,
+    },
 
-    /// Draws a circle around the ROI which is `size_factor` bigger than the ROI's bounding box.
-    SnapArea,
+    /// Draws a circle around the ROI which is `extra_size` bigger than the ROI's bounding box.
+    SnapArea {
+        /// Size added on top of the ROI's bounding-box diameter
+        #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1.0)]
+        extra_size: f32,
+        /// Unit `extra_size` is expressed in
+        #[cmdsmeta(default = SizeUnits::NanoMeter)]
+        unit: SizeUnits,
+    },
 
-    /// Draws a circle around the ROI's bounding box, with `size_factor` as the minimum diameter.
-    MinCircle,
+    /// Draws a circle around the ROI's bounding box, with `min_diameter` as the minimum diameter.
+    MinCircle {
+        /// Minimum circle diameter
+        #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1.0)]
+        min_diameter: f32,
+        /// Unit `min_diameter` is expressed in
+        #[cmdsmeta(default = SizeUnits::NanoMeter)]
+        unit: SizeUnits,
+    },
 
-    /// Draws a circle with exactly `size_factor` as diameter around the ROI.
+    /// Draws a circle with exactly `diameter` as diameter around the ROI.
     ///
-    /// If `size_factor` is 0, the ROI's bounding box is used as the diameter instead.
-    DrawCircle,
+    /// If `diameter` is 0, the ROI's bounding box is used as the diameter instead.
+    DrawCircle {
+        /// Circle diameter (0 = use the ROI's bounding box)
+        #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1.0)]
+        diameter: f32,
+        /// Unit `diameter` is expressed in
+        #[cmdsmeta(default = SizeUnits::NanoMeter)]
+        unit: SizeUnits,
+    },
 
     /// Replaces the ROI with the ellipse fitted to its mask.
-    FittingEllipse,
+    FittingEllipse {
+        /// Unitless scale factor for the fitted ellipse
+        #[cmdsmeta(default = 1.0, min = 0.0, max = 65535.0, step = 1.0)]
+        scale: f32,
+    },
 }
 
 /// Transforms given ROIs and either replaces the old ones or creates new ones.
@@ -67,22 +100,6 @@ pub struct TransformRois {
     /// leaving the input ROI untouched.
     #[cmdsmeta(default = ObjectClass::Unset)]
     pub output_class: ObjectClass,
-
-    /// Unit for `size_factor` when it represents a length (snapArea / minCircle / drawCircle)
-    ///
-    /// Has no effect for scale and fittingEllipse, where `size_factor` is a unitless multiplier.
-    #[cmdsmeta(default = SizeUnits::NanoMeter)]
-    pub size_unit: SizeUnits,
-
-    /// Factor based on the selected function
-    ///
-    /// - scale: unitless scale factor, value between 0.0 and 65535.0
-    /// - snapArea: the snap area size in `size_unit`, added to the ROI's bounding box diameter
-    /// - minCircle: the minimum circle diameter in `size_unit`
-    /// - drawCircle: the circle diameter in `size_unit` (0 = use the ROI's bounding box)
-    /// - fittingEllipse: unitless scale factor for the fitted ellipse (default = 1)
-    #[cmdsmeta(default = 1.0, min = 0.0, max = 65535.0, step = 1.0, summary = true)]
-    pub size_factor: f32,
 }
 
 impl ImageAlgorithm for TransformRois {
@@ -96,10 +113,7 @@ impl ImageAlgorithm for TransformRois {
         }
 
         let image_size = ctx.full_image_size();
-        let px_sizes = ctx.pixel_sizes();
-        // size_factor is a 1-D length (radius/diameter) here, not an area, so average the two
-        // axes rather than multiplying them the way area-based commands do.
-        let pixel_size_nm = (px_sizes.px_size_x + px_sizes.px_size_y) / 2.0;
+        let px_sizes = ctx.pixel_sizes().clone();
 
         // Same decision for every matching ROI, so it's hoisted out of the loop.
         let replace_in_place =
@@ -118,7 +132,7 @@ impl ImageAlgorithm for TransformRois {
             let Some(roi) = cache.roi_cache.get(&id) else {
                 continue;
             };
-            let geometry = self.transform_geometry(roi, pixel_size_nm, image_size);
+            let geometry = self.transform_geometry(roi, image_size, &px_sizes);
 
             if replace_in_place {
                 if let Some(roi) = cache.roi_cache.get_mut(&id) {
@@ -164,23 +178,27 @@ impl TransformRois {
     fn transform_geometry(
         &self,
         roi: &Roi,
-        pixel_size_nm: f32,
         image_size: ImageSize,
+        px_sizes: &PixelSizes,
     ) -> TransformedGeometry {
-        match self.function {
-            TransformFunction::Scale => {
-                roi.scaled_geometry(self.size_factor, self.size_factor, image_size)
+        // size_unit-based fields are 1-D lengths (radius/diameter), not areas, so average the
+        // two pixel axes rather than multiplying them the way area-based commands do.
+        let pixel_size_nm = (px_sizes.px_size_x + px_sizes.px_size_y) / 2.0;
+
+        match &self.function {
+            TransformFunction::Scale { factor } => {
+                roi.scaled_geometry(*factor, *factor, image_size)
             }
-            TransformFunction::SnapArea => {
-                let extra = self.size_unit.to_pixel(self.size_factor, pixel_size_nm) as f32;
+            TransformFunction::SnapArea { extra_size, unit } => {
+                let extra = unit.to_pixel(*extra_size, pixel_size_nm) as f32;
                 roi.circle_geometry(bbox_max_dimension(roi) + extra, image_size)
             }
-            TransformFunction::MinCircle => {
-                let min_diameter = self.size_unit.to_pixel(self.size_factor, pixel_size_nm) as f32;
+            TransformFunction::MinCircle { min_diameter, unit } => {
+                let min_diameter = unit.to_pixel(*min_diameter, pixel_size_nm) as f32;
                 roi.circle_geometry(bbox_max_dimension(roi).max(min_diameter), image_size)
             }
-            TransformFunction::DrawCircle => {
-                let diameter = self.size_unit.to_pixel(self.size_factor, pixel_size_nm) as f32;
+            TransformFunction::DrawCircle { diameter, unit } => {
+                let diameter = unit.to_pixel(*diameter, pixel_size_nm) as f32;
                 let diameter = if diameter == 0.0 {
                     bbox_max_dimension(roi)
                 } else {
@@ -188,12 +206,8 @@ impl TransformRois {
                 };
                 roi.circle_geometry(diameter, image_size)
             }
-            TransformFunction::FittingEllipse => {
-                let scale = if self.size_factor > 1.0 {
-                    self.size_factor
-                } else {
-                    1.0
-                };
+            TransformFunction::FittingEllipse { scale } => {
+                let scale = if *scale > 1.0 { *scale } else { 1.0 };
                 roi.fitting_ellipse_geometry(scale, image_size)
             }
         }
@@ -226,7 +240,6 @@ mod tests {
     use super::*;
     use crate::{
         ImageContainer, ImagePlane, ManagedImage,
-        image::PixelSizes,
         pipeline::{
             pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
             pipeline_context::PipelineContext,
@@ -299,11 +312,9 @@ mod tests {
     #[test]
     fn unset_input_class_is_noop() {
         let cmd = TransformRois {
-            function: TransformFunction::Scale,
+            function: TransformFunction::Scale { factor: 2.0 },
             input_class: ObjectClass::Unset,
             output_class: ObjectClass::Unset,
-            size_unit: SizeUnits::Pixels,
-            size_factor: 2.0,
         };
         let mut cache = PipelineCache::default();
         let roi = make_square_roi(ID_A, 10, 10, 4, CLASS_IN);
@@ -321,11 +332,9 @@ mod tests {
     #[test]
     fn scale_up_replaces_roi_in_place() {
         let cmd = TransformRois {
-            function: TransformFunction::Scale,
+            function: TransformFunction::Scale { factor: 2.0 },
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
-            size_unit: SizeUnits::Pixels,
-            size_factor: 2.0,
         };
         let mut cache = PipelineCache::default();
         // 4x4 square centered at (12, 12) -> scaled by 2 should roughly double to ~8x8.
@@ -353,11 +362,9 @@ mod tests {
     #[test]
     fn scale_with_output_class_creates_new_roi_and_keeps_original() {
         let cmd = TransformRois {
-            function: TransformFunction::Scale,
+            function: TransformFunction::Scale { factor: 2.0 },
             input_class: CLASS_IN,
             output_class: CLASS_OUT,
-            size_unit: SizeUnits::Pixels,
-            size_factor: 2.0,
         };
         let mut cache = PipelineCache::default();
         let roi = make_square_roi(ID_A, 10, 10, 4, CLASS_IN);
@@ -384,11 +391,12 @@ mod tests {
     #[test]
     fn draw_circle_with_zero_factor_uses_bounding_box() {
         let cmd = TransformRois {
-            function: TransformFunction::DrawCircle,
+            function: TransformFunction::DrawCircle {
+                diameter: 0.0,
+                unit: SizeUnits::Pixels,
+            },
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
-            size_unit: SizeUnits::Pixels,
-            size_factor: 0.0,
         };
         let mut cache = PipelineCache::default();
         let roi = make_square_roi(ID_A, 20, 20, 6, CLASS_IN);
@@ -409,11 +417,12 @@ mod tests {
     #[test]
     fn min_circle_never_shrinks_below_bounding_box() {
         let cmd = TransformRois {
-            function: TransformFunction::MinCircle,
+            function: TransformFunction::MinCircle {
+                min_diameter: 1.0, // smaller than the 6px bounding box
+                unit: SizeUnits::Pixels,
+            },
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
-            size_unit: SizeUnits::Pixels,
-            size_factor: 1.0, // smaller than the 6px bounding box
         };
         let mut cache = PipelineCache::default();
         let roi = make_square_roi(ID_A, 20, 20, 6, CLASS_IN);
@@ -433,11 +442,12 @@ mod tests {
     #[test]
     fn snap_area_grows_beyond_bounding_box() {
         let cmd = TransformRois {
-            function: TransformFunction::SnapArea,
+            function: TransformFunction::SnapArea {
+                extra_size: 10.0,
+                unit: SizeUnits::Pixels,
+            },
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
-            size_unit: SizeUnits::Pixels,
-            size_factor: 10.0,
         };
         let mut cache = PipelineCache::default();
         let roi = make_square_roi(ID_A, 20, 20, 4, CLASS_IN);
@@ -451,18 +461,16 @@ mod tests {
         let circle = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
         let [x_min, y_min, x_max, y_max] = circle.bbox;
         let diameter = (x_max - x_min + 1).max(y_max - y_min + 1);
-        // bbox diameter (4) + size_factor (10) = ~14
+        // bbox diameter (4) + extra_size (10) = ~14
         assert!(diameter >= 12, "expected snap area to grow well beyond the bbox, got {diameter}");
     }
 
     #[test]
     fn fitting_ellipse_replaces_square_with_round_shape() {
         let cmd = TransformRois {
-            function: TransformFunction::FittingEllipse,
+            function: TransformFunction::FittingEllipse { scale: 1.0 },
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
-            size_unit: SizeUnits::Pixels,
-            size_factor: 1.0,
         };
         let mut cache = PipelineCache::default();
         let roi = make_square_roi(ID_A, 20, 20, 8, CLASS_IN);
@@ -482,11 +490,9 @@ mod tests {
     #[test]
     fn transformed_roi_clipped_at_image_edge_touches_edge() {
         let cmd = TransformRois {
-            function: TransformFunction::Scale,
+            function: TransformFunction::Scale { factor: 5.0 },
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
-            size_unit: SizeUnits::Pixels,
-            size_factor: 5.0,
         };
         let mut cache = PipelineCache::default();
         // Small image: scaling by 5 will push the shape past the image bounds.
