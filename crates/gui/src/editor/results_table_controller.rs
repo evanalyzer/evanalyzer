@@ -1083,6 +1083,12 @@ impl ResultsTableController {
     /// specs or a grouped/aggregated column list — so it works in both view modes without
     /// needing to know which is active. The chosen width is also remembered in
     /// `column_widths` so it survives the next reload/filter/group-apply.
+    ///
+    /// Mutates the existing `VecModel` row in place via `set_row_data` instead of pushing a
+    /// brand-new model through `set_columns`: replacing the whole model on every drag-move
+    /// event makes the `for col in ResultsState.columns` repeater recreate every header cell,
+    /// which would reset the resize handle's own `dragging` flag mid-drag (the bug this fixes
+    /// — the drag could only ever move 1px before getting stuck).
     fn on_column_width_changed(&self, col_id: SharedString, new_width: f32) {
         let clamped = new_width.max(40.0);
         self.column_widths
@@ -1093,17 +1099,25 @@ impl ResultsTableController {
         let Some(window) = self.ui.upgrade() else { return };
         let state = window.global::<ResultsState>();
         let model = state.get_columns();
-        let cols: Vec<ResultsColumnDef> = (0..model.row_count())
-            .filter_map(|i| {
-                let mut c = model.row_data(i)?;
-                if c.id == col_id {
-                    c.width = clamped;
+        if let Some(vec_model) = model
+            .as_any()
+            .downcast_ref::<slint::VecModel<ResultsColumnDef>>()
+        {
+            for i in 0..vec_model.row_count() {
+                if let Some(mut c) = vec_model.row_data(i) {
+                    if c.id == col_id {
+                        c.width = clamped;
+                        vec_model.set_row_data(i, c);
+                        break;
+                    }
                 }
-                Some(c)
-            })
-            .collect();
-        let total_width: f32 = cols.iter().filter(|c| c.visible).map(|c| c.width).sum();
-        state.set_columns(slint::ModelRc::new(slint::VecModel::from(cols)));
+            }
+        }
+        let total_width: f32 = (0..model.row_count())
+            .filter_map(|i| model.row_data(i))
+            .filter(|c| c.visible)
+            .map(|c| c.width)
+            .sum();
         state.set_columns_total_width(total_width);
     }
 }
