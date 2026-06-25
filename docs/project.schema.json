@@ -291,6 +291,35 @@
         "classes"
       ]
     },
+    "ClassificationTransformRoisTransformFunctionSettings": {
+      "oneOf": [
+        {
+          "description": "Scale the ROI by the given scale factor.\n\nShape keeps and center of the ROI keeps the same, it is just shrinked or expanded.",
+          "type": "string",
+          "const": "SCALE"
+        },
+        {
+          "description": "Draws a circle around the ROI which is `size_factor` bigger than the ROI's bounding box.",
+          "type": "string",
+          "const": "SNAP_AREA"
+        },
+        {
+          "description": "Draws a circle around the ROI's bounding box, with `size_factor` as the minimum diameter.",
+          "type": "string",
+          "const": "MIN_CIRCLE"
+        },
+        {
+          "description": "Draws a circle with exactly `size_factor` as diameter around the ROI.\n\nIf `size_factor` is 0, the ROI's bounding box is used as the diameter instead.",
+          "type": "string",
+          "const": "DRAW_CIRCLE"
+        },
+        {
+          "description": "Replaces the ROI with the ellipse fitted to its mask.",
+          "type": "string",
+          "const": "FITTING_ELLIPSE"
+        }
+      ]
+    },
     "ClassifyRoisSettings": {
       "description": "Classifies ROIs based on morphological and intensity features.\n\n This command applies rule-based classification logic to assign object classes\n to extracted ROIs. Classification is performed using configurable criteria\n including area, shape descriptors, and intensity statistics.",
       "type": "object",
@@ -1702,6 +1731,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "transformRois"
+            }
+          },
+          "$ref": "#/$defs/TransformRoisSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "uNet"
             }
           },
@@ -2442,6 +2484,40 @@
         "id",
         "roiIds"
       ]
+    },
+    "TransformRoisSettings": {
+      "description": "Transforms given ROIs and either replaces the old ones or creates new ones.\n\n This command applies a geometric transform (scale, circle, fitted ellipse) to every ROI\n carrying `input_class`. The transformed shape keeps the original ROI's bounding-box center.\n If `output_class` is unset (or equal to `input_class`) the input ROI is replaced in place;\n otherwise a new ROI carrying `output_class` is created alongside the untouched input ROI.",
+      "type": "object",
+      "properties": {
+        "function": {
+          "description": "Geometric transform applied to each input ROI",
+          "$ref": "#/$defs/ClassificationTransformRoisTransformFunctionSettings",
+          "default": "SCALE"
+        },
+        "inputClass": {
+          "description": "ROIs carrying this class are the input to the transform",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "outputClass": {
+          "description": "If unset, the transformed shape replaces the input ROI in place.\n\n If set, a new ROI carrying this class is created for each transformed input ROI instead,\n leaving the input ROI untouched.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "sizeFactor": {
+          "description": "Factor based on the selected function\n\n - scale: unitless scale factor, value between 0.0 and 65535.0\n - snapArea: the snap area size in `size_unit`, added to the ROI's bounding box diameter\n - minCircle: the minimum circle diameter in `size_unit`\n - drawCircle: the circle diameter in `size_unit` (0 = use the ROI's bounding box)\n - fittingEllipse: unitless scale factor for the fitted ellipse (default = 1)",
+          "type": "number",
+          "format": "float",
+          "default": 1.0,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "sizeUnit": {
+          "description": "Unit for `size_factor` when it represents a length (snapArea / minCircle / drawCircle)\n\n Has no effect for scale and fittingEllipse, where `size_factor` is a unitless multiplier.",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "nm"
+        }
+      }
     },
     "UNetSettings": {
       "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return either a\n `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\n applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\n channel, in which case `output_mode` and `foreground_channel` decide how the\n foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\n automatically if CUDA is available in the linked libtorch build, otherwise\n falls back to CPU.",

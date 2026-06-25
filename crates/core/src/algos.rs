@@ -22,6 +22,8 @@ pub use self::classification::classify_rois::ClassifyMatchHandling;
 pub use self::classification::classify_rois::ClassifyRois;
 pub use self::classification::coloc_rois::Colocalization;
 pub use self::classification::extract_rois::ExtractRois;
+pub use self::classification::transform_rois::TransformFunction;
+pub use self::classification::transform_rois::TransformRois;
 pub use self::classification::voronoi::Voronoi;
 pub use self::filters::blur::Blur;
 pub use self::filters::blur_gaussian::GaussianBlur;

@@ -83,6 +83,7 @@ pub enum PipelineCommand {
     Stardist(StardistSettings),
     StructureTensor(StructureTensorSettings),
     Threshold(ThresholdSettings),
+    TransformRois(TransformRoisSettings),
     UNet(UNetSettings),
     Voronoi(VoronoiSettings),
     Watershed(WatershedSettings),
@@ -126,10 +127,11 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta { id: 22, name: "AI Stardist Segmentation", category: CommandCategory::Segment, summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU." },
         CommandMeta { id: 23, name: "StructureTensor", category: CommandCategory::Preprocess, summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.", description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```" },
         CommandMeta { id: 24, name: "Threshold", category: CommandCategory::Segment, summary: "A filter that segments an image into discrete classes based on intensity.", description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.\n\n# Examples\n\n```\nuse imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\nlet binary = Threshold {\nthresholds: vec![ThresholdSettings {\nmethod: ThresholdMethod::Otsu,\nmin_threshold: 0.0,\nmax_threshold: 1.0,\nobject_class_id: ObjectLabel::Foreground,\n}]\n};\n```" },
-        CommandMeta { id: 25, name: "AI UNet Segmentation", category: CommandCategory::Segment, summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU." },
-        CommandMeta { id: 26, name: "Voronoi", category: CommandCategory::Classify, summary: "Computes a Voronoi tessellation from segmented seed objects.", description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object." },
-        CommandMeta { id: 27, name: "Watershed", category: CommandCategory::Object, summary: "A morphological segmentation algorithm that splits touching objects using distance topography.", description: "This is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances." },
-        CommandMeta { id: 28, name: "WeightedDeviation", category: CommandCategory::Preprocess, summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.", description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n# Examples\n\n```\nuse imagec::backend::algos::WeightedDeviation;\nlet settings = WeightedDeviation {\nkernel_size: 7,\nsigma: 2.0,\n};\n```" },
+        CommandMeta { id: 25, name: "TransformRois", category: CommandCategory::Classify, summary: "Transforms given ROIs and either replaces the old ones or creates new ones.", description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every ROI\ncarrying `input_class`. The transformed shape keeps the original ROI's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input ROI is replaced in place;\notherwise a new ROI carrying `output_class` is created alongside the untouched input ROI." },
+        CommandMeta { id: 26, name: "AI UNet Segmentation", category: CommandCategory::Segment, summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU." },
+        CommandMeta { id: 27, name: "Voronoi", category: CommandCategory::Classify, summary: "Computes a Voronoi tessellation from segmented seed objects.", description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object." },
+        CommandMeta { id: 28, name: "Watershed", category: CommandCategory::Object, summary: "A morphological segmentation algorithm that splits touching objects using distance topography.", description: "This is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances." },
+        CommandMeta { id: 29, name: "WeightedDeviation", category: CommandCategory::Preprocess, summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.", description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n# Examples\n\n```\nuse imagec::backend::algos::WeightedDeviation;\nlet settings = WeightedDeviation {\nkernel_size: 7,\nsigma: 2.0,\n};\n```" },
     ]
 }
 
@@ -187,10 +189,13 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
             StructureTensorSettings::default(),
         )),
         24 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        25 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        26 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        27 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        28 => Some(PipelineCommand::WeightedDeviation(
+        25 => Some(PipelineCommand::TransformRois(
+            TransformRoisSettings::default(),
+        )),
+        26 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        27 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        28 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        29 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
         _ => None,
@@ -226,6 +231,7 @@ impl PipelineCommand {
             Self::Stardist(_) => "AI Stardist Segmentation",
             Self::StructureTensor(_) => "StructureTensor",
             Self::Threshold(_) => "Threshold",
+            Self::TransformRois(_) => "TransformRois",
             Self::UNet(_) => "AI UNet Segmentation",
             Self::Voronoi(_) => "Voronoi",
             Self::Watershed(_) => "Watershed",
@@ -260,6 +266,7 @@ impl PipelineCommand {
             Self::Stardist(_) => &CommandCategory::Segment,
             Self::StructureTensor(_) => &CommandCategory::Preprocess,
             Self::Threshold(_) => &CommandCategory::Segment,
+            Self::TransformRois(_) => &CommandCategory::Classify,
             Self::UNet(_) => &CommandCategory::Segment,
             Self::Voronoi(_) => &CommandCategory::Classify,
             Self::Watershed(_) => &CommandCategory::Object,
@@ -299,6 +306,7 @@ impl PipelineCommand {
             Self::Stardist(_) => &[CommandCategory::Measure],
             Self::StructureTensor(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Threshold(_) => &[CommandCategory::Object],
+            Self::TransformRois(_) => &[CommandCategory::Classify],
             Self::UNet(_) => &[CommandCategory::Object],
             Self::Voronoi(_) => &[CommandCategory::Classify],
             Self::Watershed(_) => &[CommandCategory::Measure],
@@ -440,6 +448,13 @@ impl PipelineCommand {
                     ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The classification ID assigned to pixels falling within this threshold range.".to_string(), value: format!("{}", __item.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                     ]).collect() },
             ],
+            Self::TransformRois(_s) => vec![
+                ParameterDef { name: "function".to_string(), display_name: "Function".to_string(), description: "Geometric transform applied to each input ROI".to_string(), value: match _s.function { ClassificationTransformRoisTransformFunctionSettings::Scale => "Scale".to_string(), ClassificationTransformRoisTransformFunctionSettings::SnapArea => "Snap Area".to_string(), ClassificationTransformRoisTransformFunctionSettings::MinCircle => "Min Circle".to_string(), ClassificationTransformRoisTransformFunctionSettings::DrawCircle => "Draw Circle".to_string(), ClassificationTransformRoisTransformFunctionSettings::FittingEllipse => "Fitting Ellipse".to_string() }, param_type: ParamType::Dropdown, options: vec!["Scale".to_string(), "Snap Area".to_string(), "Min Circle".to_string(), "Draw Circle".to_string(), "Fitting Ellipse".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "input_class".to_string(), display_name: "Input Class".to_string(), description: "ROIs carrying this class are the input to the transform".to_string(), value: match _s.input_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "If unset, the transformed shape replaces the input ROI in place.\n\nIf set, a new ROI carrying this class is created for each transformed input ROI instead,\nleaving the input ROI untouched.".to_string(), value: match _s.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Unit for `size_factor` when it represents a length (snapArea / minCircle / drawCircle)\n\nHas no effect for scale and fittingEllipse, where `size_factor` is a unitless multiplier.".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
+                ParameterDef { name: "size_factor".to_string(), display_name: "Size Factor".to_string(), description: "Factor based on the selected function\n\n- scale: unitless scale factor, value between 0.0 and 65535.0\n- snapArea: the snap area size in `size_unit`, added to the ROI's bounding box diameter\n- minCircle: the minimum circle diameter in `size_unit`\n- drawCircle: the circle diameter in `size_unit` (0 = use the ROI's bounding box)\n- fittingEllipse: unitless scale factor for the fitted ellipse (default = 1)".to_string(), value: format!("{}", _s.size_factor), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 65535.0f32, step: 1.0000f32, groups: vec![] },
+            ],
             Self::UNet(_s) => vec![
                 ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
                 ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The class assigned to pixels whose predicted probability reaches\n`probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] },
@@ -499,6 +514,7 @@ impl PipelineCommand {
             Self::Stardist(_) => String::new(),
             Self::StructureTensor(_) => String::new(),
             Self::Threshold(_) => String::new(),
+            Self::TransformRois(s) => format!("Function: {} · Size Factor: {}", match s.function { ClassificationTransformRoisTransformFunctionSettings::Scale => "Scale".to_string(), ClassificationTransformRoisTransformFunctionSettings::SnapArea => "Snap Area".to_string(), ClassificationTransformRoisTransformFunctionSettings::MinCircle => "Min Circle".to_string(), ClassificationTransformRoisTransformFunctionSettings::DrawCircle => "Draw Circle".to_string(), ClassificationTransformRoisTransformFunctionSettings::FittingEllipse => "Fitting Ellipse".to_string() }, format!("{:.3}", s.size_factor)),
             Self::UNet(_) => String::new(),
             Self::Voronoi(_) => String::new(),
             Self::Watershed(_) => String::new(),
@@ -1046,6 +1062,51 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::TransformRois(s) => {
+                if param_name == "function" {
+                    s.function = match value {
+                        "Scale" => ClassificationTransformRoisTransformFunctionSettings::Scale,
+                        "Snap Area" => {
+                            ClassificationTransformRoisTransformFunctionSettings::SnapArea
+                        }
+                        "Min Circle" => {
+                            ClassificationTransformRoisTransformFunctionSettings::MinCircle
+                        }
+                        "Draw Circle" => {
+                            ClassificationTransformRoisTransformFunctionSettings::DrawCircle
+                        }
+                        "Fitting Ellipse" => {
+                            ClassificationTransformRoisTransformFunctionSettings::FittingEllipse
+                        }
+                        _ => s.function.clone(),
+                    };
+                }
+                if param_name == "input_class" {
+                    if value == "-1" {
+                        s.input_class = ObjectClass::Unset;
+                    } else if let Ok(v) = value.parse::<u32>() {
+                        s.input_class = ObjectClass::Valid(v);
+                    }
+                }
+                if param_name == "output_class" {
+                    if value == "-1" {
+                        s.output_class = ObjectClass::Unset;
+                    } else if let Ok(v) = value.parse::<u32>() {
+                        s.output_class = ObjectClass::Valid(v);
+                    }
+                }
+                if param_name == "size_unit" {
+                    s.size_unit = match value {
+                        "nm" => SizeUnits::NanoMeter,
+                        _ => SizeUnits::Pixels,
+                    };
+                }
+                if param_name == "size_factor" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.size_factor = v;
+                    }
+                }
+            }
             Self::UNet(s) => {
                 if param_name == "model_path" {
                     s.model_path = std::path::PathBuf::from(value);
@@ -1240,6 +1301,7 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::TransformRois(_) => {}
             Self::UNet(_) => {}
             Self::Voronoi(_) => {}
             Self::Watershed(_) => {}
@@ -1278,6 +1340,7 @@ impl PipelineCommand {
                     s.thresholds.remove(idx);
                 }
             }
+            Self::TransformRois(_) => {}
             Self::UNet(_) => {}
             Self::Voronoi(_) => {}
             Self::Watershed(_) => {}

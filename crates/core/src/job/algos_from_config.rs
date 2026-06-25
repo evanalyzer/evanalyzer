@@ -163,6 +163,26 @@ impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
     }
 }
 
+impl From<ClassificationTransformRoisTransformFunctionSettings> for TransformFunction {
+    fn from(_s: ClassificationTransformRoisTransformFunctionSettings) -> Self {
+        match _s {
+            ClassificationTransformRoisTransformFunctionSettings::Scale => TransformFunction::Scale,
+            ClassificationTransformRoisTransformFunctionSettings::SnapArea => {
+                TransformFunction::SnapArea
+            }
+            ClassificationTransformRoisTransformFunctionSettings::MinCircle => {
+                TransformFunction::MinCircle
+            }
+            ClassificationTransformRoisTransformFunctionSettings::DrawCircle => {
+                TransformFunction::DrawCircle
+            }
+            ClassificationTransformRoisTransformFunctionSettings::FittingEllipse => {
+                TransformFunction::FittingEllipse
+            }
+        }
+    }
+}
+
 #[cfg(feature = "ai")]
 impl From<AiSegmentationUnetUNetOutputModeSettings> for UNetOutputMode {
     fn from(_s: AiSegmentationUnetUNetOutputModeSettings) -> Self {
@@ -456,6 +476,18 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
     }
 }
 
+impl From<TransformRoisSettings> for TransformRois {
+    fn from(_s: TransformRoisSettings) -> Self {
+        TransformRois {
+            function: TransformFunction::from(_s.function),
+            input_class: _s.input_class,
+            output_class: _s.output_class,
+            size_unit: _s.size_unit,
+            size_factor: _s.size_factor.clamp(0.0, 65535.0),
+        }
+    }
+}
+
 #[cfg(feature = "ai")]
 impl From<UNetSettings> for UNet {
     fn from(_s: UNetSettings) -> Self {
@@ -597,6 +629,9 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         }
         PipelineCommand::Threshold(settings) => {
             Ok(Box::new(crate::algos::Threshold::from(settings)))
+        }
+        PipelineCommand::TransformRois(settings) => {
+            Ok(Box::new(crate::algos::TransformRois::from(settings)))
         }
         #[cfg(feature = "ai")]
         PipelineCommand::UNet(settings) => Ok(Box::new(crate::algos::UNet::from(settings))),

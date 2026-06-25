@@ -257,6 +257,26 @@ pub enum SegmentationThresholdThresholdMethodSettings {
     Yen,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ClassificationTransformRoisTransformFunctionSettings {
+    /// Scale the ROI by the given scale factor.
+    ///
+    /// Shape keeps and center of the ROI keeps the same, it is just shrinked or expanded.
+    #[default]
+    Scale,
+    /// Draws a circle around the ROI which is `size_factor` bigger than the ROI's bounding box.
+    SnapArea,
+    /// Draws a circle around the ROI's bounding box, with `size_factor` as the minimum diameter.
+    MinCircle,
+    /// Draws a circle with exactly `size_factor` as diameter around the ROI.
+    ///
+    /// If `size_factor` is 0, the ROI's bounding box is used as the diameter instead.
+    DrawCircle,
+    /// Replaces the ROI with the ellipse fitted to its mask.
+    FittingEllipse,
+}
+
 ///  How a multi-channel U-Net output should be turned into a single foreground
 ///  probability map. Ignored for single-channel outputs, which are always
 ///  treated as already-activated foreground probabilities.
@@ -1351,6 +1371,52 @@ pub struct ColocalizationSettings {
     pub size_unit: SizeUnits,
     ///  Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
+}
+
+///  Transforms given ROIs and either replaces the old ones or creates new ones.
+///
+///  This command applies a geometric transform (scale, circle, fitted ellipse) to every ROI
+///  carrying `input_class`. The transformed shape keeps the original ROI's bounding-box center.
+///  If `output_class` is unset (or equal to `input_class`) the input ROI is replaced in place;
+///  otherwise a new ROI carrying `output_class` is created alongside the untouched input ROI.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformRoisSettings {
+    ///  Geometric transform applied to each input ROI
+    pub function: ClassificationTransformRoisTransformFunctionSettings,
+    ///  ROIs carrying this class are the input to the transform
+    pub input_class: ObjectClass,
+    ///  If unset, the transformed shape replaces the input ROI in place.
+    ///
+    ///  If set, a new ROI carrying this class is created for each transformed input ROI instead,
+    ///  leaving the input ROI untouched.
+    pub output_class: ObjectClass,
+    ///  Unit for `size_factor` when it represents a length (snapArea / minCircle / drawCircle)
+    ///
+    ///  Has no effect for scale and fittingEllipse, where `size_factor` is a unitless multiplier.
+    pub size_unit: SizeUnits,
+    ///  Factor based on the selected function
+    ///
+    ///  - scale: unitless scale factor, value between 0.0 and 65535.0
+    ///  - snapArea: the snap area size in `size_unit`, added to the ROI's bounding box diameter
+    ///  - minCircle: the minimum circle diameter in `size_unit`
+    ///  - drawCircle: the circle diameter in `size_unit` (0 = use the ROI's bounding box)
+    ///  - fittingEllipse: unitless scale factor for the fitted ellipse (default = 1)
+    #[schemars(range(min = 0, max = 65535))]
+    pub size_factor: f32,
+}
+
+impl Default for TransformRoisSettings {
+    fn default() -> Self {
+        Self {
+            function: ClassificationTransformRoisTransformFunctionSettings::default(),
+            input_class: ObjectClass::default(),
+            output_class: ObjectClass::Unset,
+            size_unit: SizeUnits::NanoMeter,
+            size_factor: 1.0f32,
+        }
+    }
 }
 
 ///  Computes a Voronoi tessellation from segmented seed objects.
