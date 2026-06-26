@@ -16,9 +16,10 @@ pub mod prelude {
 pub mod result {
     pub use crate::results::results_chart::{
         compute_heatmap, compute_histogram, compute_scatter, plottable_columns, render_heatmap,
-        render_histogram, render_scatter, save_heatmap_png, save_histogram_png, save_scatter_png,
-        ColorBy, HeatmapCell, HeatmapData, HeatmapMetric, HistogramBucket, HistogramData,
-        RenderedChart, ScatterData, ScatterPoint,
+        render_histogram, render_scatter, save_heatmap_png, save_histogram_png,
+        save_rendered_chart_png, save_scatter_png, ChartHitTester, ColorBy, HeatmapCell,
+        HeatmapData, HeatmapMetric, HistogramBucket, HistogramData, RenderedChart, ScatterData,
+        ScatterPoint,
     };
     pub use crate::results::results_exporter::ResultsExporter;
     pub use crate::results::results_loader::{

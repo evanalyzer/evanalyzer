@@ -7,8 +7,9 @@ use evanalyzer_app::result::{
     aggregate_rows, build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
     coloc_filter_label_with, compute_heatmap, compute_histogram, compute_scatter,
     discover_channels, plottable_columns, render_heatmap, render_histogram, render_scatter,
-    sort_display_rows, to_display_row, AggFunc, ColorBy, ColumnSpec, DatabaseFilter, GroupBy,
-    GroupConfig, HeatmapMetric, RenderedChart, ResultsExporter, ResultsLoader, RoiRow,
+    save_rendered_chart_png, sort_display_rows, to_display_row, AggFunc, ColorBy, ColumnSpec,
+    DatabaseFilter, GroupBy, GroupConfig, HeatmapMetric, RenderedChart, ResultsExporter,
+    ResultsLoader, RoiRow,
 };
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
@@ -17,11 +18,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 const PAGE_SIZE: usize = 500;
-// Charts render at this fixed resolution and the GUI scales the bitmap to fit
-// the chart panel. Kept generously larger than a typical on-screen panel so
-// the Image is downscaled (sharp) rather than upscaled (blurry).
-const CHART_WIDTH: u32 = 1600;
-const CHART_HEIGHT: u32 = 1000;
+// Floors under the chart's actual on-screen size (see `on_chart_render_requested`),
+// in case the window is reporting a degenerate size (e.g. not yet shown).
+const CHART_WIDTH: u32 = 960;
+const CHART_HEIGHT: u32 = 560;
 const SCATTER_MAX_POINTS: usize = 5_000;
 
 /// Sentinel shown as the first entry of the heatmap "Color by" picker —
@@ -42,6 +42,20 @@ struct ChartRenderConfig {
     /// `HEATMAP_METRIC_COUNT_LABEL` or a column label to average.
     heatmap_metric: String,
     cell_size_px: f64,
+    /// The chart area's current on-screen pixel size (a one-shot read of the
+    /// window's size at the moment Plot was clicked — see
+    /// `on_chart_render_requested`), so rendering matches the actual display
+    /// size instead of a fixed resolution that goes blurry/tiny when scaled.
+    render_width: u32,
+    render_height: u32,
+}
+
+/// The most recently rendered chart's pixels — kept so the "Save chart"
+/// button can write out exactly what's currently on screen without
+/// re-running the query/render pass a second time.
+pub(crate) struct LastChart {
+    chart: RenderedChart,
+    kind: ResultsChartKind,
 }
 
 pub struct ResultsTableController {
@@ -79,6 +93,10 @@ pub struct ResultsTableController {
     pub(crate) class_search: Mutex<String>,
     pub(crate) coloc_search: Mutex<String>,
     pub(crate) column_search: Mutex<String>,
+    /// Pixels of the most recently rendered chart — lets "Save chart" write
+    /// out exactly what's on screen without re-rendering. `None` until the
+    /// first successful Plot click.
+    pub(crate) last_chart: Arc<Mutex<Option<LastChart>>>,
 }
 
 impl ResultsTableController {
@@ -110,6 +128,7 @@ impl ResultsTableController {
             class_search: Mutex::new(String::new()),
             coloc_search: Mutex::new(String::new()),
             column_search: Mutex::new(String::new()),
+            last_chart: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -172,6 +191,27 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
 
+                // One-shot read of the window's current physical size, taken
+                // right now rather than tracked reactively — a `changed
+                // width/height` handler that wrote a Slint property back was
+                // tried earlier and caused a property-recursion panic on
+                // first layout. Reading `.window().size()` here is a plain
+                // Rust call with no Slint binding involved, so it can't
+                // re-enter the property graph. Subtracting the toolbar /
+                // settings strip / status bar (+ their 1px dividers) leaves
+                // the chart's own plotting area, so the bitmap renders at
+                // (close to) its actual on-screen size instead of a fixed
+                // resolution that wound up badly mismatched — too large
+                // relative to the panel, which shrank the text and blurred
+                // the downscale.
+                let scale = window.window().scale_factor();
+                let physical = window.window().size();
+                const CHROME_HEIGHT_LOGICAL: f32 = 48.0 + 1.0 + 44.0 + 1.0 + 32.0 + 1.0;
+                let chrome_height_physical = (CHROME_HEIGHT_LOGICAL * scale) as u32;
+                let render_width = physical.width.max(CHART_WIDTH);
+                let render_height =
+                    physical.height.saturating_sub(chrome_height_physical).max(CHART_HEIGHT);
+
                 let config = ChartRenderConfig {
                     kind: state.get_chart_kind(),
                     hist_column: state.get_chart_hist_column().to_string(),
@@ -186,11 +226,79 @@ impl ResultsTableController {
                     log_scale: state.get_chart_log_scale(),
                     heatmap_metric: state.get_chart_heatmap_metric().to_string(),
                     cell_size_px: state.get_chart_cell_size_px().max(1) as f64,
+                    render_width,
+                    render_height,
                 };
 
                 state.set_chart_status("Rendering...".into());
                 let this = Arc::clone(&this);
                 std::thread::spawn(move || Self::bg_render_chart(this, config));
+            });
+        }
+
+        // --- chart_save_requested: write the last-rendered chart to disk ------
+        {
+            let this = Arc::clone(self);
+            state.on_chart_save_requested(move || {
+                let default_name = {
+                    let guard = this.last_chart.lock().unwrap();
+                    let Some(last) = guard.as_ref() else { return };
+                    match last.kind {
+                        ResultsChartKind::Histogram => "histogram.png",
+                        ResultsChartKind::Scatter => "scatter.png",
+                        ResultsChartKind::Heatmap => "heatmap.png",
+                    }
+                };
+
+                let Some(export_path) = rfd::FileDialog::new()
+                    .add_filter("PNG", &["png"])
+                    .set_file_name(default_name)
+                    .save_file()
+                else {
+                    return;
+                };
+
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || {
+                    let guard = this.last_chart.lock().unwrap();
+                    let Some(last) = guard.as_ref() else { return };
+                    if let Err(e) = save_rendered_chart_png(&last.chart, &export_path) {
+                        warn!("Chart PNG save failed: {:?}", e);
+                    }
+                });
+            });
+        }
+
+        // --- chart_hover_lookup: hover tooltip over the chart area -------------
+        {
+            let this = Arc::clone(self);
+            state.on_chart_hover_lookup(move |mouse_x, mouse_y, area_width, area_height| {
+                let guard = this.last_chart.lock().unwrap();
+                let Some(last) = guard.as_ref() else { return SharedString::new() };
+                let Some(tester) = last.chart.hit_test.as_ref() else { return SharedString::new() };
+
+                let (bmp_w, bmp_h) = (last.chart.width as f32, last.chart.height as f32);
+                if area_width <= 0.0 || area_height <= 0.0 || bmp_w <= 0.0 || bmp_h <= 0.0 {
+                    return SharedString::new();
+                }
+                // Mirrors the Image's `image-fit: contain`: the bitmap is
+                // scaled uniformly to fit inside the area and centered, so
+                // letterbox bars can appear on two sides when the area's
+                // aspect ratio doesn't match the bitmap's (e.g. the window
+                // was resized after the last Plot click).
+                let scale = (area_width / bmp_w).min(area_height / bmp_h);
+                let offset_x = (area_width - bmp_w * scale) / 2.0;
+                let offset_y = (area_height - bmp_h * scale) / 2.0;
+                let bmp_x = (mouse_x - offset_x) / scale;
+                let bmp_y = (mouse_y - offset_y) / scale;
+                if bmp_x < 0.0 || bmp_y < 0.0 || bmp_x > bmp_w || bmp_y > bmp_h {
+                    return SharedString::new();
+                }
+
+                match tester.hit_test(bmp_x as f64, bmp_y as f64) {
+                    Some(s) => SharedString::from(s),
+                    None => SharedString::new(),
+                }
             });
         }
 
@@ -1348,6 +1456,12 @@ impl ResultsTableController {
     // Chart view: histogram / scatter rendering
     // -------------------------------------------------------------------------
 
+    /// Stashes a freshly rendered chart so a later "Save chart" click can
+    /// write out exactly these pixels without re-rendering.
+    fn cache_last_chart(&self, chart: &RenderedChart, kind: ResultsChartKind) {
+        self.last_chart.lock().unwrap().replace(LastChart { chart: chart.clone(), kind });
+    }
+
     /// Fetches every ROI matching the current filters (mirrors
     /// `bg_reload_grouped`'s "aggregation needs every matching row" fetch),
     /// computes the requested chart in `evanalyzer_app::result` (the same
@@ -1444,8 +1558,11 @@ impl ResultsTableController {
                 } else {
                     String::new()
                 };
-                match render_histogram(&data, CHART_WIDTH, CHART_HEIGHT) {
-                    Ok(chart) => report(status, Some(chart)),
+                match render_histogram(&data, config.render_width, config.render_height) {
+                    Ok(chart) => {
+                        this.cache_last_chart(&chart, config.kind);
+                        report(status, Some(chart));
+                    }
                     Err(e) => {
                         warn!("render_histogram failed: {:?}", e);
                         report("Failed to render the chart.".into(), None);
@@ -1471,8 +1588,11 @@ impl ResultsTableController {
                     }
                     None => String::new(),
                 };
-                match render_scatter(&data, CHART_WIDTH, CHART_HEIGHT) {
-                    Ok(chart) => report(status, Some(chart)),
+                match render_scatter(&data, config.render_width, config.render_height) {
+                    Ok(chart) => {
+                        this.cache_last_chart(&chart, config.kind);
+                        report(status, Some(chart));
+                    }
                     Err(e) => {
                         warn!("render_scatter failed: {:?}", e);
                         report("Failed to render the chart.".into(), None);
@@ -1515,8 +1635,11 @@ impl ResultsTableController {
                     report("No data to bin into a heatmap.".into(), None);
                     return;
                 };
-                match render_heatmap(&data, CHART_WIDTH, CHART_HEIGHT) {
-                    Ok(chart) => report(String::new(), Some(chart)),
+                match render_heatmap(&data, config.render_width, config.render_height) {
+                    Ok(chart) => {
+                        this.cache_last_chart(&chart, config.kind);
+                        report(String::new(), Some(chart));
+                    }
                     Err(e) => {
                         warn!("render_heatmap failed: {:?}", e);
                         report("Failed to render the chart.".into(), None);

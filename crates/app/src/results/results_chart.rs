@@ -12,6 +12,8 @@ use crate::results::results_loader::{
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::RoiRow;
+use plotters::coord::ranged1d::ReversibleRanged;
+use plotters::coord::ReverseCoordTranslate;
 use plotters::prelude::*;
 use std::path::Path;
 
@@ -339,14 +341,168 @@ pub fn compute_heatmap(
 // Rendering (plotters)
 // ---------------------------------------------------------------------------
 
+/// A linear pixel<->data mapping derived from two known correspondences
+/// (the plotting area's top-left and bottom-right corners, reverse-mapped
+/// through plotters' own coordinate spec at render time). Capturing it this
+/// way — rather than hand-deriving the axis math ourselves — means we don't
+/// have to know which way plotters flips the y-axis (it differs between the
+/// heatmap, which flips a second time for image-style coordinates, and
+/// everything else); whatever the mapping is, two points pin it down.
+#[derive(Debug, Clone, Copy)]
+struct PixelToData {
+    px0: f64,
+    py0: f64,
+    dx0: f64,
+    dy0: f64,
+    px1: f64,
+    py1: f64,
+    dx1: f64,
+    dy1: f64,
+}
+
+impl PixelToData {
+    fn from_chart<DB: DrawingBackend, X, Y>(
+        chart: &ChartContext<'_, DB, Cartesian2d<X, Y>>,
+    ) -> Option<Self>
+    where
+        X: Ranged<ValueType = f64> + ReversibleRanged,
+        Y: Ranged<ValueType = f64> + ReversibleRanged,
+    {
+        let (px_range, py_range) = chart.plotting_area().get_pixel_range();
+        // `get_pixel_range()` gives exclusive `Range<i32>` ends; `reverse_translate`
+        // only accepts pixels actually inside the backend rect, so probe the last
+        // valid pixel (`end - 1`), not the one-past-the-end exclusive bound.
+        let (px0, py0) = (px_range.start, py_range.start);
+        let (px1, py1) = (px_range.end - 1, py_range.end - 1);
+        let (dx0, dy0) = chart.as_coord_spec().reverse_translate((px0, py0))?;
+        let (dx1, dy1) = chart.as_coord_spec().reverse_translate((px1, py1))?;
+        Some(Self { px0: px0 as f64, py0: py0 as f64, dx0, dy0, px1: px1 as f64, py1: py1 as f64, dx1, dy1 })
+    }
+
+    fn contains_pixel(&self, px: f64, py: f64) -> bool {
+        let (lo_x, hi_x) = (self.px0.min(self.px1), self.px0.max(self.px1));
+        let (lo_y, hi_y) = (self.py0.min(self.py1), self.py0.max(self.py1));
+        (lo_x..=hi_x).contains(&px) && (lo_y..=hi_y).contains(&py)
+    }
+
+    fn data_at(&self, px: f64, py: f64) -> (f64, f64) {
+        let fx = if self.px1 != self.px0 { (px - self.px0) / (self.px1 - self.px0) } else { 0.0 };
+        let fy = if self.py1 != self.py0 { (py - self.py0) / (self.py1 - self.py0) } else { 0.0 };
+        (self.dx0 + fx * (self.dx1 - self.dx0), self.dy0 + fy * (self.dy1 - self.dy0))
+    }
+
+    fn pixel_at(&self, dx: f64, dy: f64) -> (f64, f64) {
+        let fx = if self.dx1 != self.dx0 { (dx - self.dx0) / (self.dx1 - self.dx0) } else { 0.0 };
+        let fy = if self.dy1 != self.dy0 { (dy - self.dy0) / (self.dy1 - self.dy0) } else { 0.0 };
+        (self.px0 + fx * (self.px1 - self.px0), self.py0 + fy * (self.py1 - self.py0))
+    }
+}
+
+#[derive(Debug, Clone)]
+enum HitTestData {
+    Histogram { buckets: Vec<HistogramBucket>, log_scale: bool, column_label: String },
+    Scatter { points: Vec<ScatterPoint>, x_label: String, y_label: String },
+    Heatmap {
+        cols: usize,
+        rows: usize,
+        cell_size: f64,
+        x_min: f64,
+        y_min: f64,
+        cells: Vec<HeatmapCell>,
+        value_label: String,
+    },
+}
+
+/// Answers "what's under the mouse" for a rendered chart — built once at
+/// render time (see `draw_histogram`/`draw_scatter`/`draw_heatmap`) from the
+/// same data already being plotted, so the GUI can show a hover tooltip
+/// without re-querying the database or re-deriving any plotting math.
+#[derive(Debug, Clone)]
+pub struct ChartHitTester {
+    mapping: PixelToData,
+    data: HitTestData,
+}
+
+impl ChartHitTester {
+    /// `px`/`py` are pixel coordinates within the rendered bitmap (same
+    /// space as `RenderedChart.width`/`height`). Returns a short
+    /// human-readable description of whatever's at that point, or `None`
+    /// when the point is outside the plot area / not near any data (e.g. a
+    /// scatter point, or a heatmap cell with no ROIs).
+    pub fn hit_test(&self, px: f64, py: f64) -> Option<String> {
+        if !self.mapping.contains_pixel(px, py) {
+            return None;
+        }
+        let (data_x, data_y) = self.mapping.data_at(px, py);
+        match &self.data {
+            HitTestData::Histogram { buckets, log_scale, column_label } => {
+                let real_x = if *log_scale { data_x.exp() } else { data_x };
+                let bucket = buckets
+                    .iter()
+                    .find(|b| real_x >= b.range_start && real_x < b.range_end)
+                    .or_else(|| buckets.last().filter(|b| real_x >= b.range_start))?;
+                Some(format!(
+                    "{}: {} – {}\nCount: {}",
+                    column_label,
+                    format_axis_value(bucket.range_start),
+                    format_axis_value(bucket.range_end),
+                    bucket.count
+                ))
+            }
+            HitTestData::Scatter { points, x_label, y_label } => {
+                const MAX_DIST_PX: f64 = 10.0;
+                let mut best: Option<(f64, &ScatterPoint)> = None;
+                for p in points {
+                    let (ppx, ppy) = self.mapping.pixel_at(p.x, p.y);
+                    let dist = ((ppx - px).powi(2) + (ppy - py).powi(2)).sqrt();
+                    if dist > MAX_DIST_PX {
+                        continue;
+                    }
+                    if best.as_ref().is_none_or(|(best_dist, _)| dist < *best_dist) {
+                        best = Some((dist, p));
+                    }
+                }
+                let (_, p) = best?;
+                let coords =
+                    format!("{}: {}\n{}: {}", x_label, format_axis_value(p.x), y_label, format_axis_value(p.y));
+                Some(match &p.group {
+                    Some(g) => format!("{coords}\n{g}"),
+                    None => coords,
+                })
+            }
+            HitTestData::Heatmap { cols, rows, cell_size, x_min, y_min, cells, value_label } => {
+                let col = ((data_x - x_min) / cell_size).floor();
+                let row = ((data_y - y_min) / cell_size).floor();
+                if col < 0.0 || row < 0.0 {
+                    return None;
+                }
+                let (col, row) = (col as usize, row as usize);
+                if col >= *cols || row >= *rows {
+                    return None;
+                }
+                let cell = cells.get(row * cols + col)?;
+                if cell.count == 0 {
+                    return None;
+                }
+                Some(format!("{}: {}\nCount: {}", value_label, format_axis_value(cell.value), cell.count))
+            }
+        }
+    }
+}
+
 /// A rendered chart as a row-major RGB8 buffer — the layout
 /// `slint::SharedPixelBuffer<Rgb8Pixel>` consumes directly in the GUI (see
 /// `crates/gui/src/editor/viewport_controller.rs` for the established
 /// pattern), and what `image::save_buffer` would need for a CLI PNG export.
+#[derive(Clone)]
 pub struct RenderedChart {
     pub width: u32,
     pub height: u32,
     pub rgb: Vec<u8>,
+    /// `None` only if plotters failed to report a coordinate mapping for the
+    /// rendered plot area — shouldn't happen in practice, but hover support
+    /// degrades gracefully (no tooltip) rather than panicking if it ever did.
+    pub hit_test: Option<ChartHitTester>,
 }
 
 /// Fixed, deterministic color cycle for scatter groups (class/colocalized
@@ -382,7 +538,7 @@ fn format_axis_value(v: f64) -> String {
 fn draw_histogram(
     root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
     data: &HistogramData,
-) -> Result<(), InternalErrors> {
+) -> Result<Option<ChartHitTester>, InternalErrors> {
     root.fill(&WHITE).map_err(to_internal_error)?;
 
     let max_count = data.buckets.iter().map(|b| b.count).max().unwrap_or(0);
@@ -402,17 +558,20 @@ fn draw_histogram(
 
     let mut chart = ChartBuilder::on(&root)
         .margin(10)
-        .x_label_area_size(40)
-        .y_label_area_size(50)
-        .caption(format!("Histogram: {}", data.column_label), ("sans-serif", 20))
+        .x_label_area_size(50)
+        .y_label_area_size(65)
+        .caption(format!("Histogram: {}", data.column_label), ("sans-serif", 24))
         .build_cartesian_2d(axis_min..axis_max, 0f64..(max_count as f64 * 1.1).max(1.0))
         .map_err(to_internal_error)?;
+    let mapping = PixelToData::from_chart(&chart);
 
     chart
         .configure_mesh()
         .x_desc(data.column_label.clone())
         .y_desc("Count")
         .x_label_formatter(&move |v| format_axis_value(if log_scale { v.exp() } else { *v }))
+        .label_style(("sans-serif", 14))
+        .axis_desc_style(("sans-serif", 16))
         .draw()
         .map_err(to_internal_error)?;
 
@@ -426,7 +585,14 @@ fn draw_histogram(
         .map_err(to_internal_error)?;
 
     root.present().map_err(to_internal_error)?;
-    Ok(())
+    Ok(mapping.map(|mapping| ChartHitTester {
+        mapping,
+        data: HitTestData::Histogram {
+            buckets: data.buckets.clone(),
+            log_scale: data.log_scale,
+            column_label: data.column_label.clone(),
+        },
+    }))
 }
 
 /// Min/max of `values`, padded by 5% on each side; falls back to `(0, 1)` for
@@ -450,7 +616,7 @@ fn padded_axis_bounds(values: impl Iterator<Item = f64>) -> (f64, f64) {
 fn draw_scatter(
     root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
     data: &ScatterData,
-) -> Result<(), InternalErrors> {
+) -> Result<Option<ChartHitTester>, InternalErrors> {
     root.fill(&WHITE).map_err(to_internal_error)?;
 
     let (x_min, x_max) = padded_axis_bounds(data.points.iter().map(|p| p.x));
@@ -458,16 +624,19 @@ fn draw_scatter(
 
     let mut chart = ChartBuilder::on(&root)
         .margin(10)
-        .x_label_area_size(40)
-        .y_label_area_size(50)
-        .caption(format!("{} vs {}", data.y_label, data.x_label), ("sans-serif", 20))
+        .x_label_area_size(50)
+        .y_label_area_size(65)
+        .caption(format!("{} vs {}", data.y_label, data.x_label), ("sans-serif", 24))
         .build_cartesian_2d(x_min..x_max, y_min..y_max)
         .map_err(to_internal_error)?;
+    let mapping = PixelToData::from_chart(&chart);
 
     chart
         .configure_mesh()
         .x_desc(data.x_label.clone())
         .y_desc(data.y_label.clone())
+        .label_style(("sans-serif", 14))
+        .axis_desc_style(("sans-serif", 16))
         .draw()
         .map_err(to_internal_error)?;
 
@@ -503,12 +672,20 @@ fn draw_scatter(
             .configure_series_labels()
             .background_style(WHITE.mix(0.8))
             .border_style(BLACK)
+            .label_font(("sans-serif", 14))
             .draw()
             .map_err(to_internal_error)?;
     }
 
     root.present().map_err(to_internal_error)?;
-    Ok(())
+    Ok(mapping.map(|mapping| ChartHitTester {
+        mapping,
+        data: HitTestData::Scatter {
+            points: data.points.clone(),
+            x_label: data.x_label.clone(),
+            y_label: data.y_label.clone(),
+        },
+    }))
 }
 
 /// A small Viridis-like sequential colormap (5 anchor stops, linearly
@@ -539,11 +716,11 @@ fn viridis_color(t: f64) -> RGBColor {
 fn draw_heatmap(
     root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
     data: &HeatmapData,
-) -> Result<(), InternalErrors> {
+) -> Result<Option<ChartHitTester>, InternalErrors> {
     root.fill(&WHITE).map_err(to_internal_error)?;
 
     let max_value = data.cells.iter().map(|c| c.value).fold(0.0f64, f64::max).max(1e-9);
-    let legend_width = 90i32;
+    let legend_width = 110i32;
     // `split_horizontally(x)` returns (left part of width x, right remainder)
     // — split at `total_width - legend_width` so the *chart* gets the bulk of
     // the area and the legend is the narrow strip on the right.
@@ -556,19 +733,22 @@ fn draw_heatmap(
 
     let mut chart = ChartBuilder::on(&chart_area)
         .margin(10)
-        .x_label_area_size(40)
-        .y_label_area_size(50)
-        .caption(format!("Heatmap: {}", data.value_label), ("sans-serif", 20))
+        .x_label_area_size(50)
+        .y_label_area_size(65)
+        .caption(format!("Heatmap: {}", data.value_label), ("sans-serif", 24))
         // Image-style coordinates: y grows downward, so the top-left ROI ends
         // up top-left on screen rather than bottom-left.
         .build_cartesian_2d(data.x_min..x_max, y_max..data.y_min)
         .map_err(to_internal_error)?;
+    let mapping = PixelToData::from_chart(&chart);
 
     chart
         .configure_mesh()
         .disable_mesh()
         .x_desc(data.x_label.clone())
         .y_desc(data.y_label.clone())
+        .label_style(("sans-serif", 14))
+        .axis_desc_style(("sans-serif", 16))
         .draw()
         .map_err(to_internal_error)?;
 
@@ -593,7 +773,7 @@ fn draw_heatmap(
         .margin_top(10)
         .margin_bottom(10)
         .margin_right(10)
-        .y_label_area_size(50)
+        .y_label_area_size(60)
         .build_cartesian_2d(0f64..1f64, 0f64..max_value)
         .map_err(to_internal_error)?;
     legend
@@ -601,6 +781,8 @@ fn draw_heatmap(
         .disable_mesh()
         .x_labels(0)
         .y_desc(data.value_label.clone())
+        .label_style(("sans-serif", 13))
+        .axis_desc_style(("sans-serif", 14))
         .draw()
         .map_err(to_internal_error)?;
     const LEGEND_STEPS: usize = 64;
@@ -616,29 +798,40 @@ fn draw_heatmap(
         .map_err(to_internal_error)?;
 
     root.present().map_err(to_internal_error)?;
-    Ok(())
+    Ok(mapping.map(|mapping| ChartHitTester {
+        mapping,
+        data: HitTestData::Heatmap {
+            cols: data.cols,
+            rows: data.rows,
+            cell_size: data.cell_size,
+            x_min: data.x_min,
+            y_min: data.y_min,
+            cells: data.cells.clone(),
+            value_label: data.value_label.clone(),
+        },
+    }))
 }
 
 /// Renders into an in-memory RGB8 buffer — used by the GUI to build a
 /// `slint::Image` without touching disk.
 pub fn render_histogram(data: &HistogramData, width: u32, height: u32) -> Result<RenderedChart, InternalErrors> {
     let mut rgb = vec![0u8; (width * height * 3) as usize];
-    {
+    let hit_test = {
         let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
-        draw_histogram(root, data)?;
-    }
-    Ok(RenderedChart { width, height, rgb })
+        draw_histogram(root, data)?
+    };
+    Ok(RenderedChart { width, height, rgb, hit_test })
 }
 
 /// Renders into an in-memory RGB8 buffer — used by the GUI to build a
 /// `slint::Image` without touching disk.
 pub fn render_scatter(data: &ScatterData, width: u32, height: u32) -> Result<RenderedChart, InternalErrors> {
     let mut rgb = vec![0u8; (width * height * 3) as usize];
-    {
+    let hit_test = {
         let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
-        draw_scatter(root, data)?;
-    }
-    Ok(RenderedChart { width, height, rgb })
+        draw_scatter(root, data)?
+    };
+    Ok(RenderedChart { width, height, rgb, hit_test })
 }
 
 /// Renders straight to a PNG file. Not called anywhere yet — exists so a
@@ -646,7 +839,8 @@ pub fn render_scatter(data: &ScatterData, width: u32, height: u32) -> Result<Ren
 /// drawing code the GUI uses, instead of new plotting logic.
 pub fn save_histogram_png(data: &HistogramData, width: u32, height: u32, path: &Path) -> Result<(), InternalErrors> {
     let root = BitMapBackend::new(path, (width, height)).into_drawing_area();
-    draw_histogram(root, data)
+    draw_histogram(root, data)?;
+    Ok(())
 }
 
 /// Renders straight to a PNG file. Not called anywhere yet — exists so a
@@ -654,18 +848,19 @@ pub fn save_histogram_png(data: &HistogramData, width: u32, height: u32, path: &
 /// drawing code the GUI uses, instead of new plotting logic.
 pub fn save_scatter_png(data: &ScatterData, width: u32, height: u32, path: &Path) -> Result<(), InternalErrors> {
     let root = BitMapBackend::new(path, (width, height)).into_drawing_area();
-    draw_scatter(root, data)
+    draw_scatter(root, data)?;
+    Ok(())
 }
 
 /// Renders into an in-memory RGB8 buffer — used by the GUI to build a
 /// `slint::Image` without touching disk.
 pub fn render_heatmap(data: &HeatmapData, width: u32, height: u32) -> Result<RenderedChart, InternalErrors> {
     let mut rgb = vec![0u8; (width * height * 3) as usize];
-    {
+    let hit_test = {
         let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
-        draw_heatmap(root, data)?;
-    }
-    Ok(RenderedChart { width, height, rgb })
+        draw_heatmap(root, data)?
+    };
+    Ok(RenderedChart { width, height, rgb, hit_test })
 }
 
 /// Renders straight to a PNG file. Not called anywhere yet — exists so a
@@ -673,7 +868,17 @@ pub fn render_heatmap(data: &HeatmapData, width: u32, height: u32) -> Result<Ren
 /// drawing code the GUI uses, instead of new plotting logic.
 pub fn save_heatmap_png(data: &HeatmapData, width: u32, height: u32, path: &Path) -> Result<(), InternalErrors> {
     let root = BitMapBackend::new(path, (width, height)).into_drawing_area();
-    draw_heatmap(root, data)
+    draw_heatmap(root, data)?;
+    Ok(())
+}
+
+/// Writes an already-rendered chart's pixels straight to a PNG file — used by
+/// the GUI's "Save chart" button to persist exactly what's currently on
+/// screen (no re-querying/re-rendering involved, unlike `save_histogram_png`
+/// and friends which redraw from scratch).
+pub fn save_rendered_chart_png(chart: &RenderedChart, path: &Path) -> Result<(), InternalErrors> {
+    image::save_buffer(path, &chart.rgb, chart.width, chart.height, image::ColorType::Rgb8)
+        .map_err(to_internal_error)
 }
 
 #[cfg(test)]
@@ -1000,5 +1205,139 @@ mod tests {
         assert_eq!(chart.width, 200);
         assert_eq!(chart.height, 150);
         assert_eq!(chart.rgb.len(), 200 * 150 * 3);
+    }
+
+    #[test]
+    fn save_rendered_chart_png_writes_a_readable_png() {
+        let data = HistogramData {
+            column_label: "Area".into(),
+            buckets: vec![HistogramBucket { range_start: 0.0, range_end: 1.0, count: 3 }],
+            log_scale: false,
+            excluded_non_positive: 0,
+        };
+        let chart = render_histogram(&data, 64, 48).unwrap();
+        let dir = std::env::temp_dir().join(format!("evanalyzer_chart_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chart.png");
+
+        save_rendered_chart_png(&chart, &path).unwrap();
+        let decoded = image::open(&path).unwrap();
+        assert_eq!(decoded.width(), 64);
+        assert_eq!(decoded.height(), 48);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- hover hit-testing ----
+
+    #[test]
+    fn histogram_hit_test_identifies_bucket_under_cursor() {
+        let data = HistogramData {
+            column_label: "Area".into(),
+            buckets: vec![
+                HistogramBucket { range_start: 0.0, range_end: 10.0, count: 3 },
+                HistogramBucket { range_start: 10.0, range_end: 20.0, count: 9 },
+            ],
+            log_scale: false,
+            excluded_non_positive: 0,
+        };
+        let chart = render_histogram(&data, 800, 500).unwrap();
+        let tester = chart.hit_test.expect("histogram should produce a hit tester");
+
+        // Margins guarantee the image corners are always outside the plot area.
+        assert!(tester.hit_test(0.0, 0.0).is_none());
+        assert!(tester.hit_test(799.0, 499.0).is_none());
+
+        // Self-calibrate the plot area's horizontal extent at mid-height
+        // instead of hardcoding margin pixel widths.
+        let y = 250.0;
+        let mut left = None;
+        let mut right = None;
+        for x in 0..800 {
+            if tester.hit_test(x as f64, y).is_some() {
+                left.get_or_insert(x);
+                right = Some(x);
+            }
+        }
+        let (left, right) = (left.unwrap() as f64, right.unwrap() as f64);
+
+        let near_left = tester.hit_test(left + (right - left) * 0.1, y).unwrap();
+        let near_right = tester.hit_test(left + (right - left) * 0.9, y).unwrap();
+        assert!(near_left.contains("Count: 3"), "left side should be the first bucket: {near_left}");
+        assert!(near_right.contains("Count: 9"), "right side should be the second bucket: {near_right}");
+    }
+
+    #[test]
+    fn scatter_hit_test_finds_nearest_point() {
+        let data = ScatterData {
+            x_label: "X".into(),
+            y_label: "Y".into(),
+            points: vec![
+                ScatterPoint { x: 1.0, y: 1.0, group: None },
+                ScatterPoint { x: 9.0, y: 9.0, group: Some("A".into()) },
+            ],
+            sampled_from: None,
+        };
+        let chart = render_scatter(&data, 800, 500).unwrap();
+        let tester = chart.hit_test.expect("scatter should produce a hit tester");
+
+        let mut hits = std::collections::HashSet::new();
+        for x in (0..800).step_by(4) {
+            for y in (0..500).step_by(4) {
+                if let Some(s) = tester.hit_test(x as f64, y as f64) {
+                    hits.insert(s);
+                }
+            }
+        }
+        assert!(
+            hits.iter().any(|s| s.contains("X: 1.00") && s.contains("Y: 1.00")),
+            "expected a hit near (1,1): {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|s| s.contains("X: 9.00") && s.contains("Y: 9.00") && s.contains('A')),
+            "expected a hit near (9,9) labeled with its group: {hits:?}"
+        );
+
+        assert!(tester.hit_test(0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn heatmap_hit_test_reports_cell_value_and_skips_empty_cells() {
+        let data = HeatmapData {
+            x_label: "X position (px)".into(),
+            y_label: "Y position (px)".into(),
+            value_label: "Area (px²)".into(),
+            cols: 2,
+            rows: 2,
+            cell_size: 10.0,
+            x_min: 0.0,
+            y_min: 0.0,
+            cells: vec![
+                HeatmapCell { count: 2, value: 2.0 },
+                HeatmapCell { count: 0, value: 0.0 },
+                HeatmapCell { count: 0, value: 0.0 },
+                HeatmapCell { count: 5, value: 5.0 },
+            ],
+        };
+        let chart = render_heatmap(&data, 800, 500).unwrap();
+        let tester = chart.hit_test.expect("heatmap should produce a hit tester");
+
+        let mut hits = std::collections::HashSet::new();
+        for x in (0..800).step_by(4) {
+            for y in (0..500).step_by(4) {
+                if let Some(s) = tester.hit_test(x as f64, y as f64) {
+                    hits.insert(s);
+                }
+            }
+        }
+        assert!(
+            hits.iter().any(|s| s.contains("Area (px²): 2.00") && s.contains("Count: 2")),
+            "{hits:?}"
+        );
+        assert!(
+            hits.iter().any(|s| s.contains("Area (px²): 5.00") && s.contains("Count: 5")),
+            "{hits:?}"
+        );
+        assert!(!hits.iter().any(|s| s.contains("Count: 0")), "empty cells shouldn't show a tooltip");
     }
 }

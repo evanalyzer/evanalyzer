@@ -2136,6 +2136,7 @@ dependencies = [
  "evanalyzer_cfg",
  "evanalyzer_core",
  "human-sort",
+ "image 0.24.9",
  "indexmap",
  "log",
  "pathdiff",

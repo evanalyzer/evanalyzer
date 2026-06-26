@@ -35,6 +35,11 @@ component ChartKindButton inherits Rectangle {
 
 export component ResultsChart inherits Rectangle {
     background: Theme.bg;
+    // Set by hover-ta's `moved` handler below; read by the tooltip. Purely
+    // local presentation state — never bound externally, never written from
+    // anywhere else, so it can't run into the property-recursion issues a
+    // shared global binding would.
+    property <string> hover_text: "";
 
     VerticalLayout {
         spacing: 0px;
@@ -259,6 +264,39 @@ export component ResultsChart inherits Rectangle {
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
+            }
+
+            hover-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: default;
+                moved => {
+                    root.hover_text = ResultsState.chart_hover_lookup(
+                        self.mouse-x / 1px,
+                        self.mouse-y / 1px,
+                        self.width / 1px,
+                        self.height / 1px,
+                    );
+                }
+            }
+
+            if hover-ta.has-hover && root.hover_text != "": tip := Rectangle {
+                x: hover-ta.mouse-x < parent.width * 0.7 ? hover-ta.mouse-x + 14px : hover-ta.mouse-x - self.width - 14px;
+                y: hover-ta.mouse-y < parent.height * 0.7 ? hover-ta.mouse-y + 14px : hover-ta.mouse-y - self.height - 14px;
+                width: tip-text.width + 14px;
+                height: tip-text.height + 10px;
+                background: #1a1a1aee;
+                border-radius: 4px;
+
+                tip-text := Text {
+                    x: 7px;
+                    y: 5px;
+                    text: root.hover_text;
+                    font-size: 11px;
+                    font-family: Theme.font-mono;
+                    color: white;
+                    wrap: no-wrap;
+                }
             }
         }
     }
