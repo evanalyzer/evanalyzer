@@ -407,6 +407,12 @@ component ResultsToolbar inherits Rectangle {
                             selected: ResultsState.group_by == ResultsGroupBy.regex;
                             clicked => { ResultsState.group_by = ResultsGroupBy.regex; }
                         }
+                        GroupOptionRow {
+                            label: "Also group by class";
+                            checkbox: true;
+                            selected: ResultsState.group_by_class;
+                            clicked => { ResultsState.group_by_class = !ResultsState.group_by_class; }
+                        }
 
                         // -- Regex pattern input ---------------------------
                         Rectangle {

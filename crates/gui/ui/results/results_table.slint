@@ -129,6 +129,9 @@ export global ResultsState {
     // When true, each group is additionally split into a colocalizing and a
     // non-colocalizing row.
     in-out property <bool> group_split_colocalized: false;
+    // When true, each group is additionally split by class (e.g. "Image1 /
+    // Class1", "Image1 / Class2", …).
+    in-out property <bool> group_by_class: false;
     // True while a non-`none` grouping is applied (drives the status badge).
     in-out property <bool> group_active:         false;
     // Applies the current group_by / group_regex / aggregate selection.

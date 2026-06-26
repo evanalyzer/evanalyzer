@@ -521,6 +521,52 @@ fn sql_in_list(items: &[String]) -> String {
         .join(", ")
 }
 
+// ---------------------------------------------------------------------------
+// Coloc filter vocabulary
+//
+// `RoiFilter::coloc_filter` items are one of three kinds of label, matched
+// literally against the value coming back from the GUI's filter popup:
+//   - "No"                          -> ROI has no colocalization partners
+//   - "Yes (any class)"             -> ROI colocalizes with at least one class
+//   - "Colocalizes with <class>"    -> ROI colocalizes with that specific class
+// These helpers are the single source of truth for that vocabulary so the SQL
+// builder below and the GUI (which populates the filter popup) never drift.
+// ---------------------------------------------------------------------------
+
+pub fn coloc_filter_label_no() -> &'static str {
+    "No"
+}
+
+pub fn coloc_filter_label_any() -> &'static str {
+    "Yes (any class)"
+}
+
+pub fn coloc_filter_label_with(class: &str) -> String {
+    format!("Colocalizes with {class}")
+}
+
+fn parse_coloc_filter_with(label: &str) -> Option<&str> {
+    label.strip_prefix("Colocalizes with ")
+}
+
+/// Builds the SQL boolean expression for a single selected coloc-filter label.
+fn coloc_filter_condition(label: &str) -> String {
+    if label == coloc_filter_label_no() {
+        "(coloc_json IS NULL OR coloc_json = '' OR coloc_json = '{}')".to_string()
+    } else if label == coloc_filter_label_any() {
+        "(coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}')".to_string()
+    } else if let Some(class) = parse_coloc_filter_with(label) {
+        format!(
+            "COALESCE(json_array_length(coloc_json -> '{}'), 0) > 0",
+            class.replace('\'', "''")
+        )
+    } else {
+        // Unrecognized label (shouldn't happen if the GUI only ever sends labels
+        // produced by the helpers above) -> matches nothing.
+        "FALSE".to_string()
+    }
+}
+
 /// Opens a result file written by [`DuckDbExporter`] for reading.
 pub struct DuckDbReader {
     conn: Connection,
@@ -597,15 +643,12 @@ impl DuckDbReader {
                 sql_in_list(classes)
             ));
         }
-        if let Some(statuses) = &filter.coloc_filter {
+        if let Some(labels) = &filter.coloc_filter {
             // Every entry `Colocalization` ever writes into `colocalized_with` has a non-empty
             // ID list (see coloc_rois.rs), so `coloc_json` is exactly "{}" / empty iff the ROI
             // has no colocalization partner — no need to parse the object to check.
-            conditions.push(format!(
-                "CASE WHEN coloc_json IS NULL OR coloc_json = '' OR coloc_json = '{{}}' \
-                 THEN 'No' ELSE 'Yes' END IN ({})",
-                sql_in_list(statuses)
-            ));
+            let fragments: Vec<String> = labels.iter().map(|l| coloc_filter_condition(l)).collect();
+            conditions.push(format!("({})", fragments.join(" OR ")));
         }
 
         let where_clause = if conditions.is_empty() {
@@ -659,6 +702,26 @@ impl DuckDbReader {
             .conn
             .prepare("SELECT DISTINCT image_name FROM rois ORDER BY image_name")
             .map_err(err)?;
+        stmt.query_map([], |row| row.get(0))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)
+    }
+
+    /// Returns all distinct partner-class labels appearing as keys in any ROI's
+    /// `coloc_json`, sorted alphabetically. Used to populate the "Colocalizes
+    /// with <class>" entries of the coloc filter popup.
+    pub fn get_coloc_partner_class_names(&self) -> Result<Vec<String>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        // Filter in a subquery first: UNNEST in the outer SELECT list is evaluated
+        // against every scanned row before the WHERE predicate is applied, so
+        // `json_keys('')` would otherwise be hit for rows with no colocalization.
+        let sql = "SELECT DISTINCT UNNEST(json_keys(t.cj)) AS k FROM ( \
+                       SELECT coloc_json AS cj FROM rois \
+                       WHERE coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}' \
+                   ) AS t \
+                   ORDER BY k";
+        let mut stmt = self.conn.prepare(sql).map_err(err)?;
         stmt.query_map([], |row| row.get(0))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
@@ -785,7 +848,7 @@ mod tests {
 
         let yes = reader
             .get_rois(&RoiFilter {
-                coloc_filter: Some(vec!["Yes".into()]),
+                coloc_filter: Some(vec![coloc_filter_label_any().into()]),
                 ..Default::default()
             })
             .unwrap();
@@ -794,7 +857,7 @@ mod tests {
 
         let no = reader
             .get_rois(&RoiFilter {
-                coloc_filter: Some(vec!["No".into()]),
+                coloc_filter: Some(vec![coloc_filter_label_no().into()]),
                 ..Default::default()
             })
             .unwrap();
@@ -814,5 +877,34 @@ mod tests {
             none_selected.is_empty(),
             "active filter with nothing selected → 0 rows"
         );
+    }
+
+    #[test]
+    fn coloc_partner_class_names_and_filter() {
+        const ID_WITH_B: u128 = 1;
+        const ID_WITH_C: u128 = 2;
+        const PARTNER_B: ObjectClass = ObjectClass::Valid(2);
+        const PARTNER_C: ObjectClass = ObjectClass::Valid(3);
+        let id_with_b = ObjectId(ID_WITH_B).to_string();
+
+        let mut roi_with_b = make_filled_roi(ID_WITH_B, [0, 0, 1, 1]);
+        roi_with_b.add_colocalizing_object(PARTNER_B, ObjectId(99));
+        let mut roi_with_c = make_filled_roi(ID_WITH_C, [5, 5, 6, 6]);
+        roi_with_c.add_colocalizing_object(PARTNER_C, ObjectId(98));
+
+        let (_dir, reader) = export_and_open(vec![roi_with_b, roi_with_c]);
+
+        // class_label() falls back to "class_{n}" when no name map is provided.
+        let partner_classes = reader.get_coloc_partner_class_names().unwrap();
+        assert_eq!(partner_classes, vec!["class_2".to_string(), "class_3".to_string()]);
+
+        let with_b = reader
+            .get_rois(&RoiFilter {
+                coloc_filter: Some(vec![coloc_filter_label_with("class_2")]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(with_b.len(), 1);
+        assert_eq!(with_b[0].object_id, id_with_b);
     }
 }

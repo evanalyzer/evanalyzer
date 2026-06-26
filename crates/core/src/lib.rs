@@ -49,5 +49,8 @@ pub use crate::storage::duckdb::DuckDbExporter;
 pub use crate::storage::duckdb::DuckDbReader;
 pub use crate::storage::duckdb::RoiFilter;
 pub use crate::storage::duckdb::RoiRow;
+pub use crate::storage::duckdb::{
+    coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with,
+};
 pub use crate::storage::file::CsvExporter;
 pub use crate::storage::memory::MemoryExporter;

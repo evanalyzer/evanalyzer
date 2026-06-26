@@ -4,7 +4,8 @@ use crate::{
     ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
-    aggregate_rows, build_column_specs, discover_channels, to_display_row, AggFunc, ColumnSpec,
+    aggregate_rows, build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
+    coloc_filter_label_with, discover_channels, to_display_row, AggFunc, ColumnSpec,
     DatabaseFilter, GroupBy, GroupConfig, ResultsExporter, ResultsLoader, RoiRow,
 };
 use log::warn;
@@ -130,6 +131,7 @@ impl ResultsTableController {
                     regex: state.get_group_regex().to_string(),
                     aggs: selected_aggs(&state),
                     split_colocalized: state.get_group_split_colocalized(),
+                    group_by_class: state.get_group_by_class(),
                 };
                 *this.group_config.lock().unwrap() = config;
                 *this.current_page.lock().unwrap() = 0;
@@ -420,11 +422,12 @@ impl ResultsTableController {
             });
             let img_names = loader.get_image_names();
             let cls_names = loader.get_class_names();
+            let coloc_partner_classes = loader.get_coloc_partner_class_names();
 
-            match (first_page, img_names, cls_names) {
-                (Ok(rois), Ok(img_names), Ok(cls_names)) => {
+            match (first_page, img_names, cls_names, coloc_partner_classes) {
+                (Ok(rois), Ok(img_names), Ok(cls_names), Ok(coloc_partner_classes)) => {
                     let channels = discover_channels(&rois);
-                    let specs = build_column_specs(&channels);
+                    let specs = build_column_specs(&channels, &coloc_partner_classes);
                     let all_loaded = rois.len() < PAGE_SIZE;
 
                     *channels_arc.lock().unwrap() = channels;
@@ -497,10 +500,17 @@ impl ResultsTableController {
                             state.set_filter_class_active(false);
                             state.set_filter_class_all_popup_checked(true);
 
-                            // The colocalized column only ever has two possible values, so
-                            // (unlike image/class) this list isn't sourced from the database.
-                            let coloc_items =
-                                names_to_filter_items(&["Yes".to_string(), "No".to_string()]);
+                            // "No" / "Yes (any class)" are always offered; the rest are the
+                            // partner classes actually present in this file's coloc_json data,
+                            // letting the user filter for e.g. "Colocalizes with Nucleus".
+                            let mut coloc_labels = vec![
+                                coloc_filter_label_no().to_string(),
+                                coloc_filter_label_any().to_string(),
+                            ];
+                            coloc_labels.extend(
+                                coloc_partner_classes.iter().map(|c| coloc_filter_label_with(c)),
+                            );
+                            let coloc_items = names_to_filter_items(&coloc_labels);
                             state.set_filter_coloc_items(slint::ModelRc::new(
                                 slint::VecModel::from(coloc_items.clone()),
                             ));
@@ -523,7 +533,7 @@ impl ResultsTableController {
                         }
                     });
                 }
-                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => {
                     warn!("Failed to load results: {:?}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(app_ui) = app_ui.upgrade() {
