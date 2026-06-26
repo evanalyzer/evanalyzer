@@ -20,6 +20,9 @@ export global GlobalAppState {
 export global WarningState {
     in-out property <string> title: "Cannot start analysis";
     in-out property <string> message: "";
+    // When true the dialog shows an info icon instead of the warning sign
+    // (e.g. for a successful import rather than an error).
+    in-out property <bool> info: false;
 }
 
 

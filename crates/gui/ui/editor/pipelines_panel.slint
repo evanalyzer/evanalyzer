@@ -5,7 +5,6 @@
 
 import {
     ScrollView,
-    Button,
     LineEdit,
     ComboBox,
     Slider,
@@ -20,7 +19,7 @@ import { ClassificationState, ClassItemData } from "classification_panel.slint";
 
 export enum StepCategory { preprocess, segment, object, measure, classify }
 export enum PipelineStatus { idle, queued, running, done, error }
-export enum ParamType { number, text, dropdown, toggle, slider, spinner, group, obj-class, seg-class, multi-obj-class, multi-seg-class, pixel-units, size-units, label }
+export enum ParamType { number, text, dropdown, toggle, slider, spinner, group, obj-class, seg-class, multi-obj-class, multi-seg-class, pixel-units, size-units, label, file-path }
 
 export struct LeafParam {
     name: string,
@@ -1009,6 +1008,7 @@ component SpinnerInput inherits HorizontalLayout {
 component LeafParamRow inherits VerticalLayout {
     in property <LeafParam> p;
     callback changed(string);
+    property <string> browsed-path: "";
 
     spacing: 4px;
 
@@ -1076,6 +1076,47 @@ component LeafParamRow inherits VerticalLayout {
         font-size: 11px;
         edited(t) => {
             root.changed(t);
+        }
+    }
+
+    if p.param-type == ParamType.file-path: HorizontalLayout {
+        spacing: 4px;
+        leaf-fp-input := LineEdit {
+            height: 24px;
+            horizontal-stretch: 1;
+            text: p.value;
+            font-size: 11px;
+            edited(t) => {
+                root.changed(t);
+            }
+        }
+
+        Rectangle {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: leaf-browse-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
+            Image {
+                source: @image-url("../icons/regular-white/folder-open.svg");
+                width: 13px;
+                height: 13px;
+                colorize: Theme.text-dim;
+            }
+
+            leaf-browse-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.browsed-path = PipelinesPanelState.browse-file(
+                        p.options.length > 0 ? p.options[0] : "",
+                        leaf-fp-input.text);
+                    if (root.browsed-path != "") {
+                        leaf-fp-input.text = root.browsed-path;
+                        root.changed(root.browsed-path);
+                    }
+                }
+            }
         }
     }
 
@@ -1196,6 +1237,7 @@ component ParamRow inherits VerticalLayout {
     callback item-field-changed(int, string, string);
     callback add-item();
     callback remove-item(int);
+    property <string> browsed-path: "";
 
     spacing: 4px;
 
@@ -1263,6 +1305,47 @@ component ParamRow inherits VerticalLayout {
         font-size: 11px;
         edited(t) => {
             root.changed(t);
+        }
+    }
+
+    if p.param-type == ParamType.file-path: HorizontalLayout {
+        spacing: 4px;
+        fp-input := LineEdit {
+            height: 26px;
+            horizontal-stretch: 1;
+            text: p.value;
+            font-size: 11px;
+            edited(t) => {
+                root.changed(t);
+            }
+        }
+
+        Rectangle {
+            width: 26px;
+            height: 26px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: browse-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
+            Image {
+                source: @image-url("../icons/regular-white/folder-open.svg");
+                width: 14px;
+                height: 14px;
+                colorize: Theme.text-dim;
+            }
+
+            browse-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.browsed-path = PipelinesPanelState.browse-file(
+                        p.options.length > 0 ? p.options[0] : "",
+                        fp-input.text);
+                    if (root.browsed-path != "") {
+                        fp-input.text = root.browsed-path;
+                        root.changed(root.browsed-path);
+                    }
+                }
+            }
         }
     }
 
@@ -1904,6 +1987,11 @@ export global PipelinesPanelState {
     callback dry-run();
     callback auto-preview(bool);
     callback save-as-template();
+
+    // Opens a native "open file" dialog filtered to the given comma-separated
+    // extensions (empty = any file), starting from current-path's directory.
+    // Returns the picked path, or "" if the dialog was cancelled.
+    callback browse-file(string, string) -> string;
 }
 
 

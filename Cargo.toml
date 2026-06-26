@@ -13,6 +13,10 @@ authors = ["Joachim Danmayr"]
 license = "AGPL-3.0"
 
 
+[workspace.dependencies]
+# Toggle the AI (libtorch/tch) feature here — remove "ai" from features to disable
+evanalyzer_core = { path = "crates/core", features = ["ai"] }
+
 [profile.release]
 strip = true        # Removes all debug symbols/names
 lto = "thin"

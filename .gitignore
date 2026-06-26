@@ -1,5 +1,4 @@
 /target
-/java/jre_linux
 tests/fixtures/test_image_big_endian.lif
 tests/fixtures/test_image_slide_scanner_rgb.vsi
 backend/tests/muliple_z_stacks.nd2
@@ -8,3 +7,9 @@ lcov.info
 .claude
 .claude/settings.json
 .claude/settings.local.json
+# Ignore the large prebuilt native deps in libs/, but keep the download scripts
+# under version control (they fetch those deps - see libs/download.sh).
+/libs/*
+!/libs/.gitkeep
+!/libs/*.sh
+/crates/core/java

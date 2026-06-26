@@ -122,6 +122,7 @@ pub struct BreakpointSettings {
 
 pub struct JobExecutor {
     pub project_path: PathBuf,
+    pub output_path: PathBuf,
     pub pipelines: IndexMap<PipelineId, Pipeline>,
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
@@ -139,6 +140,7 @@ pub struct JobExecutor {
 impl<'a> JobExecutor {
     pub fn new(
         project_path: PathBuf,
+        output_path: PathBuf,
         images: IndexMap<PathBuf, ImageEntry>,
         image_base_path: PathBuf,
         global_image_settings: GlobalImageSettings,
@@ -148,6 +150,7 @@ impl<'a> JobExecutor {
         Self {
             pipelines: IndexMap::new(),
             project_path,
+            output_path,
             image_base_path,
             images,
             global_image_settings,
@@ -456,7 +459,8 @@ impl<'a> JobExecutor {
                                     (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot)
                                 })
                                 .unwrap_or((None, false));
-                            let result = p.run(cache, bp_step, snapshot_mode)?;
+                            let result =
+                                p.run(self.output_path.clone(), cache, bp_step, snapshot_mode)?;
                             bp_hit = result.breakpoint_hit;
                             cache = result.cache;
                         }
@@ -721,7 +725,7 @@ impl<'a> JobExecutor {
                         .filter(|b| b.pipeline_id == *pipe_id)
                         .map(|b| (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot))
                         .unwrap_or((None, false));
-                    let result = p.run(cache, bp_step, snapshot_mode)?;
+                    let result = p.run(self.output_path.clone(), cache, bp_step, snapshot_mode)?;
                     if result.breakpoint_hit {
                         stop_image = Some(result.image);
                     } else if let Some(snap) = result.breakpoint_snapshot {

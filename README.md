@@ -8,7 +8,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/evanalyzer/evanalyzer?include_prereleases)](https://github.com/evanalyzer/evanalyzer/releases/latest)
 [![License: AGPL-3.0 for non-commercial | Commercial license available](https://img.shields.io/badge/License-AGPL--3.0_%7C_Commercial-blue)](#license)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange?logo=rust)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey)](#building)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](#installing-a-release)
 
 **A high-performance bioimage analysis desktop application written in Rust.**
 
@@ -43,9 +43,46 @@ EVAnalyzer is the Rust reimplementation of [ImageC](https://github.com/imagec) a
 | Category | Algorithms |
 |---|---|
 | **Filters** | Gaussian blur, rank filter (min/median/max), rolling-ball background subtraction, enhance contrast, colour filter, intensity transform, Canny/Sobel edge detection, Hessian, Laplacian, structure tensor, weighted deviation |
-| **Segmentation** | Manual & automatic thresholding, connected components, watershed |
+| **Segmentation** | Manual & automatic thresholding, connected components, watershed, AI segmentation (Stardist, U-Net — requires the `ai` build feature) |
 | **Morphology** | Dilation, erosion, opening, closing |
 | **Classification** | Rule-based object classification with configurable measurements |
+
+### AI Segmentation
+
+Two AI segmentation algorithms are available (built with the `ai` Cargo feature, via [tch-rs](https://github.com/LaurentMazare/tch-rs)/libtorch):
+
+| Algorithm | What the model predicts | What you get |
+|---|---|---|
+| **Stardist** | Star-convex polygon parameters per grid cell | Separated object instances directly — no further steps needed |
+| **UNet** | Per-pixel semantic mask | A single foreground mask — touching objects are **not** separated yet |
+
+#### Using `UNet` correctly
+
+`UNet` only produces a semantic mask (foreground vs. background); it has no notion of individual object instances. Getting good results requires two things:
+
+1. **Match `output_mode`/`foreground_channel` to your model's export.**
+   - **Plain background/foreground classifier** (a mutually-exclusive softmax head): use `output_mode: SoftmaxClasses` and set `foreground_channel` to the foreground class index (usually `1` for a 2-class head — this is the default).
+   - **Boundary-aware model** (e.g. bioimage.io nucleus-boundary models, which export an independent mask channel *and* a separate boundary channel — these are two unrelated probabilities, not softmax classes): use `output_mode: IndependentChannels` and set `foreground_channel` to the mask channel's index (commonly `0`; check the model's `rdf.yaml` if unsure). Running softmax across mask+boundary, or picking the boundary channel by mistake, is the most common cause of "I get outlines, not filled objects".
+
+2. **Separate touching objects.** `UNet` emits one shared class for "foreground", so two touching nuclei become one connected blob. How you split them depends on the model:
+
+   - **Boundary-aware models — use the boundary channel (recommended).** Models like bioimage.io's [`affable-shark`](https://bioimage.io/#/?id=affable-shark) (*NucleiSegmentationBoundaryModel* — a U-Net, **not** StarDist) predict an explicit boundary in a second channel **specifically so you can separate touching nuclei**. Set `boundary_channel` to that channel (commonly `1`) and `boundary_threshold` (~`0.5`): a pixel is foreground only where the mask is high *and* the boundary is low, carving thin gaps between objects. Then a plain `ConnectedComponents` separates them — no watershed needed:
+
+     ```
+     UNet (foreground_channel: 0, boundary_channel: 1) → ConnectedComponents → ExtractRois
+     ```
+
+     Discarding the boundary channel and relying on watershed instead is the most common reason touching nuclei "won't split": a distance-map watershed can't separate a blob that has no waist, and the waist information lives in the boundary channel you didn't use.
+
+   - **Mask-only models — distance-map watershed.** If the model gives only a foreground mask (no boundary), chain a watershed:
+
+     ```
+     UNet → ConnectedComponents → Watershed → ExtractRois
+     ```
+
+     `ConnectedComponents` labels each blob; `Watershed` re-splits any blob with more than one object. It's a faithful port of ImageJ's `Process > Binary > Watershed` (the `MaximumFinder` distance-map algorithm), so the default `maximum_finder_tolerance` of `0.5` works for most nuclei. Note this only works when touching nuclei actually form a pinched "peanut"; heavily overlapping nuclei with no waist cannot be split from the mask alone.
+
+These patterns (boundary-carving, and distance-map declumping) are the standard approaches for U-Net-style models — the same ideas used by CellProfiler and ilastik. `Stardist`, by contrast, predicts per-object instances directly and skips all of this — but only genuine StarDist exports (object probability + radial distances) work with the `Stardist` command; a boundary U-Net like `affable-shark` will **not**.
 
 ---
 
@@ -102,6 +139,50 @@ The workspace is organised into focused crates:
 
 ---
 
+## Installing a release
+
+Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies (libtorch, DuckDB), the bundled Java runtime and Bio-Formats all ship **inside the archive, next to the binary**, so there is nothing else to install.
+
+### Linux x86-64 — `evanalyzer-linux-x86_64.tar.gz`
+
+```sh
+tar xzf evanalyzer-linux-x86_64.tar.gz
+./evanalyzer
+```
+
+### Windows x86-64 — `evanalyzer-windows-x86_64.zip`
+
+Unzip the archive and run `evanalyzer.exe` (keep the `.dll` files next to it).
+
+### macOS, Apple Silicon — `evanalyzer-macos-arm64.tar.gz`
+
+```sh
+tar xzf evanalyzer-macos-arm64.tar.gz
+# The build is ad-hoc signed but not notarized, so macOS Gatekeeper quarantines
+# it after download. Clear the quarantine flag once, then launch it:
+xattr -dr com.apple.quarantine evanalyzer
+./evanalyzer
+```
+
+> Keep every file from the archive in the same folder — the bundled `.dylib`
+> libraries are resolved relative to the `evanalyzer` binary.
+
+### GPU (CUDA) builds — Linux / Windows
+
+The CUDA builds bundle the (multi-GB) NVIDIA runtime, so they are published as
+**split 7-Zip archives** (`…-cuda.7z.001`, `.002`, …) to stay under GitHub's
+per-file limit. Download **all** volumes into one folder and extract with
+[7-Zip](https://www.7-zip.org/) pointed at the first part:
+
+```sh
+7z x evanalyzer-linux-x86_64-cuda.7z.001     # finds .002, .003, … automatically
+```
+
+Then run the `evanalyzer` binary as for the CPU build. A matching NVIDIA driver
+(CUDA 12.x) must be installed on the machine.
+
+---
+
 ## Building
 
 ### Linux x86-64
@@ -125,6 +206,16 @@ cargo build-linux-arm
 ```
 
 > Requires the cross-toolchain: `apt install gcc-aarch64-linux-gnu` and `rustup target add aarch64-unknown-linux-gnu`
+
+### macOS, Apple Silicon
+
+```sh
+cargo build-mac
+```
+
+> Build natively on an Apple-Silicon Mac. DuckDB is not bundled on macOS, so set
+> `DUCKDB_LIB_DIR`/`DUCKDB_INCLUDE_DIR` to a prebuilt libduckdb (see
+> `libs/download.sh mac-cpu` and the `build-macos` CI job).
 
 ---
 

@@ -1,0 +1,306 @@
+import { ComboBox, SpinBox } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ResultsState, ResultsChartKind } from "results_table.slint";
+
+// -- Histogram / scatter toggle ------------------------------------------------
+
+component ChartKindButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+
+    width: 86px;
+    height: 26px;
+    border-radius: 4px;
+    background: selected ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.raised);
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        font-weight: 600;
+        color: root.selected ? white : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// -- Public export -------------------------------------------------------------
+
+export component ResultsChart inherits Rectangle {
+    background: Theme.bg;
+    // Set by click-ta's `clicked` handler below; read by the tooltip. Purely
+    // local presentation state — never bound externally, never written from
+    // anywhere else, so it can't run into the property-recursion issues a
+    // shared global binding would.
+    property <string> tooltip_text: "";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // -- Settings strip ------------------------------------------------
+        Rectangle {
+            height: 44px;
+            background: Theme.panel;
+
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    ChartKindButton {
+                        label: "Histogram";
+                        selected: ResultsState.chart_kind == ResultsChartKind.histogram;
+                        clicked => { ResultsState.chart_kind = ResultsChartKind.histogram; }
+                    }
+
+                    ChartKindButton {
+                        label: "Scatter";
+                        selected: ResultsState.chart_kind == ResultsChartKind.scatter;
+                        clicked => { ResultsState.chart_kind = ResultsChartKind.scatter; }
+                    }
+
+                    ChartKindButton {
+                        label: "Heatmap";
+                        selected: ResultsState.chart_kind == ResultsChartKind.heatmap;
+                        clicked => { ResultsState.chart_kind = ResultsChartKind.heatmap; }
+                    }
+                }
+
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border-soft;
+                }
+
+                if ResultsState.chart_kind == ResultsChartKind.histogram: HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    Text {
+                        text: "Column:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        width: 170px;
+                        model: ResultsState.chart_plottable_columns;
+                        current-value: ResultsState.chart_hist_column;
+                        selected(v) => { ResultsState.chart_hist_column = v; }
+                    }
+
+                    Text {
+                        text: "Buckets:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    SpinBox {
+                        width: 100px;
+                        minimum: 2;
+                        maximum: 200;
+                        value: ResultsState.chart_bucket_count;
+                        edited(v) => { ResultsState.chart_bucket_count = v; }
+                    }
+
+                    ChartKindButton {
+                        width: 85px;
+                        label: "Log scale";
+                        selected: ResultsState.chart_log_scale;
+                        clicked => { ResultsState.chart_log_scale = !ResultsState.chart_log_scale; }
+                    }
+                }
+
+                if ResultsState.chart_kind == ResultsChartKind.scatter: HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    Text {
+                        text: "X:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        width: 150px;
+                        model: ResultsState.chart_plottable_columns;
+                        current-value: ResultsState.chart_scatter_x;
+                        selected(v) => { ResultsState.chart_scatter_x = v; }
+                    }
+
+                    Text {
+                        text: "Y:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        width: 150px;
+                        model: ResultsState.chart_plottable_columns;
+                        current-value: ResultsState.chart_scatter_y;
+                        selected(v) => { ResultsState.chart_scatter_y = v; }
+                    }
+
+                    Text {
+                        text: "Color by:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        width: 110px;
+                        model: ["None", "Class", "Colocalized"];
+                        current-value: ResultsState.chart_color_by == "class" ? "Class" : (ResultsState.chart_color_by == "colocalized" ? "Colocalized" : "None");
+                        selected(v) => {
+                            ResultsState.chart_color_by = v == "Class" ? "class" : (v == "Colocalized" ? "colocalized" : "");
+                        }
+                    }
+                }
+
+                if ResultsState.chart_kind == ResultsChartKind.heatmap: HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    Text {
+                        text: "Color by:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        width: 170px;
+                        model: ResultsState.chart_heatmap_metric_options;
+                        current-value: ResultsState.chart_heatmap_metric;
+                        selected(v) => { ResultsState.chart_heatmap_metric = v; }
+                    }
+
+                    Text {
+                        text: "Cell size (px):";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    SpinBox {
+                        width: 110px;
+                        minimum: 1;
+                        maximum: 10000;
+                        value: ResultsState.chart_cell_size_px;
+                        edited(v) => { ResultsState.chart_cell_size_px = v; }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                plot-ta := TouchArea {
+                    width: 64px;
+                    height: 26px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.tooltip_text = "";
+                        ResultsState.chart_render_requested();
+                    }
+
+                    Rectangle {
+                        border-radius: 4px;
+                        background: plot-ta.has-hover ? Theme.accent.darker(15%) : Theme.accent;
+                        animate background { duration: 80ms; }
+
+                        Text {
+                            text: "Plot";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            font-weight: 600;
+                            color: white;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+
+        // -- Chart area -------------------------------------------------------
+        Rectangle {
+            vertical-stretch: 1;
+            background: white;
+            clip: true;
+
+            Image {
+                source: ResultsState.chart_image;
+                width: 100%;
+                height: 100%;
+                image-fit: contain;
+            }
+
+            if ResultsState.chart_status != "": Text {
+                x: 20px;
+                width: parent.width - 40px;
+                text: ResultsState.chart_status;
+                font-size: 12px;
+                font-family: Theme.font-sans;
+                color: Theme.text-faint;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            click-ta := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.tooltip_text = ResultsState.chart_point_lookup(
+                        self.mouse-x / 1px,
+                        self.mouse-y / 1px,
+                        self.width / 1px,
+                        self.height / 1px,
+                    );
+                }
+            }
+
+            if root.tooltip_text != "": tip := Rectangle {
+                x: click-ta.mouse-x < parent.width * 0.7 ? click-ta.mouse-x + 14px : click-ta.mouse-x - self.width - 14px;
+                y: click-ta.mouse-y < parent.height * 0.7 ? click-ta.mouse-y + 14px : click-ta.mouse-y - self.height - 14px;
+                width: tip-text.width + 14px;
+                height: tip-text.height + 10px;
+                background: #1a1a1aee;
+                border-radius: 4px;
+
+                tip-text := Text {
+                    x: 7px;
+                    y: 5px;
+                    text: root.tooltip_text;
+                    font-size: 11px;
+                    font-family: Theme.font-mono;
+                    color: white;
+                    wrap: no-wrap;
+                }
+            }
+        }
+    }
+}

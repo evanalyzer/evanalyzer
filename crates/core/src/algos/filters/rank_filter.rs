@@ -251,6 +251,8 @@ fn get_kernel_geometry(radius: f64) -> (Vec<i32>, i32, usize) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::{
         image::PixelSizes,
@@ -275,6 +277,7 @@ mod tests {
             Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
 
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,
@@ -361,6 +364,7 @@ mod tests {
             CpuAllocator,
         )?;
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,
@@ -458,6 +462,7 @@ mod tests {
         )?;
 
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

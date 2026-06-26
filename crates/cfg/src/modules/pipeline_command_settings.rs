@@ -257,6 +257,85 @@ pub enum SegmentationThresholdThresholdMethodSettings {
     Yen,
 }
 
+///  Each variant carries only the parameters it actually uses, so there's no shared field whose
+///  meaning shifts depending on which function is selected (e.g. a "factor" that's a unitless
+///  multiplier for `Scale` but a length in `size_unit` for `SnapArea`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ClassificationTransformRoisTransformFunctionSettings {
+    /// Scale the ROI by the given scale factor.
+    ///
+    /// Shape keeps and center of the ROI keeps the same, it is just shrinked or expanded.
+    #[serde(rename_all = "camelCase")]
+    Scale {
+        ///  Unitless scale factor
+        #[schemars(range(min = 0, max = 65535))]
+        factor: f32,
+    },
+    /// Draws a circle around the ROI which is `extra_size` bigger than the ROI's bounding box.
+    #[serde(rename_all = "camelCase")]
+    SnapArea {
+        ///  Size added on top of the ROI's bounding-box diameter
+        #[schemars(range(min = 0, max = 65535))]
+        extra_size: f32,
+        ///  Unit `extra_size` is expressed in
+        unit: SizeUnits,
+    },
+    /// Draws a circle around the ROI's bounding box, with `min_diameter` as the minimum diameter.
+    #[serde(rename_all = "camelCase")]
+    MinCircle {
+        ///  Minimum circle diameter
+        #[schemars(range(min = 0, max = 65535))]
+        min_diameter: f32,
+        ///  Unit `min_diameter` is expressed in
+        unit: SizeUnits,
+    },
+    /// Draws a circle with exactly `diameter` as diameter around the ROI.
+    ///
+    /// If `diameter` is 0, the ROI's bounding box is used as the diameter instead.
+    #[serde(rename_all = "camelCase")]
+    DrawCircle {
+        ///  Circle diameter (0 = use the ROI's bounding box)
+        #[schemars(range(min = 0, max = 65535))]
+        diameter: f32,
+        ///  Unit `diameter` is expressed in
+        unit: SizeUnits,
+    },
+    /// Replaces the ROI with the ellipse fitted to its mask.
+    #[serde(rename_all = "camelCase")]
+    FittingEllipse {
+        ///  Unitless scale factor for the fitted ellipse
+        #[schemars(range(min = 0, max = 65535))]
+        scale: f32,
+    },
+}
+
+impl Default for ClassificationTransformRoisTransformFunctionSettings {
+    fn default() -> Self {
+        Self::Scale { factor: 1.0f32 }
+    }
+}
+
+///  How a multi-channel U-Net output should be turned into a single foreground
+///  probability map. Ignored for single-channel outputs, which are always
+///  treated as already-activated foreground probabilities.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AiSegmentationUnetUNetOutputModeSettings {
+    /// Channels are mutually-exclusive class scores (e.g. a background/foreground
+    /// classification head). `softmax` is applied over the channel dimension
+    /// first, then the channel at `foreground_channel` is taken as the
+    /// foreground probability.
+    #[default]
+    SoftmaxClasses,
+    /// Channels are independent, already-activated probability maps — e.g. a
+    /// foreground-mask channel plus a separate boundary channel, as produced by
+    /// boundary-aware models (mask + boundary heads are *not* mutually
+    /// exclusive, so they must never be put through a softmax together). The
+    /// channel at `foreground_channel` is used directly.
+    IndependentChannels,
+}
+
 // ============ PREPROCESSING ============
 
 ///  Smooths an image by averaging pixel intensities within a local neighborhood.
@@ -729,8 +808,9 @@ impl Default for RollingBallSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveImageSettings {
-    ///  The destination filesystem path where the image will be written.
-    pub path: PathBuf,
+    ///  Name the image should be stord under
+    pub name: String,
+    ///  Which image from the pipeline should be stored
     pub source: MathSaveImageImageSourceSettings,
 }
 
@@ -807,6 +887,122 @@ pub struct WeightedDeviationSettings {
 
 // ============ SEGMENTATION ============
 
+///  Instance segmentation using a pretrained Cellpose model exported as TorchScript.
+///
+///  The model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)
+///  grayscale image is placed in channel 0 and any remaining channels are filled
+///  with zeros. Standard Cellpose networks expect **two** channels (cytoplasm +
+///  optional nucleus), which is the default; single-channel exports use
+///  `input_channels = 1`. The model must return a `[1, C, H, W]` tensor with
+///  `C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow
+///  `dX` (channel 1) and the cell-probability logits (channel 2), which is
+///  Cellpose's spatial-gradient representation. Exports that wrap the output in a
+///  tuple (e.g. `(flows, style)`) are also supported — the first tensor with at
+///  least three channels is used.
+///
+///  Instances are recovered with Cellpose's *dynamics*: every pixel whose
+///  cell probability reaches `probability_threshold` is advected for
+///  `flow_iterations` Euler steps along the (down-scaled) flow field until it
+///  converges to the sink at its cell's center. Pixels whose trajectories end in
+///  the same sink basin — found by connected components over the final-position
+///  density map — form one instance. Instances smaller than `min_object_size`
+///  pixels are discarded. Runs on GPU automatically if CUDA is available in the
+///  linked libtorch build, otherwise falls back to CPU.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct CellposeSettings {
+    ///  Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
+    pub model_path: PathBuf,
+    ///  The class assigned to pixels of every detected object. All other
+    ///  pixels are assigned `SegmentationClass::BACKGROUND`.
+    pub object_class_id: SegmentationClass,
+    ///  Number of input channels the model expects. The grayscale image goes in
+    ///  channel 0; any further channels are zero-filled. Standard Cellpose models
+    ///  take `2` (cytoplasm + optional nucleus); set `1` for single-channel
+    ///  exports, or higher to match a custom model.
+    #[schemars(range(min = 1, max = 8))]
+    pub input_channels: i32,
+    ///  Cell probability above which a pixel takes part in the flow dynamics and
+    ///  can be assigned to an object. The raw cell-probability logits are passed
+    ///  through a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's
+    ///  default logit threshold of `0` corresponds to `0.5`).
+    #[schemars(range(min = 0, max = 1))]
+    pub probability_threshold: f32,
+    ///  Number of Euler integration steps used to follow the flow field. Higher
+    ///  values let pixels of large cells reach their sink at the cost of runtime;
+    ///  Cellpose's default is `200`.
+    #[schemars(range(min = 1, max = 1000))]
+    pub flow_iterations: i32,
+    ///  Minimum object size, in pixels. After the dynamics, any instance smaller
+    ///  than this is removed (its pixels become background). `0` disables the filter.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_object_size: i32,
+}
+
+impl Default for CellposeSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            object_class_id: SegmentationClass(1),
+            input_channels: 2i32,
+            probability_threshold: 0.5f32,
+            flow_iterations: 200i32,
+            min_object_size: 15i32,
+        }
+    }
+}
+
+///  Instance segmentation using a pretrained StarDist model exported as TorchScript.
+///
+///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
+///  same normalization as the rest of the pipeline) and return two tensors:
+///  an object-probability map `[1, 1, H', W']` and a ray-distance map
+///  `[1, n_rays, H', W']` giving, for each grid cell, the distance to the object
+///  boundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon
+///  representation). `H'`/`W'` may be smaller than the input size if the model
+///  predicts on a coarser grid; this is detected from the output shape and the
+///  polygons are rescaled back to image resolution automatically.
+///
+///  Some TorchScript exports concatenate both outputs into a single
+///  `[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =
+///  distances); this is also supported.
+///
+///  Per grid cell candidates above `probability_threshold` are converted to
+///  star-convex polygons, then greedily filtered with non-maximum suppression
+///  (polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds
+///  `nms_threshold` are discarded) before being rasterized into the pipeline's
+///  segmentation and instance maps. Runs on GPU automatically if CUDA is
+///  available in the linked libtorch build, otherwise falls back to CPU.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct StardistSettings {
+    ///  Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
+    pub model_path: PathBuf,
+    ///  The class assigned to pixels of every detected object. All other
+    ///  pixels are assigned `SegmentationClass::BACKGROUND`.
+    pub object_class_id: SegmentationClass,
+    ///  Probability above which a grid cell is considered a candidate object center.
+    #[schemars(range(min = 0, max = 1))]
+    pub probability_threshold: f32,
+    ///  Pixel-overlap ratio (intersection / union) above which a lower-scoring
+    ///  candidate polygon is suppressed in favor of an overlapping higher-scoring one.
+    #[schemars(range(min = 0, max = 1))]
+    pub nms_threshold: f32,
+}
+
+impl Default for StardistSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            object_class_id: SegmentationClass(1),
+            probability_threshold: 0.5f32,
+            nms_threshold: 0.3f32,
+        }
+    }
+}
+
 ///  A filter that segments an image into discrete classes based on intensity.
 ///
 ///  This supports "Multi-Otsu" style behavior by allowing a vector of
@@ -871,6 +1067,77 @@ impl Default for ThresholdEntrySettings {
     }
 }
 
+///  Semantic segmentation using a pretrained U-Net exported as TorchScript.
+///
+///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
+///  same normalization as the rest of the pipeline) and return either a
+///  `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
+///  applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
+///  channel, in which case `output_mode` and `foreground_channel` decide how the
+///  foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
+///  automatically if CUDA is available in the linked libtorch build, otherwise
+///  falls back to CPU.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct UNetSettings {
+    ///  Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).
+    pub model_path: PathBuf,
+    ///  The class assigned to pixels whose predicted probability reaches
+    ///  `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.
+    pub object_class_id: SegmentationClass,
+    ///  Probability above which a pixel is classified as foreground.
+    #[schemars(range(min = 0, max = 1))]
+    pub probability_threshold: f32,
+    ///  How to interpret the model output when it has more than one channel.
+    ///  Ignored for single-channel outputs.
+    pub output_mode: AiSegmentationUnetUNetOutputModeSettings,
+    ///  Index of the channel holding the foreground probability, used only
+    ///  when the model output has more than one channel. Out-of-range values
+    ///  are clamped to the last available channel.
+    ///
+    ///  * For `SoftmaxClasses`, this is typically the last channel (e.g. `1`
+    ///    for a 2-class background/foreground head).
+    ///  * For `IndependentChannels`, this is whichever channel the model
+    ///    dedicates to the foreground mask — commonly `0` for boundary-aware
+    ///    models, which conventionally output mask before boundary.
+    #[schemars(range(min = 0, max = 16))]
+    pub foreground_channel: i32,
+    ///  Index of an optional **boundary** channel for boundary-aware models
+    ///  (e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,
+    ///  which outputs mask in channel 0 and boundary in channel 1). Set to `-1`
+    ///  to disable.
+    ///
+    ///  When enabled, a pixel is classified as foreground only where the
+    ///  foreground probability reaches `probability_threshold` **and** the
+    ///  boundary probability stays below `boundary_threshold`. This carves the
+    ///  predicted boundaries out as thin gaps, so a following `ConnectedComponents`
+    ///  separates touching objects directly — which is the whole point of a
+    ///  boundary model and the only way to split nuclei a plain mask merges.
+    #[schemars(range(min = -1, max = 16))]
+    pub boundary_channel: i32,
+    ///  Boundary probability at or above which a pixel is treated as an object
+    ///  boundary and excluded from the foreground. Only used when
+    ///  `boundary_channel` is enabled (>= 0). Lower values cut wider gaps
+    ///  (separate more aggressively); higher values cut thinner gaps.
+    #[schemars(range(min = 0, max = 1))]
+    pub boundary_threshold: f32,
+}
+
+impl Default for UNetSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            object_class_id: SegmentationClass(1),
+            probability_threshold: 0.5f32,
+            output_mode: AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses,
+            foreground_channel: 1i32,
+            boundary_channel: -1i32,
+            boundary_threshold: 0.5f32,
+        }
+    }
+}
+
 // ============ OBJECT ============
 
 ///  Identifies and labels discrete objects within a binary or multi-class image.
@@ -880,35 +1147,52 @@ pub struct ConnectedComponentsSettings {}
 
 ///  A morphological segmentation algorithm that splits touching objects using distance topography.
 ///
-///  The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).
-///  By analyzing the "shape" of an object via a Distance Transform, it identifies centers of mass
-///  and establishes boundaries at the narrowest points of connection.
-///
-///  This implementation is adaptive:
-///  * It can **auto-detect** objects from grayscale intensity peaks.
-///  * It can **refine** existing segments if a `U32Label` image is provided as input.
+///  This is a faithful port of ImageJ's `Process > Binary > Watershed`
+///  (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
+///  `ConnectedComponents` merged into a single blob are split at their "necks":
+///  the distance map's local maxima are the seeds, maxima protruding less than
+///  `maximum_finder_tolerance` above the ridge connecting them to a higher maximum
+///  are merged, and a constrained flood draws 1-pixel watershed lines between the
+///  surviving basins. The split blob is then re-labeled into separate instances.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct WatershedSettings {
-    ///  The prominence threshold for peak detection.
+    ///  Prominence tolerance for the maximum finder, in pixels of distance.
     ///
-    ///  This value determines how "deep" the valley between two peaks must be to
-    ///  keep them as separate objects.
+    ///  A local maximum of the distance map is treated as a separate object only
+    ///  if it protrudes more than this value above the ridge connecting it to a
+    ///  higher maximum. This is ImageJ's "prominence"/"noise tolerance" parameter.
     ///
-    ///  * **Low values**: Sensitive to small variations; may cause over-segmentation (splitting one object into many).
-    ///  * **High values**: More robust to noise; may cause under-segmentation (failing to split touching objects).
+    ///  * **Low values**: more sensitive; may over-segment ragged objects.
+    ///  * **High values**: more robust; may fail to split genuinely touching objects.
     ///
-    ///  In an EDM (Euclidean Distance Map), this value directly corresponds to the
-    ///  pixel distance from the edge of the object.
-    #[schemars(range(min = 0.1, max = 1))]
+    ///  ImageJ's default of `0.5` works well for most distance maps; raise it if a
+    ///  single object is being split into several pieces.
+    #[schemars(range(min = 0.1, max = 20))]
     pub maximum_finder_tolerance: f32,
+    ///  Standard deviation (px) of an optional Gaussian blur applied to the
+    ///  distance map *before* the maximum finder. `0` disables it.
+    ///
+    ///  ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
+    ///  boundaries, so this is rarely needed; for extremely noisy AI masks a value
+    ///  of `1.0`–`2.0` can further suppress spurious maxima.
+    #[schemars(range(min = 0, max = 10))]
+    pub smoothing_sigma: f32,
+    ///  Minimum object size, in pixels. After segmentation, any object smaller than
+    ///  this is removed (its pixels become background). `0` disables the filter.
+    ///
+    ///  Use it to drop tiny fragments left by very ragged masks.
+    #[schemars(range(min = 0, max = 100000))]
+    pub min_object_size: i32,
 }
 
 impl Default for WatershedSettings {
     fn default() -> Self {
         Self {
             maximum_finder_tolerance: 0.5f32,
+            smoothing_sigma: 0.0f32,
+            min_object_size: 0i32,
         }
     }
 }
@@ -1126,6 +1410,37 @@ pub struct ColocalizationSettings {
     pub size_unit: SizeUnits,
     ///  Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
+}
+
+///  Transforms given ROIs and either replaces the old ones or creates new ones.
+///
+///  This command applies a geometric transform (scale, circle, fitted ellipse) to every ROI
+///  carrying `input_class`. The transformed shape keeps the original ROI's bounding-box center.
+///  If `output_class` is unset (or equal to `input_class`) the input ROI is replaced in place;
+///  otherwise a new ROI carrying `output_class` is created alongside the untouched input ROI.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformRoisSettings {
+    ///  Geometric transform applied to each input ROI
+    pub function: ClassificationTransformRoisTransformFunctionSettings,
+    ///  ROIs carrying this class are the input to the transform
+    pub input_class: ObjectClass,
+    ///  If unset, the transformed shape replaces the input ROI in place.
+    ///
+    ///  If set, a new ROI carrying this class is created for each transformed input ROI instead,
+    ///  leaving the input ROI untouched.
+    pub output_class: ObjectClass,
+}
+
+impl Default for TransformRoisSettings {
+    fn default() -> Self {
+        Self {
+            function: ClassificationTransformRoisTransformFunctionSettings::default(),
+            input_class: ObjectClass::default(),
+            output_class: ObjectClass::Unset,
+        }
+    }
 }
 
 ///  Computes a Voronoi tessellation from segmented seed objects.

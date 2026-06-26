@@ -473,7 +473,7 @@
           "enabled": true,
           "command": {
             "type": "saveImage",
-            "path": "images/${imageName}",
+            "name": "spot_ch1",
             "source": "IMAGE"
           }
         }
@@ -592,7 +592,7 @@
           "enabled": true,
           "command": {
             "type": "saveImage",
-            "path": "images/${imageName}",
+            "name": "spot_ch2",
             "source": "IMAGE"
           }
         }

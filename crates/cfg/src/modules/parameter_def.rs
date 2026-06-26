@@ -23,6 +23,11 @@ pub enum ParamType {
     SizeUnits,
     /// Read-only text label - value is displayed but the field is not editable.
     Label,
+    /// PathBuf displayed as a text field with a "Browse…" button that opens a
+    /// native file picker. `options` holds the allowed file extensions (empty
+    /// means any file); the dialog's initial directory is derived from the
+    /// field's current value.
+    FilePath,
 }
 
 #[allow(dead_code)]

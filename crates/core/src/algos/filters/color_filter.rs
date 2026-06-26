@@ -199,6 +199,8 @@ fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::image::PixelSizes;
     use crate::pipeline::pipeline::PipelineImageMeta;
@@ -233,6 +235,7 @@ mod tests {
 
         // Initialize Context
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,
@@ -310,6 +313,7 @@ mod tests {
         img.set_pixel(0, 0, 2, 0.1).unwrap();
 
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,
@@ -372,6 +376,7 @@ mod tests {
 
         // Initialize Context with F32Gray
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

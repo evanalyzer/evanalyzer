@@ -1,5 +1,6 @@
 use evanalyzer_cfg::core_types::InternalErrors;
 pub use evanalyzer_core::RoiRow;
+pub use evanalyzer_core::{coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with};
 use evanalyzer_core::{DuckDbReader, RoiFilter};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -55,9 +56,18 @@ pub fn discover_channels(rois: &[RoiRow]) -> Vec<i32> {
     channels.into_iter().collect()
 }
 
-/// Builds the full ordered list of [`ColumnSpec`] for the given channel list.
-/// All columns start as visible.
-pub fn build_column_specs(channels: &[i32]) -> Vec<ColumnSpec> {
+/// Builds the full ordered list of [`ColumnSpec`] for the given channel list
+/// and the set of known colocalization-partner classes. All columns start as
+/// visible.
+///
+/// Each partner class contributes two columns: `coloc_partner__{class}__count`
+/// (the number of that class's ROIs this ROI colocalizes with — numeric,
+/// aggregatable when grouping) and `coloc_partner__{class}__ids` (the
+/// colocalizing ROIs' object ids, comma-joined — display-only). The `__`
+/// separators are safe even if `class` itself contains `__`: parsing only ever
+/// strips the fixed `coloc_partner__` prefix and a fixed `__count`/`__ids`/
+/// `__<agg>` suffix, never splits on `__` in the middle.
+pub fn build_column_specs(channels: &[i32], coloc_partner_classes: &[String]) -> Vec<ColumnSpec> {
     let mut cols = vec![
         ColumnSpec {
             id: "roi_id".into(),
@@ -95,6 +105,12 @@ pub fn build_column_specs(channels: &[i32]) -> Vec<ColumnSpec> {
             filterable: false,
             visible: true,
         },
+        ColumnSpec {
+            id: "colocalized".into(),
+            label: "Colocalized".into(),
+            filterable: true,
+            visible: true,
+        },
     ];
     for &ch in channels {
         cols.push(ColumnSpec {
@@ -116,6 +132,20 @@ pub fn build_column_specs(channels: &[i32]) -> Vec<ColumnSpec> {
             visible: true,
         });
     }
+    for class in coloc_partner_classes {
+        cols.push(ColumnSpec {
+            id: format!("coloc_partner__{class}__count"),
+            label: format!("Coloc w/ {class} (#)"),
+            filterable: false,
+            visible: true,
+        });
+        cols.push(ColumnSpec {
+            id: format!("coloc_partner__{class}__ids"),
+            label: format!("Coloc w/ {class} (IDs)"),
+            filterable: false,
+            visible: true,
+        });
+    }
     cols
 }
 
@@ -129,9 +159,17 @@ pub fn build_column_specs(channels: &[i32]) -> Vec<ColumnSpec> {
 /// one channel column is visible.
 pub fn to_display_row(row_idx: usize, roi: &RoiRow, columns: &[ColumnSpec]) -> DisplayRow {
     let needs_intensities = columns.iter().any(|c| c.visible && c.id.starts_with("ch"));
+    let needs_coloc_partner = columns
+        .iter()
+        .any(|c| c.visible && c.id.starts_with("coloc_partner__"));
 
     let intensities: BTreeMap<i32, (f64, f64, f64)> = if needs_intensities {
         parse_intensities(&roi.intensities_json)
+    } else {
+        BTreeMap::new()
+    };
+    let coloc_partners: BTreeMap<String, Vec<String>> = if needs_coloc_partner {
+        parse_coloc_partners(&roi.coloc_json)
     } else {
         BTreeMap::new()
     };
@@ -151,6 +189,10 @@ pub fn to_display_row(row_idx: usize, roi: &RoiRow, columns: &[ColumnSpec]) -> D
                 "area_px" => roi.area_px.to_string(),
                 "area_nm2" => format!("{:.2}", roi.area_nm2),
                 "circularity" => format!("{:.3}", roi.circularity),
+                "colocalized" => coloc_label(is_colocalized(&roi.coloc_json)),
+                id if id.starts_with("coloc_partner__") => {
+                    coloc_partner_value(id, &coloc_partners)
+                }
                 id => channel_value(id, &intensities),
             }
         })
@@ -162,7 +204,7 @@ pub fn to_display_row(row_idx: usize, roi: &RoiRow, columns: &[ColumnSpec]) -> D
     }
 }
 
-fn compute_class(roi: &RoiRow) -> String {
+pub(crate) fn compute_class(roi: &RoiRow) -> String {
     if roi.object_class_name.is_empty() {
         roi.seg_class_name.clone().unwrap_or_default()
     } else {
@@ -170,8 +212,28 @@ fn compute_class(roi: &RoiRow) -> String {
     }
 }
 
+/// True if `coloc_json` (the per-ROI `colocalized_with` map, keyed by partner class label)
+/// records at least one colocalization partner for any class.
+pub(crate) fn is_colocalized(coloc_json: &str) -> bool {
+    if coloc_json.is_empty() || coloc_json == "{}" {
+        return false;
+    }
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(coloc_json) else {
+        return false;
+    };
+    let Some(obj) = val.as_object() else {
+        return false;
+    };
+    obj.values()
+        .any(|v| v.as_array().is_some_and(|a| !a.is_empty()))
+}
+
+pub(crate) fn coloc_label(colocalized: bool) -> String {
+    if colocalized { "Yes" } else { "No" }.to_string()
+}
+
 /// Parses `intensities_json` into a map of channel → (min_scaled, max_scaled, mean_scaled).
-fn parse_intensities(json: &str) -> BTreeMap<i32, (f64, f64, f64)> {
+pub(crate) fn parse_intensities(json: &str) -> BTreeMap<i32, (f64, f64, f64)> {
     let mut result = BTreeMap::new();
     if json.is_empty() || json == "{}" {
         return result;
@@ -224,6 +286,54 @@ fn channel_value(col_id: &str, intensities: &BTreeMap<i32, (f64, f64, f64)>) -> 
     }
 }
 
+/// Splits a `coloc_partner__{class}__{suffix}` column id into `(class, suffix)`,
+/// where `suffix` is `"count"`, `"ids"`, or (in a grouped column) an aggregate
+/// label. Only ever strips the fixed prefix and the *last* `__`-separated
+/// segment, so a class label containing `__` round-trips correctly.
+fn split_coloc_partner_id(col_id: &str) -> Option<(&str, &str)> {
+    let rest = col_id.strip_prefix("coloc_partner__")?;
+    rest.rsplit_once("__")
+}
+
+/// Parses `coloc_json` into a map of partner class label → colocalizing object ids.
+pub(crate) fn parse_coloc_partners(json: &str) -> BTreeMap<String, Vec<String>> {
+    let mut result = BTreeMap::new();
+    if json.is_empty() || json == "{}" {
+        return result;
+    }
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(json) else {
+        return result;
+    };
+    let Some(obj) = val.as_object() else {
+        return result;
+    };
+    for (class, ids) in obj {
+        let Some(ids) = ids.as_array() else { continue };
+        let ids: Vec<String> = ids
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        if !ids.is_empty() {
+            result.insert(class.clone(), ids);
+        }
+    }
+    result
+}
+
+/// Extracts a formatted value for `coloc_partner__{class}__count` /
+/// `coloc_partner__{class}__ids` columns.
+fn coloc_partner_value(col_id: &str, partners: &BTreeMap<String, Vec<String>>) -> String {
+    let Some((class, suffix)) = split_coloc_partner_id(col_id) else {
+        return String::new();
+    };
+    let ids = partners.get(class).map(Vec::as_slice).unwrap_or(&[]);
+    match suffix {
+        "count" => ids.len().to_string(),
+        "ids" => ids.join(", "),
+        _ => String::new(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Database filter and loader
 // ---------------------------------------------------------------------------
@@ -233,11 +343,21 @@ pub struct DatabaseFilter {
     pub image_filter: Option<Vec<String>>,
     /// `None` = no class filter; `Some([])` = nothing passes; `Some([..])` = restrict to these.
     pub class_filter: Option<Vec<String>>,
+    /// `None` = no coloc filter; `Some([])` = nothing passes; `Some([..])` = restrict to
+    /// rows whose colocalization status ("Yes"/"No") is in this set.
+    pub coloc_filter: Option<Vec<String>>,
+    /// Restricts to ROIs from this single time-frame index, or `None` for every frame.
+    pub t_stack_filter: Option<i32>,
+    /// Restricts to ROIs from this single Z-depth index, or `None` for every depth.
+    pub z_stack_filter: Option<i32>,
     pub page_size: usize,
     pub page: usize,
     /// When false the database omits `intensities_json` from the SELECT, avoiding
     /// JSON parsing cost when no channel columns are visible.
     pub needs_intensities: bool,
+    /// Results-table column id to sort by; `None` keeps the default order.
+    pub sort_column: Option<String>,
+    pub sort_ascending: bool,
 }
 
 impl Default for DatabaseFilter {
@@ -245,9 +365,14 @@ impl Default for DatabaseFilter {
         Self {
             image_filter: None,
             class_filter: None,
+            coloc_filter: None,
+            t_stack_filter: None,
+            z_stack_filter: None,
             page_size: 500,
             page: 0,
             needs_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
         }
     }
 }
@@ -320,6 +445,14 @@ pub struct GroupConfig {
     /// column per entry here (e.g. selecting Min+Max+Avg yields three columns
     /// per metric).
     pub aggs: Vec<AggFunc>,
+    /// When true, each group is additionally split into a colocalizing and a
+    /// non-colocalizing bucket (based on `RoiRow::coloc_json`), producing two
+    /// rows per group instead of one.
+    pub split_colocalized: bool,
+    /// When true, each group is additionally split by class (e.g. "Image1 /
+    /// Class1", "Image1 / Class2", …). A ROI carrying multiple classes
+    /// contributes to each of its classes' buckets.
+    pub group_by_class: bool,
 }
 
 impl Default for GroupConfig {
@@ -328,6 +461,8 @@ impl Default for GroupConfig {
             group_by: GroupBy::None,
             regex: String::new(),
             aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
+            group_by_class: false,
         }
     }
 }
@@ -360,14 +495,31 @@ fn group_key(roi: &RoiRow, group_by: GroupBy, regex: Option<&regex::Regex>) -> O
     }
 }
 
+/// Returns the classes a ROI belongs to, for fan-out grouping by class. Mirrors
+/// [`compute_class`]'s fallback to `seg_class_name`, but as a list instead of a
+/// joined string, so a multi-class ROI contributes to each of its classes'
+/// group buckets separately.
+fn roi_classes(roi: &RoiRow) -> Vec<String> {
+    if roi.object_class_name.is_empty() {
+        vec![roi.seg_class_name.clone().unwrap_or_default()]
+    } else {
+        roi.object_class_name.clone()
+    }
+}
+
 /// True for per-ROI columns that carry a numeric value we can aggregate.
 /// (Excludes `roi_id`, `image`, `class`.)
-fn is_numeric_metric(id: &str) -> bool {
-    matches!(id, "area_px" | "area_nm2" | "circularity") || id.starts_with("ch")
+pub(crate) fn is_numeric_metric(id: &str) -> bool {
+    matches!(id, "area_px" | "area_nm2" | "circularity")
+        || id.starts_with("ch")
+        || (id.starts_with("coloc_partner__") && id.ends_with("__count"))
 }
 
 /// Decimal places used when formatting a base metric's aggregate.
 fn metric_precision(id: &str) -> usize {
+    if id.starts_with("coloc_partner__") && id.ends_with("__count") {
+        return 0; // whole number of colocalizing ROIs
+    }
     match id {
         "area_nm2" => 2,
         "circularity" => 3,
@@ -376,16 +528,25 @@ fn metric_precision(id: &str) -> usize {
 }
 
 /// Pulls the numeric value of a base metric column (e.g. `area_px`,
-/// `ch0_min_bit`) from a single ROI, or `None` if absent.
-fn metric_value(
+/// `ch0_min_bit`, `coloc_partner__ClassA__count`) from a single ROI, or `None`
+/// if absent.
+pub(crate) fn metric_value(
     id: &str,
     roi: &RoiRow,
     intensities: &BTreeMap<i32, (f64, f64, f64)>,
+    coloc_partners: &BTreeMap<String, Vec<String>>,
 ) -> Option<f64> {
     match id {
         "area_px" => Some(roi.area_px as f64),
         "area_nm2" => Some(roi.area_nm2),
         "circularity" => Some(roi.circularity),
+        id if id.starts_with("coloc_partner__") => {
+            let (class, suffix) = split_coloc_partner_id(id)?;
+            if suffix != "count" {
+                return None;
+            }
+            Some(coloc_partners.get(class).map_or(0, Vec::len) as f64)
+        }
         _ => {
             let rest = id.strip_prefix("ch")?;
             let under = rest.find('_')?;
@@ -399,6 +560,25 @@ fn metric_value(
             }
         }
     }
+}
+
+/// Pulls the numeric value of `column_id` from a single ROI, parsing
+/// `intensities_json`/`coloc_json` only if that column actually needs them
+/// (same guarded pattern as [`to_display_row`]). Used by the chart module
+/// (`results_chart.rs`), which — unlike [`aggregate_rows`] — looks at one
+/// column at a time rather than every visible metric at once.
+pub(crate) fn numeric_value(roi: &RoiRow, column_id: &str) -> Option<f64> {
+    let intensities = if column_id.starts_with("ch") {
+        parse_intensities(&roi.intensities_json)
+    } else {
+        BTreeMap::new()
+    };
+    let coloc_partners = if column_id.starts_with("coloc_partner__") {
+        parse_coloc_partners(&roi.coloc_json)
+    } else {
+        BTreeMap::new()
+    };
+    metric_value(column_id, roi, &intensities, &coloc_partners)
 }
 
 /// Applies an aggregate to a slice of values. Returns `0.0` for an empty slice.
@@ -460,21 +640,36 @@ pub fn aggregate_rows(
         .filter(|c| c.visible && is_numeric_metric(&c.id))
         .collect();
 
-    // Grouped columns: key, count, then each metric × each selected aggregate.
-    let mut specs = vec![
-        ColumnSpec {
-            id: "group".into(),
-            label: group_label.into(),
+    // Grouped columns: key, (optionally) class, (optionally) colocalized
+    // split, count, then each metric × each selected aggregate.
+    let mut specs = vec![ColumnSpec {
+        id: "group".into(),
+        label: group_label.into(),
+        filterable: false,
+        visible: true,
+    }];
+    if config.group_by_class {
+        specs.push(ColumnSpec {
+            id: "group_class".into(),
+            label: "Class".into(),
             filterable: false,
             visible: true,
-        },
-        ColumnSpec {
-            id: "count".into(),
-            label: "ROIs".into(),
+        });
+    }
+    if config.split_colocalized {
+        specs.push(ColumnSpec {
+            id: "colocalized".into(),
+            label: "Colocalized".into(),
             filterable: false,
             visible: true,
-        },
-    ];
+        });
+    }
+    specs.push(ColumnSpec {
+        id: "count".into(),
+        label: "ROIs".into(),
+        filterable: false,
+        visible: true,
+    });
     for m in &metrics {
         for agg in &config.aggs {
             specs.push(ColumnSpec {
@@ -492,24 +687,43 @@ pub fn aggregate_rows(
         None
     };
     let needs_intensities = metrics.iter().any(|m| m.id.starts_with("ch"));
+    let needs_coloc_partner = metrics.iter().any(|m| m.id.starts_with("coloc_partner__"));
 
-    // group key -> (ROI count, base metric id -> collected values)
-    let mut groups: BTreeMap<String, (usize, BTreeMap<String, Vec<f64>>)> = BTreeMap::new();
+    // (group key, class, colocalized flag) -> (ROI count, base metric id -> collected values).
+    // `class` is `None` unless `group_by_class` is set, in which case a ROI fans out into
+    // one bucket per class it carries. `coloc flag` is `None` unless `split_colocalized` is
+    // set, in which case it is `Some(is_colocalized)`, splitting each group in two.
+    let mut groups: BTreeMap<(String, Option<String>, Option<bool>), (usize, BTreeMap<String, Vec<f64>>)> =
+        BTreeMap::new();
     for roi in rois {
         let Some(key) = group_key(roi, config.group_by, regex.as_ref()) else {
             continue;
         };
-        let entry = groups.entry(key).or_default();
-        entry.0 += 1;
+        let classes: Vec<Option<String>> = if config.group_by_class {
+            roi_classes(roi).into_iter().map(Some).collect()
+        } else {
+            vec![None]
+        };
+        let coloc_flag = config.split_colocalized.then(|| is_colocalized(&roi.coloc_json));
 
         let intensities = if needs_intensities {
             parse_intensities(&roi.intensities_json)
         } else {
             BTreeMap::new()
         };
-        for m in &metrics {
-            if let Some(v) = metric_value(&m.id, roi, &intensities) {
-                entry.1.entry(m.id.clone()).or_default().push(v);
+        let coloc_partners = if needs_coloc_partner {
+            parse_coloc_partners(&roi.coloc_json)
+        } else {
+            BTreeMap::new()
+        };
+
+        for class in classes {
+            let entry = groups.entry((key.clone(), class, coloc_flag)).or_default();
+            entry.0 += 1;
+            for m in &metrics {
+                if let Some(v) = metric_value(&m.id, roi, &intensities, &coloc_partners) {
+                    entry.1.entry(m.id.clone()).or_default().push(v);
+                }
             }
         }
     }
@@ -517,11 +731,13 @@ pub fn aggregate_rows(
     let rows = groups
         .into_iter()
         .enumerate()
-        .map(|(idx, (key, (count, metric_vals)))| {
+        .map(|(idx, ((key, class, coloc_flag), (count, metric_vals)))| {
             let values = specs
                 .iter()
                 .map(|col| match col.id.as_str() {
                     "group" => key.clone(),
+                    "group_class" => class.clone().unwrap_or_default(),
+                    "colocalized" => coloc_label(coloc_flag.unwrap_or(false)),
                     "count" => count.to_string(),
                     id => {
                         // id is "<base_id>__<agg>"
@@ -550,6 +766,31 @@ pub fn aggregate_rows(
     (specs, rows)
 }
 
+/// Sorts `rows` in place by the current value of `column_id` (looked up via
+/// `specs`), ascending or descending. Values that parse as numbers sort
+/// numerically; everything else sorts as text. A `column_id` absent from
+/// `specs` leaves `rows` untouched.
+///
+/// The grouped view is always fully materialized in memory (see
+/// [`aggregate_rows`]), so sorting it is a plain in-memory sort; the
+/// paginated per-ROI view sorts via SQL `ORDER BY` instead (see
+/// `DatabaseFilter::sort_column`), since only a fraction of its rows are
+/// ever loaded at once.
+pub fn sort_display_rows(rows: &mut [DisplayRow], specs: &[ColumnSpec], column_id: &str, ascending: bool) {
+    let Some(idx) = specs.iter().position(|c| c.id == column_id) else {
+        return;
+    };
+    rows.sort_by(|a, b| {
+        let av = a.values.get(idx).map(String::as_str).unwrap_or("");
+        let bv = b.values.get(idx).map(String::as_str).unwrap_or("");
+        let ord = match (av.parse::<f64>(), bv.parse::<f64>()) {
+            (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            _ => av.cmp(bv),
+        };
+        if ascending { ord } else { ord.reverse() }
+    });
+}
+
 pub struct ResultsLoader {
     path: PathBuf,
 }
@@ -563,9 +804,14 @@ impl ResultsLoader {
         DuckDbReader::open(&self.path)?.get_rois(&RoiFilter {
             image_filter: filter.image_filter,
             class_filter: filter.class_filter,
+            coloc_filter: filter.coloc_filter,
+            t_stack_filter: filter.t_stack_filter,
+            z_stack_filter: filter.z_stack_filter,
             page_size: filter.page_size,
             page: filter.page,
             fetch_intensities: filter.needs_intensities,
+            sort_column: filter.sort_column,
+            sort_ascending: filter.sort_ascending,
         })
     }
 
@@ -575,6 +821,22 @@ impl ResultsLoader {
 
     pub fn get_class_names(&self) -> Result<Vec<String>, InternalErrors> {
         DuckDbReader::open(&self.path)?.get_class_names()
+    }
+
+    /// `(min, max)` of `t_stack` present in the file, or `None` when there's
+    /// nothing to step through (no time axis, or a single shared value).
+    pub fn get_t_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
+        DuckDbReader::open(&self.path)?.get_t_stack_range()
+    }
+
+    /// `(min, max)` of `z_stack` present in the file, or `None` when there's
+    /// nothing to step through (no depth axis, or a single shared value).
+    pub fn get_z_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
+        DuckDbReader::open(&self.path)?.get_z_stack_range()
+    }
+
+    pub fn get_coloc_partner_class_names(&self) -> Result<Vec<String>, InternalErrors> {
+        DuckDbReader::open(&self.path)?.get_coloc_partner_class_names()
     }
 }
 
@@ -682,19 +944,20 @@ mod tests {
     // ---- build_column_specs ----
 
     #[test]
-    fn build_column_specs_no_channels_has_six_fixed_cols() {
-        let specs = build_column_specs(&[]);
-        assert_eq!(specs.len(), 6);
+    fn build_column_specs_no_channels_has_seven_fixed_cols() {
+        let specs = build_column_specs(&[], &[]);
+        assert_eq!(specs.len(), 7);
         assert_eq!(specs[0].id, "roi_id");
         assert_eq!(specs[5].id, "circularity");
+        assert_eq!(specs[6].id, "colocalized");
         assert!(specs.iter().all(|c| c.visible));
     }
 
     #[test]
     fn build_column_specs_with_channels_adds_three_cols_per_channel() {
-        let specs = build_column_specs(&[0, 1]);
-        assert_eq!(specs.len(), 6 + 3 * 2);
-        let ch_ids: Vec<&str> = specs[6..].iter().map(|c| c.id.as_str()).collect();
+        let specs = build_column_specs(&[0, 1], &[]);
+        assert_eq!(specs.len(), 7 + 3 * 2);
+        let ch_ids: Vec<&str> = specs[7..].iter().map(|c| c.id.as_str()).collect();
         assert_eq!(
             ch_ids,
             [
@@ -721,7 +984,7 @@ mod tests {
             0.923,
             "{}",
         );
-        let specs = build_column_specs(&[]);
+        let specs = build_column_specs(&[], &[]);
         let row = to_display_row(0, &roi, &specs);
 
         assert_eq!(row.roi_id, 1); // row_idx=0 → roi_id=1
@@ -731,12 +994,28 @@ mod tests {
         assert_eq!(row.values[3], "1234"); // area_px
         assert_eq!(row.values[4], "567.89"); // area_nm2
         assert_eq!(row.values[5], "0.923"); // circularity
+        assert_eq!(row.values[6], "No"); // colocalized (coloc_json is "{}")
+    }
+
+    #[test]
+    fn to_display_row_colocalized_column_reflects_coloc_json() {
+        let roi = make_roi("img.tif", vec![], None, 0, 0.0, 0.0, "{}");
+        let mut roi = roi;
+        roi.coloc_json = r#"{"Target (1)":["00000000-0000-0000-0000-000000000002"]}"#.into();
+        let specs = build_column_specs(&[], &[]);
+        let row = to_display_row(0, &roi, &specs);
+        assert_eq!(row.values[6], "Yes");
+
+        let mut not_colocalized = roi.clone();
+        not_colocalized.coloc_json = r#"{"Target (1)":[]}"#.into();
+        let row = to_display_row(0, &not_colocalized, &specs);
+        assert_eq!(row.values[6], "No");
     }
 
     #[test]
     fn to_display_row_class_falls_back_to_seg_class_when_object_class_empty() {
         let roi = make_roi("img.tif", vec![], Some("Background"), 0, 0.0, 0.0, "{}");
-        let specs = build_column_specs(&[]);
+        let specs = build_column_specs(&[], &[]);
         let row = to_display_row(0, &roi, &specs);
         assert_eq!(row.values[2], "Background");
     }
@@ -744,7 +1023,7 @@ mod tests {
     #[test]
     fn to_display_row_hidden_column_is_empty_string() {
         let roi = make_roi("img.tif", vec![], None, 100, 100.0, 0.5, "{}");
-        let mut specs = build_column_specs(&[]);
+        let mut specs = build_column_specs(&[], &[]);
         specs[3].visible = false; // hide area_px
         let row = to_display_row(0, &roi, &specs);
         assert_eq!(row.values[3], "");
@@ -754,17 +1033,17 @@ mod tests {
     fn to_display_row_channel_values_parsed_correctly() {
         let json = r#"{"0":{"sum_raw":0.0,"sum_scaled":0.0,"mean_raw":0.0,"mean_scaled":0.0,"median_raw":0.0,"median_scaled":0.0,"std_raw":0.0,"std_scaled":0.0,"min_raw":0.0,"min_scaled":100.0,"max_raw":0.0,"max_scaled":200.0}}"#;
         let roi = make_roi("img.tif", vec![], None, 0, 0.0, 0.0, json);
-        let specs = build_column_specs(&[0]);
+        let specs = build_column_specs(&[0], &[]);
         let row = to_display_row(0, &roi, &specs);
-        // index 6 = ch0_min_bit, 7 = ch0_max_bit, 8 = ch0_avg_bit
-        assert_eq!(row.values[6], "100"); // min_scaled rounded
-        assert_eq!(row.values[7], "200"); // max_scaled rounded
+        // index 7 = ch0_min_bit, 8 = ch0_max_bit, 9 = ch0_avg_bit
+        assert_eq!(row.values[7], "100"); // min_scaled rounded
+        assert_eq!(row.values[8], "200"); // max_scaled rounded
     }
 
     #[test]
     fn to_display_row_row_idx_increments_roi_id() {
         let roi = make_roi("img.tif", vec![], None, 0, 0.0, 0.0, "{}");
-        let specs = build_column_specs(&[]);
+        let specs = build_column_specs(&[], &[]);
         assert_eq!(to_display_row(0, &roi, &specs).roi_id, 1);
         assert_eq!(to_display_row(4, &roi, &specs).roi_id, 5);
     }
@@ -831,8 +1110,10 @@ mod tests {
             group_by: GroupBy::Regex,
             regex: r"^([A-Z]\d+)_".into(),
             aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
+            group_by_class: false,
         };
-        let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[]));
+        let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[], &[]));
 
         // group, count, area_px, area_nm2, circularity
         assert_eq!(specs.len(), 5);
@@ -863,8 +1144,10 @@ mod tests {
             group_by: GroupBy::Image,
             regex: String::new(),
             aggs: vec![AggFunc::Min],
+            split_colocalized: false,
+            group_by_class: false,
         };
-        let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[0]));
+        let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[0], &[]));
         // group, count, area_px, area_nm2, circularity, ch0_min, ch0_max, ch0_avg
         assert_eq!(specs.len(), 8);
         assert_eq!(rows.len(), 1);
@@ -884,8 +1167,10 @@ mod tests {
             group_by: GroupBy::Image,
             regex: String::new(),
             aggs: vec![AggFunc::Min, AggFunc::Max, AggFunc::Avg],
+            split_colocalized: false,
+            group_by_class: false,
         };
-        let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[]));
+        let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[], &[]));
         // group, count, then 3 metrics (area_px, area_nm2, circularity) × 3 aggs
         assert_eq!(specs.len(), 2 + 3 * 3);
         assert_eq!(specs[2].id, "area_px__min");
@@ -901,7 +1186,7 @@ mod tests {
     fn aggregate_rows_respects_column_visibility() {
         let rois = vec![make_roi("img", vec![], None, 100, 50.0, 0.9, "{}")];
         // Only the area_px metric is visible.
-        let mut base_specs = build_column_specs(&[]);
+        let mut base_specs = build_column_specs(&[], &[]);
         for spec in base_specs.iter_mut() {
             spec.visible = spec.id == "area_px";
         }
@@ -909,10 +1194,216 @@ mod tests {
             group_by: GroupBy::Image,
             regex: String::new(),
             aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
+            group_by_class: false,
         };
         let (specs, _rows) = aggregate_rows(&rois, &config, &base_specs);
         // group, count, area_px__avg — area_nm2/circularity hidden.
         assert_eq!(specs.len(), 3);
         assert_eq!(specs[2].id, "area_px__avg");
+    }
+
+    #[test]
+    fn aggregate_rows_split_colocalized_produces_two_rows_per_group() {
+        let mut coloc_roi_1 = make_roi("img", vec![], None, 100, 0.0, 0.0, "{}");
+        coloc_roi_1.coloc_json = r#"{"Target (1)":["00000000-0000-0000-0000-000000000002"]}"#.into();
+        let mut coloc_roi_2 = make_roi("img", vec![], None, 200, 0.0, 0.0, "{}");
+        coloc_roi_2.coloc_json = r#"{"Target (1)":["00000000-0000-0000-0000-000000000003"]}"#.into();
+        let not_coloc_roi = make_roi("img", vec![], None, 300, 0.0, 0.0, "{}"); // coloc_json "{}"
+
+        let rois = vec![coloc_roi_1, coloc_roi_2, not_coloc_roi];
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            regex: String::new(),
+            aggs: vec![AggFunc::Avg],
+            split_colocalized: true,
+            group_by_class: false,
+        };
+        let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[], &[]));
+
+        // group, colocalized, count, area_px__avg, area_nm2__avg, circularity__avg
+        assert_eq!(specs[0].id, "group");
+        assert_eq!(specs[1].id, "colocalized");
+        assert_eq!(specs[2].id, "count");
+
+        assert_eq!(rows.len(), 2, "one colocalizing + one non-colocalizing bucket");
+        // BTreeMap orders Option<bool> as None < Some(false) < Some(true), so the
+        // non-colocalizing bucket sorts first.
+        assert_eq!(rows[0].values[1], "No");
+        assert_eq!(rows[0].values[2], "1"); // count
+        assert_eq!(rows[0].values[3], "300.0"); // area_px avg
+        assert_eq!(rows[1].values[1], "Yes");
+        assert_eq!(rows[1].values[2], "2");
+        assert_eq!(rows[1].values[3], "150.0"); // avg(100,200)
+    }
+
+    // ---- coloc-partner columns ----
+
+    #[test]
+    fn build_column_specs_adds_two_cols_per_partner_class() {
+        let specs = build_column_specs(&[], &["ClassA".to_string(), "ClassB".to_string()]);
+        let ids: Vec<&str> = specs[7..].iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "coloc_partner__ClassA__count",
+                "coloc_partner__ClassA__ids",
+                "coloc_partner__ClassB__count",
+                "coloc_partner__ClassB__ids",
+            ]
+        );
+    }
+
+    #[test]
+    fn to_display_row_coloc_partner_count_and_ids() {
+        let mut roi = make_roi("img.tif", vec![], None, 0, 0.0, 0.0, "{}");
+        roi.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002","00000000-0000-0000-0000-000000000003"]}"#.into();
+        let specs = build_column_specs(&[], &["ClassA".to_string(), "ClassB".to_string()]);
+        let row = to_display_row(0, &roi, &specs);
+
+        // index 7/8 = ClassA count/ids, 9/10 = ClassB count/ids
+        assert_eq!(row.values[7], "2");
+        assert_eq!(
+            row.values[8],
+            "00000000-0000-0000-0000-000000000002, 00000000-0000-0000-0000-000000000003"
+        );
+        assert_eq!(row.values[9], "0", "no ClassB partners");
+        assert_eq!(row.values[10], "");
+    }
+
+    #[test]
+    fn aggregate_rows_coloc_partner_count_is_aggregatable_metric() {
+        let mut roi1 = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        roi1.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002"]}"#.into();
+        let mut roi2 = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        roi2.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002","00000000-0000-0000-0000-000000000003"]}"#.into();
+
+        let base_specs = build_column_specs(&[], &["ClassA".to_string()]);
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            regex: String::new(),
+            aggs: vec![AggFunc::Max],
+            split_colocalized: false,
+            group_by_class: false,
+        };
+        let (specs, rows) = aggregate_rows(&[roi1, roi2], &config, &base_specs);
+
+        let max_col = specs
+            .iter()
+            .position(|c| c.id == "coloc_partner__ClassA__count__max")
+            .expect("ClassA coloc-partner count should be an aggregatable metric");
+        assert_eq!(rows[0].values[max_col], "2");
+    }
+
+    // ---- group_by_class ----
+
+    #[test]
+    fn aggregate_rows_group_by_class_splits_into_one_row_per_class() {
+        let roi_a = make_roi("img", vec!["ClassA".to_string()], None, 100, 0.0, 0.0, "{}");
+        let roi_b = make_roi("img", vec!["ClassB".to_string()], None, 200, 0.0, 0.0, "{}");
+
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            regex: String::new(),
+            aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
+            group_by_class: true,
+        };
+        let (specs, rows) = aggregate_rows(&[roi_a, roi_b], &config, &build_column_specs(&[], &[]));
+
+        assert_eq!(specs[0].id, "group");
+        assert_eq!(specs[1].id, "group_class");
+        assert_eq!(specs[2].id, "count");
+
+        assert_eq!(rows.len(), 2, "one row per (image, class) pair");
+        assert_eq!(rows[0].values[1], "ClassA");
+        assert_eq!(rows[0].values[2], "1");
+        assert_eq!(rows[1].values[1], "ClassB");
+        assert_eq!(rows[1].values[2], "1");
+    }
+
+    #[test]
+    fn aggregate_rows_group_by_class_multi_class_roi_fans_out_to_both_buckets() {
+        let roi = make_roi(
+            "img",
+            vec!["ClassA".to_string(), "ClassB".to_string()],
+            None,
+            100,
+            0.0,
+            0.0,
+            "{}",
+        );
+
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            regex: String::new(),
+            aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
+            group_by_class: true,
+        };
+        let (_specs, rows) = aggregate_rows(&[roi], &config, &build_column_specs(&[], &[]));
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "a ROI carrying two classes contributes to both class buckets"
+        );
+        assert_eq!(rows[0].values[1], "ClassA");
+        assert_eq!(rows[1].values[1], "ClassB");
+    }
+
+    // ---- sort_display_rows ----
+
+    #[test]
+    fn sort_display_rows_orders_numerically_ascending_and_descending() {
+        let specs = vec![ColumnSpec {
+            id: "area_px".into(),
+            label: "Area".into(),
+            filterable: false,
+            visible: true,
+        }];
+        let mut rows = vec![
+            DisplayRow { roi_id: 1, values: vec!["300".into()] },
+            DisplayRow { roi_id: 2, values: vec!["100".into()] },
+            DisplayRow { roi_id: 3, values: vec!["200".into()] },
+        ];
+
+        sort_display_rows(&mut rows, &specs, "area_px", true);
+        assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![2, 3, 1]);
+
+        sort_display_rows(&mut rows, &specs, "area_px", false);
+        assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![1, 3, 2]);
+    }
+
+    #[test]
+    fn sort_display_rows_falls_back_to_text_for_non_numeric_values() {
+        let specs = vec![ColumnSpec {
+            id: "group".into(),
+            label: "Group".into(),
+            filterable: false,
+            visible: true,
+        }];
+        let mut rows = vec![
+            DisplayRow { roi_id: 1, values: vec!["banana".into()] },
+            DisplayRow { roi_id: 2, values: vec!["apple".into()] },
+        ];
+        sort_display_rows(&mut rows, &specs, "group", true);
+        assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![2, 1]);
+    }
+
+    #[test]
+    fn sort_display_rows_unknown_column_leaves_rows_untouched() {
+        let specs = vec![ColumnSpec {
+            id: "area_px".into(),
+            label: "Area".into(),
+            filterable: false,
+            visible: true,
+        }];
+        let mut rows = vec![
+            DisplayRow { roi_id: 1, values: vec!["300".into()] },
+            DisplayRow { roi_id: 2, values: vec!["100".into()] },
+        ];
+        sort_display_rows(&mut rows, &specs, "does_not_exist", true);
+        assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![1, 2]);
     }
 }

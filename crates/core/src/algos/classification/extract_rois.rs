@@ -8,10 +8,13 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::{
-    ImageContainer, ImagePlane,
     algos::ImageAlgorithm,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{
+        pipeline_cache::{sample_channel_pixel, PipelineCache},
+        pipeline_context::PipelineContext,
+    },
     roi::{Intensity, Roi, RoiInit},
+    ImagePlane,
 };
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SegmentationClass};
@@ -25,13 +28,19 @@ use std::sync::Arc;
 
 /// A command to extract spatial statistics and bounding boxes from labeled objects.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "measure")]
+#[cmdsmeta(category = "measure", next = "classify")]
 pub struct ExtractRois {
     /// Maximum allowed ROIs to extract.
     ///
     /// If this limit is exceeded the pipeline fails.
     /// This is a protection against memory overload.
-    #[cmdsmeta(default = 100000, min = 100000, max = 100000, step = 1, optional = true)]
+    #[cmdsmeta(
+        default = 100000,
+        min = 100000,
+        max = 100000,
+        step = 1,
+        optional = true
+    )]
     pub max_objects_before_fail: i32,
 }
 
@@ -78,30 +87,23 @@ impl ImageAlgorithm for ExtractRois {
         }
 
         // Hoist loop-invariant lookups out of the per-pixel hot path. In particular
-        // `get_channel_slice()` allocates a Vec and bumps Arc refcounts on every call,
-        // so calling it once per pixel dominated the runtime.
+        // resolving the channel views allocates a Vec, so doing it once per pixel
+        // would dominate the runtime.
         let tile_offset = ctx.get_image_tile_offset();
         let full_image_size = ctx.full_image_size();
-        let channels = cache.image_cache.get_channel_slice();
-        let plane = ctx
-            .get_image_plane()
-            .unwrap_or(ImagePlane { z: -1, c: -1, t: -1 });
+        let plane = ctx.get_image_plane().unwrap_or(ImagePlane {
+            z: -1,
+            c: -1,
+            t: -1,
+        });
 
         // Resolve each channel's pixel slice and sampling geometry once. The previous
         // per-pixel path re-matched the container type and recomputed zoom for every
-        // pixel — all loop-invariant per channel. `is_rgb` selects the luminance vs.
-        // direct-sample branch below.
+        // pixel — all loop-invariant per channel.
         let origin_width = size.width;
         let zoom_x = size.width / full_image_size.width;
         let zoom_y = size.height / full_image_size.height;
-        let channel_views: Vec<(i32, bool, &[f32])> = channels
-            .iter()
-            .filter_map(|(idx, container)| match container.as_ref() {
-                ImageContainer::F32Gray(img) => Some((*idx, false, img.as_slice())),
-                ImageContainer::F32Rgb(img) => Some((*idx, true, img.as_slice())),
-                ImageContainer::U32(_) => None, // no intensity contribution
-            })
-            .collect();
+        let channel_views = cache.image_cache.resolve_channel_views();
         let n_ch = channel_views.len();
         let n_obj = max_id + 1;
 
@@ -147,14 +149,7 @@ impl ImageAlgorithm for ExtractRois {
                 let sample = sample_row + x * zoom_x;
                 let base = id * n_ch;
                 for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
-                    let val = if *is_rgb {
-                        let idx = sample * 3;
-                        // Perceptual luminance (BT.709); background_level = 0.
-                        (0.2126 * slice[idx] + 0.7152 * slice[idx + 1] + 0.0722 * slice[idx + 2])
-                            .max(0.0)
-                    } else {
-                        slice[sample]
-                    };
+                    let val = sample_channel_pixel(*is_rgb, slice, sample);
                     let k = base + ci;
                     i_sum[k] += val as f64;
                     if val < i_min[k] {
@@ -188,65 +183,67 @@ impl ImageAlgorithm for ExtractRois {
         // --- Pass 2: assemble each ROI (mask, intensities, geometry) ---
         // Kept single-threaded on purpose: the pipeline parallelizes across images (one
         // core per image), so adding threads here would oversubscribe the CPU.
-        cache.roi_cache.extend((1..=max_id).filter(|&id| area[id] != 0).map(|id| {
-            let bb = bbox[id];
-            let rw = (bb[2] - bb[0] + 1) as usize;
-            let rh = (bb[3] - bb[1] + 1) as usize;
+        cache
+            .roi_cache
+            .extend((1..=max_id).filter(|&id| area[id] != 0).map(|id| {
+                let bb = bbox[id];
+                let rw = (bb[2] - bb[0] + 1) as usize;
+                let rh = (bb[3] - bb[1] + 1) as usize;
 
-            // Build the bbox-relative bitmask by re-scanning only the bbox window.
-            let mut mask = BitVec::<u64, Lsb0>::repeat(false, rw * rh);
-            for ry in 0..rh {
-                for rx in 0..rw {
-                    // Convert bbox-local coords to tile-local for slice indexing.
-                    let tile_x = rx + bb[0] as usize - tile_offset.x;
-                    let tile_y = ry + bb[1] as usize - tile_offset.y;
-                    if instance_map_slice[tile_y * w + tile_x] == id as u32 {
-                        mask.set(ry * rw + rx, true);
+                // Build the bbox-relative bitmask by re-scanning only the bbox window.
+                let mut mask = BitVec::<u64, Lsb0>::repeat(false, rw * rh);
+                for ry in 0..rh {
+                    for rx in 0..rw {
+                        // Convert bbox-local coords to tile-local for slice indexing.
+                        let tile_x = rx + bb[0] as usize - tile_offset.x;
+                        let tile_y = ry + bb[1] as usize - tile_offset.y;
+                        if instance_map_slice[tile_y * w + tile_x] == id as u32 {
+                            mask.set(ry * rw + rx, true);
+                        }
                     }
                 }
-            }
 
-            // Per-channel intensity stats from the SoA accumulators. Mean is sum / area
-            // (every pixel contributes one sample per channel); no per-pixel storage.
-            let base = id * n_ch;
-            let n = area[id] as f64;
-            let mut intensities = IndexMap::with_capacity(n_ch);
-            for (ci, (ch_idx, _, _)) in channel_views.iter().enumerate() {
-                let k = base + ci;
-                intensities.insert(
-                    *ch_idx,
-                    Intensity {
-                        sum_intensity: i_sum[k],
-                        min_intensity: i_min[k],
-                        max_intensity: i_max[k],
-                        avg_intensity: (i_sum[k] / n) as f32,
-                        pixel_values: Vec::new(),
-                    },
-                );
-            }
+                // Per-channel intensity stats from the SoA accumulators. Mean is sum / area
+                // (every pixel contributes one sample per channel); no per-pixel storage.
+                let base = id * n_ch;
+                let n = area[id] as f64;
+                let mut intensities = IndexMap::with_capacity(n_ch);
+                for (ci, (ch_idx, _, _)) in channel_views.iter().enumerate() {
+                    let k = base + ci;
+                    intensities.insert(
+                        *ch_idx,
+                        Intensity {
+                            sum_intensity: i_sum[k],
+                            min_intensity: i_min[k],
+                            max_intensity: i_max[k],
+                            avg_intensity: (i_sum[k] / n) as f32,
+                            pixel_values: Vec::new(),
+                        },
+                    );
+                }
 
-            // `Roi::new` finalizes geometry (perimeter/ellipse) from the mask and moments.
-            let mut roi = Roi::new(RoiInit {
-                id: ObjectId::next(),
-                segmentation_class: SegmentationClass(seg_class[id]),
-                bbox: bb,
-                mask_data: mask,
-                area: area[id],
-                touches_edge: touches_edge[id],
-                sum_x: sum_x[id],
-                sum_y: sum_y[id],
-                sum_x2: sum_x2[id],
-                sum_y2: sum_y2[id],
-                sum_xy: sum_xy[id],
-                intensities,
-                plane,
-                ..Default::default()
-            });
-            // Assign the segmentation class as default first object class so classify ROI is not mandatory.
-            roi.add_object_class(ObjectClass::from_segmentation_class(roi.segmentation_class));
+                // `Roi::new` finalizes geometry (perimeter/ellipse) from the mask and moments.
+                let mut roi = Roi::new(RoiInit {
+                    id: ObjectId::next(),
+                    segmentation_class: SegmentationClass(seg_class[id]),
+                    bbox: bb,
+                    mask_data: mask,
+                    area: area[id],
+                    touches_edge: touches_edge[id],
+                    sum_x: sum_x[id],
+                    sum_y: sum_y[id],
+                    sum_x2: sum_x2[id],
+                    sum_y2: sum_y2[id],
+                    sum_xy: sum_xy[id],
+                    intensities,
+                    plane,
+                    ..Default::default()
+                });
+                // Assign the segmentation class as default first object class so classify ROI is not mandatory.
+                roi.add_object_class(ObjectClass::from_segmentation_class(roi.segmentation_class));
 
-            (roi.id.clone(), roi)
-        }));
+                (roi.id.clone(), roi)
+            }));
 
         Ok(())
     }
@@ -334,8 +331,10 @@ impl Roi {
                 crate::ImageContainer::F32Gray(image) => {
                     let intensity_slice = image.as_slice();
                     let val = intensity_slice[y_rel * origin_image.size().width + x_rel];
-                    let channel_intensity =
-                        self.intensities.entry(*index).or_insert_with(new_intensity_acc);
+                    let channel_intensity = self
+                        .intensities
+                        .entry(*index)
+                        .or_insert_with(new_intensity_acc);
                     channel_intensity.sum_intensity += val as f64;
                     channel_intensity.max_intensity = channel_intensity.max_intensity.max(val);
                     channel_intensity.min_intensity = channel_intensity.min_intensity.min(val);
@@ -357,8 +356,10 @@ impl Roi {
                     let background_level: f32 = 0.0;
                     let corrected_val = (raw_val - background_level).max(0.0);
 
-                    let channel_intensity =
-                        self.intensities.entry(*index).or_insert_with(new_intensity_acc);
+                    let channel_intensity = self
+                        .intensities
+                        .entry(*index)
+                        .or_insert_with(new_intensity_acc);
 
                     channel_intensity.sum_intensity += corrected_val as f64;
                     channel_intensity.max_intensity =
@@ -411,8 +412,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        F32Gray, ImagePlane,
         image::{ManagedImage, PixelSizes},
+        F32Gray, ImagePlane,
     };
     use bitvec::slice::BitSlice;
     use kornia_image::{Image, ImageSize};
@@ -496,7 +497,9 @@ mod tests {
             .add_to_channel_cache(Arc::new(ctx.image.clone()), 0);
 
         // 2. Execute Algorithm
-        let extractor = ExtractRois { max_objects_before_fail: 100_000 };
+        let extractor = ExtractRois {
+            max_objects_before_fail: 100_000,
+        };
         extractor
             .execute(&mut ctx, &mut cache)
             .expect("Extraction failed");
@@ -598,7 +601,9 @@ mod tests {
             .add_to_channel_cache(Arc::new(ctx.image.clone()), 0);
 
         // Execute
-        let extractor = ExtractRois { max_objects_before_fail: 100_000 };
+        let extractor = ExtractRois {
+            max_objects_before_fail: 100_000,
+        };
         extractor
             .execute(&mut ctx, &mut cache)
             .expect("Extraction failed");
@@ -729,7 +734,9 @@ mod tests {
 
     #[test]
     fn test_name() {
-        let extractor = ExtractRois { max_objects_before_fail: 100_000 };
+        let extractor = ExtractRois {
+            max_objects_before_fail: 100_000,
+        };
         let name = extractor.name();
         assert_eq!(name, "ExtractRois");
     }

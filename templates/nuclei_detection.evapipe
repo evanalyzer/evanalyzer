@@ -99,7 +99,7 @@
       "enabled": true,
       "command": {
         "type": "saveImage",
-        "path": "images/${imageName}/nucleus",
+        "name": "nucleus",
         "source": "IMAGE"
       }
     }

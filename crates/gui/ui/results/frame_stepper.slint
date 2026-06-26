@@ -1,0 +1,95 @@
+import { Slider } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+// Small "All frames" toggle — `ToolToggleButton` is icon-only, so this is a
+// minimal text-button variant (same visual language as `ChartKindButton` in
+// results_chart.slint, but file-local since neither component is reused
+// beyond its own file).
+component AllToggleButton inherits Rectangle {
+    in property <bool> selected;
+    callback clicked;
+
+    width: 34px;
+    height: 22px;
+    border-radius: 4px;
+    background: selected ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.raised);
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: "All";
+        font-size: 10px;
+        font-family: Theme.font-sans;
+        font-weight: 600;
+        color: root.selected ? white : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A compact "step through frames" control — one axis label, an "All frames"
+// toggle, a scrub slider, and a "current / total" readout. Used for both the
+// T (time) and Z (depth) axes in the results toolbar so neither block of
+// markup is duplicated.
+export component FrameStepper inherits HorizontalLayout {
+    in property <string> axis_label;
+    in property <int> min;
+    in property <int> max;
+    in-out property <int> value;
+    // True = every frame shown (no restriction); false = only `value`.
+    in-out property <bool> show_all;
+    // Fired on every slider move (show_all becomes false) and on toggling
+    // "All" — (new_value, new_show_all).
+    callback changed(int, bool);
+
+    spacing: 6px;
+    padding-left: 4px;
+    padding-right: 4px;
+
+    Text {
+        text: root.axis_label;
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        font-weight: 600;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+    }
+
+    AllToggleButton {
+        selected: root.show_all;
+        clicked => {
+            // `value`/`show_all` are bound externally (read-only from here in
+            // practice) — only report the new state via `changed`, and let
+            // the caller write it back into the real source of truth, which
+            // then flows back down through the binding. Writing to
+            // `root.value`/`root.show_all` directly here would fight that
+            // external binding and is what caused a property recursion panic.
+            root.changed(root.value, !root.show_all);
+        }
+    }
+
+    Slider {
+        width: 110px;
+        minimum: root.min;
+        maximum: root.max;
+        value: root.value;
+        enabled: !root.show_all;
+        changed(v) => {
+            root.changed(Math.round(v), false);
+        }
+    }
+
+    Text {
+        text: root.show_all ? "All frames" : "\{root.value - root.min + 1} / \{root.max - root.min + 1}";
+        font-size: 10.5px;
+        font-family: Theme.font-mono;
+        color: Theme.text-mute;
+        vertical-alignment: center;
+        horizontal-alignment: left;
+        min-width: 56px;
+    }
+}

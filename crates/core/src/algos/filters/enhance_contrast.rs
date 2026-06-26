@@ -295,6 +295,8 @@ fn sample_lut(lut: &[f32], val: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::{
         image::PixelSizes,
         pipeline::{pipeline::PipelineImageMeta, pipeline_cache::ImageCache},
@@ -364,6 +366,7 @@ mod tests {
                 .unwrap();
 
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

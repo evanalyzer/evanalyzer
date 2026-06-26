@@ -48,8 +48,9 @@ impl ResultsListController {
         }
     }
 
-    /// Scans `<project_dir>/results/` for `*.RESULTS_FILE_EXTENSION` files and
-    /// pushes them to the Slint results list, sorted by modification time (newest first).
+    /// Recursively scans `<project_dir>/results/` for `*.RESULTS_FILE_EXTENSION`
+    /// files and pushes them to the Slint results list, sorted by modification
+    /// time (newest first).
     pub fn sync_results_files_to_slint(&self) {
         let project = self.app_state.get_project();
 
@@ -68,48 +69,7 @@ impl ResultsListController {
         let mut items: Vec<(std::time::SystemTime, ResultItemData)> = Vec::new();
 
         if results_dir.exists() {
-            match std::fs::read_dir(&results_dir) {
-                Ok(entries) => {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().and_then(|e| e.to_str()) != Some(RESULTS_FILE_EXTENSION)
-                        {
-                            continue;
-                        }
-
-                        let (file_size, modified, mtime) = match std::fs::metadata(&path) {
-                            Ok(meta) => {
-                                let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                                (
-                                    format_file_size(meta.len()),
-                                    format_modified_time(mtime),
-                                    mtime,
-                                )
-                            }
-                            Err(_) => (String::new(), String::new(), std::time::UNIX_EPOCH),
-                        };
-
-                        // let name = path
-                        //     .file_name()
-                        //     .and_then(|n| n.to_str())
-                        //     .unwrap_or("")
-                        //     .to_string();
-                        let name = extract_name_from_path(&path).unwrap_or("-");
-                        items.push((
-                            mtime,
-                            ResultItemData {
-                                name: name.into(),
-                                path: path.to_string_lossy().to_string().into(),
-                                file_size: file_size.into(),
-                                modified: modified.into(),
-                            },
-                        ));
-                    }
-                }
-                Err(e) => {
-                    warn!("Could not read results directory {:?}: {}", results_dir, e);
-                }
-            }
+            collect_results_files(&results_dir, &mut items);
         }
 
         // Newest first
@@ -157,6 +117,54 @@ impl ResultsListController {
     }
 }
 
+/// Recursively walks `dir`, appending every file whose extension matches
+/// [`RESULTS_FILE_EXTENSION`] to `items` together with its modification time.
+fn collect_results_files(dir: &Path, items: &mut Vec<(std::time::SystemTime, ResultItemData)>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!("Could not read results directory {:?}: {}", dir, e);
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path.is_dir() {
+            collect_results_files(&path, items);
+            continue;
+        }
+
+        if path.extension().and_then(|e| e.to_str()) != Some(RESULTS_FILE_EXTENSION) {
+            continue;
+        }
+
+        let (file_size, modified, mtime) = match std::fs::metadata(&path) {
+            Ok(meta) => {
+                let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                (
+                    format_file_size(meta.len()),
+                    format_modified_time(mtime),
+                    mtime,
+                )
+            }
+            Err(_) => (String::new(), String::new(), std::time::UNIX_EPOCH),
+        };
+
+        let name = extract_name_from_path(&path).unwrap_or("-");
+        items.push((
+            mtime,
+            ResultItemData {
+                name: name.into(),
+                path: path.to_string_lossy().to_string().into(),
+                file_size: file_size.into(),
+                modified: modified.into(),
+            },
+        ));
+    }
+}
+
 fn format_file_size(bytes: u64) -> String {
     if bytes < 1_024 {
         format!("{} B", bytes)
@@ -192,7 +200,8 @@ fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
     let file_stem = Path::new(file_name).file_stem()?.to_str()?;
 
     // Split at the "__" and return everything to the right
-    let (_, name_part) = file_stem.split_once("__")?;
-
-    Some(name_part)
+    match file_stem.split_once("__") {
+        Some((_, name_part)) if !name_part.is_empty() => Some(name_part),
+        _ => Some(file_stem),
+    }
 }

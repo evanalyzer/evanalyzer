@@ -16,6 +16,7 @@ use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use evanalyzer_cfg::settings::parameter_def::{ParamType as CfgParamType, ParameterDef};
+use evanalyzer_cfg::settings::pipeline_command::CommandMeta;
 use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, all_command_meta, default_command,
 };
@@ -587,27 +588,29 @@ impl PipelinesController {
                             } else {
                                 usize::MAX
                             };
-                            let (ctx_cat, suggested) = if p.steps.is_empty() {
-                                (-1i32, -1i32)
-                            } else if context_idx == usize::MAX {
-                                (-1i32, -1i32)
+                            // Pre-select the chips for *all* categories that may
+                            // follow the previous step (its `allowed_next`, which is
+                            // decoupled from the display `category` — e.g.
+                            // ConnectedComponents suggests Object + Measure so both
+                            // Watershed and ExtractRois are in view). These are only
+                            // suggestions: the user can toggle any chip, and clearing
+                            // them all shows every command.
+                            let (ctx_cat, suggested) = if p.steps.is_empty()
+                                || context_idx == usize::MAX
+                            {
+                                (-1i32, [false; 5])
                             } else {
-                                let last_cat = p.steps[context_idx].command.category();
-                                let ctx_order = last_cat.display_order() as i32;
-                                // Preprocess can be followed by another Preprocess or Segment,
-                                // so show All (-1) rather than locking to Segment.
-                                // All other stages have a single clear next stage.
-                                let next_order = if matches!(last_cat, CommandCategory::Preprocess)
-                                {
-                                    -1i32
-                                } else {
-                                    last_cat.suggested_next().display_order() as i32
-                                };
-                                (ctx_order, next_order)
+                                let prev = &p.steps[context_idx].command;
+                                let ctx_order = prev.category().display_order() as i32;
+                                let mut flags = [false; 5];
+                                for c in prev.allowed_next() {
+                                    flags[c.display_order() as usize] = true;
+                                }
+                                (ctx_order, flags)
                             };
                             (name, p.steps.len() as i32, ctx_cat, suggested)
                         } else {
-                            (String::new(), 0, -1i32, -1i32)
+                            (String::new(), 0, -1i32, [false; 5])
                         }
                     };
                     manager.reload_pipeline_templates_async();
@@ -620,12 +623,16 @@ impl PipelinesController {
                         picker.set_context_category(context_cat);
                         picker.set_query("".into());
                         picker.set_filter_favorites(false);
-                        // Auto-select the filter for the suggested next category.
-                        // -1 keeps the "All" view (empty pipeline or unknown context).
-                        picker.set_filter_category(suggested_filter);
+                        // Pre-select the suggested next categories (all of them); an
+                        // empty set leaves the "All" view.
+                        picker.set_fcat_pre(suggested_filter[0]);
+                        picker.set_fcat_seg(suggested_filter[1]);
+                        picker.set_fcat_obj(suggested_filter[2]);
+                        picker.set_fcat_mea(suggested_filter[3]);
+                        picker.set_fcat_cls(suggested_filter[4]);
                         picker.set_selected_id(-1);
-                        // Apply the filter immediately so the list matches the pre-selected chip.
-                        manager.apply_picker_filter(&ui, "", suggested_filter, false);
+                        // Apply the filter immediately so the list matches the chips.
+                        manager.apply_picker_filter(&ui, "", false);
                         ui.global::<GlobalAppState>()
                             .set_active_dialog(DialogType::CommandSelectionDialog);
                     }
@@ -640,9 +647,8 @@ impl PipelinesController {
                         return;
                     };
                     let picker = ui.global::<CommandPickerState>();
-                    let filter_cat = picker.get_filter_category();
                     let filter_favorites = picker.get_filter_favorites();
-                    manager.apply_picker_filter(&ui, query.as_str(), filter_cat, filter_favorites);
+                    manager.apply_picker_filter(&ui, query.as_str(), filter_favorites);
                 });
 
             // Picker: select - update detail pane
@@ -666,30 +672,7 @@ impl PipelinesController {
                     }
                     let metas = all_command_meta();
                     if let Some(m) = metas.iter().find(|m| m.id == command_id) {
-                        let cat = match m.category {
-                            CommandCategory::Preprocess => StepCategory::Preprocess,
-                            CommandCategory::Segment => StepCategory::Segment,
-                            CommandCategory::Object => StepCategory::Object,
-                            CommandCategory::Measure => StepCategory::Measure,
-                            CommandCategory::Classify => StepCategory::Classify,
-                        };
-                        let detail = CommandDef {
-                            id: m.id,
-                            name: m.name.into(),
-                            summary: m.summary.into(),
-                            description: m.description.into(),
-                            category: cat,
-                            icon_glyph: "▭".into(),
-                            keywords: m.name.to_ascii_lowercase().into(),
-                            source: "built-in".into(),
-                            favorite: false,
-                            recent: false,
-                            default_params: ModelRc::default(),
-                            is_template: false,
-                            author: "".into(),
-                            organization: "".into(),
-                            creation_time: "".into(),
-                        };
+                        let detail = to_command_def(m);
                         let picker = ui.global::<CommandPickerState>();
                         picker.set_detail(detail);
                         picker.set_has_detail(true);
@@ -756,6 +739,85 @@ impl PipelinesController {
                 }
             });
 
+            // Picker: import a bioimage.io model - pick its rdf.yaml, configure an
+            // AI segmentation command from it, and insert it like a normal step.
+            let manager = self.clone();
+            ui.global::<CommandPickerState>().on_import_bioimageio(move || {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let picker = ui.global::<CommandPickerState>();
+                let pipeline_id = picker.get_pipeline_id() as u32;
+                let after_idx = picker.get_insert_after_idx();
+
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("bioimage.io RDF", &["yaml", "yml"])
+                    .pick_file()
+                else {
+                    return; // user cancelled the file picker; leave the command picker open
+                };
+
+                match evanalyzer_app::bioimageio::configure_from_file(&path) {
+                    Ok(configured) => {
+                        let step = PipelineStepSettings {
+                            enabled: true,
+                            command: configured.command,
+                        };
+                        {
+                            let mut project = manager.app_state.get_project_write();
+                            if let Some(pipeline) =
+                                project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
+                            {
+                                let insert_at = if after_idx < 0 {
+                                    0
+                                } else {
+                                    ((after_idx as usize) + 1).min(pipeline.steps.len())
+                                };
+                                pipeline.steps.insert(insert_at, step);
+                            }
+                        }
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::None);
+                        manager.pipeline_settings_changed();
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+
+                        // Surface any caveats (assumed defaults, required
+                        // normalization, remote weights) so the user can verify.
+                        if !configured.notes.is_empty() {
+                            let body = configured
+                                .notes
+                                .iter()
+                                .map(|n| format!("• {n}"))
+                                .collect::<Vec<_>>()
+                                .join("\n\n");
+                            let msg = format!(
+                                "Imported a model from {}.\n\nPlease review:\n\n{body}",
+                                path.display()
+                            );
+                            let warning = ui.global::<WarningState>();
+                            warning.set_info(true);
+                            warning.set_title("bioimage.io model imported".into());
+                            warning.set_message(msg.into());
+                            ui.global::<GlobalAppState>()
+                                .set_active_dialog(DialogType::Warning);
+                        }
+                    }
+                    Err(e) => {
+                        let warning = ui.global::<WarningState>();
+                        warning.set_info(false);
+                        warning.set_title("bioimage.io import failed".into());
+                        warning.set_message(
+                            format!("Could not import the bioimage.io model:\n\n{e}").into(),
+                        );
+                        ui.global::<GlobalAppState>()
+                            .set_active_dialog(DialogType::Warning);
+                    }
+                }
+            });
+
             // Step parameter changed
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_param_changed(
@@ -789,7 +851,7 @@ impl PipelinesController {
                         }
                     };
 
-                    let (new_summary, new_param_value) = {
+                    let (new_summary, params_now) = {
                         let mut project = manager.app_state.get_project_write();
                         let Some(pipeline) =
                             project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
@@ -800,82 +862,101 @@ impl PipelinesController {
                             return;
                         };
                         step.command.apply_param_change(&param_name, &value_str);
-                        let summary = step.command.to_summary();
-                        let params_now = step.command.to_parameters();
-                        let updated_value = if let Some((g, idx, f)) = &nested_path {
-                            params_now
-                                .iter()
-                                .find(|p| p.name == *g)
-                                .and_then(|p| p.groups.get(*idx))
-                                .and_then(|item| item.iter().find(|fd| fd.name == *f))
-                                .map(|fd| fd.value.clone())
-                                .unwrap_or_default()
-                        } else {
-                            params_now
-                                .into_iter()
-                                .find(|p| p.name == param_name)
-                                .map(|p| p.value)
-                                .unwrap_or_default()
-                        };
-                        (summary, updated_value)
+                        (step.command.to_summary(), step.command.to_parameters())
                     }; // write lock dropped here
 
                     // Update the affected step in the Slint model: summary + the
                     // changed param's value (and, for multi-select toggles, its flags).
                     let model = ui.global::<PipelinesPanelState>().get_active_commands();
-                    if let Some(mut cmd) = model.row_data(step_idx as usize) {
-                        cmd.summary = new_summary.into();
-                        let params = cmd.parameters.clone();
+                    let Some(mut cmd) = model.row_data(step_idx as usize) else {
+                        return;
+                    };
+                    cmd.summary = new_summary.into();
+                    let params = cmd.parameters.clone();
 
-                        if let Some((group_name, idx, field_name)) = nested_path {
-                            // Nested group field: find the group CommandParameter, then
-                            // update fields[k].value inside group_items[idx].
-                            for i in 0..params.row_count() {
-                                if let Some(p) = params.row_data(i) {
-                                    if p.name.as_str() == group_name {
-                                        let items = p.group_items.clone();
-                                        if let Some(item) = items.row_data(idx) {
-                                            let fields = item.fields.clone();
-                                            for k in 0..fields.row_count() {
-                                                if let Some(mut lp) = fields.row_data(k) {
-                                                    if lp.name.as_str() == field_name {
-                                                        lp.value = new_param_value.clone().into();
-                                                        fields.set_row_data(k, lp);
-                                                        break;
-                                                    }
+                    if let Some((group_name, idx, field_name)) = nested_path {
+                        // Nested group field: find the group CommandParameter, then
+                        // update fields[k].value inside group_items[idx].
+                        let new_param_value = params_now
+                            .iter()
+                            .find(|p| p.name == group_name)
+                            .and_then(|p| p.groups.get(idx))
+                            .and_then(|item| item.iter().find(|fd| fd.name == field_name))
+                            .map(|fd| fd.value.clone())
+                            .unwrap_or_default();
+                        for i in 0..params.row_count() {
+                            if let Some(p) = params.row_data(i) {
+                                if p.name.as_str() == group_name {
+                                    let items = p.group_items.clone();
+                                    if let Some(item) = items.row_data(idx) {
+                                        let fields = item.fields.clone();
+                                        for k in 0..fields.row_count() {
+                                            if let Some(mut lp) = fields.row_data(k) {
+                                                if lp.name.as_str() == field_name {
+                                                    lp.value = new_param_value.clone().into();
+                                                    fields.set_row_data(k, lp);
+                                                    break;
                                                 }
                                             }
                                         }
-                                        break;
                                     }
+                                    break;
                                 }
                             }
-                        } else {
-                            // Flat parameter: update value (and flags for multi-select).
-                            for i in 0..params.row_count() {
-                                if let Some(mut p) = params.row_data(i) {
-                                    if p.name.as_str() == param_name {
-                                        p.value = new_param_value.clone().into();
-                                        if is_toggle {
-                                            let selected: std::collections::HashSet<u32> =
-                                                new_param_value
-                                                    .split(',')
-                                                    .filter_map(|s| s.trim().parse::<u32>().ok())
-                                                    .collect();
-                                            let new_flags: Vec<SharedString> = (0u32..33u32)
-                                                .map(|idx| {
-                                                    if selected.contains(&idx) {
-                                                        "1".into()
-                                                    } else {
-                                                        "0".into()
-                                                    }
-                                                })
+                        }
+                        model.set_row_data(step_idx as usize, cmd);
+                    } else {
+                        // Some fields (e.g. a "function" dropdown backed by a Rust enum whose
+                        // variants each carry their own sub-fields) change *which* parameters
+                        // exist, not just one value, when switched. Patching a single row in
+                        // that case would leave stale fields on screen or miss new ones, so
+                        // detect a changed field set and fall back to a full resync — the same
+                        // thing add_group_item/remove_group_item already do for the other case
+                        // where the parameter list's shape can change.
+                        let old_names: Vec<String> = (0..params.row_count())
+                            .filter_map(|i| params.row_data(i).map(|p| p.name.to_string()))
+                            .collect();
+                        let new_names: Vec<String> =
+                            params_now.iter().map(|p| p.name.clone()).collect();
+                        if old_names != new_names {
+                            manager.sync_steps_of_selected_pipeline_to_slint(
+                                PipelineId(pipeline_id),
+                                false,
+                            );
+                            manager.pipeline_settings_changed();
+                            return;
+                        }
+
+                        // Flat parameter, field set unchanged: patch the single value (and
+                        // flags for multi-select) in place.
+                        let new_param_value = params_now
+                            .into_iter()
+                            .find(|p| p.name == param_name)
+                            .map(|p| p.value)
+                            .unwrap_or_default();
+                        for i in 0..params.row_count() {
+                            if let Some(mut p) = params.row_data(i) {
+                                if p.name.as_str() == param_name {
+                                    p.value = new_param_value.clone().into();
+                                    if is_toggle {
+                                        let selected: std::collections::HashSet<u32> =
+                                            new_param_value
+                                                .split(',')
+                                                .filter_map(|s| s.trim().parse::<u32>().ok())
                                                 .collect();
-                                            p.options = ModelRc::new(VecModel::from(new_flags));
-                                        }
-                                        params.set_row_data(i, p);
-                                        break;
+                                        let new_flags: Vec<SharedString> = (0u32..33u32)
+                                            .map(|idx| {
+                                                if selected.contains(&idx) {
+                                                    "1".into()
+                                                } else {
+                                                    "0".into()
+                                                }
+                                            })
+                                            .collect();
+                                        p.options = ModelRc::new(VecModel::from(new_flags));
                                     }
+                                    params.set_row_data(i, p);
+                                    break;
                                 }
                             }
                         }
@@ -918,6 +999,43 @@ impl PipelinesController {
                             Some(item_idx as usize),
                         );
                         manager.pipeline_settings_changed();
+                    }
+                },
+            );
+
+            // Browse for a file (e.g. a TorchScript model path) - opens a native
+            // file picker filtered by the given comma-separated extensions,
+            // starting from current_path's directory.
+            ui.global::<PipelinesPanelState>().on_browse_file(
+                move |extensions_csv, current_path| {
+                    let extensions: Vec<String> = extensions_csv
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|e| !e.is_empty())
+                        .map(str::to_string)
+                        .collect();
+
+                    let mut dialog = rfd::FileDialog::new();
+                    if !extensions.is_empty() {
+                        dialog = dialog.add_filter("Allowed Files", &extensions);
+                    }
+
+                    let current = std::path::Path::new(current_path.as_str());
+                    let start_dir = if current.is_dir() {
+                        Some(current.to_path_buf())
+                    } else {
+                        current
+                            .parent()
+                            .filter(|p| p.is_dir())
+                            .map(|p| p.to_path_buf())
+                    };
+                    if let Some(dir) = start_dir {
+                        dialog = dialog.set_directory(dir);
+                    }
+
+                    match dialog.pick_file() {
+                        Some(path) => SharedString::from(path.display().to_string()),
+                        None => SharedString::new(),
                     }
                 },
             );
@@ -1103,7 +1221,10 @@ impl PipelinesController {
         let ui_weak = self.ui.clone();
         if let Err(e) = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<WarningState>().set_message(message.into());
+                let warning = ui.global::<WarningState>();
+                warning.set_info(false);
+                warning.set_title("Cannot start analysis".into());
+                warning.set_message(message.into());
                 ui.global::<GlobalAppState>()
                     .set_active_dialog(DialogType::Warning);
             }
@@ -1202,7 +1323,6 @@ impl PipelinesController {
         self: &Arc<Self>,
         ui: &AppWindow,
         query: &str,
-        filter_cat: i32,
         filter_favorites: bool,
     ) {
         let q = query.to_ascii_lowercase();
@@ -1213,38 +1333,32 @@ impl PipelinesController {
                 || m.name.to_ascii_lowercase().contains(&q)
                 || m.summary.to_ascii_lowercase().contains(&q)
         };
-        let cat_enabled = |target: CommandCategory| -> bool {
-            match filter_cat {
-                -1 => true,
-                0 => matches!(target, CommandCategory::Preprocess),
-                1 => matches!(target, CommandCategory::Segment),
-                2 => matches!(target, CommandCategory::Object),
-                3 => matches!(target, CommandCategory::Measure),
-                4 => matches!(target, CommandCategory::Classify),
-                _ => false,
+        // Per-category chip state (multi-select). When no chip is active the
+        // picker shows every category ("All").
+        let picker_state = ui.global::<CommandPickerState>();
+        let (fc_pre, fc_seg, fc_obj, fc_mea, fc_cls) = (
+            picker_state.get_fcat_pre(),
+            picker_state.get_fcat_seg(),
+            picker_state.get_fcat_obj(),
+            picker_state.get_fcat_mea(),
+            picker_state.get_fcat_cls(),
+        );
+        let any_active = fc_pre || fc_seg || fc_obj || fc_mea || fc_cls;
+        let cat_enabled = move |target: CommandCategory| -> bool {
+            if !any_active {
+                return true;
+            }
+            match target {
+                CommandCategory::Preprocess => fc_pre,
+                CommandCategory::Segment => fc_seg,
+                CommandCategory::Object => fc_obj,
+                CommandCategory::Measure => fc_mea,
+                CommandCategory::Classify => fc_cls,
             }
         };
         let make = |m: &evanalyzer_cfg::settings::pipeline_command::CommandMeta,
-                    cat: StepCategory|
-         -> CommandDef {
-            CommandDef {
-                id: m.id,
-                name: m.name.into(),
-                summary: m.summary.into(),
-                description: m.description.into(),
-                category: cat,
-                icon_glyph: "▭".into(),
-                keywords: m.name.to_ascii_lowercase().into(),
-                source: "built-in".into(),
-                favorite: false,
-                recent: false,
-                default_params: ModelRc::default(),
-                is_template: false,
-                author: "".into(),
-                organization: "".into(),
-                creation_time: "".into(),
-            }
-        };
+                    _cat: StepCategory|
+         -> CommandDef { to_command_def(m) };
         let pre: Vec<CommandDef> = metas
             .iter()
             .filter(|m| {
@@ -1362,9 +1476,8 @@ impl PipelinesController {
                 }
                 let picker = ui.global::<CommandPickerState>();
                 let query = picker.get_query().to_string();
-                let filter_cat = picker.get_filter_category();
                 let filter_favorites = picker.get_filter_favorites();
-                manager.apply_picker_filter(&ui, &query, filter_cat, filter_favorites);
+                manager.apply_picker_filter(&ui, &query, filter_favorites);
             }) {
                 warn!("Failed to refresh pipeline templates in picker: {}", e);
             }
@@ -1372,74 +1485,36 @@ impl PipelinesController {
     }
 
     fn sync_commands_to_selection_dialog_slint(self: &Arc<Self>) {
-        // Collect only Send-safe primitives outside the event loop closure.
-        struct RawCmd {
-            id: i32,
-            name: &'static str,
-            summary: &'static str,
-            category: StepCategory,
-        }
-        let raw: Vec<RawCmd> = all_command_meta()
-            .into_iter()
-            .map(|m| RawCmd {
-                id: m.id,
-                name: m.name,
-                summary: m.summary,
-                category: match m.category {
-                    CommandCategory::Preprocess => StepCategory::Preprocess,
-                    CommandCategory::Segment => StepCategory::Segment,
-                    CommandCategory::Object => StepCategory::Object,
-                    CommandCategory::Measure => StepCategory::Measure,
-                    CommandCategory::Classify => StepCategory::Classify,
-                },
-            })
-            .collect();
+        let raw = all_command_meta();
 
         let ui_weak = self.ui.clone();
         if let Err(e) = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let make_def = |r: &RawCmd| CommandDef {
-                    id: r.id,
-                    name: r.name.into(),
-                    summary: r.summary.into(),
-                    description: "".into(),
-                    category: r.category,
-                    icon_glyph: "▭".into(),
-                    keywords: r.name.to_ascii_lowercase().into(),
-                    source: "built-in".into(),
-                    favorite: false,
-                    recent: false,
-                    default_params: ModelRc::default(),
-                    is_template: false,
-                    author: "".into(),
-                    organization: "".into(),
-                    creation_time: "".into(),
-                };
-                let all: Vec<CommandDef> = raw.iter().map(make_def).collect();
+                let all: Vec<CommandDef> = raw.iter().map(to_command_def).collect();
                 let shown_pre: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Preprocess)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Preprocess))
+                    .map(to_command_def)
                     .collect();
                 let shown_seg: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Segment)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Segment))
+                    .map(to_command_def)
                     .collect();
                 let shown_obj: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Object)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Object))
+                    .map(to_command_def)
                     .collect();
                 let shown_mea: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Measure)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Measure))
+                    .map(to_command_def)
                     .collect();
                 let shown_cls: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|r| r.category == StepCategory::Classify)
-                    .map(make_def)
+                    .filter(|m| matches!(m.category, CommandCategory::Classify))
+                    .map(to_command_def)
                     .collect();
                 let total = all.len() as i32;
                 let (cp, cs, co, cm, cc) = (
@@ -1627,6 +1702,9 @@ impl PipelinesController {
                                                             ParamType::SizeUnits
                                                         }
                                                         CfgParamType::Label => ParamType::Label,
+                                                        CfgParamType::FilePath => {
+                                                            ParamType::FilePath
+                                                        }
                                                     },
                                                     options: ModelRc::new(VecModel::from(
                                                         lp.options
@@ -1662,6 +1740,7 @@ impl PipelinesController {
                                         CfgParamType::PixelUnits => ParamType::PixelUnits,
                                         CfgParamType::SizeUnits => ParamType::SizeUnits,
                                         CfgParamType::Label => ParamType::Label,
+                                        CfgParamType::FilePath => ParamType::FilePath,
                                     },
                                     options: ModelRc::new(VecModel::from(
                                         p.options
@@ -1772,4 +1851,32 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
             .to_string()
             .into(),
     }
+}
+
+fn to_command_def(m: &CommandMeta) -> CommandDef {
+    let cat = match m.category {
+        CommandCategory::Preprocess => StepCategory::Preprocess,
+        CommandCategory::Segment => StepCategory::Segment,
+        CommandCategory::Object => StepCategory::Object,
+        CommandCategory::Measure => StepCategory::Measure,
+        CommandCategory::Classify => StepCategory::Classify,
+    };
+    let detail = CommandDef {
+        id: m.id,
+        name: m.name.into(),
+        summary: m.summary.into(),
+        description: m.description.into(),
+        category: cat,
+        icon_glyph: "ƒ".into(),
+        keywords: m.name.to_ascii_lowercase().into(),
+        source: "built-in".into(),
+        favorite: false,
+        recent: false,
+        default_params: ModelRc::default(),
+        is_template: false,
+        author: "".into(),
+        organization: "".into(),
+        creation_time: "".into(),
+    };
+    detail
 }

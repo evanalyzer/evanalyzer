@@ -286,6 +286,8 @@ impl ImageAlgorithm for Voronoi {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::{
         ImageContainer, ImagePlane, ManagedImage,
@@ -319,6 +321,7 @@ mod tests {
             plane: None,
         };
         PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

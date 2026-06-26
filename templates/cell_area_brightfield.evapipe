@@ -118,7 +118,7 @@
       "enabled": true,
       "command": {
         "type": "saveImage",
-        "path": "images/${imageName}/cell_area",
+        "name": "cell_area",
         "source": "IMAGE"
       }
     }

@@ -6,7 +6,7 @@ authors = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
-evanalyzer_core = { path = "../core" }
+evanalyzer_core = { workspace = true }
 evanalyzer_cfg = { path = "../cfg" }
 
 log = "0.4"
@@ -19,10 +19,13 @@ rayon = "1.12.0"
 human-sort = "0.2"
 serde = "1.0.228"
 serde_json = "1.0.149"
+serde_yaml = "0.9"
 regex = "1"
 csv = "1"
 rust_xlsxwriter = "0"
 dirs = "6"
+plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "point_series", "ttf"] }
+image = "0.24"
 
 
 

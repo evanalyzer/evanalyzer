@@ -481,7 +481,7 @@ pub struct RoiRow {
 
 /// Filter criteria for [`DuckDbReader::get_rois`].
 ///
-/// For both `image_filter` and `class_filter`:
+/// For `image_filter`, `class_filter` and `coloc_filter`:
 /// - `None`       → no restriction (return all)
 /// - `Some([])`   → active filter with nothing selected → return 0 rows
 /// - `Some([..])` → return only rows matching these values
@@ -489,6 +489,14 @@ pub struct RoiRow {
 pub struct RoiFilter {
     pub image_filter: Option<Vec<String>>,
     pub class_filter: Option<Vec<String>>,
+    /// Restricts to rows whose colocalization status label ("Yes"/"No") is in this set.
+    pub coloc_filter: Option<Vec<String>>,
+    /// Restricts to ROIs from this single time-frame index, or `None` for
+    /// every frame (today's default behavior).
+    pub t_stack_filter: Option<i32>,
+    /// Restricts to ROIs from this single Z-depth index, or `None` for every
+    /// depth (today's default behavior).
+    pub z_stack_filter: Option<i32>,
     /// Rows per page; 0 means return all.
     pub page_size: usize,
     /// Zero-based page index.
@@ -496,6 +504,10 @@ pub struct RoiFilter {
     /// When false, `intensities_json` is replaced with an empty string in the
     /// query result, avoiding JSON parsing cost for hidden channel columns.
     pub fetch_intensities: bool,
+    /// Results-table column id to sort by (see [`column_order_expr`] for which
+    /// ids are supported). `None` keeps the default `ORDER BY object_id`.
+    pub sort_column: Option<String>,
+    pub sort_ascending: bool,
 }
 
 impl Default for RoiFilter {
@@ -503,10 +515,73 @@ impl Default for RoiFilter {
         Self {
             image_filter: None,
             class_filter: None,
+            coloc_filter: None,
+            t_stack_filter: None,
+            z_stack_filter: None,
             page_size: 500,
             page: 0,
             fetch_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
         }
+    }
+}
+
+/// SQL expression computing the same display class string used throughout the
+/// results table/filters/export: the joined `object_class_name` list, falling
+/// back to `seg_class_name` when a ROI carries no object classes.
+fn class_case_expr() -> &'static str {
+    "CASE WHEN json_array_length(object_class_name) = 0 \
+     THEN COALESCE(seg_class_name, '') \
+     ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END"
+}
+
+/// SQL expression for one of `RoiRow`'s scaled per-channel intensity stats
+/// (`min_scaled` / `max_scaled` / `mean_scaled`, see `intensities_to_json`).
+fn channel_stat_expr(ch: i32, stat: &str) -> String {
+    format!("CAST(json_extract(intensities_json, ['{ch}']) ->> '{stat}' AS DOUBLE)")
+}
+
+/// SQL expression for the number of `class`-colocalizing partners a ROI has —
+/// the same value the `coloc_partner__{class}__count` results-table column shows.
+fn coloc_partner_count_expr(class: &str) -> String {
+    format!(
+        "COALESCE(json_array_length(coloc_json -> '{}'), 0)",
+        class.replace('\'', "''")
+    )
+}
+
+/// Maps a results-table column id to the SQL expression `ORDER BY` should sort
+/// on, or `None` if that column isn't backed by a sortable SQL value (e.g. the
+/// comma-joined `coloc_partner__{class}__ids` text column).
+fn column_order_expr(col_id: &str) -> Option<String> {
+    match col_id {
+        "roi_id" => Some("object_id".to_string()),
+        "image" => Some("image_name".to_string()),
+        "class" => Some(class_case_expr().to_string()),
+        "area_px" => Some("area_px".to_string()),
+        "area_nm2" => Some("area_nm2".to_string()),
+        "circularity" => Some("circularity".to_string()),
+        "colocalized" => {
+            Some("(coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}')".to_string())
+        }
+        id if id.starts_with("coloc_partner__") => {
+            let (class, suffix) = id.strip_prefix("coloc_partner__")?.rsplit_once("__")?;
+            (suffix == "count").then(|| coloc_partner_count_expr(class))
+        }
+        id if id.starts_with("ch") => {
+            let rest = id.strip_prefix("ch")?;
+            let under = rest.find('_')?;
+            let ch: i32 = rest[..under].parse().ok()?;
+            let stat = match &rest[under + 1..] {
+                "min_bit" => "min_scaled",
+                "max_bit" => "max_scaled",
+                "avg_bit" => "mean_scaled",
+                _ => return None,
+            };
+            Some(channel_stat_expr(ch, stat))
+        }
+        _ => None,
     }
 }
 
@@ -516,6 +591,73 @@ fn sql_in_list(items: &[String]) -> String {
         .map(|s| format!("'{}'", s.replace('\'', "''")))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// `(min, max)` of `column` (one of the fixed `"t_stack"`/`"z_stack"`
+/// literals below — never user input), or `None` when there's nothing to
+/// step through: the column is all NULL, or every non-NULL value is the same.
+fn stack_range(conn: &Connection, column: &str) -> Result<Option<(i32, i32)>, InternalErrors> {
+    let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+    let sql = format!(
+        "SELECT MIN({column}), MAX({column}), COUNT(DISTINCT {column}) FROM rois WHERE {column} IS NOT NULL"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(err)?;
+    let (min, max, distinct_count): (Option<i32>, Option<i32>, i64) = stmt
+        .query_row([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(err)?;
+    if distinct_count <= 1 {
+        return Ok(None);
+    }
+    match (min, max) {
+        (Some(min), Some(max)) => Ok(Some((min, max))),
+        _ => Ok(None),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Coloc filter vocabulary
+//
+// `RoiFilter::coloc_filter` items are one of three kinds of label, matched
+// literally against the value coming back from the GUI's filter popup:
+//   - "No"                          -> ROI has no colocalization partners
+//   - "Yes (any class)"             -> ROI colocalizes with at least one class
+//   - "Colocalizes with <class>"    -> ROI colocalizes with that specific class
+// These helpers are the single source of truth for that vocabulary so the SQL
+// builder below and the GUI (which populates the filter popup) never drift.
+// ---------------------------------------------------------------------------
+
+pub fn coloc_filter_label_no() -> &'static str {
+    "No"
+}
+
+pub fn coloc_filter_label_any() -> &'static str {
+    "Yes (any class)"
+}
+
+pub fn coloc_filter_label_with(class: &str) -> String {
+    format!("Colocalizes with {class}")
+}
+
+fn parse_coloc_filter_with(label: &str) -> Option<&str> {
+    label.strip_prefix("Colocalizes with ")
+}
+
+/// Builds the SQL boolean expression for a single selected coloc-filter label.
+fn coloc_filter_condition(label: &str) -> String {
+    if label == coloc_filter_label_no() {
+        "(coloc_json IS NULL OR coloc_json = '' OR coloc_json = '{}')".to_string()
+    } else if label == coloc_filter_label_any() {
+        "(coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}')".to_string()
+    } else if let Some(class) = parse_coloc_filter_with(label) {
+        format!(
+            "COALESCE(json_array_length(coloc_json -> '{}'), 0) > 0",
+            class.replace('\'', "''")
+        )
+    } else {
+        // Unrecognized label (shouldn't happen if the GUI only ever sends labels
+        // produced by the helpers above) -> matches nothing.
+        "FALSE".to_string()
+    }
 }
 
 /// Opens a result file written by [`DuckDbExporter`] for reading.
@@ -573,6 +715,13 @@ impl DuckDbReader {
         {
             return Ok(vec![]);
         }
+        if filter
+            .coloc_filter
+            .as_deref()
+            .map_or(false, |v| v.is_empty())
+        {
+            return Ok(vec![]);
+        }
 
         let mut conditions: Vec<String> = Vec::new();
 
@@ -581,11 +730,23 @@ impl DuckDbReader {
         }
         if let Some(classes) = &filter.class_filter {
             conditions.push(format!(
-                "CASE WHEN json_array_length(object_class_name) = 0 \
-                 THEN COALESCE(seg_class_name, '') \
-                 ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END IN ({})",
+                "{} IN ({})",
+                class_case_expr(),
                 sql_in_list(classes)
             ));
+        }
+        if let Some(labels) = &filter.coloc_filter {
+            // Every entry `Colocalization` ever writes into `colocalized_with` has a non-empty
+            // ID list (see coloc_rois.rs), so `coloc_json` is exactly "{}" / empty iff the ROI
+            // has no colocalization partner — no need to parse the object to check.
+            let fragments: Vec<String> = labels.iter().map(|l| coloc_filter_condition(l)).collect();
+            conditions.push(format!("({})", fragments.join(" OR ")));
+        }
+        if let Some(t) = filter.t_stack_filter {
+            conditions.push(format!("t_stack = {t}"));
+        }
+        if let Some(z) = filter.z_stack_filter {
+            conditions.push(format!("z_stack = {z}"));
         }
 
         let where_clause = if conditions.is_empty() {
@@ -604,8 +765,22 @@ impl DuckDbReader {
             String::new()
         };
 
+        // `object_id` is always the final tiebreaker so pages stay stably ordered
+        // even when many rows share the same sort-column value.
+        let order_by = match filter
+            .sort_column
+            .as_deref()
+            .and_then(column_order_expr)
+        {
+            Some(expr) => format!(
+                "ORDER BY {expr} {}, object_id",
+                if filter.sort_ascending { "ASC" } else { "DESC" }
+            ),
+            None => "ORDER BY object_id".to_string(),
+        };
+
         let sql = format!(
-            "{} {} ORDER BY object_id {}",
+            "{} {} {order_by} {}",
             roi_select_sql(filter.fetch_intensities),
             where_clause,
             pagination
@@ -620,16 +795,29 @@ impl DuckDbReader {
     /// Returns all distinct computed class strings present in the file, sorted alphabetically.
     pub fn get_class_names(&self) -> Result<Vec<String>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let sql = "SELECT DISTINCT \
-                   CASE WHEN json_array_length(object_class_name) = 0 \
-                   THEN COALESCE(seg_class_name, '') \
-                   ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END AS class_str \
-                   FROM rois ORDER BY class_str";
-        let mut stmt = self.conn.prepare(sql).map_err(err)?;
+        let sql = format!(
+            "SELECT DISTINCT {} AS class_str FROM rois ORDER BY class_str",
+            class_case_expr()
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(err)?;
         stmt.query_map([], |row| row.get(0))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)
+    }
+
+    /// Returns the `(min, max)` of `t_stack` present in the file, or `None`
+    /// when there's nothing to step through — either every ROI's `t_stack` is
+    /// NULL (no time axis) or they all share the same single value.
+    pub fn get_t_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
+        stack_range(&self.conn, "t_stack")
+    }
+
+    /// Returns the `(min, max)` of `z_stack` present in the file, or `None`
+    /// when there's nothing to step through — either every ROI's `z_stack` is
+    /// NULL (no depth axis) or they all share the same single value.
+    pub fn get_z_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
+        stack_range(&self.conn, "z_stack")
     }
 
     /// Returns all distinct `image_name` values present in the file, sorted alphabetically.
@@ -639,6 +827,26 @@ impl DuckDbReader {
             .conn
             .prepare("SELECT DISTINCT image_name FROM rois ORDER BY image_name")
             .map_err(err)?;
+        stmt.query_map([], |row| row.get(0))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)
+    }
+
+    /// Returns all distinct partner-class labels appearing as keys in any ROI's
+    /// `coloc_json`, sorted alphabetically. Used to populate the "Colocalizes
+    /// with <class>" entries of the coloc filter popup.
+    pub fn get_coloc_partner_class_names(&self) -> Result<Vec<String>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        // Filter in a subquery first: UNNEST in the outer SELECT list is evaluated
+        // against every scanned row before the WHERE predicate is applied, so
+        // `json_keys('')` would otherwise be hit for rows with no colocalization.
+        let sql = "SELECT DISTINCT UNNEST(json_keys(t.cj)) AS k FROM ( \
+                       SELECT coloc_json AS cj FROM rois \
+                       WHERE coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}' \
+                   ) AS t \
+                   ORDER BY k";
+        let mut stmt = self.conn.prepare(sql).map_err(err)?;
         stmt.query_map([], |row| row.get(0))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
@@ -706,5 +914,239 @@ fn extract_int_list(val: Value) -> Vec<i32> {
             .filter_map(|v| if let Value::Int(n) = v { Some(n) } else { None })
             .collect(),
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::roi::{Roi, RoiInit};
+    use bitvec::prelude::*;
+    use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
+    use tempfile::TempDir;
+
+    fn make_filled_roi(id: u128, bbox: [u32; 4]) -> Roi {
+        let [x_min, y_min, x_max, y_max] = bbox;
+        let w = (x_max - x_min + 1) as usize;
+        let h = (y_max - y_min + 1) as usize;
+        let area = w * h;
+        let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
+        Roi::new(RoiInit {
+            id: ObjectId(id),
+            bbox,
+            mask_data,
+            area,
+            ..Default::default()
+        })
+    }
+
+    fn make_filled_roi_at_plane(id: u128, bbox: [u32; 4], t: i32, z: i32) -> Roi {
+        let mut roi = make_filled_roi(id, bbox);
+        roi.plane.t = t;
+        roi.plane.z = z;
+        roi
+    }
+
+    fn export_and_open(rois: Vec<Roi>) -> (TempDir, DuckDbReader) {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let mut cache = PipelineCache::default();
+        for roi in rois {
+            cache.roi_cache.insert(roi.id.clone(), roi);
+        }
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+        exporter.export(&cache).expect("export failed");
+        drop(exporter); // flushes the appenders / closes the connection
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        (dir, reader)
+    }
+
+    #[test]
+    fn coloc_filter_restricts_to_matching_status() {
+        const ID_COLOC: u128 = 1;
+        const ID_NOT_COLOC: u128 = 2;
+        const PARTNER_CLASS: ObjectClass = ObjectClass::Valid(1);
+        let coloc_id = ObjectId(ID_COLOC).to_string();
+        let not_coloc_id = ObjectId(ID_NOT_COLOC).to_string();
+
+        let mut coloc_roi = make_filled_roi(ID_COLOC, [0, 0, 1, 1]);
+        coloc_roi.add_colocalizing_object(PARTNER_CLASS, ObjectId(99));
+        let not_coloc_roi = make_filled_roi(ID_NOT_COLOC, [5, 5, 6, 6]);
+
+        let (_dir, reader) = export_and_open(vec![coloc_roi, not_coloc_roi]);
+
+        let yes = reader
+            .get_rois(&RoiFilter {
+                coloc_filter: Some(vec![coloc_filter_label_any().into()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(yes.len(), 1);
+        assert_eq!(yes[0].object_id, coloc_id);
+
+        let no = reader
+            .get_rois(&RoiFilter {
+                coloc_filter: Some(vec![coloc_filter_label_no().into()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(no.len(), 1);
+        assert_eq!(no[0].object_id, not_coloc_id);
+
+        let all = reader.get_rois(&RoiFilter::default()).unwrap();
+        assert_eq!(all.len(), 2, "no coloc_filter set → both rows returned");
+
+        let none_selected = reader
+            .get_rois(&RoiFilter {
+                coloc_filter: Some(vec![]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            none_selected.is_empty(),
+            "active filter with nothing selected → 0 rows"
+        );
+    }
+
+    #[test]
+    fn coloc_partner_class_names_and_filter() {
+        const ID_WITH_B: u128 = 1;
+        const ID_WITH_C: u128 = 2;
+        const PARTNER_B: ObjectClass = ObjectClass::Valid(2);
+        const PARTNER_C: ObjectClass = ObjectClass::Valid(3);
+        let id_with_b = ObjectId(ID_WITH_B).to_string();
+
+        let mut roi_with_b = make_filled_roi(ID_WITH_B, [0, 0, 1, 1]);
+        roi_with_b.add_colocalizing_object(PARTNER_B, ObjectId(99));
+        let mut roi_with_c = make_filled_roi(ID_WITH_C, [5, 5, 6, 6]);
+        roi_with_c.add_colocalizing_object(PARTNER_C, ObjectId(98));
+
+        let (_dir, reader) = export_and_open(vec![roi_with_b, roi_with_c]);
+
+        // class_label() falls back to "class_{n}" when no name map is provided.
+        let partner_classes = reader.get_coloc_partner_class_names().unwrap();
+        assert_eq!(partner_classes, vec!["class_2".to_string(), "class_3".to_string()]);
+
+        let with_b = reader
+            .get_rois(&RoiFilter {
+                coloc_filter: Some(vec![coloc_filter_label_with("class_2")]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(with_b.len(), 1);
+        assert_eq!(with_b[0].object_id, id_with_b);
+    }
+
+    #[test]
+    fn get_rois_sorts_by_requested_column() {
+        const ID_SMALL: u128 = 1;
+        const ID_LARGE: u128 = 2;
+        let small_id = ObjectId(ID_SMALL).to_string();
+        let large_id = ObjectId(ID_LARGE).to_string();
+
+        // bbox [0,0,1,1] -> 2x2 = 4px; bbox [0,0,9,9] -> 10x10 = 100px.
+        let small = make_filled_roi(ID_SMALL, [0, 0, 1, 1]);
+        let large = make_filled_roi(ID_LARGE, [0, 0, 9, 9]);
+        let (_dir, reader) = export_and_open(vec![large, small]);
+
+        let asc = reader
+            .get_rois(&RoiFilter {
+                sort_column: Some("area_px".into()),
+                sort_ascending: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            asc.iter().map(|r| r.object_id.clone()).collect::<Vec<_>>(),
+            vec![small_id.clone(), large_id.clone()]
+        );
+
+        let desc = reader
+            .get_rois(&RoiFilter {
+                sort_column: Some("area_px".into()),
+                sort_ascending: false,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            desc.iter().map(|r| r.object_id.clone()).collect::<Vec<_>>(),
+            vec![large_id, small_id]
+        );
+    }
+
+    #[test]
+    fn get_rois_unsortable_column_falls_back_to_object_id_order() {
+        let roi_a = make_filled_roi(1, [0, 0, 1, 1]);
+        let roi_b = make_filled_roi(2, [0, 0, 1, 1]);
+        let (_dir, reader) = export_and_open(vec![roi_b, roi_a]);
+
+        let rows = reader
+            .get_rois(&RoiFilter {
+                sort_column: Some("coloc_partner__ClassA__ids".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.object_id.clone()).collect::<Vec<_>>(),
+            vec![ObjectId(1).to_string(), ObjectId(2).to_string()],
+            "unsortable column id falls back to the default ORDER BY object_id"
+        );
+    }
+
+    #[test]
+    fn stack_range_is_none_when_every_roi_shares_one_value() {
+        let roi_a = make_filled_roi_at_plane(1, [0, 0, 1, 1], 0, 0);
+        let roi_b = make_filled_roi_at_plane(2, [5, 5, 6, 6], 0, 0);
+        let (_dir, reader) = export_and_open(vec![roi_a, roi_b]);
+
+        assert_eq!(reader.get_t_stack_range().unwrap(), None);
+        assert_eq!(reader.get_z_stack_range().unwrap(), None);
+    }
+
+    #[test]
+    fn stack_range_reports_min_max_when_values_differ() {
+        let roi_t0 = make_filled_roi_at_plane(1, [0, 0, 1, 1], 0, 3);
+        let roi_t2 = make_filled_roi_at_plane(2, [5, 5, 6, 6], 2, 3);
+        let roi_t5 = make_filled_roi_at_plane(3, [9, 9, 10, 10], 5, 7);
+        let (_dir, reader) = export_and_open(vec![roi_t0, roi_t2, roi_t5]);
+
+        assert_eq!(reader.get_t_stack_range().unwrap(), Some((0, 5)));
+        assert_eq!(reader.get_z_stack_range().unwrap(), Some((3, 7)));
+    }
+
+    #[test]
+    fn get_rois_filters_by_t_stack_and_z_stack() {
+        const ID_T0: u128 = 1;
+        const ID_T2: u128 = 2;
+        let id_t0 = ObjectId(ID_T0).to_string();
+        let id_t2 = ObjectId(ID_T2).to_string();
+
+        let roi_t0 = make_filled_roi_at_plane(ID_T0, [0, 0, 1, 1], 0, 1);
+        let roi_t2 = make_filled_roi_at_plane(ID_T2, [5, 5, 6, 6], 2, 4);
+        let (_dir, reader) = export_and_open(vec![roi_t0, roi_t2]);
+
+        let only_t0 = reader
+            .get_rois(&RoiFilter {
+                t_stack_filter: Some(0),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(only_t0.len(), 1);
+        assert_eq!(only_t0[0].object_id, id_t0);
+
+        let only_z4 = reader
+            .get_rois(&RoiFilter {
+                z_stack_filter: Some(4),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(only_z4.len(), 1);
+        assert_eq!(only_z4[0].object_id, id_t2);
+
+        let both_unset = reader.get_rois(&RoiFilter::default()).unwrap();
+        assert_eq!(both_unset.len(), 2, "no t/z filter set -> every frame returned");
     }
 }

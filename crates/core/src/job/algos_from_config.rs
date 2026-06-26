@@ -163,12 +163,76 @@ impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
     }
 }
 
+impl From<ClassificationTransformRoisTransformFunctionSettings> for TransformFunction {
+    fn from(_s: ClassificationTransformRoisTransformFunctionSettings) -> Self {
+        match _s {
+            ClassificationTransformRoisTransformFunctionSettings::Scale { factor } => {
+                TransformFunction::Scale {
+                    factor: factor.clamp(0.0, 65535.0),
+                }
+            }
+            ClassificationTransformRoisTransformFunctionSettings::SnapArea { extra_size, unit } => {
+                TransformFunction::SnapArea {
+                    extra_size: extra_size.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
+            }
+            ClassificationTransformRoisTransformFunctionSettings::MinCircle {
+                min_diameter,
+                unit,
+            } => TransformFunction::MinCircle {
+                min_diameter: min_diameter.clamp(0.0, 65535.0),
+                unit: unit,
+            },
+            ClassificationTransformRoisTransformFunctionSettings::DrawCircle { diameter, unit } => {
+                TransformFunction::DrawCircle {
+                    diameter: diameter.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
+            }
+            ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale } => {
+                TransformFunction::FittingEllipse {
+                    scale: scale.clamp(0.0, 65535.0),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<AiSegmentationUnetUNetOutputModeSettings> for UNetOutputMode {
+    fn from(_s: AiSegmentationUnetUNetOutputModeSettings) -> Self {
+        match _s {
+            AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses => {
+                UNetOutputMode::SoftmaxClasses
+            }
+            AiSegmentationUnetUNetOutputModeSettings::IndependentChannels => {
+                UNetOutputMode::IndependentChannels
+            }
+        }
+    }
+}
+
 // ============ STRUCT FROM IMPLS ============
 
 impl From<BlurSettings> for Blur {
     fn from(_s: BlurSettings) -> Self {
         Blur {
             kernel_size: _s.kernel_size,
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<CellposeSettings> for Cellpose {
+    fn from(_s: CellposeSettings) -> Self {
+        Cellpose {
+            model_path: _s.model_path,
+            object_class_id: _s.object_class_id,
+            input_channels: _s.input_channels,
+            probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
+            flow_iterations: _s.flow_iterations,
+            min_object_size: _s.min_object_size,
         }
     }
 }
@@ -380,8 +444,20 @@ impl From<RollingBallSettings> for RollingBall {
 impl From<SaveImageSettings> for SaveImage {
     fn from(_s: SaveImageSettings) -> Self {
         SaveImage {
-            path: _s.path,
+            name: _s.name,
             source: ImageSource::from(_s.source),
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<StardistSettings> for Stardist {
+    fn from(_s: StardistSettings) -> Self {
+        Stardist {
+            model_path: _s.model_path,
+            object_class_id: _s.object_class_id,
+            probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
+            nms_threshold: _s.nms_threshold.clamp(0.0, 1.0),
         }
     }
 }
@@ -416,6 +492,31 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
     }
 }
 
+impl From<TransformRoisSettings> for TransformRois {
+    fn from(_s: TransformRoisSettings) -> Self {
+        TransformRois {
+            function: TransformFunction::from(_s.function),
+            input_class: _s.input_class,
+            output_class: _s.output_class,
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<UNetSettings> for UNet {
+    fn from(_s: UNetSettings) -> Self {
+        UNet {
+            model_path: _s.model_path,
+            object_class_id: _s.object_class_id,
+            probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
+            output_mode: UNetOutputMode::from(_s.output_mode),
+            foreground_channel: _s.foreground_channel,
+            boundary_channel: _s.boundary_channel,
+            boundary_threshold: _s.boundary_threshold.clamp(0.0, 1.0),
+        }
+    }
+}
+
 impl From<VoronoiSettings> for Voronoi {
     fn from(_s: VoronoiSettings) -> Self {
         Voronoi {
@@ -443,7 +544,9 @@ impl From<VoronoiSettings> for Voronoi {
 impl From<WatershedSettings> for Watershed {
     fn from(_s: WatershedSettings) -> Self {
         Watershed {
-            maximum_finder_tolerance: _s.maximum_finder_tolerance.clamp(0.1, 1.0),
+            maximum_finder_tolerance: _s.maximum_finder_tolerance.clamp(0.1, 20.0),
+            smoothing_sigma: _s.smoothing_sigma.clamp(0.0, 10.0),
+            min_object_size: _s.min_object_size,
         }
     }
 }
@@ -465,6 +568,12 @@ use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, InternalErrors> {
     match cmd {
         PipelineCommand::Blur(settings) => Ok(Box::new(crate::algos::Blur::from(settings))),
+        #[cfg(feature = "ai")]
+        PipelineCommand::Cellpose(settings) => Ok(Box::new(crate::algos::Cellpose::from(settings))),
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::Cellpose(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; Cellpose is unavailable.".into(),
+        )),
         PipelineCommand::ClassifyRois(settings) => {
             Ok(Box::new(crate::algos::ClassifyRois::from(settings)))
         }
@@ -523,12 +632,27 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::SaveImage(settings) => {
             Ok(Box::new(crate::algos::SaveImage::from(settings)))
         }
+        #[cfg(feature = "ai")]
+        PipelineCommand::Stardist(settings) => Ok(Box::new(crate::algos::Stardist::from(settings))),
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::Stardist(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; Stardist is unavailable.".into(),
+        )),
         PipelineCommand::StructureTensor(settings) => {
             Ok(Box::new(crate::algos::StructureTensor::from(settings)))
         }
         PipelineCommand::Threshold(settings) => {
             Ok(Box::new(crate::algos::Threshold::from(settings)))
         }
+        PipelineCommand::TransformRois(settings) => {
+            Ok(Box::new(crate::algos::TransformRois::from(settings)))
+        }
+        #[cfg(feature = "ai")]
+        PipelineCommand::UNet(settings) => Ok(Box::new(crate::algos::UNet::from(settings))),
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::UNet(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; UNet is unavailable.".into(),
+        )),
         PipelineCommand::Voronoi(settings) => Ok(Box::new(crate::algos::Voronoi::from(settings))),
         PipelineCommand::Watershed(settings) => {
             Ok(Box::new(crate::algos::Watershed::from(settings)))
