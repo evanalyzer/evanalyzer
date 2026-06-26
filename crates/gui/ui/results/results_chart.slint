@@ -47,7 +47,6 @@ export component ResultsChart inherits Rectangle {
             HorizontalLayout {
                 padding: 8px;
                 spacing: 10px;
-                alignment: start;
 
                 HorizontalLayout {
                     spacing: 4px;
@@ -56,11 +55,13 @@ export component ResultsChart inherits Rectangle {
                         selected: ResultsState.chart_kind == ResultsChartKind.histogram;
                         clicked => { ResultsState.chart_kind = ResultsChartKind.histogram; }
                     }
+
                     ChartKindButton {
                         label: "Scatter";
                         selected: ResultsState.chart_kind == ResultsChartKind.scatter;
                         clicked => { ResultsState.chart_kind = ResultsChartKind.scatter; }
                     }
+
                     ChartKindButton {
                         label: "Heatmap";
                         selected: ResultsState.chart_kind == ResultsChartKind.heatmap;
@@ -68,10 +69,14 @@ export component ResultsChart inherits Rectangle {
                     }
                 }
 
-                Rectangle { width: 1px; background: Theme.border-soft; }
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border-soft;
+                }
 
                 if ResultsState.chart_kind == ResultsChartKind.histogram: HorizontalLayout {
                     spacing: 6px;
+                    alignment: start;
                     Text {
                         text: "Column:";
                         font-size: 11px;
@@ -79,12 +84,14 @@ export component ResultsChart inherits Rectangle {
                         color: Theme.text-dim;
                         vertical-alignment: center;
                     }
+
                     ComboBox {
                         width: 170px;
                         model: ResultsState.chart_plottable_columns;
                         current-value: ResultsState.chart_hist_column;
                         selected(v) => { ResultsState.chart_hist_column = v; }
                     }
+
                     Text {
                         text: "Buckets:";
                         font-size: 11px;
@@ -92,15 +99,17 @@ export component ResultsChart inherits Rectangle {
                         color: Theme.text-dim;
                         vertical-alignment: center;
                     }
+
                     SpinBox {
-                        width: 90px;
+                        width: 100px;
                         minimum: 2;
                         maximum: 200;
                         value: ResultsState.chart_bucket_count;
                         edited(v) => { ResultsState.chart_bucket_count = v; }
                     }
+
                     ChartKindButton {
-                        width: 96px;
+                        width: 85px;
                         label: "Log scale";
                         selected: ResultsState.chart_log_scale;
                         clicked => { ResultsState.chart_log_scale = !ResultsState.chart_log_scale; }
@@ -109,6 +118,7 @@ export component ResultsChart inherits Rectangle {
 
                 if ResultsState.chart_kind == ResultsChartKind.scatter: HorizontalLayout {
                     spacing: 6px;
+                    alignment: start;
                     Text {
                         text: "X:";
                         font-size: 11px;
@@ -116,12 +126,14 @@ export component ResultsChart inherits Rectangle {
                         color: Theme.text-dim;
                         vertical-alignment: center;
                     }
+
                     ComboBox {
                         width: 150px;
                         model: ResultsState.chart_plottable_columns;
                         current-value: ResultsState.chart_scatter_x;
                         selected(v) => { ResultsState.chart_scatter_x = v; }
                     }
+
                     Text {
                         text: "Y:";
                         font-size: 11px;
@@ -129,12 +141,14 @@ export component ResultsChart inherits Rectangle {
                         color: Theme.text-dim;
                         vertical-alignment: center;
                     }
+
                     ComboBox {
                         width: 150px;
                         model: ResultsState.chart_plottable_columns;
                         current-value: ResultsState.chart_scatter_y;
                         selected(v) => { ResultsState.chart_scatter_y = v; }
                     }
+
                     Text {
                         text: "Color by:";
                         font-size: 11px;
@@ -142,6 +156,7 @@ export component ResultsChart inherits Rectangle {
                         color: Theme.text-dim;
                         vertical-alignment: center;
                     }
+
                     ComboBox {
                         width: 110px;
                         model: ["None", "Class", "Colocalized"];
@@ -154,6 +169,7 @@ export component ResultsChart inherits Rectangle {
 
                 if ResultsState.chart_kind == ResultsChartKind.heatmap: HorizontalLayout {
                     spacing: 6px;
+                    alignment: start;
                     Text {
                         text: "Color by:";
                         font-size: 11px;
@@ -161,12 +177,14 @@ export component ResultsChart inherits Rectangle {
                         color: Theme.text-dim;
                         vertical-alignment: center;
                     }
+
                     ComboBox {
                         width: 170px;
                         model: ResultsState.chart_heatmap_metric_options;
                         current-value: ResultsState.chart_heatmap_metric;
                         selected(v) => { ResultsState.chart_heatmap_metric = v; }
                     }
+
                     Text {
                         text: "Cell size (px):";
                         font-size: 11px;
@@ -174,8 +192,9 @@ export component ResultsChart inherits Rectangle {
                         color: Theme.text-dim;
                         vertical-alignment: center;
                     }
+
                     SpinBox {
-                        width: 90px;
+                        width: 110px;
                         minimum: 1;
                         maximum: 10000;
                         value: ResultsState.chart_cell_size_px;
@@ -183,7 +202,9 @@ export component ResultsChart inherits Rectangle {
                     }
                 }
 
-                Rectangle { horizontal-stretch: 1; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
 
                 plot-ta := TouchArea {
                     width: 64px;
@@ -210,7 +231,10 @@ export component ResultsChart inherits Rectangle {
             }
         }
 
-        Rectangle { height: 1px; background: Theme.border; }
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
 
         // -- Chart area -------------------------------------------------------
         Rectangle {
