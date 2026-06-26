@@ -1462,6 +1462,25 @@ impl ResultsTableController {
                 }
             }
             ResultsChartKind::Heatmap => {
+                // The heatmap bins raw pixel centroids; overlaying more than
+                // one image's coordinate space as-is would silently mix
+                // unrelated images together rather than just look odd, so
+                // require the user to filter down to a single image first.
+                let image_count = rois
+                    .iter()
+                    .map(|r| r.image_name.as_str())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len();
+                if image_count > 1 {
+                    report(
+                        format!(
+                            "Heatmap mixes pixel coordinates from {image_count} images — use the Image filter to pick a single image for a meaningful result."
+                        ),
+                        None,
+                    );
+                    return;
+                }
+
                 let metric = if config.heatmap_metric.is_empty()
                     || config.heatmap_metric == HEATMAP_METRIC_COUNT_LABEL
                 {
