@@ -7,11 +7,13 @@ import {
     ResultsState,
     ResultsViewMode,
     ResultsGroupBy,
+    ResultsChartKind,
     ResultsColumnDef,
     ResultsRow,
     FilterItem,
 } from "results_table.slint";
-export { ResultsState, ResultsViewMode, ResultsGroupBy, ResultsColumnDef, ResultsRow, FilterItem } from "results_table.slint";
+import { ResultsChart } from "results_chart.slint";
+export { ResultsState, ResultsViewMode, ResultsGroupBy, ResultsChartKind, ResultsColumnDef, ResultsRow, FilterItem } from "results_table.slint";
 
 
 // -- Radio-style option row (used in the group-by popup) ----------------------
@@ -658,7 +660,6 @@ component ResultsToolbar inherits Rectangle {
         ToolToggleButton {
             icon: @image-url("../icons/regular-black/chart-bar.svg");
             checked: ResultsState.view_mode == ResultsViewMode.chart;
-            enabled: false;
             clicked => {
                 ResultsState.view_mode = ResultsViewMode.chart;
             }
@@ -824,9 +825,12 @@ export component ResultsWindow inherits Window {
             background: Theme.border;
         }
 
-        ResultsTable {
+        if ResultsState.view_mode == ResultsViewMode.table: ResultsTable {
             vertical-stretch: 1;
             background: Theme.panel;
+        }
+        if ResultsState.view_mode == ResultsViewMode.chart: ResultsChart {
+            vertical-stretch: 1;
         }
 
         ResultsStatusBar { }

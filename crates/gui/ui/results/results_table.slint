@@ -35,6 +35,9 @@ export struct FilterItem {
 
 export enum ResultsViewMode { table, chart }
 
+// Which chart the chart view currently shows.
+export enum ResultsChartKind { histogram, scatter }
+
 // How rows are bucketed before aggregation.
 export enum ResultsGroupBy { none, image, folder, regex }
 
@@ -151,6 +154,24 @@ export global ResultsState {
     in-out property <bool> group_active:         false;
     // Applies the current group_by / group_regex / aggregate selection.
     callback group_apply();
+
+    // -- Chart view ---------------------------------------------------------
+    in-out property <ResultsChartKind> chart_kind: ResultsChartKind.histogram;
+    // Numeric column labels available to plot (visible numeric metrics only).
+    in property <[string]> chart_plottable_columns: [];
+    in-out property <string> chart_hist_column:   "";
+    in-out property <string> chart_scatter_x:     "";
+    in-out property <string> chart_scatter_y:     "";
+    // "" / "class" / "colocalized" — which categorical dimension colors scatter points.
+    in-out property <string> chart_color_by:      "";
+    in-out property <int> chart_bucket_count:     20;
+    // Rendered chart bitmap, built by the controller via the `plotters` crate.
+    in property <image> chart_image;
+    // Empty while a chart is shown; otherwise an explanatory/placeholder
+    // message (e.g. "Pick a column to plot", "showing 5,000 of 42,310 points").
+    in property <string> chart_status: "Pick a column and click Plot";
+    // Re-renders the chart from the current picks + current table filters.
+    callback chart_render_requested();
 }
 
 // -- Shared checkbox item used inside filter popups ----------------------------

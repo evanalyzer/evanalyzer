@@ -24,6 +24,7 @@ regex = "1"
 csv = "1"
 rust_xlsxwriter = "0"
 dirs = "6"
+plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "point_series", "ttf"] }
 
 
 

@@ -1,12 +1,14 @@
 use crate::editor::images_list_controller::ImagesListController;
 use crate::{
-    FilterItem, ResultsColumnDef, ResultsGroupBy, ResultsListState, ResultsRow, ResultsState,
-    ResultsWindow, UiState,
+    FilterItem, ResultsChartKind, ResultsColumnDef, ResultsGroupBy, ResultsListState, ResultsRow,
+    ResultsState, ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
     aggregate_rows, build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
-    coloc_filter_label_with, discover_channels, sort_display_rows, to_display_row, AggFunc,
-    ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, ResultsExporter, ResultsLoader, RoiRow,
+    coloc_filter_label_with, compute_histogram, compute_scatter, discover_channels,
+    plottable_columns, render_histogram, render_scatter, sort_display_rows, to_display_row,
+    AggFunc, ColorBy, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, RenderedChart,
+    ResultsExporter, ResultsLoader, RoiRow,
 };
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
@@ -15,6 +17,21 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 const PAGE_SIZE: usize = 500;
+const CHART_WIDTH: u32 = 960;
+const CHART_HEIGHT: u32 = 560;
+const SCATTER_MAX_POINTS: usize = 5_000;
+
+/// Chart picks read off `ResultsState` on the UI thread before handing off to
+/// `bg_render_chart` on a background thread — mirrors `GroupConfig`'s role for
+/// `bg_reload_grouped`.
+struct ChartRenderConfig {
+    kind: ResultsChartKind,
+    hist_column: String,
+    scatter_x: String,
+    scatter_y: String,
+    color_by: ColorBy,
+    bucket_count: usize,
+}
 
 pub struct ResultsTableController {
     pub(crate) ui: slint::Weak<ResultsWindow>,
@@ -126,6 +143,33 @@ impl ResultsTableController {
         state.on_sort_requested(cb!(on_sort_column_changed, SharedString, bool));
 
         state.on_roi_row_selected(cb!(on_roi_row_selected, i32));
+
+        // --- chart_render_requested: read picks on the UI thread, render in --
+        // the background (mirrors group_apply's read-then-spawn split).
+        {
+            let this = Arc::clone(self);
+            state.on_chart_render_requested(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+
+                let config = ChartRenderConfig {
+                    kind: state.get_chart_kind(),
+                    hist_column: state.get_chart_hist_column().to_string(),
+                    scatter_x: state.get_chart_scatter_x().to_string(),
+                    scatter_y: state.get_chart_scatter_y().to_string(),
+                    color_by: match state.get_chart_color_by().as_str() {
+                        "class" => ColorBy::Class,
+                        "colocalized" => ColorBy::Colocalized,
+                        _ => ColorBy::None,
+                    },
+                    bucket_count: state.get_chart_bucket_count().max(0) as usize,
+                };
+
+                state.set_chart_status("Rendering...".into());
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || Self::bg_render_chart(this, config));
+            });
+        }
 
         // --- group_apply: read group selection, reload (grouped or paginated) -
         {
@@ -541,6 +585,15 @@ impl ResultsTableController {
                             state.set_group_regex(slint::SharedString::new());
                             state.set_sort_column_id(slint::SharedString::new());
                             state.set_sort_ascending(true);
+                            state.set_chart_image(slint::Image::default());
+                            state.set_chart_status("Pick a column and click Plot".into());
+                            state.set_chart_hist_column(slint::SharedString::new());
+                            state.set_chart_scatter_x(slint::SharedString::new());
+                            state.set_chart_scatter_y(slint::SharedString::new());
+                            state.set_chart_color_by(slint::SharedString::new());
+                            state.set_chart_plottable_columns(slint::ModelRc::new(
+                                slint::VecModel::from(plottable_column_labels(&specs)),
+                            ));
                             state.set_all_rows_loaded(all_loaded);
                             state.set_loading_more(false);
                             state.set_rows(slint::ModelRc::new(slint::VecModel::from(
@@ -1130,6 +1183,11 @@ impl ResultsTableController {
             }
         }
 
+        let specs = self.column_specs.lock().unwrap().clone();
+        state.set_chart_plottable_columns(slint::ModelRc::new(slint::VecModel::from(
+            plottable_column_labels(&specs),
+        )));
+
         let grouped = !matches!(
             self.group_config.lock().unwrap().group_by,
             GroupBy::None
@@ -1139,7 +1197,6 @@ impl ResultsTableController {
             state.set_loading_more(true);
             Self::spawn_reload(Arc::clone(self));
         } else {
-            let specs = self.column_specs.lock().unwrap().clone();
             let widths = self.column_widths.lock().unwrap().clone();
             let slint_cols = specs_to_slint_cols(&specs, &widths);
             let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
@@ -1192,6 +1249,128 @@ impl ResultsTableController {
             .sum();
         state.set_columns_total_width(total_width);
     }
+
+    // -------------------------------------------------------------------------
+    // Chart view: histogram / scatter rendering
+    // -------------------------------------------------------------------------
+
+    /// Fetches every ROI matching the current filters (mirrors
+    /// `bg_reload_grouped`'s "aggregation needs every matching row" fetch),
+    /// computes the requested chart in `evanalyzer_app::result` (the same
+    /// functions a future CLI export command would call), renders it with
+    /// `plotters` into an RGB8 buffer, and pushes it to the UI as a
+    /// `slint::Image`.
+    fn bg_render_chart(this: Arc<Self>, config: ChartRenderConfig) {
+        let ui = this.ui.clone();
+        let report = move |status: String, chart: Option<RenderedChart>| {
+            let ui = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(window) = ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                if let Some(chart) = chart {
+                    let mut buf =
+                        slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(chart.width, chart.height);
+                    {
+                        let slice = buf.make_mut_slice();
+                        for (px, rgb) in slice.iter_mut().zip(chart.rgb.chunks_exact(3)) {
+                            *px = slint::Rgb8Pixel { r: rgb[0], g: rgb[1], b: rgb[2] };
+                        }
+                    }
+                    state.set_chart_image(slint::Image::from_rgb8(buf));
+                }
+                state.set_chart_status(status.into());
+            });
+        };
+
+        let Some(path) = this.path.lock().unwrap().clone() else {
+            report("No results file loaded.".into(), None);
+            return;
+        };
+
+        // Per-ROI specs carry the visible-column selection; chart axis picks
+        // are resolved against them (label -> column id) below.
+        let specs = this.column_specs.lock().unwrap().clone();
+        let resolve_id =
+            |label: &str| specs.iter().find(|c| c.label == label).map(|c| c.id.clone());
+
+        let image_filter = this.image_filter.lock().unwrap().clone();
+        let class_filter = this.class_filter.lock().unwrap().clone();
+        let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+
+        let loader = ResultsLoader::new(&path);
+        // A chart summarizes every matching ROI, not just a loaded page.
+        let rois = match loader.get_rois(DatabaseFilter {
+            image_filter,
+            class_filter,
+            coloc_filter,
+            page_size: 0,
+            page: 0,
+            needs_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
+        }) {
+            Ok(rois) => rois,
+            Err(e) => {
+                warn!("bg_render_chart failed to load ROIs: {:?}", e);
+                report("Failed to load data for the chart.".into(), None);
+                return;
+            }
+        };
+
+        if rois.is_empty() {
+            report("No ROIs match the current filters.".into(), None);
+            return;
+        }
+
+        match config.kind {
+            ResultsChartKind::Histogram => {
+                let Some(col_id) = resolve_id(&config.hist_column) else {
+                    report("Pick a column to plot.".into(), None);
+                    return;
+                };
+                let Some(data) =
+                    compute_histogram(&rois, &col_id, &specs, config.bucket_count.max(1))
+                else {
+                    report("No numeric data for this column.".into(), None);
+                    return;
+                };
+                match render_histogram(&data, CHART_WIDTH, CHART_HEIGHT) {
+                    Ok(chart) => report(String::new(), Some(chart)),
+                    Err(e) => {
+                        warn!("render_histogram failed: {:?}", e);
+                        report("Failed to render the chart.".into(), None);
+                    }
+                }
+            }
+            ResultsChartKind::Scatter => {
+                let (Some(x_id), Some(y_id)) =
+                    (resolve_id(&config.scatter_x), resolve_id(&config.scatter_y))
+                else {
+                    report("Pick X and Y columns to plot.".into(), None);
+                    return;
+                };
+                let Some(data) =
+                    compute_scatter(&rois, &x_id, &y_id, config.color_by, &specs, SCATTER_MAX_POINTS)
+                else {
+                    report("No numeric data for these columns.".into(), None);
+                    return;
+                };
+                let status = match data.sampled_from {
+                    Some(total) => {
+                        format!("Showing {} of {} points (sampled).", data.points.len(), total)
+                    }
+                    None => String::new(),
+                };
+                match render_scatter(&data, CHART_WIDTH, CHART_HEIGHT) {
+                    Ok(chart) => report(status, Some(chart)),
+                    Err(e) => {
+                        warn!("render_scatter failed: {:?}", e);
+                        report("Failed to render the chart.".into(), None);
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1242,6 +1421,16 @@ fn to_slint_row(row: evanalyzer_app::result::DisplayRow) -> ResultsRow {
         roi_id: row.roi_id,
         values: slint::ModelRc::new(slint::VecModel::from(values)),
     }
+}
+
+/// Labels of the columns the chart view's axis/column pickers may offer —
+/// visible numeric metrics only. Recomputed wherever `column_items` is, so
+/// hiding a column also removes it from the chart pickers.
+fn plottable_column_labels(specs: &[ColumnSpec]) -> Vec<SharedString> {
+    plottable_columns(specs)
+        .iter()
+        .map(|c| c.label.as_str().into())
+        .collect()
 }
 
 fn specs_to_slint_cols(specs: &[ColumnSpec], widths: &HashMap<String, f32>) -> Vec<ResultsColumnDef> {

@@ -1,0 +1,199 @@
+import { ComboBox, SpinBox } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ResultsState, ResultsChartKind } from "results_table.slint";
+
+// -- Histogram / scatter toggle ------------------------------------------------
+
+component ChartKindButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+
+    width: 86px;
+    height: 26px;
+    border-radius: 4px;
+    background: selected ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.raised);
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        font-weight: 600;
+        color: root.selected ? white : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// -- Public export -------------------------------------------------------------
+
+export component ResultsChart inherits Rectangle {
+    background: Theme.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // -- Settings strip ------------------------------------------------
+        Rectangle {
+            height: 44px;
+            background: Theme.panel;
+
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 10px;
+                alignment: start;
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    ChartKindButton {
+                        label: "Histogram";
+                        selected: ResultsState.chart_kind == ResultsChartKind.histogram;
+                        clicked => { ResultsState.chart_kind = ResultsChartKind.histogram; }
+                    }
+                    ChartKindButton {
+                        label: "Scatter";
+                        selected: ResultsState.chart_kind == ResultsChartKind.scatter;
+                        clicked => { ResultsState.chart_kind = ResultsChartKind.scatter; }
+                    }
+                }
+
+                Rectangle { width: 1px; background: Theme.border-soft; }
+
+                if ResultsState.chart_kind == ResultsChartKind.histogram: HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "Column:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                    ComboBox {
+                        width: 170px;
+                        model: ResultsState.chart_plottable_columns;
+                        current-value: ResultsState.chart_hist_column;
+                        selected(v) => { ResultsState.chart_hist_column = v; }
+                    }
+                    Text {
+                        text: "Buckets:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                    SpinBox {
+                        width: 90px;
+                        minimum: 2;
+                        maximum: 200;
+                        value: ResultsState.chart_bucket_count;
+                        edited(v) => { ResultsState.chart_bucket_count = v; }
+                    }
+                }
+
+                if ResultsState.chart_kind == ResultsChartKind.scatter: HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "X:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                    ComboBox {
+                        width: 150px;
+                        model: ResultsState.chart_plottable_columns;
+                        current-value: ResultsState.chart_scatter_x;
+                        selected(v) => { ResultsState.chart_scatter_x = v; }
+                    }
+                    Text {
+                        text: "Y:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                    ComboBox {
+                        width: 150px;
+                        model: ResultsState.chart_plottable_columns;
+                        current-value: ResultsState.chart_scatter_y;
+                        selected(v) => { ResultsState.chart_scatter_y = v; }
+                    }
+                    Text {
+                        text: "Color by:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                    ComboBox {
+                        width: 110px;
+                        model: ["None", "Class", "Colocalized"];
+                        current-value: ResultsState.chart_color_by == "class" ? "Class" : (ResultsState.chart_color_by == "colocalized" ? "Colocalized" : "None");
+                        selected(v) => {
+                            ResultsState.chart_color_by = v == "Class" ? "class" : (v == "Colocalized" ? "colocalized" : "");
+                        }
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                plot-ta := TouchArea {
+                    width: 64px;
+                    height: 26px;
+                    mouse-cursor: pointer;
+                    clicked => { ResultsState.chart_render_requested(); }
+
+                    Rectangle {
+                        border-radius: 4px;
+                        background: plot-ta.has-hover ? Theme.accent.darker(15%) : Theme.accent;
+                        animate background { duration: 80ms; }
+
+                        Text {
+                            text: "Plot";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            font-weight: 600;
+                            color: white;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border; }
+
+        // -- Chart area -------------------------------------------------------
+        Rectangle {
+            vertical-stretch: 1;
+            background: white;
+            clip: true;
+
+            Image {
+                source: ResultsState.chart_image;
+                width: 100%;
+                height: 100%;
+                image-fit: contain;
+            }
+
+            if ResultsState.chart_status != "": Text {
+                x: 20px;
+                width: parent.width - 40px;
+                text: ResultsState.chart_status;
+                font-size: 12px;
+                font-family: Theme.font-sans;
+                color: Theme.text-faint;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

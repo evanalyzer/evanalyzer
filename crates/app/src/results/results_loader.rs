@@ -204,7 +204,7 @@ pub fn to_display_row(row_idx: usize, roi: &RoiRow, columns: &[ColumnSpec]) -> D
     }
 }
 
-fn compute_class(roi: &RoiRow) -> String {
+pub(crate) fn compute_class(roi: &RoiRow) -> String {
     if roi.object_class_name.is_empty() {
         roi.seg_class_name.clone().unwrap_or_default()
     } else {
@@ -214,7 +214,7 @@ fn compute_class(roi: &RoiRow) -> String {
 
 /// True if `coloc_json` (the per-ROI `colocalized_with` map, keyed by partner class label)
 /// records at least one colocalization partner for any class.
-fn is_colocalized(coloc_json: &str) -> bool {
+pub(crate) fn is_colocalized(coloc_json: &str) -> bool {
     if coloc_json.is_empty() || coloc_json == "{}" {
         return false;
     }
@@ -228,12 +228,12 @@ fn is_colocalized(coloc_json: &str) -> bool {
         .any(|v| v.as_array().is_some_and(|a| !a.is_empty()))
 }
 
-fn coloc_label(colocalized: bool) -> String {
+pub(crate) fn coloc_label(colocalized: bool) -> String {
     if colocalized { "Yes" } else { "No" }.to_string()
 }
 
 /// Parses `intensities_json` into a map of channel → (min_scaled, max_scaled, mean_scaled).
-fn parse_intensities(json: &str) -> BTreeMap<i32, (f64, f64, f64)> {
+pub(crate) fn parse_intensities(json: &str) -> BTreeMap<i32, (f64, f64, f64)> {
     let mut result = BTreeMap::new();
     if json.is_empty() || json == "{}" {
         return result;
@@ -296,7 +296,7 @@ fn split_coloc_partner_id(col_id: &str) -> Option<(&str, &str)> {
 }
 
 /// Parses `coloc_json` into a map of partner class label → colocalizing object ids.
-fn parse_coloc_partners(json: &str) -> BTreeMap<String, Vec<String>> {
+pub(crate) fn parse_coloc_partners(json: &str) -> BTreeMap<String, Vec<String>> {
     let mut result = BTreeMap::new();
     if json.is_empty() || json == "{}" {
         return result;
@@ -503,7 +503,7 @@ fn roi_classes(roi: &RoiRow) -> Vec<String> {
 
 /// True for per-ROI columns that carry a numeric value we can aggregate.
 /// (Excludes `roi_id`, `image`, `class`.)
-fn is_numeric_metric(id: &str) -> bool {
+pub(crate) fn is_numeric_metric(id: &str) -> bool {
     matches!(id, "area_px" | "area_nm2" | "circularity")
         || id.starts_with("ch")
         || (id.starts_with("coloc_partner__") && id.ends_with("__count"))
@@ -524,7 +524,7 @@ fn metric_precision(id: &str) -> usize {
 /// Pulls the numeric value of a base metric column (e.g. `area_px`,
 /// `ch0_min_bit`, `coloc_partner__ClassA__count`) from a single ROI, or `None`
 /// if absent.
-fn metric_value(
+pub(crate) fn metric_value(
     id: &str,
     roi: &RoiRow,
     intensities: &BTreeMap<i32, (f64, f64, f64)>,
@@ -554,6 +554,25 @@ fn metric_value(
             }
         }
     }
+}
+
+/// Pulls the numeric value of `column_id` from a single ROI, parsing
+/// `intensities_json`/`coloc_json` only if that column actually needs them
+/// (same guarded pattern as [`to_display_row`]). Used by the chart module
+/// (`results_chart.rs`), which — unlike [`aggregate_rows`] — looks at one
+/// column at a time rather than every visible metric at once.
+pub(crate) fn numeric_value(roi: &RoiRow, column_id: &str) -> Option<f64> {
+    let intensities = if column_id.starts_with("ch") {
+        parse_intensities(&roi.intensities_json)
+    } else {
+        BTreeMap::new()
+    };
+    let coloc_partners = if column_id.starts_with("coloc_partner__") {
+        parse_coloc_partners(&roi.coloc_json)
+    } else {
+        BTreeMap::new()
+    };
+    metric_value(column_id, roi, &intensities, &coloc_partners)
 }
 
 /// Applies an aggregate to a slice of values. Returns `0.0` for an empty slice.

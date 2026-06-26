@@ -14,6 +14,11 @@ pub mod prelude {
 }
 
 pub mod result {
+    pub use crate::results::results_chart::{
+        compute_histogram, compute_scatter, plottable_columns, render_histogram, render_scatter,
+        save_histogram_png, save_scatter_png, ColorBy, HistogramBucket, HistogramData,
+        RenderedChart, ScatterData, ScatterPoint,
+    };
     pub use crate::results::results_exporter::ResultsExporter;
     pub use crate::results::results_loader::{
         AggFunc, ColumnSpec, DatabaseFilter, DisplayRow, GroupBy, GroupConfig, ResultsLoader,
