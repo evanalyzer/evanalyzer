@@ -1,24 +1,25 @@
 // main.rs or app/src/args.rs
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "EVAnalyzer", version, about = "Image processing tool")]
 pub struct Args {
-    /// Run in GUI mode (default) or CLI mode
-    #[arg(long, default_value = "gui")]
-    pub mode: Mode,
-
-    /// Optional project file to open on startup
+    /// Optional project file to open on startup (GUI mode only)
     #[arg(long)]
     pub project: Option<std::path::PathBuf>,
+
+    #[command(subcommand)]
+    pub command: Option<TopCommand>,
 }
 
-#[derive(ValueEnum, Clone, Default, PartialEq)]
-pub enum Mode {
-    #[default]
-    Gui,
-    Cli,
+#[derive(Subcommand)]
+pub enum TopCommand {
+    /// Run a one-shot CLI command (analyze / export / view / ...) instead of launching the GUI
+    Cli {
+        #[command(subcommand)]
+        command: evanalyzer_cli::CliCommand,
+    },
 }
 
 pub fn parse_args() -> Args {

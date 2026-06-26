@@ -9,3 +9,4 @@ license = { workspace = true }
 evanalyzer_core = { workspace = true }
 evanalyzer_app = { path = "../app" }
 evanalyzer_cfg = { path = "../cfg" }
+clap = { version = "4", features = ["derive"] }
