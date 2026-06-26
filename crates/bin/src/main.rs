@@ -1,8 +1,9 @@
 mod args;
 
-use args::{Mode, parse_args};
+use args::{TopCommand, parse_args};
 use env_logger::Builder;
 use evanalyzer_app::{Frontend, ProjectOwner};
+use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::CoreConfig;
 use log::LevelFilter;
 
@@ -27,20 +28,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         jvm_heap_size: 1_000_000_000,
     })?;
 
-    // Project init
     let args = parse_args();
-    let owner = ProjectOwner::new();
 
+    // CLI mode: run the requested batch command and exit, no GUI event loop involved.
+    if let Some(TopCommand::Cli { command }) = args.command {
+        if let Err(e) = evanalyzer_cli::run(command) {
+            match e {
+                InternalErrors::Cancelled => {
+                    eprintln!("Cancelled.");
+                    std::process::exit(130);
+                }
+                other => {
+                    eprintln!("Error: {other}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // GUI mode (default)
+    let owner = ProjectOwner::new();
     if let Some(path) = &args.project {
         owner.load_project(path)?;
     }
 
-    // Frontend init
-    let frontend: Box<dyn Frontend> = match args.mode {
-        Mode::Gui => Box::new(evanalyzer_gui::create()),
-        Mode::Cli => Box::new(evanalyzer_cli::create()),
-    };
-
+    let frontend: Box<dyn Frontend> = Box::new(evanalyzer_gui::create());
     frontend.start(owner);
     Ok(())
 }
