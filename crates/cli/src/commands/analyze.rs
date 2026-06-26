@@ -4,6 +4,7 @@ use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::ProgressEvent;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
@@ -45,10 +46,17 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
             .unwrap_or(1)
     });
     println!("Output:    {}", output_path.display());
-    println!("Running with {threads} parallel thread(s)...\n");
+    println!("Running with {threads} parallel thread(s) (Ctrl+C to cancel)...\n");
 
     let start = Instant::now();
-    let (handle, rx, _cancel) = job.run_async(threads);
+    let (handle, rx, cancel) = job.run_async(threads);
+
+    if let Err(e) = ctrlc::set_handler(move || {
+        eprintln!("\nCancelling... (waiting for in-flight images to finish)");
+        cancel.store(true, Ordering::SeqCst);
+    }) {
+        eprintln!("Warning: could not install Ctrl+C handler: {e}");
+    }
 
     let mut failed = 0usize;
     let mut total = image_count;

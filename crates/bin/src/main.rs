@@ -3,6 +3,7 @@ mod args;
 use args::{TopCommand, parse_args};
 use env_logger::Builder;
 use evanalyzer_app::{Frontend, ProjectOwner};
+use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::CoreConfig;
 use log::LevelFilter;
 
@@ -32,8 +33,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CLI mode: run the requested batch command and exit, no GUI event loop involved.
     if let Some(TopCommand::Cli { command }) = args.command {
         if let Err(e) = evanalyzer_cli::run(command) {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            match e {
+                InternalErrors::Cancelled => {
+                    eprintln!("Cancelled.");
+                    std::process::exit(130);
+                }
+                other => {
+                    eprintln!("Error: {other}");
+                    std::process::exit(1);
+                }
+            }
         }
         return Ok(());
     }

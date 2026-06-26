@@ -7,6 +7,8 @@ pub enum CliCommand {
     Analyze(AnalyzeArgs),
     /// Print a project's images, classes and pipelines without running anything
     ProjectInfo(ProjectInfoArgs),
+    /// Check that every image referenced by a project can be found on disk
+    Validate(ValidateArgs),
     /// Export a results database to CSV, XLSX, or a chart image
     Export(ExportArgs),
     /// Print a quick summary and a page of rows from a results database
@@ -34,6 +36,17 @@ pub struct AnalyzeArgs {
 #[derive(Args)]
 pub struct ProjectInfoArgs {
     /// Project file (.evaproj) to inspect
+    #[arg(long)]
+    pub project: PathBuf,
+
+    /// Print machine-readable JSON instead of a human-readable summary
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct ValidateArgs {
+    /// Project file (.evaproj) to validate
     #[arg(long)]
     pub project: PathBuf,
 }
@@ -264,6 +277,10 @@ pub struct ViewArgs {
     #[arg(long)]
     pub channels: bool,
 
+    /// Print machine-readable JSON instead of a human-readable table
+    #[arg(long)]
+    pub json: bool,
+
     #[command(flatten)]
     pub filter: FilterArgs,
 }
@@ -273,4 +290,8 @@ pub struct ColumnsArgs {
     /// Results database (.evadb) produced by `analyze`
     #[arg(long)]
     pub db: PathBuf,
+
+    /// Print machine-readable JSON instead of a human-readable table
+    #[arg(long)]
+    pub json: bool,
 }
