@@ -48,59 +48,104 @@ pub struct HistogramBucket {
 pub struct HistogramData {
     pub column_label: String,
     pub buckets: Vec<HistogramBucket>,
+    /// Whether `buckets` were spaced equally in log space rather than linear
+    /// space — drives `draw_histogram`'s choice of axis. Bucket edges are
+    /// always reported back in real (linear) units either way.
+    pub log_scale: bool,
+    /// Values `<= 0` can't be log-binned and are dropped; this is how many
+    /// were, so the GUI can surface a "N values excluded" notice. Always 0
+    /// when `log_scale` is false.
+    pub excluded_non_positive: usize,
 }
 
-/// Buckets every ROI's `column_id` value into `bucket_count` equal-width
-/// buckets spanning [min, max]. `None` if the column isn't found, no ROI has
-/// a value for it, or `bucket_count` is 0.
+/// Splits `values` into `bucket_count` equal-width buckets in `to_space(v)`
+/// space, then reports each bucket's edges back via `from_space` — e.g.
+/// `to_space = f64::ln, from_space = f64::exp` buckets equally in log-space
+/// while still reporting real-world bucket edges.
+fn bucket_values(
+    values: &[f64],
+    bucket_count: usize,
+    to_space: impl Fn(f64) -> f64,
+    from_space: impl Fn(f64) -> f64,
+) -> Vec<HistogramBucket> {
+    let transformed: Vec<f64> = values.iter().map(|&v| to_space(v)).collect();
+    let min = transformed.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = transformed.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+    if max <= min {
+        // Every ROI has the same value — one bucket holds them all.
+        let edge = from_space(min);
+        return vec![HistogramBucket {
+            range_start: edge,
+            range_end: edge,
+            count: values.len(),
+        }];
+    }
+
+    let width = (max - min) / bucket_count as f64;
+    let mut counts = vec![0usize; bucket_count];
+    for v in &transformed {
+        // The max value lands exactly on the last bucket's upper edge;
+        // clamp it into that bucket instead of overflowing.
+        let idx = (((v - min) / width) as usize).min(bucket_count - 1);
+        counts[idx] += 1;
+    }
+    counts
+        .into_iter()
+        .enumerate()
+        .map(|(i, count)| HistogramBucket {
+            range_start: from_space(min + i as f64 * width),
+            range_end: from_space(min + (i + 1) as f64 * width),
+            count,
+        })
+        .collect()
+}
+
+/// Buckets every ROI's `column_id` value into `bucket_count` buckets spanning
+/// [min, max]. `None` if the column isn't found, no ROI has a value for it,
+/// or `bucket_count` is 0.
+///
+/// `log_scale` spaces buckets equally in log space instead of linear space —
+/// the fix for right-skewed data (e.g. cell area) where a few large outliers
+/// otherwise crowd almost every value into the first one or two buckets.
+/// Values `<= 0` can't be log-binned and are excluded (see
+/// `HistogramData::excluded_non_positive`).
 pub fn compute_histogram(
     rois: &[RoiRow],
     column_id: &str,
     columns: &[ColumnSpec],
     bucket_count: usize,
+    log_scale: bool,
 ) -> Option<HistogramData> {
     if bucket_count == 0 {
         return None;
     }
     let column_label = columns.iter().find(|c| c.id == column_id)?.label.clone();
-    let values: Vec<f64> = rois.iter().filter_map(|r| numeric_value(r, column_id)).collect();
+    let mut values: Vec<f64> = rois.iter().filter_map(|r| numeric_value(r, column_id)).collect();
+
+    let excluded_non_positive = if log_scale {
+        let before = values.len();
+        values.retain(|v| *v > 0.0);
+        before - values.len()
+    } else {
+        0
+    };
+
     if values.is_empty() {
         return None;
     }
 
-    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-
-    let buckets = if max <= min {
-        // Every ROI has the same value — one bucket holds them all.
-        vec![HistogramBucket {
-            range_start: min,
-            range_end: min,
-            count: values.len(),
-        }]
+    let buckets = if log_scale {
+        bucket_values(&values, bucket_count, f64::ln, f64::exp)
     } else {
-        let width = (max - min) / bucket_count as f64;
-        let mut counts = vec![0usize; bucket_count];
-        for v in &values {
-            // The max value lands exactly on the last bucket's upper edge;
-            // clamp it into that bucket instead of overflowing.
-            let idx = (((v - min) / width) as usize).min(bucket_count - 1);
-            counts[idx] += 1;
-        }
-        counts
-            .into_iter()
-            .enumerate()
-            .map(|(i, count)| HistogramBucket {
-                range_start: min + i as f64 * width,
-                range_end: min + (i + 1) as f64 * width,
-                count,
-            })
-            .collect()
+        bucket_values(&values, bucket_count, |v| v, |v| v)
     };
 
     Some(HistogramData {
         column_label,
         buckets,
+        log_scale,
+        excluded_non_positive,
     })
 }
 
@@ -323,6 +368,17 @@ fn to_internal_error<E: std::fmt::Display>(e: E) -> InternalErrors {
     InternalErrors::Io(e.to_string())
 }
 
+/// Compact axis-label formatting: whole numbers for large values, two
+/// decimals for small ones — just enough to keep histogram axis labels
+/// readable without pulling in a full number-formatting dependency.
+fn format_axis_value(v: f64) -> String {
+    if v.abs() >= 1000.0 {
+        format!("{v:.0}")
+    } else {
+        format!("{v:.2}")
+    }
+}
+
 fn draw_histogram(
     root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
     data: &HistogramData,
@@ -334,25 +390,36 @@ fn draw_histogram(
     let x_max_raw = data.buckets.last().map_or(1.0, |b| b.range_end);
     let x_max = if x_max_raw > x_min { x_max_raw } else { x_min + 1.0 };
 
+    // In log mode, bars are positioned by the log of their (real-unit) edges
+    // so equal-log-space buckets render as equal-width bars on screen; axis
+    // labels exponentiate back so they still read in real units. Bucket
+    // edges themselves (`b.range_start`/`range_end`) are always real-unit —
+    // only the on-screen coordinate is transformed.
+    let to_axis = |v: f64| if data.log_scale { v.ln() } else { v };
+    let axis_min = to_axis(x_min);
+    let axis_max = to_axis(x_max);
+    let log_scale = data.log_scale;
+
     let mut chart = ChartBuilder::on(&root)
         .margin(10)
         .x_label_area_size(40)
         .y_label_area_size(50)
         .caption(format!("Histogram: {}", data.column_label), ("sans-serif", 20))
-        .build_cartesian_2d(x_min..x_max, 0f64..(max_count as f64 * 1.1).max(1.0))
+        .build_cartesian_2d(axis_min..axis_max, 0f64..(max_count as f64 * 1.1).max(1.0))
         .map_err(to_internal_error)?;
 
     chart
         .configure_mesh()
         .x_desc(data.column_label.clone())
         .y_desc("Count")
+        .x_label_formatter(&move |v| format_axis_value(if log_scale { v.exp() } else { *v }))
         .draw()
         .map_err(to_internal_error)?;
 
     chart
         .draw_series(data.buckets.iter().map(|b| {
             Rectangle::new(
-                [(b.range_start, 0.0), (b.range_end, b.count as f64)],
+                [(to_axis(b.range_start), 0.0), (to_axis(b.range_end), b.count as f64)],
                 PALETTE[0].filled(),
             )
         }))
@@ -477,7 +544,12 @@ fn draw_heatmap(
 
     let max_value = data.cells.iter().map(|c| c.value).fold(0.0f64, f64::max).max(1e-9);
     let legend_width = 90i32;
-    let (chart_area, legend_area) = root.split_horizontally(legend_width.max(0));
+    // `split_horizontally(x)` returns (left part of width x, right remainder)
+    // — split at `total_width - legend_width` so the *chart* gets the bulk of
+    // the area and the legend is the narrow strip on the right.
+    let (total_width, _) = root.dim_in_pixel();
+    let (chart_area, legend_area) =
+        root.split_horizontally((total_width as i32 - legend_width).max(0));
 
     let x_max = data.x_min + data.cols as f64 * data.cell_size;
     let y_max = data.y_min + data.rows as f64 * data.cell_size;
@@ -679,9 +751,11 @@ mod tests {
             make_roi(99, "{}", vec![], "{}"),
         ];
         let columns = base_columns();
-        let data = compute_histogram(&rois, "area_px", &columns, 10).unwrap();
+        let data = compute_histogram(&rois, "area_px", &columns, 10, false).unwrap();
         assert_eq!(data.column_label, "Area (px²)");
         assert_eq!(data.buckets.len(), 10);
+        assert!(!data.log_scale);
+        assert_eq!(data.excluded_non_positive, 0);
         let total: usize = data.buckets.iter().map(|b| b.count).sum();
         assert_eq!(total, 4);
         // width = (99-0)/10 = 9.9: 0 -> bucket 0, 10 -> bucket 1, 50 -> bucket 5, 99 -> bucket 9.
@@ -694,7 +768,7 @@ mod tests {
     #[test]
     fn compute_histogram_identical_values_single_bucket() {
         let rois = vec![make_roi(5, "{}", vec![], "{}"), make_roi(5, "{}", vec![], "{}")];
-        let data = compute_histogram(&rois, "area_px", &base_columns(), 10).unwrap();
+        let data = compute_histogram(&rois, "area_px", &base_columns(), 10, false).unwrap();
         assert_eq!(data.buckets.len(), 1);
         assert_eq!(data.buckets[0].count, 2);
     }
@@ -702,9 +776,37 @@ mod tests {
     #[test]
     fn compute_histogram_unknown_column_or_empty_rois_is_none() {
         let columns = base_columns();
-        assert!(compute_histogram(&[], "area_px", &columns, 10).is_none());
-        assert!(compute_histogram(&[make_roi(1, "{}", vec![], "{}")], "does_not_exist", &columns, 10).is_none());
-        assert!(compute_histogram(&[make_roi(1, "{}", vec![], "{}")], "area_px", &columns, 0).is_none());
+        assert!(compute_histogram(&[], "area_px", &columns, 10, false).is_none());
+        assert!(compute_histogram(&[make_roi(1, "{}", vec![], "{}")], "does_not_exist", &columns, 10, false).is_none());
+        assert!(compute_histogram(&[make_roi(1, "{}", vec![], "{}")], "area_px", &columns, 0, false).is_none());
+    }
+
+    #[test]
+    fn compute_histogram_log_scale_spreads_skewed_outliers_across_buckets() {
+        // A few huge outliers alongside many small values — equal-width
+        // linear binning would crowd everything into bucket 0; log binning
+        // should spread them out instead.
+        let mut rois: Vec<RoiRow> = (1..=20).map(|i| make_roi(i * 100, "{}", vec![], "{}")).collect();
+        rois.push(make_roi(1_000_000, "{}", vec![], "{}"));
+        let columns = base_columns();
+        let data = compute_histogram(&rois, "area_px", &columns, 10, true).unwrap();
+        assert!(data.log_scale);
+        let occupied = data.buckets.iter().filter(|b| b.count > 0).count();
+        assert!(occupied > 1, "log binning should spread values across more than one bucket");
+    }
+
+    #[test]
+    fn compute_histogram_log_scale_excludes_non_positive_values() {
+        let rois = vec![
+            make_roi(0, "{}", vec![], "{}"),
+            make_roi(10, "{}", vec![], "{}"),
+            make_roi(100, "{}", vec![], "{}"),
+        ];
+        let columns = base_columns();
+        let data = compute_histogram(&rois, "area_px", &columns, 5, true).unwrap();
+        assert_eq!(data.excluded_non_positive, 1, "area_px == 0 can't be log-binned");
+        let total: usize = data.buckets.iter().map(|b| b.count).sum();
+        assert_eq!(total, 2);
     }
 
     // ---- compute_scatter ----
@@ -837,10 +939,27 @@ mod tests {
                 HistogramBucket { range_start: 0.0, range_end: 1.0, count: 3 },
                 HistogramBucket { range_start: 1.0, range_end: 2.0, count: 5 },
             ],
+            log_scale: false,
+            excluded_non_positive: 0,
         };
         let chart = render_histogram(&data, 200, 150).unwrap();
         assert_eq!(chart.width, 200);
         assert_eq!(chart.height, 150);
+        assert_eq!(chart.rgb.len(), 200 * 150 * 3);
+    }
+
+    #[test]
+    fn render_histogram_log_scale_produces_correctly_sized_buffer() {
+        let data = HistogramData {
+            column_label: "Area".into(),
+            buckets: vec![
+                HistogramBucket { range_start: 10.0, range_end: 100.0, count: 3 },
+                HistogramBucket { range_start: 100.0, range_end: 1_000_000.0, count: 5 },
+            ],
+            log_scale: true,
+            excluded_non_positive: 2,
+        };
+        let chart = render_histogram(&data, 200, 150).unwrap();
         assert_eq!(chart.rgb.len(), 200 * 150 * 3);
     }
 

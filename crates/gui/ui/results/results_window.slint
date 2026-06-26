@@ -14,7 +14,15 @@ import {
 } from "results_table.slint";
 import { ResultsChart } from "results_chart.slint";
 import { FrameStepper } from "frame_stepper.slint";
-export { ResultsState, ResultsViewMode, ResultsGroupBy, ResultsChartKind, ResultsColumnDef, ResultsRow, FilterItem } from "results_table.slint";
+export {
+    ResultsState,
+    ResultsViewMode,
+    ResultsGroupBy,
+    ResultsChartKind,
+    ResultsColumnDef,
+    ResultsRow,
+    FilterItem,
+}from "results_table.slint";
 
 
 // -- Radio-style option row (used in the group-by popup) ----------------------
@@ -187,7 +195,10 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- (Select All) --------------------------------------
                         col-sel-all-ta := TouchArea {
@@ -244,7 +255,10 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- Item list -----------------------------------------
                         ScrollView {
@@ -365,7 +379,10 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- Done button ---------------------------------------
                         col-done-ta := TouchArea {
@@ -446,28 +463,36 @@ component ResultsToolbar inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         GroupOptionRow {
                             label: "None";
                             selected: ResultsState.group_by == ResultsGroupBy.none;
                             clicked => { ResultsState.group_by = ResultsGroupBy.none; }
                         }
+
                         GroupOptionRow {
                             label: "Image name";
                             selected: ResultsState.group_by == ResultsGroupBy.image;
                             clicked => { ResultsState.group_by = ResultsGroupBy.image; }
                         }
+
                         GroupOptionRow {
                             label: "Folder name";
                             selected: ResultsState.group_by == ResultsGroupBy.folder;
                             clicked => { ResultsState.group_by = ResultsGroupBy.folder; }
                         }
+
                         GroupOptionRow {
                             label: "Regex on image name";
                             selected: ResultsState.group_by == ResultsGroupBy.regex;
                             clicked => { ResultsState.group_by = ResultsGroupBy.regex; }
                         }
+
                         GroupOptionRow {
                             label: "Also group by class";
                             checkbox: true;
@@ -541,7 +566,11 @@ component ResultsToolbar inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         HorizontalLayout {
                             padding: 4px;
@@ -554,12 +583,14 @@ component ResultsToolbar inherits Rectangle {
                                     selected: ResultsState.group_agg_min;
                                     clicked => { ResultsState.group_agg_min = !ResultsState.group_agg_min; }
                                 }
+
                                 GroupOptionRow {
                                     label: "Max";
                                     checkbox: true;
                                     selected: ResultsState.group_agg_max;
                                     clicked => { ResultsState.group_agg_max = !ResultsState.group_agg_max; }
                                 }
+
                                 GroupOptionRow {
                                     label: "Average";
                                     checkbox: true;
@@ -567,6 +598,7 @@ component ResultsToolbar inherits Rectangle {
                                     clicked => { ResultsState.group_agg_avg = !ResultsState.group_agg_avg; }
                                 }
                             }
+
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 GroupOptionRow {
@@ -575,12 +607,14 @@ component ResultsToolbar inherits Rectangle {
                                     selected: ResultsState.group_agg_median;
                                     clicked => { ResultsState.group_agg_median = !ResultsState.group_agg_median; }
                                 }
+
                                 GroupOptionRow {
                                     label: "Std. dev.";
                                     checkbox: true;
                                     selected: ResultsState.group_agg_stdev;
                                     clicked => { ResultsState.group_agg_stdev = !ResultsState.group_agg_stdev; }
                                 }
+
                                 GroupOptionRow {
                                     label: "Sum";
                                     checkbox: true;
@@ -590,7 +624,10 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- "Split" section header ------------------------
                         Rectangle {
@@ -606,7 +643,11 @@ component ResultsToolbar inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         GroupOptionRow {
                             label: "Colocalized / not colocalized";
@@ -617,7 +658,10 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- Apply button ----------------------------------
                         apply-ta := TouchArea {
@@ -659,7 +703,7 @@ component ResultsToolbar inherits Rectangle {
         }
 
         ToolToggleButton {
-            icon: @image-url("../icons/regular-black/chart-bar.svg");
+            icon: @image-url("../icons/regular-black/chart-scatter.svg");
             checked: ResultsState.view_mode == ResultsViewMode.chart;
             clicked => {
                 ResultsState.view_mode = ResultsViewMode.chart;

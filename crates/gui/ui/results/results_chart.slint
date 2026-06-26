@@ -99,6 +99,12 @@ export component ResultsChart inherits Rectangle {
                         value: ResultsState.chart_bucket_count;
                         edited(v) => { ResultsState.chart_bucket_count = v; }
                     }
+                    ChartKindButton {
+                        width: 96px;
+                        label: "Log scale";
+                        selected: ResultsState.chart_log_scale;
+                        clicked => { ResultsState.chart_log_scale = !ResultsState.chart_log_scale; }
+                    }
                 }
 
                 if ResultsState.chart_kind == ResultsChartKind.scatter: HorizontalLayout {

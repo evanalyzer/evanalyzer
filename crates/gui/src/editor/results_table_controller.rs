@@ -17,17 +17,20 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 const PAGE_SIZE: usize = 500;
-const CHART_WIDTH: u32 = 960;
-const CHART_HEIGHT: u32 = 560;
+// Charts render at this fixed resolution and the GUI scales the bitmap to fit
+// the chart panel. Kept generously larger than a typical on-screen panel so
+// the Image is downscaled (sharp) rather than upscaled (blurry).
+const CHART_WIDTH: u32 = 1600;
+const CHART_HEIGHT: u32 = 1000;
 const SCATTER_MAX_POINTS: usize = 5_000;
 
-/// Chart picks read off `ResultsState` on the UI thread before handing off to
-/// `bg_render_chart` on a background thread — mirrors `GroupConfig`'s role for
-/// `bg_reload_grouped`.
 /// Sentinel shown as the first entry of the heatmap "Color by" picker —
 /// picking it colors cells by ROI count instead of averaging a column.
 const HEATMAP_METRIC_COUNT_LABEL: &str = "Count (ROIs per cell)";
 
+/// Chart picks read off `ResultsState` on the UI thread before handing off to
+/// `bg_render_chart` on a background thread — mirrors `GroupConfig`'s role for
+/// `bg_reload_grouped`.
 struct ChartRenderConfig {
     kind: ResultsChartKind,
     hist_column: String,
@@ -35,6 +38,7 @@ struct ChartRenderConfig {
     scatter_y: String,
     color_by: ColorBy,
     bucket_count: usize,
+    log_scale: bool,
     /// `HEATMAP_METRIC_COUNT_LABEL` or a column label to average.
     heatmap_metric: String,
     cell_size_px: f64,
@@ -179,6 +183,7 @@ impl ResultsTableController {
                         _ => ColorBy::None,
                     },
                     bucket_count: state.get_chart_bucket_count().max(0) as usize,
+                    log_scale: state.get_chart_log_scale(),
                     heatmap_metric: state.get_chart_heatmap_metric().to_string(),
                     cell_size_px: state.get_chart_cell_size_px().max(1) as f64,
                 };
@@ -623,6 +628,7 @@ impl ResultsTableController {
                             state.set_chart_scatter_x(slint::SharedString::new());
                             state.set_chart_scatter_y(slint::SharedString::new());
                             state.set_chart_color_by(slint::SharedString::new());
+                            state.set_chart_log_scale(false);
                             state.set_chart_heatmap_metric(slint::SharedString::new());
                             state.set_chart_cell_size_px(20);
                             state.set_chart_plottable_columns(slint::ModelRc::new(
@@ -1420,14 +1426,26 @@ impl ResultsTableController {
                     report("Pick a column to plot.".into(), None);
                     return;
                 };
-                let Some(data) =
-                    compute_histogram(&rois, &col_id, &specs, config.bucket_count.max(1))
-                else {
+                let Some(data) = compute_histogram(
+                    &rois,
+                    &col_id,
+                    &specs,
+                    config.bucket_count.max(1),
+                    config.log_scale,
+                ) else {
                     report("No numeric data for this column.".into(), None);
                     return;
                 };
+                let status = if data.excluded_non_positive > 0 {
+                    format!(
+                        "Excluded {} value(s) <= 0 — can't be shown on a log scale.",
+                        data.excluded_non_positive
+                    )
+                } else {
+                    String::new()
+                };
                 match render_histogram(&data, CHART_WIDTH, CHART_HEIGHT) {
-                    Ok(chart) => report(String::new(), Some(chart)),
+                    Ok(chart) => report(status, Some(chart)),
                     Err(e) => {
                         warn!("render_histogram failed: {:?}", e);
                         report("Failed to render the chart.".into(), None);

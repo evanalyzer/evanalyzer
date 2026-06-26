@@ -62,8 +62,13 @@ export component FrameStepper inherits HorizontalLayout {
     AllToggleButton {
         selected: root.show_all;
         clicked => {
-            root.show_all = !root.show_all;
-            root.changed(root.value, root.show_all);
+            // `value`/`show_all` are bound externally (read-only from here in
+            // practice) — only report the new state via `changed`, and let
+            // the caller write it back into the real source of truth, which
+            // then flows back down through the binding. Writing to
+            // `root.value`/`root.show_all` directly here would fight that
+            // external binding and is what caused a property recursion panic.
+            root.changed(root.value, !root.show_all);
         }
     }
 
@@ -74,8 +79,6 @@ export component FrameStepper inherits HorizontalLayout {
         value: root.value;
         enabled: !root.show_all;
         changed(v) => {
-            root.value = Math.round(v);
-            root.show_all = false;
             root.changed(Math.round(v), false);
         }
     }

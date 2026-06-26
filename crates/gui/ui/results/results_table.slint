@@ -165,6 +165,10 @@ export global ResultsState {
     // "" / "class" / "colocalized" — which categorical dimension colors scatter points.
     in-out property <string> chart_color_by:      "";
     in-out property <int> chart_bucket_count:     20;
+    // Bins histogram buckets equally in log space instead of linear space —
+    // fixes right-skewed data (e.g. cell area) where a few large outliers
+    // otherwise crowd almost every value into the first bucket or two.
+    in-out property <bool> chart_log_scale:       false;
     // First entry is always the "Count" sentinel; the rest mirror
     // chart_plottable_columns. Picking the first entry colors heatmap cells
     // by ROI count, picking any other averages that column per cell.
