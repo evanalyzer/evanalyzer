@@ -491,6 +491,12 @@ pub struct RoiFilter {
     pub class_filter: Option<Vec<String>>,
     /// Restricts to rows whose colocalization status label ("Yes"/"No") is in this set.
     pub coloc_filter: Option<Vec<String>>,
+    /// Restricts to ROIs from this single time-frame index, or `None` for
+    /// every frame (today's default behavior).
+    pub t_stack_filter: Option<i32>,
+    /// Restricts to ROIs from this single Z-depth index, or `None` for every
+    /// depth (today's default behavior).
+    pub z_stack_filter: Option<i32>,
     /// Rows per page; 0 means return all.
     pub page_size: usize,
     /// Zero-based page index.
@@ -510,6 +516,8 @@ impl Default for RoiFilter {
             image_filter: None,
             class_filter: None,
             coloc_filter: None,
+            t_stack_filter: None,
+            z_stack_filter: None,
             page_size: 500,
             page: 0,
             fetch_intensities: true,
@@ -583,6 +591,27 @@ fn sql_in_list(items: &[String]) -> String {
         .map(|s| format!("'{}'", s.replace('\'', "''")))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// `(min, max)` of `column` (one of the fixed `"t_stack"`/`"z_stack"`
+/// literals below — never user input), or `None` when there's nothing to
+/// step through: the column is all NULL, or every non-NULL value is the same.
+fn stack_range(conn: &Connection, column: &str) -> Result<Option<(i32, i32)>, InternalErrors> {
+    let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+    let sql = format!(
+        "SELECT MIN({column}), MAX({column}), COUNT(DISTINCT {column}) FROM rois WHERE {column} IS NOT NULL"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(err)?;
+    let (min, max, distinct_count): (Option<i32>, Option<i32>, i64) = stmt
+        .query_row([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(err)?;
+    if distinct_count <= 1 {
+        return Ok(None);
+    }
+    match (min, max) {
+        (Some(min), Some(max)) => Ok(Some((min, max))),
+        _ => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +742,12 @@ impl DuckDbReader {
             let fragments: Vec<String> = labels.iter().map(|l| coloc_filter_condition(l)).collect();
             conditions.push(format!("({})", fragments.join(" OR ")));
         }
+        if let Some(t) = filter.t_stack_filter {
+            conditions.push(format!("t_stack = {t}"));
+        }
+        if let Some(z) = filter.z_stack_filter {
+            conditions.push(format!("z_stack = {z}"));
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -769,6 +804,20 @@ impl DuckDbReader {
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)
+    }
+
+    /// Returns the `(min, max)` of `t_stack` present in the file, or `None`
+    /// when there's nothing to step through — either every ROI's `t_stack` is
+    /// NULL (no time axis) or they all share the same single value.
+    pub fn get_t_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
+        stack_range(&self.conn, "t_stack")
+    }
+
+    /// Returns the `(min, max)` of `z_stack` present in the file, or `None`
+    /// when there's nothing to step through — either every ROI's `z_stack` is
+    /// NULL (no depth axis) or they all share the same single value.
+    pub fn get_z_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
+        stack_range(&self.conn, "z_stack")
     }
 
     /// Returns all distinct `image_name` values present in the file, sorted alphabetically.
@@ -889,6 +938,13 @@ mod tests {
             area,
             ..Default::default()
         })
+    }
+
+    fn make_filled_roi_at_plane(id: u128, bbox: [u32; 4], t: i32, z: i32) -> Roi {
+        let mut roi = make_filled_roi(id, bbox);
+        roi.plane.t = t;
+        roi.plane.z = z;
+        roi
     }
 
     fn export_and_open(rois: Vec<Roi>) -> (TempDir, DuckDbReader) {
@@ -1038,5 +1094,59 @@ mod tests {
             vec![ObjectId(1).to_string(), ObjectId(2).to_string()],
             "unsortable column id falls back to the default ORDER BY object_id"
         );
+    }
+
+    #[test]
+    fn stack_range_is_none_when_every_roi_shares_one_value() {
+        let roi_a = make_filled_roi_at_plane(1, [0, 0, 1, 1], 0, 0);
+        let roi_b = make_filled_roi_at_plane(2, [5, 5, 6, 6], 0, 0);
+        let (_dir, reader) = export_and_open(vec![roi_a, roi_b]);
+
+        assert_eq!(reader.get_t_stack_range().unwrap(), None);
+        assert_eq!(reader.get_z_stack_range().unwrap(), None);
+    }
+
+    #[test]
+    fn stack_range_reports_min_max_when_values_differ() {
+        let roi_t0 = make_filled_roi_at_plane(1, [0, 0, 1, 1], 0, 3);
+        let roi_t2 = make_filled_roi_at_plane(2, [5, 5, 6, 6], 2, 3);
+        let roi_t5 = make_filled_roi_at_plane(3, [9, 9, 10, 10], 5, 7);
+        let (_dir, reader) = export_and_open(vec![roi_t0, roi_t2, roi_t5]);
+
+        assert_eq!(reader.get_t_stack_range().unwrap(), Some((0, 5)));
+        assert_eq!(reader.get_z_stack_range().unwrap(), Some((3, 7)));
+    }
+
+    #[test]
+    fn get_rois_filters_by_t_stack_and_z_stack() {
+        const ID_T0: u128 = 1;
+        const ID_T2: u128 = 2;
+        let id_t0 = ObjectId(ID_T0).to_string();
+        let id_t2 = ObjectId(ID_T2).to_string();
+
+        let roi_t0 = make_filled_roi_at_plane(ID_T0, [0, 0, 1, 1], 0, 1);
+        let roi_t2 = make_filled_roi_at_plane(ID_T2, [5, 5, 6, 6], 2, 4);
+        let (_dir, reader) = export_and_open(vec![roi_t0, roi_t2]);
+
+        let only_t0 = reader
+            .get_rois(&RoiFilter {
+                t_stack_filter: Some(0),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(only_t0.len(), 1);
+        assert_eq!(only_t0[0].object_id, id_t0);
+
+        let only_z4 = reader
+            .get_rois(&RoiFilter {
+                z_stack_filter: Some(4),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(only_z4.len(), 1);
+        assert_eq!(only_z4[0].object_id, id_t2);
+
+        let both_unset = reader.get_rois(&RoiFilter::default()).unwrap();
+        assert_eq!(both_unset.len(), 2, "no t/z filter set -> every frame returned");
     }
 }

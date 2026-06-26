@@ -5,10 +5,10 @@ use crate::{
 };
 use evanalyzer_app::result::{
     aggregate_rows, build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
-    coloc_filter_label_with, compute_histogram, compute_scatter, discover_channels,
-    plottable_columns, render_histogram, render_scatter, sort_display_rows, to_display_row,
-    AggFunc, ColorBy, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, RenderedChart,
-    ResultsExporter, ResultsLoader, RoiRow,
+    coloc_filter_label_with, compute_heatmap, compute_histogram, compute_scatter,
+    discover_channels, plottable_columns, render_heatmap, render_histogram, render_scatter,
+    sort_display_rows, to_display_row, AggFunc, ColorBy, ColumnSpec, DatabaseFilter, GroupBy,
+    GroupConfig, HeatmapMetric, RenderedChart, ResultsExporter, ResultsLoader, RoiRow,
 };
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
@@ -24,6 +24,10 @@ const SCATTER_MAX_POINTS: usize = 5_000;
 /// Chart picks read off `ResultsState` on the UI thread before handing off to
 /// `bg_render_chart` on a background thread — mirrors `GroupConfig`'s role for
 /// `bg_reload_grouped`.
+/// Sentinel shown as the first entry of the heatmap "Color by" picker —
+/// picking it colors cells by ROI count instead of averaging a column.
+const HEATMAP_METRIC_COUNT_LABEL: &str = "Count (ROIs per cell)";
+
 struct ChartRenderConfig {
     kind: ResultsChartKind,
     hist_column: String,
@@ -31,6 +35,9 @@ struct ChartRenderConfig {
     scatter_y: String,
     color_by: ColorBy,
     bucket_count: usize,
+    /// `HEATMAP_METRIC_COUNT_LABEL` or a column label to average.
+    heatmap_metric: String,
+    cell_size_px: f64,
 }
 
 pub struct ResultsTableController {
@@ -54,6 +61,10 @@ pub struct ResultsTableController {
     pub(crate) image_filter: Arc<Mutex<Option<Vec<String>>>>,
     pub(crate) class_filter: Arc<Mutex<Option<Vec<String>>>>,
     pub(crate) coloc_filter: Arc<Mutex<Option<Vec<String>>>>,
+    /// Selected single time-frame/depth index, or `None` to show every frame
+    /// (the default). `None` whenever the file has no t_stack/z_stack axis.
+    pub(crate) t_stack_filter: Arc<Mutex<Option<i32>>>,
+    pub(crate) z_stack_filter: Arc<Mutex<Option<i32>>>,
     pub(crate) group_config: Arc<Mutex<GroupConfig>>,
     /// Results-table column id the view is currently sorted by, or `None` for
     /// the default order. Re-applied on every reload (filter/group/page) the
@@ -86,6 +97,8 @@ impl ResultsTableController {
             image_filter: Arc::new(Mutex::new(None)),
             class_filter: Arc::new(Mutex::new(None)),
             coloc_filter: Arc::new(Mutex::new(None)),
+            t_stack_filter: Arc::new(Mutex::new(None)),
+            z_stack_filter: Arc::new(Mutex::new(None)),
             group_config: Arc::new(Mutex::new(GroupConfig::default())),
             sort_column: Arc::new(Mutex::new(None)),
             sort_ascending: Arc::new(Mutex::new(true)),
@@ -142,6 +155,9 @@ impl ResultsTableController {
 
         state.on_sort_requested(cb!(on_sort_column_changed, SharedString, bool));
 
+        state.on_t_stack_changed(cb!(on_t_stack_changed, i32, bool));
+        state.on_z_stack_changed(cb!(on_z_stack_changed, i32, bool));
+
         state.on_roi_row_selected(cb!(on_roi_row_selected, i32));
 
         // --- chart_render_requested: read picks on the UI thread, render in --
@@ -163,6 +179,8 @@ impl ResultsTableController {
                         _ => ColorBy::None,
                     },
                     bucket_count: state.get_chart_bucket_count().max(0) as usize,
+                    heatmap_metric: state.get_chart_heatmap_metric().to_string(),
+                    cell_size_px: state.get_chart_cell_size_px().max(1) as f64,
                 };
 
                 state.set_chart_status("Rendering...".into());
@@ -369,6 +387,8 @@ impl ResultsTableController {
                 let image_filter = this.image_filter.lock().unwrap().clone();
                 let class_filter = this.class_filter.lock().unwrap().clone();
                 let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+                let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+                let z_stack_filter = *this.z_stack_filter.lock().unwrap();
                 let group = this.group_config.lock().unwrap().clone();
                 let base_specs = this.column_specs.lock().unwrap().clone();
 
@@ -387,6 +407,8 @@ impl ResultsTableController {
                         image_filter,
                         class_filter,
                         coloc_filter,
+                        t_stack_filter,
+                        z_stack_filter,
                         ..Default::default()
                     };
                     if let Err(e) =
@@ -406,6 +428,8 @@ impl ResultsTableController {
                 let image_filter = this.image_filter.lock().unwrap().clone();
                 let class_filter = this.class_filter.lock().unwrap().clone();
                 let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+                let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+                let z_stack_filter = *this.z_stack_filter.lock().unwrap();
                 let group = this.group_config.lock().unwrap().clone();
                 let base_specs = this.column_specs.lock().unwrap().clone();
 
@@ -424,6 +448,8 @@ impl ResultsTableController {
                         image_filter,
                         class_filter,
                         coloc_filter,
+                        t_stack_filter,
+                        z_stack_filter,
                         ..Default::default()
                     };
                     if let Err(e) =
@@ -451,6 +477,8 @@ impl ResultsTableController {
         *self.image_filter.lock().unwrap() = None;
         *self.class_filter.lock().unwrap() = None;
         *self.coloc_filter.lock().unwrap() = None;
+        *self.t_stack_filter.lock().unwrap() = None;
+        *self.z_stack_filter.lock().unwrap() = None;
         *self.group_config.lock().unwrap() = GroupConfig::default();
         *self.sort_column.lock().unwrap() = None;
         *self.sort_ascending.lock().unwrap() = true;
@@ -477,6 +505,10 @@ impl ResultsTableController {
             let img_names = loader.get_image_names();
             let cls_names = loader.get_class_names();
             let coloc_partner_classes = loader.get_coloc_partner_class_names();
+            // Non-fatal: a file with no time/depth axis (or a lookup error)
+            // just means the frame steppers stay hidden.
+            let t_range = loader.get_t_stack_range().unwrap_or(None);
+            let z_range = loader.get_z_stack_range().unwrap_or(None);
 
             match (first_page, img_names, cls_names, coloc_partner_classes) {
                 (Ok(rois), Ok(img_names), Ok(cls_names), Ok(coloc_partner_classes)) => {
@@ -591,9 +623,24 @@ impl ResultsTableController {
                             state.set_chart_scatter_x(slint::SharedString::new());
                             state.set_chart_scatter_y(slint::SharedString::new());
                             state.set_chart_color_by(slint::SharedString::new());
+                            state.set_chart_heatmap_metric(slint::SharedString::new());
+                            state.set_chart_cell_size_px(20);
                             state.set_chart_plottable_columns(slint::ModelRc::new(
                                 slint::VecModel::from(plottable_column_labels(&specs)),
                             ));
+                            state.set_chart_heatmap_metric_options(slint::ModelRc::new(
+                                slint::VecModel::from(heatmap_metric_options(&specs)),
+                            ));
+                            state.set_t_stack_active(t_range.is_some());
+                            state.set_t_stack_min(t_range.map_or(0, |(min, _)| min));
+                            state.set_t_stack_max(t_range.map_or(0, |(_, max)| max));
+                            state.set_selected_t_stack(t_range.map_or(0, |(min, _)| min));
+                            state.set_t_stack_show_all(true);
+                            state.set_z_stack_active(z_range.is_some());
+                            state.set_z_stack_min(z_range.map_or(0, |(min, _)| min));
+                            state.set_z_stack_max(z_range.map_or(0, |(_, max)| max));
+                            state.set_selected_z_stack(z_range.map_or(0, |(min, _)| min));
+                            state.set_z_stack_show_all(true);
                             state.set_all_rows_loaded(all_loaded);
                             state.set_loading_more(false);
                             state.set_rows(slint::ModelRc::new(slint::VecModel::from(
@@ -656,6 +703,8 @@ impl ResultsTableController {
         let image_filter = this.image_filter.lock().unwrap().clone();
         let class_filter = this.class_filter.lock().unwrap().clone();
         let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+        let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+        let z_stack_filter = *this.z_stack_filter.lock().unwrap();
         let config = this.group_config.lock().unwrap().clone();
         // Per-ROI specs carry the column-visibility selection; only visible
         // metrics become grouped columns.
@@ -669,6 +718,8 @@ impl ResultsTableController {
             image_filter,
             class_filter,
             coloc_filter,
+            t_stack_filter,
+            z_stack_filter,
             page_size: 0,
             page: 0,
             needs_intensities: true,
@@ -739,6 +790,8 @@ impl ResultsTableController {
         let image_filter = this.image_filter.lock().unwrap().clone();
         let class_filter = this.class_filter.lock().unwrap().clone();
         let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+        let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+        let z_stack_filter = *this.z_stack_filter.lock().unwrap();
         let specs = this.column_specs.lock().unwrap().clone();
         let needs_intensities = specs.iter().any(|c| c.visible && c.id.starts_with("ch"));
         let sort_column = this.sort_column.lock().unwrap().clone();
@@ -750,6 +803,8 @@ impl ResultsTableController {
             image_filter,
             class_filter,
             coloc_filter,
+            t_stack_filter,
+            z_stack_filter,
             page_size: PAGE_SIZE,
             page: 0,
             needs_intensities,
@@ -817,6 +872,8 @@ impl ResultsTableController {
         let image_filter = this.image_filter.lock().unwrap().clone();
         let class_filter = this.class_filter.lock().unwrap().clone();
         let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+        let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+        let z_stack_filter = *this.z_stack_filter.lock().unwrap();
         let specs = this.column_specs.lock().unwrap().clone();
         let needs_intensities = specs.iter().any(|c| c.visible && c.id.starts_with("ch"));
         let sort_column = this.sort_column.lock().unwrap().clone();
@@ -837,6 +894,8 @@ impl ResultsTableController {
             image_filter,
             class_filter,
             coloc_filter,
+            t_stack_filter,
+            z_stack_filter,
             page_size: PAGE_SIZE,
             page: next_page,
             needs_intensities,
@@ -892,6 +951,32 @@ impl ResultsTableController {
     fn on_sort_column_changed(self: &Arc<Self>, column_id: SharedString, sort_ascending: bool) {
         *self.sort_column.lock().unwrap() = Some(column_id.to_string());
         *self.sort_ascending.lock().unwrap() = sort_ascending;
+        *self.current_page.lock().unwrap() = 0;
+        *self.all_loaded.lock().unwrap() = false;
+
+        let Some(window) = self.ui.upgrade() else { return };
+        window.global::<ResultsState>().set_loading_more(true);
+
+        Self::spawn_reload(Arc::clone(self));
+    }
+
+    // -------------------------------------------------------------------------
+    // Frame navigation (time/depth stacks)
+    // -------------------------------------------------------------------------
+
+    fn on_t_stack_changed(self: &Arc<Self>, value: i32, show_all: bool) {
+        *self.t_stack_filter.lock().unwrap() = if show_all { None } else { Some(value) };
+        *self.current_page.lock().unwrap() = 0;
+        *self.all_loaded.lock().unwrap() = false;
+
+        let Some(window) = self.ui.upgrade() else { return };
+        window.global::<ResultsState>().set_loading_more(true);
+
+        Self::spawn_reload(Arc::clone(self));
+    }
+
+    fn on_z_stack_changed(self: &Arc<Self>, value: i32, show_all: bool) {
+        *self.z_stack_filter.lock().unwrap() = if show_all { None } else { Some(value) };
         *self.current_page.lock().unwrap() = 0;
         *self.all_loaded.lock().unwrap() = false;
 
@@ -1187,6 +1272,9 @@ impl ResultsTableController {
         state.set_chart_plottable_columns(slint::ModelRc::new(slint::VecModel::from(
             plottable_column_labels(&specs),
         )));
+        state.set_chart_heatmap_metric_options(slint::ModelRc::new(slint::VecModel::from(
+            heatmap_metric_options(&specs),
+        )));
 
         let grouped = !matches!(
             self.group_config.lock().unwrap().group_by,
@@ -1296,6 +1384,8 @@ impl ResultsTableController {
         let image_filter = this.image_filter.lock().unwrap().clone();
         let class_filter = this.class_filter.lock().unwrap().clone();
         let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+        let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+        let z_stack_filter = *this.z_stack_filter.lock().unwrap();
 
         let loader = ResultsLoader::new(&path);
         // A chart summarizes every matching ROI, not just a loaded page.
@@ -1303,6 +1393,8 @@ impl ResultsTableController {
             image_filter,
             class_filter,
             coloc_filter,
+            t_stack_filter,
+            z_stack_filter,
             page_size: 0,
             page: 0,
             needs_intensities: true,
@@ -1369,6 +1461,31 @@ impl ResultsTableController {
                     }
                 }
             }
+            ResultsChartKind::Heatmap => {
+                let metric = if config.heatmap_metric.is_empty()
+                    || config.heatmap_metric == HEATMAP_METRIC_COUNT_LABEL
+                {
+                    HeatmapMetric::Count
+                } else {
+                    let Some(col_id) = resolve_id(&config.heatmap_metric) else {
+                        report("Pick how to color the heatmap.".into(), None);
+                        return;
+                    };
+                    HeatmapMetric::Average(col_id)
+                };
+                let Some(data) = compute_heatmap(&rois, &metric, &specs, config.cell_size_px)
+                else {
+                    report("No data to bin into a heatmap.".into(), None);
+                    return;
+                };
+                match render_heatmap(&data, CHART_WIDTH, CHART_HEIGHT) {
+                    Ok(chart) => report(String::new(), Some(chart)),
+                    Err(e) => {
+                        warn!("render_heatmap failed: {:?}", e);
+                        report("Failed to render the chart.".into(), None);
+                    }
+                }
+            }
         }
     }
 }
@@ -1431,6 +1548,14 @@ fn plottable_column_labels(specs: &[ColumnSpec]) -> Vec<SharedString> {
         .iter()
         .map(|c| c.label.as_str().into())
         .collect()
+}
+
+/// Options for the heatmap's "Color by" picker: the `Count` sentinel first,
+/// then every plottable column label (averaged per cell when picked).
+fn heatmap_metric_options(specs: &[ColumnSpec]) -> Vec<SharedString> {
+    let mut options = vec![SharedString::from(HEATMAP_METRIC_COUNT_LABEL)];
+    options.extend(plottable_column_labels(specs));
+    options
 }
 
 fn specs_to_slint_cols(specs: &[ColumnSpec], widths: &HashMap<String, f32>) -> Vec<ResultsColumnDef> {

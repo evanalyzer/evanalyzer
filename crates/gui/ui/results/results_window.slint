@@ -13,6 +13,7 @@ import {
     FilterItem,
 } from "results_table.slint";
 import { ResultsChart } from "results_chart.slint";
+import { FrameStepper } from "frame_stepper.slint";
 export { ResultsState, ResultsViewMode, ResultsGroupBy, ResultsChartKind, ResultsColumnDef, ResultsRow, FilterItem } from "results_table.slint";
 
 
@@ -662,6 +663,34 @@ component ResultsToolbar inherits Rectangle {
             checked: ResultsState.view_mode == ResultsViewMode.chart;
             clicked => {
                 ResultsState.view_mode = ResultsViewMode.chart;
+            }
+        }
+
+        if ResultsState.t_stack_active || ResultsState.z_stack_active: VerticalDivider { }
+
+        // -- Frame navigation (time/depth stacks) -------------------------------
+        if ResultsState.t_stack_active: FrameStepper {
+            axis_label: "T";
+            min: ResultsState.t_stack_min;
+            max: ResultsState.t_stack_max;
+            value: ResultsState.selected_t_stack;
+            show_all: ResultsState.t_stack_show_all;
+            changed(v, all) => {
+                ResultsState.selected_t_stack = v;
+                ResultsState.t_stack_show_all = all;
+                ResultsState.t_stack_changed(v, all);
+            }
+        }
+        if ResultsState.z_stack_active: FrameStepper {
+            axis_label: "Z";
+            min: ResultsState.z_stack_min;
+            max: ResultsState.z_stack_max;
+            value: ResultsState.selected_z_stack;
+            show_all: ResultsState.z_stack_show_all;
+            changed(v, all) => {
+                ResultsState.selected_z_stack = v;
+                ResultsState.z_stack_show_all = all;
+                ResultsState.z_stack_changed(v, all);
             }
         }
 

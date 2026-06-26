@@ -180,6 +180,116 @@ pub fn compute_scatter(
     })
 }
 
+/// What each heatmap cell's color encodes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HeatmapMetric {
+    /// Number of ROIs whose centroid falls in the cell.
+    Count,
+    /// Average value of the named numeric column, over ROIs whose centroid
+    /// falls in the cell (cells with no value end up at 0).
+    Average(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeatmapCell {
+    /// ROIs whose centroid falls in this cell — 0 means "no data", drawn as
+    /// background rather than the low end of the color scale.
+    pub count: usize,
+    pub value: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct HeatmapData {
+    pub x_label: String,
+    pub y_label: String,
+    pub value_label: String,
+    pub cols: usize,
+    pub rows: usize,
+    /// Raster cell size, in image pixels (square cells, same for both axes).
+    pub cell_size: f64,
+    pub x_min: f64,
+    pub y_min: f64,
+    /// Row-major: `cells[row * cols + col]`.
+    pub cells: Vec<HeatmapCell>,
+}
+
+/// Bins every ROI's centroid (`centroid_x_px`/`centroid_y_px`) into a grid of
+/// `cell_size_px`-wide square cells spanning the ROIs' bounding box, and
+/// colors each cell either by how many ROIs landed in it (`Count`) or by the
+/// average of a numeric column over those ROIs (`Average`) — e.g. "how many
+/// nuclei per region" vs. "average channel intensity per region".
+///
+/// `None` if `rois` is empty, `cell_size_px <= 0`, or (for `Average`) the
+/// named column isn't found.
+pub fn compute_heatmap(
+    rois: &[RoiRow],
+    metric: &HeatmapMetric,
+    columns: &[ColumnSpec],
+    cell_size_px: f64,
+) -> Option<HeatmapData> {
+    if rois.is_empty() || cell_size_px <= 0.0 {
+        return None;
+    }
+    let value_label = match metric {
+        HeatmapMetric::Count => "Count".to_string(),
+        HeatmapMetric::Average(col_id) => columns.iter().find(|c| c.id == *col_id)?.label.clone(),
+    };
+
+    let x_min = rois.iter().map(|r| r.centroid_x_px).fold(f64::INFINITY, f64::min);
+    let x_max = rois.iter().map(|r| r.centroid_x_px).fold(f64::NEG_INFINITY, f64::max);
+    let y_min = rois.iter().map(|r| r.centroid_y_px).fold(f64::INFINITY, f64::min);
+    let y_max = rois.iter().map(|r| r.centroid_y_px).fold(f64::NEG_INFINITY, f64::max);
+
+    let cols = (((x_max - x_min) / cell_size_px) as usize) + 1;
+    let rows = (((y_max - y_min) / cell_size_px) as usize) + 1;
+
+    let mut counts = vec![0usize; cols * rows];
+    let mut sums = vec![0f64; cols * rows];
+    for roi in rois {
+        let ix = (((roi.centroid_x_px - x_min) / cell_size_px) as usize).min(cols - 1);
+        let iy = (((roi.centroid_y_px - y_min) / cell_size_px) as usize).min(rows - 1);
+        let idx = iy * cols + ix;
+        match metric {
+            HeatmapMetric::Count => counts[idx] += 1,
+            HeatmapMetric::Average(col_id) => {
+                if let Some(v) = numeric_value(roi, col_id) {
+                    counts[idx] += 1;
+                    sums[idx] += v;
+                }
+            }
+        }
+    }
+
+    let cells = (0..cols * rows)
+        .map(|i| {
+            let count = counts[i];
+            let value = match metric {
+                HeatmapMetric::Count => count as f64,
+                HeatmapMetric::Average(_) => {
+                    if count > 0 {
+                        sums[i] / count as f64
+                    } else {
+                        0.0
+                    }
+                }
+            };
+            HeatmapCell { count, value }
+        })
+        .collect();
+
+    Some(HeatmapData {
+        x_label: "X position (px)".to_string(),
+        y_label: "Y position (px)".to_string(),
+        value_label,
+        cols,
+        rows,
+        cell_size: cell_size_px,
+        x_min,
+        y_min,
+        cells,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Rendering (plotters)
 // ---------------------------------------------------------------------------
@@ -334,6 +444,109 @@ fn draw_scatter(
     Ok(())
 }
 
+/// A small Viridis-like sequential colormap (5 anchor stops, linearly
+/// interpolated) — perceptually uniform-ish and colorblind-friendlier than a
+/// raw hue sweep, without depending on plotters' own colormap feature.
+fn viridis_color(t: f64) -> RGBColor {
+    const STOPS: [(f64, u8, u8, u8); 5] = [
+        (0.00, 68, 1, 84),
+        (0.25, 59, 82, 139),
+        (0.50, 33, 145, 140),
+        (0.75, 94, 201, 98),
+        (1.00, 253, 231, 37),
+    ];
+    let t = t.clamp(0.0, 1.0);
+    for i in 0..STOPS.len() - 1 {
+        let (t0, r0, g0, b0) = STOPS[i];
+        let (t1, r1, g1, b1) = STOPS[i + 1];
+        if t <= t1 {
+            let local_t = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
+            let lerp = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * local_t) as u8;
+            return RGBColor(lerp(r0, r1), lerp(g0, g1), lerp(b0, b1));
+        }
+    }
+    let (_, r, g, b) = STOPS[STOPS.len() - 1];
+    RGBColor(r, g, b)
+}
+
+fn draw_heatmap(
+    root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
+    data: &HeatmapData,
+) -> Result<(), InternalErrors> {
+    root.fill(&WHITE).map_err(to_internal_error)?;
+
+    let max_value = data.cells.iter().map(|c| c.value).fold(0.0f64, f64::max).max(1e-9);
+    let legend_width = 90i32;
+    let (chart_area, legend_area) = root.split_horizontally(legend_width.max(0));
+
+    let x_max = data.x_min + data.cols as f64 * data.cell_size;
+    let y_max = data.y_min + data.rows as f64 * data.cell_size;
+
+    let mut chart = ChartBuilder::on(&chart_area)
+        .margin(10)
+        .x_label_area_size(40)
+        .y_label_area_size(50)
+        .caption(format!("Heatmap: {}", data.value_label), ("sans-serif", 20))
+        // Image-style coordinates: y grows downward, so the top-left ROI ends
+        // up top-left on screen rather than bottom-left.
+        .build_cartesian_2d(data.x_min..x_max, y_max..data.y_min)
+        .map_err(to_internal_error)?;
+
+    chart
+        .configure_mesh()
+        .disable_mesh()
+        .x_desc(data.x_label.clone())
+        .y_desc(data.y_label.clone())
+        .draw()
+        .map_err(to_internal_error)?;
+
+    chart
+        .draw_series(data.cells.iter().enumerate().filter(|(_, c)| c.count > 0).map(
+            |(i, cell)| {
+                let col = i % data.cols;
+                let row = i / data.cols;
+                let x0 = data.x_min + col as f64 * data.cell_size;
+                let y0 = data.y_min + row as f64 * data.cell_size;
+                let color = viridis_color(cell.value / max_value);
+                Rectangle::new(
+                    [(x0, y0), (x0 + data.cell_size, y0 + data.cell_size)],
+                    color.filled(),
+                )
+            },
+        ))
+        .map_err(to_internal_error)?;
+
+    // Legend: a vertical gradient strip with the value scale on its axis.
+    let mut legend = ChartBuilder::on(&legend_area)
+        .margin_top(10)
+        .margin_bottom(10)
+        .margin_right(10)
+        .y_label_area_size(50)
+        .build_cartesian_2d(0f64..1f64, 0f64..max_value)
+        .map_err(to_internal_error)?;
+    legend
+        .configure_mesh()
+        .disable_mesh()
+        .x_labels(0)
+        .y_desc(data.value_label.clone())
+        .draw()
+        .map_err(to_internal_error)?;
+    const LEGEND_STEPS: usize = 64;
+    legend
+        .draw_series((0..LEGEND_STEPS).map(|i| {
+            let t0 = i as f64 / LEGEND_STEPS as f64;
+            let t1 = (i + 1) as f64 / LEGEND_STEPS as f64;
+            Rectangle::new(
+                [(0.0, t0 * max_value), (1.0, t1 * max_value)],
+                viridis_color(t0).filled(),
+            )
+        }))
+        .map_err(to_internal_error)?;
+
+    root.present().map_err(to_internal_error)?;
+    Ok(())
+}
+
 /// Renders into an in-memory RGB8 buffer — used by the GUI to build a
 /// `slint::Image` without touching disk.
 pub fn render_histogram(data: &HistogramData, width: u32, height: u32) -> Result<RenderedChart, InternalErrors> {
@@ -370,6 +583,25 @@ pub fn save_histogram_png(data: &HistogramData, width: u32, height: u32, path: &
 pub fn save_scatter_png(data: &ScatterData, width: u32, height: u32, path: &Path) -> Result<(), InternalErrors> {
     let root = BitMapBackend::new(path, (width, height)).into_drawing_area();
     draw_scatter(root, data)
+}
+
+/// Renders into an in-memory RGB8 buffer — used by the GUI to build a
+/// `slint::Image` without touching disk.
+pub fn render_heatmap(data: &HeatmapData, width: u32, height: u32) -> Result<RenderedChart, InternalErrors> {
+    let mut rgb = vec![0u8; (width * height * 3) as usize];
+    {
+        let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
+        draw_heatmap(root, data)?;
+    }
+    Ok(RenderedChart { width, height, rgb })
+}
+
+/// Renders straight to a PNG file. Not called anywhere yet — exists so a
+/// future CLI "export chart" command is a thin wrapper around the same
+/// drawing code the GUI uses, instead of new plotting logic.
+pub fn save_heatmap_png(data: &HeatmapData, width: u32, height: u32, path: &Path) -> Result<(), InternalErrors> {
+    let root = BitMapBackend::new(path, (width, height)).into_drawing_area();
+    draw_heatmap(root, data)
 }
 
 #[cfg(test)]
@@ -532,6 +764,69 @@ mod tests {
         assert!(compute_scatter(&rois, "does_not_exist", "circularity", ColorBy::None, &columns, 0).is_none());
     }
 
+    // ---- compute_heatmap ----
+
+    fn roi_at(x: f64, y: f64) -> RoiRow {
+        RoiRow { centroid_x_px: x, centroid_y_px: y, ..make_roi(10, "{}", vec![], "{}") }
+    }
+
+    #[test]
+    fn compute_heatmap_count_bins_centroids_into_cells() {
+        // 10px cells over a 0..20 x 0..20 span: (0,0)/(1,1) share cell (0,0);
+        // (19,19) lands in the far corner cell.
+        let rois = vec![roi_at(0.0, 0.0), roi_at(1.0, 1.0), roi_at(19.0, 19.0)];
+        let columns = base_columns();
+        let data = compute_heatmap(&rois, &HeatmapMetric::Count, &columns, 10.0).unwrap();
+        assert_eq!(data.value_label, "Count");
+        assert_eq!(data.cols, 2);
+        assert_eq!(data.rows, 2);
+        assert_eq!(data.cells[0].count, 2);
+        assert_eq!(data.cells[0].value, 2.0);
+        assert_eq!(data.cells[3].count, 1, "(19,19) falls in the last row/col");
+        let total: usize = data.cells.iter().map(|c| c.count).sum();
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn compute_heatmap_average_uses_metric_mean_per_cell() {
+        let mut a = roi_at(0.0, 0.0);
+        a.area_px = 10;
+        a.area_nm2 = 10.0;
+        let mut b = roi_at(1.0, 1.0);
+        b.area_px = 20;
+        b.area_nm2 = 20.0;
+        let columns = base_columns();
+        let data =
+            compute_heatmap(&[a, b], &HeatmapMetric::Average("area_px".into()), &columns, 10.0)
+                .unwrap();
+        assert_eq!(data.value_label, "Area (px²)");
+        assert_eq!(data.cells[0].count, 2);
+        assert_eq!(data.cells[0].value, 15.0, "average of 10 and 20");
+    }
+
+    #[test]
+    fn compute_heatmap_empty_rois_or_invalid_cell_size_or_unknown_column_is_none() {
+        let columns = base_columns();
+        assert!(compute_heatmap(&[], &HeatmapMetric::Count, &columns, 10.0).is_none());
+        let rois = vec![roi_at(0.0, 0.0)];
+        assert!(compute_heatmap(&rois, &HeatmapMetric::Count, &columns, 0.0).is_none());
+        assert!(compute_heatmap(&rois, &HeatmapMetric::Count, &columns, -5.0).is_none());
+        assert!(
+            compute_heatmap(&rois, &HeatmapMetric::Average("does_not_exist".into()), &columns, 10.0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn compute_heatmap_single_point_is_one_by_one_grid() {
+        let rois = vec![roi_at(5.0, 5.0)];
+        let columns = base_columns();
+        let data = compute_heatmap(&rois, &HeatmapMetric::Count, &columns, 10.0).unwrap();
+        assert_eq!(data.cols, 1);
+        assert_eq!(data.rows, 1);
+        assert_eq!(data.cells[0].count, 1);
+    }
+
     // ---- rendering smoke tests ----
 
     #[test]
@@ -561,6 +856,30 @@ mod tests {
             sampled_from: None,
         };
         let chart = render_scatter(&data, 200, 150).unwrap();
+        assert_eq!(chart.rgb.len(), 200 * 150 * 3);
+    }
+
+    #[test]
+    fn render_heatmap_produces_correctly_sized_buffer() {
+        let data = HeatmapData {
+            x_label: "X position (px)".into(),
+            y_label: "Y position (px)".into(),
+            value_label: "Count".into(),
+            cols: 2,
+            rows: 2,
+            cell_size: 10.0,
+            x_min: 0.0,
+            y_min: 0.0,
+            cells: vec![
+                HeatmapCell { count: 2, value: 2.0 },
+                HeatmapCell { count: 0, value: 0.0 },
+                HeatmapCell { count: 0, value: 0.0 },
+                HeatmapCell { count: 1, value: 1.0 },
+            ],
+        };
+        let chart = render_heatmap(&data, 200, 150).unwrap();
+        assert_eq!(chart.width, 200);
+        assert_eq!(chart.height, 150);
         assert_eq!(chart.rgb.len(), 200 * 150 * 3);
     }
 }

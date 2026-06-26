@@ -346,6 +346,10 @@ pub struct DatabaseFilter {
     /// `None` = no coloc filter; `Some([])` = nothing passes; `Some([..])` = restrict to
     /// rows whose colocalization status ("Yes"/"No") is in this set.
     pub coloc_filter: Option<Vec<String>>,
+    /// Restricts to ROIs from this single time-frame index, or `None` for every frame.
+    pub t_stack_filter: Option<i32>,
+    /// Restricts to ROIs from this single Z-depth index, or `None` for every depth.
+    pub z_stack_filter: Option<i32>,
     pub page_size: usize,
     pub page: usize,
     /// When false the database omits `intensities_json` from the SELECT, avoiding
@@ -362,6 +366,8 @@ impl Default for DatabaseFilter {
             image_filter: None,
             class_filter: None,
             coloc_filter: None,
+            t_stack_filter: None,
+            z_stack_filter: None,
             page_size: 500,
             page: 0,
             needs_intensities: true,
@@ -799,6 +805,8 @@ impl ResultsLoader {
             image_filter: filter.image_filter,
             class_filter: filter.class_filter,
             coloc_filter: filter.coloc_filter,
+            t_stack_filter: filter.t_stack_filter,
+            z_stack_filter: filter.z_stack_filter,
             page_size: filter.page_size,
             page: filter.page,
             fetch_intensities: filter.needs_intensities,
@@ -813,6 +821,18 @@ impl ResultsLoader {
 
     pub fn get_class_names(&self) -> Result<Vec<String>, InternalErrors> {
         DuckDbReader::open(&self.path)?.get_class_names()
+    }
+
+    /// `(min, max)` of `t_stack` present in the file, or `None` when there's
+    /// nothing to step through (no time axis, or a single shared value).
+    pub fn get_t_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
+        DuckDbReader::open(&self.path)?.get_t_stack_range()
+    }
+
+    /// `(min, max)` of `z_stack` present in the file, or `None` when there's
+    /// nothing to step through (no depth axis, or a single shared value).
+    pub fn get_z_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
+        DuckDbReader::open(&self.path)?.get_z_stack_range()
     }
 
     pub fn get_coloc_partner_class_names(&self) -> Result<Vec<String>, InternalErrors> {

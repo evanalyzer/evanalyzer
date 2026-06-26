@@ -61,6 +61,11 @@ export component ResultsChart inherits Rectangle {
                         selected: ResultsState.chart_kind == ResultsChartKind.scatter;
                         clicked => { ResultsState.chart_kind = ResultsChartKind.scatter; }
                     }
+                    ChartKindButton {
+                        label: "Heatmap";
+                        selected: ResultsState.chart_kind == ResultsChartKind.heatmap;
+                        clicked => { ResultsState.chart_kind = ResultsChartKind.heatmap; }
+                    }
                 }
 
                 Rectangle { width: 1px; background: Theme.border-soft; }
@@ -138,6 +143,37 @@ export component ResultsChart inherits Rectangle {
                         selected(v) => {
                             ResultsState.chart_color_by = v == "Class" ? "class" : (v == "Colocalized" ? "colocalized" : "");
                         }
+                    }
+                }
+
+                if ResultsState.chart_kind == ResultsChartKind.heatmap: HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "Color by:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                    ComboBox {
+                        width: 170px;
+                        model: ResultsState.chart_heatmap_metric_options;
+                        current-value: ResultsState.chart_heatmap_metric;
+                        selected(v) => { ResultsState.chart_heatmap_metric = v; }
+                    }
+                    Text {
+                        text: "Cell size (px):";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                    SpinBox {
+                        width: 90px;
+                        minimum: 1;
+                        maximum: 10000;
+                        value: ResultsState.chart_cell_size_px;
+                        edited(v) => { ResultsState.chart_cell_size_px = v; }
                     }
                 }
 
