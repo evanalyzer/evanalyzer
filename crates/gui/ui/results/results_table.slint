@@ -186,14 +186,14 @@ export global ResultsState {
     // Saves the most recently rendered chart (see chart_image) to a PNG file
     // the user picks. No-op until at least one chart has been rendered.
     callback chart_save_requested();
-    // What's under the mouse in the chart area, for a hover tooltip.
-    // mouse_x/mouse_y are pixels relative to the chart Image's displayed
-    // area (not the underlying bitmap — image-fit: contain can letterbox
-    // it), area_width/area_height that area's current size; both as
-    // reported by the TouchArea overlaid on the chart in
+    // What's at a clicked point in the chart area, for a tap-to-inspect
+    // tooltip. mouse_x/mouse_y are pixels relative to the chart Image's
+    // displayed area (not the underlying bitmap — image-fit: contain can
+    // letterbox it), area_width/area_height that area's current size; both
+    // as reported by the TouchArea overlaid on the chart in
     // results_chart.slint. Returns "" when there's nothing to show (outside
     // the plot area, no chart rendered yet, etc).
-    callback chart_hover_lookup(float, float, float, float) -> string;
+    callback chart_point_lookup(float, float, float, float) -> string;
 
     // -- Frame navigation (time/depth stacks) --------------------------------
     // True only when the loaded file actually has more than one t_stack/

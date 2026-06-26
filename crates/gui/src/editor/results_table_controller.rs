@@ -269,10 +269,10 @@ impl ResultsTableController {
             });
         }
 
-        // --- chart_hover_lookup: hover tooltip over the chart area -------------
+        // --- chart_point_lookup: tap-to-inspect tooltip over the chart area ----
         {
             let this = Arc::clone(self);
-            state.on_chart_hover_lookup(move |mouse_x, mouse_y, area_width, area_height| {
+            state.on_chart_point_lookup(move |mouse_x, mouse_y, area_width, area_height| {
                 let guard = this.last_chart.lock().unwrap();
                 let Some(last) = guard.as_ref() else { return SharedString::new() };
                 let Some(tester) = last.chart.hit_test.as_ref() else { return SharedString::new() };

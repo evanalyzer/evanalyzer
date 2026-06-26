@@ -35,11 +35,11 @@ component ChartKindButton inherits Rectangle {
 
 export component ResultsChart inherits Rectangle {
     background: Theme.bg;
-    // Set by hover-ta's `moved` handler below; read by the tooltip. Purely
+    // Set by click-ta's `clicked` handler below; read by the tooltip. Purely
     // local presentation state — never bound externally, never written from
     // anywhere else, so it can't run into the property-recursion issues a
     // shared global binding would.
-    property <string> hover_text: "";
+    property <string> tooltip_text: "";
 
     VerticalLayout {
         spacing: 0px;
@@ -215,7 +215,10 @@ export component ResultsChart inherits Rectangle {
                     width: 64px;
                     height: 26px;
                     mouse-cursor: pointer;
-                    clicked => { ResultsState.chart_render_requested(); }
+                    clicked => {
+                        root.tooltip_text = "";
+                        ResultsState.chart_render_requested();
+                    }
 
                     Rectangle {
                         border-radius: 4px;
@@ -266,12 +269,12 @@ export component ResultsChart inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            hover-ta := TouchArea {
+            click-ta := TouchArea {
                 width: 100%;
                 height: 100%;
-                mouse-cursor: default;
-                moved => {
-                    root.hover_text = ResultsState.chart_hover_lookup(
+                mouse-cursor: pointer;
+                clicked => {
+                    root.tooltip_text = ResultsState.chart_point_lookup(
                         self.mouse-x / 1px,
                         self.mouse-y / 1px,
                         self.width / 1px,
@@ -280,9 +283,9 @@ export component ResultsChart inherits Rectangle {
                 }
             }
 
-            if hover-ta.has-hover && root.hover_text != "": tip := Rectangle {
-                x: hover-ta.mouse-x < parent.width * 0.7 ? hover-ta.mouse-x + 14px : hover-ta.mouse-x - self.width - 14px;
-                y: hover-ta.mouse-y < parent.height * 0.7 ? hover-ta.mouse-y + 14px : hover-ta.mouse-y - self.height - 14px;
+            if root.tooltip_text != "": tip := Rectangle {
+                x: click-ta.mouse-x < parent.width * 0.7 ? click-ta.mouse-x + 14px : click-ta.mouse-x - self.width - 14px;
+                y: click-ta.mouse-y < parent.height * 0.7 ? click-ta.mouse-y + 14px : click-ta.mouse-y - self.height - 14px;
                 width: tip-text.width + 14px;
                 height: tip-text.height + 10px;
                 background: #1a1a1aee;
@@ -291,7 +294,7 @@ export component ResultsChart inherits Rectangle {
                 tip-text := Text {
                     x: 7px;
                     y: 5px;
-                    text: root.hover_text;
+                    text: root.tooltip_text;
                     font-size: 11px;
                     font-family: Theme.font-mono;
                     color: white;
