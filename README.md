@@ -96,7 +96,7 @@ The workspace is organised into focused crates:
 | `evanalyzer_cfg` | Project settings, serialisation to JSON, pipeline command configuration |
 | `evanalyzer_app` | Application handle, shared project state |
 | `evanalyzer_gui` | Slint-based desktop GUI — viewport, histogram, ROI tools, classification panel |
-| `evanalyzer_cli` | Command-line interface for headless batch analysis |
+| `evanalyzer_cli` | Headless CLI: analyze projects, export/view results databases (see [Command-Line Interface](#command-line-interface-cli)) |
 | `evanalyzer_bin` | Binary entry point — launches GUI or CLI depending on arguments |
 
 ### Pipeline Flow
@@ -180,6 +180,93 @@ per-file limit. Download **all** volumes into one folder and extract with
 
 Then run the `evanalyzer` binary as for the CPU build. A matching NVIDIA driver
 (CUDA 12.x) must be installed on the machine.
+
+---
+
+## Command-Line Interface (CLI)
+
+Besides the GUI, the `evanalyzer` binary has a headless batch mode for scripting,
+servers, and CI pipelines: `evanalyzer cli <command>`. Run `evanalyzer cli --help`
+or `evanalyzer cli <command> --help` for the full flag reference — this section
+covers the common workflows.
+
+### Analyze a project
+
+```sh
+evanalyzer cli analyze --project my_project.evaproj --images /data/plate1 --threads 8
+```
+
+- `--project` — the `.evaproj` file to run (required).
+- `--images` — point the project at a folder and (re-)scan it for images before
+  running. Omit this to use the image list the project already has saved.
+- `--threads` — images processed in parallel (default: number of CPUs minus one).
+
+Progress is printed as `[i/total] <image>` while it runs. A new results database
+(`.evadb`) is written under `results/<timestamp>__<job-name>/` next to the
+project file — the same layout the GUI uses. Press **Ctrl+C** to cancel; the
+in-flight image finishes, no more are started, and the process exits with code
+`130`.
+
+### Inspect a project before running it
+
+```sh
+evanalyzer cli project-info --project my_project.evaproj   # images, classes, pipelines
+evanalyzer cli validate --project my_project.evaproj        # do all referenced images exist on disk?
+```
+
+Both also accept `--json` (on `project-info`) for scripting — see below.
+
+### View a results database
+
+```sh
+evanalyzer cli view --db results/.../job.evadb --limit 50 --page 0
+evanalyzer cli view --db results/.../job.evadb --image sample01.tif --class Nucleus
+evanalyzer cli columns --db results/.../job.evadb   # column ids for --group-by / chart axes
+```
+
+`view` prints a quick summary (image/class counts, T/Z range) plus a page of ROI
+rows — enough to sanity-check a run without opening the GUI. `columns` lists every
+column id (including per-channel and colocalization-partner columns) available
+for grouping and charting.
+
+`view`, `columns`, and `project-info` all accept `--json` for machine-readable
+output, e.g.:
+
+```sh
+evanalyzer cli view --db job.evadb --json --limit 100 | jq '.rows[].area_px'
+```
+
+### Export results
+
+```sh
+# CSV / XLSX, optionally grouped and aggregated
+evanalyzer cli export csv  --db job.evadb --out results.csv
+evanalyzer cli export xlsx --db job.evadb --out results.xlsx \
+  --group-by image --agg avg,median --class Nucleus
+
+# Charts (PNG), rendered with the same code path as the GUI's chart view
+evanalyzer cli export chart histogram --db job.evadb --out area.png \
+  --column area_px --buckets 30 --log-scale
+evanalyzer cli export chart scatter   --db job.evadb --out scatter.png \
+  --x area_px --y circularity --color-by class
+evanalyzer cli export chart heatmap   --db job.evadb --out heatmap.png \
+  --metric count --cell-size 256
+```
+
+All `export` and `view` subcommands accept `--image <name>`, `--class <name>`
+(repeatable) and `--colocalized <true|false>` to filter rows first.
+
+### Command summary
+
+| Command | Purpose |
+|---|---|
+| `analyze` | Run a project's enabled pipelines over its images, writing a new `.evadb` |
+| `project-info` | Print a project's images/classes/pipelines without running anything |
+| `validate` | Check that every image a project references can be found on disk |
+| `export csv` / `export xlsx` | Export a results database to a spreadsheet, optionally grouped/aggregated |
+| `export chart histogram/scatter/heatmap` | Render a results database to a chart PNG |
+| `view` | Print a quick summary and a page of rows from a results database |
+| `columns` | List the column ids available for `--group-by` / chart axes |
 
 ---
 
