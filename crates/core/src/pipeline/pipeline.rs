@@ -7,7 +7,7 @@ use crate::{
 use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, PipelineId};
 use kornia_image::ImageSize;
 use log::info;
-use std::time::Instant;
+use std::{path::PathBuf, time::Instant};
 
 pub struct PipelineResult {
     pub image: ImageContainer,
@@ -88,6 +88,7 @@ impl Pipeline {
     ///     to completion; the clone is returned in `breakpoint_snapshot`.
     pub fn run(
         &self,
+        output_path: PathBuf,
         mut cache: PipelineCache,
         breakpoint_step: Option<i32>,
         snapshot_mode: bool,
@@ -100,6 +101,7 @@ impl Pipeline {
         };
 
         let mut ctx = PipelineContext::new_from_image(
+            output_path,
             cache.image_cache.image_meta.clone(),
             initial_image.as_ref().clone(),
         )?;
@@ -136,7 +138,11 @@ impl Pipeline {
         }
 
         cache.image_cache.clear_pipeline_context();
-        info!("Executed pipeline steps {} in {:?}", self.id, start.elapsed());
+        info!(
+            "Executed pipeline steps {} in {:?}",
+            self.id,
+            start.elapsed()
+        );
         Ok(PipelineResult {
             image: ctx.image,
             cache,

@@ -3,16 +3,23 @@ use syn::{GenericArgument, Item, ItemEnum, ItemStruct, PathArguments, Type, pars
 
 pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
     let algos_path = Path::new("../core/src/algos");
+    let module_features = parse_module_features(Path::new("../core/src/algos.rs"));
     let mut commands = Vec::new();
     let mut enums = Vec::new();
 
     if let Ok(entries) = fs::read_dir(algos_path) {
         for entry in entries.flatten() {
             let path = entry.path();
+            // Top-level module name as declared in algos.rs (`mod <name>;` /
+            // `mod <name>.rs`), used to look up an optional `#[cfg(feature = "...")]`
+            // gate that must be propagated onto the generated glue code.
+            let module_name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+            let feature = module_features.get(module_name).and_then(|f| f.clone());
+
             if path.is_dir() {
-                scan_directory(&path, &mut commands, &mut enums);
+                scan_directory(&path, &mut commands, &mut enums, feature.as_deref());
             } else if path.extension().map_or(false, |ext| ext == "rs") {
-                extract_command_structs(&path, &mut commands, &mut enums);
+                extract_command_structs(&path, &mut commands, &mut enums, feature.as_deref());
             }
         }
     }
@@ -136,6 +143,54 @@ fn format_default_for_type(ty: &str, val: f64) -> String {
     }
 }
 
+/// The default-value expression for one settings field, honouring an explicit
+/// `#[cmdsmeta(default = ...)]` if present and falling back to the type's own `Default`
+/// otherwise. Shared between a command struct's generated `Default` impl and a rich enum
+/// variant's generated `Default` impl (both assemble a field-by-field literal).
+fn field_default_expr(field: &FieldInfo, enums: &[EnumInfo], commands: &[CommandInfo]) -> String {
+    let field_type = map_to_settings_type(&field.ty, enums, commands);
+    if let Some(ref expr) = field.metadata.default_expr {
+        remap_default_expr(expr, enums, commands)
+    } else if let Some(val) = field.metadata.default {
+        format_default_for_type(&field.ty, val)
+    } else if field_type.starts_with("Vec<") {
+        "vec![]".to_string()
+    } else if field_type.starts_with("Option<") {
+        "None".to_string()
+    } else {
+        format!("{}::default()", field_type)
+    }
+}
+
+/// The value expression converting one settings field into its core-side counterpart for a
+/// generated `From<...Settings> for ...` impl: clamps numeric fields to `min`/`max`, recurses
+/// into nested user enums/structs via `.into()`, and maps `Vec`/`Option`. Shared between a
+/// command struct's `From` impl and a rich enum variant's `From` impl.
+fn field_value_expr(
+    field: &FieldInfo,
+    field_access: String,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+) -> String {
+    let meta = &field.metadata;
+    if field.ty == "f32" || field.ty == "f64" {
+        match (meta.min, meta.max) {
+            (Some(min), Some(max)) => format!("{}.clamp({:?}, {:?})", field_access, min, max),
+            (Some(min), None) => format!("{}.max({:?})", field_access, min),
+            (None, Some(max)) => format!("{}.min({:?})", field_access, max),
+            _ => field_access,
+        }
+    } else if is_user_enum(&field.ty, enums) || is_user_struct(&field.ty, commands) {
+        format!("{}::from({})", field.ty, field_access)
+    } else if field.ty.starts_with("Vec<") {
+        format!("{}.into_iter().map(|v| v.into()).collect()", field_access)
+    } else if field.ty.starts_with("Option<") {
+        format!("{}.map(|v| v.into())", field_access)
+    } else {
+        field_access
+    }
+}
+
 fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     use std::collections::HashSet;
 
@@ -173,34 +228,83 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     // Enums
     out.push_str("// ============ ENUM SETTINGS ============\n\n");
     for enum_info in &filtered_enums {
-        let settings_name = format!(
-            "{}{}Settings",
-            to_pascal_case(&enum_info.source_file),
-            enum_info.enum_name
-        );
+        let settings_name = enum_info.settings_name();
+        let is_rich = enum_info.is_rich();
 
         for doc in &enum_info.doc_comments {
             out.push_str(&format!("/// {}\n", doc));
         }
-        out.push_str(
-            "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]\n",
-        );
-        out.push_str("#[serde(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
+        if is_rich {
+            // Internally tagged: each variant's own fields sit alongside the discriminant,
+            // which schemars renders as `oneOf` + a `const`-valued "type" property — the
+            // standard JSON Schema representation for "different fields depending on which
+            // option is selected" (mirrors a serde-tagged Rust enum / OpenAPI discriminator).
+            out.push_str("#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]\n");
+            out.push_str("#[serde(tag = \"type\", rename_all = \"camelCase\")]\n");
+        } else {
+            out.push_str(
+                "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]\n",
+            );
+            out.push_str("#[serde(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
+        }
         out.push_str(&format!("pub enum {} {{\n", settings_name));
         for (vi, variant) in enum_info.variants.iter().enumerate() {
             for doc in &variant.doc_comments {
                 out.push_str(&format!("    /// {}\n", doc));
             }
-            if vi == 0 {
+            if !is_rich && vi == 0 {
                 out.push_str("    #[default]\n");
             }
-            if let Some(ref data_type) = variant.data_type {
+            if variant.is_rich() {
+                // The enum-level `rename_all` only renames variant identifiers, not the
+                // fields of a struct-like variant — each variant needs its own rename_all
+                // to keep field names camelCase, consistent with every other settings struct.
+                out.push_str("    #[serde(rename_all = \"camelCase\")]\n");
+                out.push_str(&format!("    {} {{\n", variant.name));
+                for field in &variant.named_fields {
+                    for doc in &field.doc_comments {
+                        out.push_str(&format!("        /// {}\n", doc));
+                    }
+                    let mut range_parts = Vec::new();
+                    if let Some(min) = field.metadata.min {
+                        range_parts.push(format!("min = {}", min));
+                    }
+                    if let Some(max) = field.metadata.max {
+                        range_parts.push(format!("max = {}", max));
+                    }
+                    if !range_parts.is_empty() {
+                        out.push_str(&format!(
+                            "        #[schemars(range({}))]\n",
+                            range_parts.join(", ")
+                        ));
+                    }
+                    let field_type = map_to_settings_type(&field.ty, enums, commands);
+                    out.push_str(&format!("        {}: {},\n", field.name, field_type));
+                }
+                out.push_str("    },\n");
+            } else if let Some(ref data_type) = variant.data_type {
                 out.push_str(&format!("    {}({}),\n", variant.name, data_type));
             } else {
                 out.push_str(&format!("    {},\n", variant.name));
             }
         }
         out.push_str("}\n\n");
+
+        // Rich enums opt out of #[derive(Default)] (the field defaults would otherwise be each
+        // field type's zero value, ignoring any #[cmdsmeta(default = ...)] override), so they
+        // need a hand-rolled Default impl — same idea as a command struct's Default impl below.
+        if is_rich {
+            if let Some(first) = enum_info.variants.first() {
+                out.push_str(&format!("impl Default for {} {{\n", settings_name));
+                out.push_str("    fn default() -> Self {\n");
+                out.push_str(&format!("        Self::{} {{\n", first.name));
+                for field in &first.named_fields {
+                    let default_expr = field_default_expr(field, enums, commands);
+                    out.push_str(&format!("            {}: {},\n", field.name, default_expr));
+                }
+                out.push_str("        }\n    }\n}\n\n");
+            }
+        }
     }
 
     // Structs by category
@@ -316,18 +420,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                     out.push_str("    fn default() -> Self {\n");
                     out.push_str("        Self {\n");
                     for field in &cmd.fields {
-                        let field_type = map_to_settings_type(&field.ty, enums, commands);
-                        let default_expr = if let Some(ref expr) = field.metadata.default_expr {
-                            remap_default_expr(expr, enums, commands)
-                        } else if let Some(val) = field.metadata.default {
-                            format_default_for_type(&field.ty, val)
-                        } else if field_type.starts_with("Vec<") {
-                            "vec![]".to_string()
-                        } else if field_type.starts_with("Option<") {
-                            "None".to_string()
-                        } else {
-                            format!("{}::default()", field_type)
-                        };
+                        let default_expr = field_default_expr(field, enums, commands);
                         out.push_str(&format!("            {}: {},\n", field.name, default_expr));
                     }
                     out.push_str("        }\n");
@@ -383,6 +476,9 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
             enum_info.enum_name
         );
 
+        if let Some(feature) = &enum_info.feature {
+            out.push_str(&format!("#[cfg(feature = {feature:?})]\n"));
+        }
         out.push_str(&format!(
             "impl From<{settings_name}> for {} {{\n",
             enum_info.enum_name
@@ -390,7 +486,20 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
         out.push_str(&format!("    fn from(_s: {settings_name}) -> Self {{\n"));
         out.push_str("        match _s {\n");
         for variant in &enum_info.variants {
-            if variant.data_type.is_some() {
+            if variant.is_rich() {
+                let field_names: Vec<&str> =
+                    variant.named_fields.iter().map(|f| f.name.as_str()).collect();
+                let pattern = field_names.join(", ");
+                out.push_str(&format!(
+                    "            {settings_name}::{} {{ {pattern} }} => {}::{} {{\n",
+                    variant.name, enum_info.enum_name, variant.name
+                ));
+                for field in &variant.named_fields {
+                    let value = field_value_expr(field, field.name.clone(), enums, commands);
+                    out.push_str(&format!("                {}: {},\n", field.name, value));
+                }
+                out.push_str("            },\n");
+            } else if variant.data_type.is_some() {
                 out.push_str(&format!(
                     "            {settings_name}::{}(v) => {}::{}(v),\n",
                     variant.name, enum_info.enum_name, variant.name
@@ -410,6 +519,9 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     for cmd in &filtered_commands {
         let settings_name = format!("{}Settings", cmd.struct_name);
 
+        if let Some(feature) = &cmd.feature {
+            out.push_str(&format!("#[cfg(feature = {feature:?})]\n"));
+        }
         out.push_str(&format!(
             "impl From<{settings_name}> for {} {{\n",
             cmd.struct_name
@@ -418,28 +530,8 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
         out.push_str(&format!("        {} {{\n", cmd.struct_name));
 
         for field in &cmd.fields {
-            let meta = &field.metadata;
             let field_access = format!("_s.{}", field.name);
-
-            let field_value = if field.ty == "f32" || field.ty == "f64" {
-                match (meta.min, meta.max) {
-                    (Some(min), Some(max)) => {
-                        format!("{}.clamp({:?}, {:?})", field_access, min, max)
-                    }
-                    (Some(min), None) => format!("{}.max({:?})", field_access, min),
-                    (None, Some(max)) => format!("{}.min({:?})", field_access, max),
-                    _ => field_access,
-                }
-            } else if is_user_enum(&field.ty, enums) || is_user_struct(&field.ty, commands) {
-                format!("{}::from({})", field.ty, field_access)
-            } else if field.ty.starts_with("Vec<") {
-                format!("{}.into_iter().map(|v| v.into()).collect()", field_access)
-            } else if field.ty.starts_with("Option<") {
-                format!("{}.map(|v| v.into())", field_access)
-            } else {
-                field_access
-            };
-
+            let field_value = field_value_expr(field, field_access, enums, commands);
             out.push_str(&format!("            {}: {},\n", field.name, field_value));
         }
         out.push_str("        }\n    }\n}\n\n");
@@ -454,10 +546,26 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
     );
     out.push_str("    match cmd {\n");
     for cmd in filtered_commands.iter().filter(|c| c.is_algo) {
-        out.push_str(&format!(
-            "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
-            cmd.struct_name, cmd.struct_name
-        ));
+        match &cmd.feature {
+            Some(feature) => {
+                out.push_str(&format!("        #[cfg(feature = {feature:?})]\n"));
+                out.push_str(&format!(
+                    "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
+                    cmd.struct_name, cmd.struct_name
+                ));
+                out.push_str(&format!("        #[cfg(not(feature = {feature:?}))]\n"));
+                out.push_str(&format!(
+                    "        PipelineCommand::{}(_settings) => Err(InternalErrors::Generic(\"This build was compiled without the {feature} feature; {} is unavailable.\".into())),\n",
+                    cmd.struct_name, cmd.struct_name
+                ));
+            }
+            None => {
+                out.push_str(&format!(
+                    "        PipelineCommand::{}(settings) => Ok(Box::new(crate::algos::{}::from(settings))),\n",
+                    cmd.struct_name, cmd.struct_name
+                ));
+            }
+        }
     }
     out.push_str("    }\n}\n");
 
@@ -468,16 +576,50 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
 // All helpers unchanged from your original
 // ============================================================
 
-fn scan_directory(dir: &Path, commands: &mut Vec<CommandInfo>, enums: &mut Vec<EnumInfo>) {
+/// Scans `algos.rs` for top-level `#[cfg(feature = "...")] mod <name>;` declarations,
+/// returning a map from module name to the gating feature (if any). A module with
+/// no `#[cfg(feature = ...)]` attribute maps to `None`.
+fn parse_module_features(algos_rs_path: &Path) -> HashMap<String, Option<String>> {
+    let mut map = HashMap::new();
+    let Ok(content) = fs::read_to_string(algos_rs_path) else {
+        return map;
+    };
+    let Ok(file) = parse_file(&content) else {
+        return map;
+    };
+    for item in &file.items {
+        if let Item::Mod(item_mod) = item {
+            let name = item_mod.ident.to_string();
+            let feature = item_mod.attrs.iter().find_map(|attr| {
+                if !attr.path().is_ident("cfg") {
+                    return None;
+                }
+                let tokens = attr.meta.require_list().ok()?.tokens.to_string();
+                let start = tokens.find('"')?;
+                let end = tokens[start + 1..].find('"')?;
+                Some(tokens[start + 1..start + 1 + end].to_string())
+            });
+            map.insert(name, feature);
+        }
+    }
+    map
+}
+
+fn scan_directory(
+    dir: &Path,
+    commands: &mut Vec<CommandInfo>,
+    enums: &mut Vec<EnumInfo>,
+    feature: Option<&str>,
+) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                scan_directory(&path, commands, enums);
+                scan_directory(&path, commands, enums, feature);
             } else if path.extension().map_or(false, |ext| ext == "rs")
                 && path.file_name().map_or(false, |n| n != "mod.rs")
             {
-                extract_command_structs(&path, commands, enums);
+                extract_command_structs(&path, commands, enums, feature);
             }
         }
     }
@@ -498,6 +640,10 @@ struct FieldMetadata {
     summary: bool,
     optional: bool,
     visible: bool,
+    /// Comma-separated list of file extensions (no leading dot, e.g. "pt,pth")
+    /// for `PathBuf` fields rendered with a "Browse…" button. Empty/absent
+    /// means any file is selectable.
+    file_extensions: Option<String>,
 }
 
 impl Default for FieldMetadata {
@@ -515,6 +661,7 @@ impl Default for FieldMetadata {
             summary: false,
             optional: false,
             visible: true,
+            file_extensions: None,
         }
     }
 }
@@ -523,6 +670,16 @@ impl Default for FieldMetadata {
 struct StructMetadata {
     /// Explicit category override from #[cmdsmeta(category = "...")]
     category: Option<String>,
+    /// Explicit display name override from #[cmdsmeta(display_name = "...")],
+    /// shown in the command picker/header instead of the bare struct name.
+    display_name: Option<String>,
+    /// Explicit list of categories that may follow this command, from
+    /// #[cmdsmeta(next = "measure,classify")]. Overrides the category-derived
+    /// default successors (see `default_next_for_category`). Used to decouple a
+    /// command's display `category` from what is allowed to come after it — e.g.
+    /// StarDist/Cellpose live in `segment` for grouping but flow straight to
+    /// `measure`, while U-Net (also `segment`) flows to `object`.
+    next: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -533,7 +690,10 @@ struct CommandInfo {
     _source_file: String,
     doc_comments: Vec<String>,
     is_algo: bool,
-    _struct_meta: StructMetadata,
+    struct_meta: StructMetadata,
+    /// Cargo feature (in the `core` crate) that must be enabled for this command's
+    /// `crate::algos::<struct_name>` to exist, e.g. `Some("ai")` for U-Net/Cellpose/StarDist.
+    feature: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -550,20 +710,56 @@ struct EnumInfo {
     variants: Vec<EnumVariant>,
     source_file: String,
     doc_comments: Vec<String>,
+    feature: Option<String>,
+}
+
+impl EnumInfo {
+    /// A "rich" enum has at least one struct-like (named-field) variant, e.g.
+    /// `Scale { factor: f32 }`. These are generated as an internally-tagged
+    /// (`#[serde(tag = "type")]`) settings enum — a `oneOf` + `const` discriminator in the
+    /// JSON schema — so each variant only carries the fields it actually needs, instead of
+    /// every command sharing one flat struct with fields whose meaning shifts per variant.
+    ///
+    /// Plain/tuple enums (e.g. `Outliers(f32)`) keep the existing externally-tagged
+    /// representation, since internal tagging can't represent a tuple variant and switching
+    /// representation would break already-saved project files.
+    fn is_rich(&self) -> bool {
+        self.variants.iter().any(|v| v.is_rich())
+    }
+
+    fn settings_name(&self) -> String {
+        format!(
+            "{}{}Settings",
+            to_pascal_case(&self.source_file),
+            self.enum_name
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
 struct EnumVariant {
     name: String,
     data_type: Option<String>,
+    /// Named (struct-like) variant fields, e.g. `Scale { factor: f32 }`. Empty for
+    /// unit variants and for the single-unnamed-field tuple variants covered by
+    /// `data_type` (e.g. `Outliers(f32)`). A variant has at most one of `data_type`
+    /// / non-empty `named_fields` set.
+    named_fields: Vec<FieldInfo>,
     doc_comments: Vec<String>,
     display_name: Option<String>,
+}
+
+impl EnumVariant {
+    fn is_rich(&self) -> bool {
+        !self.named_fields.is_empty()
+    }
 }
 
 fn extract_command_structs(
     file_path: &Path,
     commands: &mut Vec<CommandInfo>,
     enums: &mut Vec<EnumInfo>,
+    feature: Option<&str>,
 ) {
     let content = match fs::read_to_string(file_path) {
         Ok(c) => c,
@@ -641,7 +837,8 @@ fn extract_command_structs(
                     _source_file: source_file.clone(),
                     doc_comments,
                     is_algo,
-                    _struct_meta: struct_meta,
+                    struct_meta,
+                    feature: feature.map(str::to_string),
                 });
             }
             Item::Enum(item_enum) => {
@@ -661,6 +858,7 @@ fn extract_command_structs(
                         variants,
                         source_file: source_file.clone(),
                         doc_comments,
+                        feature: feature.map(str::to_string),
                     });
                 }
             }
@@ -695,7 +893,7 @@ fn determine_category(file_path: &Path) -> String {
 fn normalize_category(raw: &str) -> String {
     match raw.to_ascii_lowercase().as_str() {
         "Preprocessing" | "preprocessing" => "Preprocessing".to_string(),
-        "segment" | "segmentation" => "Segmentation".to_string(),
+        "segment" | "segmentation" | "ai_segmentation" => "Segmentation".to_string(),
         "object" | "object_detection" | "detect" => "Object".to_string(),
         "measure" | "measurement" => "Measure".to_string(),
         "classify" | "classification" => "Classification".to_string(),
@@ -712,6 +910,19 @@ fn parse_struct_meta(attrs: &[syn::Attribute]) -> StructMetadata {
                 if m.path.is_ident("category") {
                     let value: syn::LitStr = m.value()?.parse()?;
                     meta.category = Some(value.value());
+                } else if m.path.is_ident("display_name") {
+                    let value: syn::LitStr = m.value()?.parse()?;
+                    meta.display_name = Some(value.value());
+                } else if m.path.is_ident("next") {
+                    let value: syn::LitStr = m.value()?.parse()?;
+                    meta.next = Some(
+                        value
+                            .value()
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect(),
+                    );
                 }
                 // Consume any value so the parser advances even for unknown keys
                 if m.input.peek(syn::Token![=]) {
@@ -804,15 +1015,32 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
                     });
                 }
             }
-            let data_type = match &v.fields {
+            let (data_type, named_fields) = match &v.fields {
                 syn::Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
-                    Some(type_to_string(&unnamed.unnamed[0].ty))
+                    (Some(type_to_string(&unnamed.unnamed[0].ty)), Vec::new())
                 }
-                _ => None,
+                syn::Fields::Named(named) => {
+                    let fields = named
+                        .named
+                        .iter()
+                        .filter_map(|f| {
+                            let ident = f.ident.as_ref()?;
+                            Some(FieldInfo {
+                                name: ident.to_string(),
+                                ty: type_to_string(&f.ty),
+                                doc_comments: extract_doc_comments(&f.attrs),
+                                metadata: parse_custom_meta(f),
+                            })
+                        })
+                        .collect();
+                    (None, fields)
+                }
+                _ => (None, Vec::new()),
             };
             EnumVariant {
                 name: v.ident.to_string(),
                 data_type,
+                named_fields,
                 doc_comments,
                 display_name,
             }
@@ -955,6 +1183,9 @@ fn parse_custom_meta(field: &syn::Field) -> FieldMetadata {
                             metadata.visible = b.value;
                         }
                     }
+                } else if meta.path.is_ident("file_extensions") {
+                    let value: syn::LitStr = meta.value()?.parse()?;
+                    metadata.file_extensions = Some(value.value());
                 }
                 Ok(())
             });
@@ -1088,128 +1319,63 @@ fn is_user_struct(ty: &str, all_commands: &[CommandInfo]) -> bool {
     all_commands.iter().any(|c| c.struct_name == ty)
 }
 
-fn field_to_param_def(
-    field: &FieldInfo,
+/// Escapes a doc-comment block into the single-line, backslash-escaped string literal body
+/// used for both a `ParameterDef.description` and a discriminant-variant's own field.
+fn escape_doc_comments(doc_comments: &[String]) -> String {
+    let lines: Vec<String> = doc_comments
+        .iter()
+        .map(|s| {
+            s.trim_start()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    let last_nonempty = lines
+        .iter()
+        .rposition(|s| !s.trim().is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    lines[..last_nonempty].join("\\n")
+}
+
+/// Joins a list of `Vec<ParameterDef>`-typed expressions into one such expression. Used
+/// wherever a variable number of sub-expressions (one per field, each already a `Vec`) need to
+/// collapse into the single `Vec<ParameterDef>` a command/group-item/variant must produce.
+fn concat_param_vecs(parts: &[String]) -> String {
+    if parts.is_empty() {
+        "vec![]".to_string()
+    } else if parts.len() == 1 {
+        parts[0].clone()
+    } else {
+        format!("[{}].concat()", parts.join(", "))
+    }
+}
+
+/// Builds a single `ParameterDef { ... }` literal for one leaf field (not Vec/Option/HashMap/
+/// array/nested-struct/rich-enum — the caller handles those before reaching this point).
+///
+/// `access` is the Rust expression that reads the field's current value — `"_s.kernel_size"`
+/// for an ordinary struct field, or just the bound identifier (e.g. `"factor"`) when called for
+/// a field bound out of a rich enum variant's pattern. Returns `None` for unrecognized types
+/// (e.g. `ImageAddress`), which are silently skipped, same as today.
+fn leaf_param_def_literal(
+    ty: &str,
+    meta: &FieldMetadata,
+    access: &str,
+    routing_name: &str,
+    display_label: &str,
+    description: &str,
     enums: &[EnumInfo],
-    commands: &[CommandInfo],
-    var: &str,
-    indent: &str,
-    name_prefix: &str,
-) -> Vec<String> {
-    let ty = &field.ty;
-    let name = &field.name;
-    let meta = &field.metadata;
-
-    if !meta.visible {
-        return vec![];
-    }
-
-    let routing_name = format!("{}{}", name_prefix, name);
-    // display_label: from cmdsmeta display_name, else title-case the bare field name
-    let display_label = meta
-        .display_name
-        .as_deref()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| snake_to_title_case(name));
-    // Full doc comment joined with \n, escaping chars that would break a string literal.
-    // Trailing blank lines are stripped. The first non-empty line is the summary;
-    // text after the first blank line is the extended description.
-    let description = {
-        let lines: Vec<String> = field
-            .doc_comments
-            .iter()
-            .map(|s| {
-                s.trim_start()
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .trim_end()
-                    .to_string()
-            })
-            .collect();
-        let last_nonempty = lines
-            .iter()
-            .rposition(|s| !s.trim().is_empty())
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        lines[..last_nonempty].join("\\n")
-    };
-
-    // Vec<UserStruct> → Group param
-    if ty.starts_with("Vec<") && ty.ends_with('>') {
-        let inner_ty = &ty[4..ty.len() - 1];
-        if let Some(inner_cmd) = commands.iter().find(|c| c.struct_name == inner_ty) {
-            let inner_indent = format!("{}    ", indent);
-            let mut inner_params = String::new();
-            for inner_field in &inner_cmd.fields {
-                for s in
-                    field_to_param_def(inner_field, enums, commands, "__item", &inner_indent, "")
-                {
-                    inner_params.push_str(&s);
-                }
-            }
-            return vec![format!(
-                "{indent}ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {var}.{name}.iter().map(|__item| vec![\n{inner_params}{inner_indent}]).collect() }},\n"
-            )];
-        }
-        // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker.
-        // options holds 33 flag strings ("1"/"0") for classes 0–32; the Slint
-        // popup reads options[i] instead of doing a string.contains() check.
-        if inner_ty == "ObjectClass" {
-            let value_expr = format!(
-                "{var}.{name}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
-            );
-            let flags_expr = format!(
-                "(0u32..33u32).map(|__idx| if {var}.{name}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
-            );
-            return vec![format!(
-                "{indent}ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }},\n"
-            )];
-        }
-        if inner_ty == "SegmentationClass" {
-            let value_expr = format!(
-                "{var}.{name}.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(\",\")"
-            );
-            let flags_expr = format!(
-                "(0u32..33u32).map(|__idx| if {var}.{name}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
-            );
-            return vec![format!(
-                "{indent}ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }},\n"
-            )];
-        }
-
-        return vec![]; // Vec<primitive> or Vec<unknown> - skip
-    }
-
-    // Other non-leaf types - skip
-    if ty.starts_with("Option<") || ty.starts_with("HashMap<") || ty.starts_with('[') {
-        return vec![];
-    }
-
-    // Plain nested UserStruct → flatten its fields inline
-    if let Some(nested_cmd) = commands.iter().find(|c| c.struct_name == *ty) {
-        let nested_var = format!("{}.{}", var, name);
-        let new_prefix = format!("{}{}", name_prefix, name);
-        let mut results = Vec::new();
-        for inner_field in &nested_cmd.fields {
-            results.extend(field_to_param_def(
-                inner_field,
-                enums,
-                commands,
-                &nested_var,
-                indent,
-                &format!("{}.", new_prefix),
-            ));
-        }
-        return results;
-    }
-
-    let (param_type, value_expr, options_expr, min, max) = match ty.as_str() {
+) -> Option<String> {
+    let (param_type, value_expr, options_expr, min, max) = match ty {
         "f32" | "f64" => {
             if meta.step.is_some() {
                 // step given → spinner regardless of min/max
                 (
                     "ParamType::Spinner",
-                    format!("format!(\"{{}}\", {var}.{name})"),
+                    format!("format!(\"{{}}\", {access})"),
                     "vec![]".to_string(),
                     meta.min.unwrap_or(0.0),
                     meta.max.unwrap_or(0.0),
@@ -1218,7 +1384,7 @@ fn field_to_param_def(
                 // min+max but no step → spinner
                 (
                     "ParamType::Spinner",
-                    format!("format!(\"{{}}\", {var}.{name})"),
+                    format!("format!(\"{{}}\", {access})"),
                     "vec![]".to_string(),
                     meta.min.unwrap(),
                     meta.max.unwrap(),
@@ -1226,7 +1392,7 @@ fn field_to_param_def(
             } else {
                 (
                     "ParamType::Number",
-                    format!("format!(\"{{}}\", {var}.{name})"),
+                    format!("format!(\"{{}}\", {access})"),
                     "vec![]".to_string(),
                     meta.min.unwrap_or(0.0),
                     meta.max.unwrap_or(0.0),
@@ -1237,9 +1403,9 @@ fn field_to_param_def(
             // min == max → read-only label; value is shown but not editable.
             if let (Some(min_v), Some(max_v)) = (meta.min, meta.max) {
                 if (min_v - max_v).abs() < f32::EPSILON {
-                    return vec![format!(
-                        "{indent}ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: format!(\"{{}}\", {var}.{name}), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }},\n"
-                    )];
+                    return Some(format!(
+                        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: format!(\"{{}}\", {access}), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+                    ));
                 }
             }
             if let (Some(step), Some(min_v), Some(max_v)) = (meta.step, meta.min, meta.max) {
@@ -1254,7 +1420,7 @@ fn field_to_param_def(
                             .collect();
                         (
                             "ParamType::Dropdown",
-                            format!("format!(\"{{}}\", {var}.{name})"),
+                            format!("format!(\"{{}}\", {access})"),
                             format!("vec![{}]", opts.join(", ")),
                             min_v,
                             max_v,
@@ -1262,7 +1428,7 @@ fn field_to_param_def(
                     } else {
                         (
                             "ParamType::Spinner",
-                            format!("format!(\"{{}}\", {var}.{name})"),
+                            format!("format!(\"{{}}\", {access})"),
                             "vec![]".to_string(),
                             min_v,
                             max_v,
@@ -1271,7 +1437,7 @@ fn field_to_param_def(
                 } else {
                     (
                         "ParamType::Number",
-                        format!("format!(\"{{}}\", {var}.{name})"),
+                        format!("format!(\"{{}}\", {access})"),
                         "vec![]".to_string(),
                         meta.min.unwrap_or(0.0),
                         meta.max.unwrap_or(0.0),
@@ -1281,7 +1447,7 @@ fn field_to_param_def(
                 // step without min/max → spinner with no clamping bounds
                 (
                     "ParamType::Spinner",
-                    format!("format!(\"{{}}\", {var}.{name})"),
+                    format!("format!(\"{{}}\", {access})"),
                     "vec![]".to_string(),
                     meta.min.unwrap_or(0.0),
                     meta.max.unwrap_or(0.0),
@@ -1289,7 +1455,7 @@ fn field_to_param_def(
             } else {
                 (
                     "ParamType::Number",
-                    format!("format!(\"{{}}\", {var}.{name})"),
+                    format!("format!(\"{{}}\", {access})"),
                     "vec![]".to_string(),
                     meta.min.unwrap_or(0.0),
                     meta.max.unwrap_or(0.0),
@@ -1298,29 +1464,51 @@ fn field_to_param_def(
         }
         "bool" => (
             "ParamType::Toggle",
-            format!("format!(\"{{}}\", {var}.{name})"),
+            format!("format!(\"{{}}\", {access})"),
             "vec![]".to_string(),
             0.0_f32,
             0.0_f32,
         ),
         "String" => (
             "ParamType::Text",
-            format!("{var}.{name}.clone()"),
+            format!("{access}.clone()"),
             "vec![]".to_string(),
             0.0_f32,
             0.0_f32,
         ),
-        "PathBuf" => (
-            "ParamType::Text",
-            format!("{var}.{name}.display().to_string()"),
-            "vec![]".to_string(),
-            0.0_f32,
-            0.0_f32,
-        ),
+        "PathBuf" => {
+            // The Slint browse button reads a single comma-separated string from
+            // `options[0]` (it splits on ',' itself), so emit one CSV element
+            // rather than one element per extension — otherwise only the first
+            // extension reaches the file dialog filter.
+            let extensions_expr = match &meta.file_extensions {
+                Some(exts) => {
+                    let csv = exts
+                        .split(',')
+                        .map(|e| e.trim())
+                        .filter(|e| !e.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    if csv.is_empty() {
+                        "vec![]".to_string()
+                    } else {
+                        format!("vec![\"{csv}\".to_string()]")
+                    }
+                }
+                None => "vec![]".to_string(),
+            };
+            (
+                "ParamType::FilePath",
+                format!("{access}.display().to_string()"),
+                extensions_expr,
+                0.0_f32,
+                0.0_f32,
+            )
+        }
         "ObjectClass" => (
             "ParamType::ObjClass",
             format!(
-                "match {var}.{name}.to_u32() {{ Some(v) => format!(\"{{}}\", v), None => \"-1\".to_string() }}"
+                "match {access}.to_u32() {{ Some(v) => format!(\"{{}}\", v), None => \"-1\".to_string() }}"
             ),
             "vec![]".to_string(),
             0.0_f32,
@@ -1328,7 +1516,7 @@ fn field_to_param_def(
         ),
         "SegmentationClass" => (
             "ParamType::SegClass",
-            format!("format!(\"{{}}\", {var}.{name}.as_u32())"),
+            format!("format!(\"{{}}\", {access}.as_u32())"),
             "vec![]".to_string(),
             0.0_f32,
             0.0_f32,
@@ -1336,7 +1524,7 @@ fn field_to_param_def(
         "PixelUnits" => (
             "ParamType::PixelUnits",
             format!(
-                "match {var}.{name} {{ PixelUnits::Bit => \"bit\".to_string(), PixelUnits::Percent => \"%\".to_string(), PixelUnits::Relative => \"rel\".to_string() }}"
+                "match {access} {{ PixelUnits::Bit => \"bit\".to_string(), PixelUnits::Percent => \"%\".to_string(), PixelUnits::Relative => \"rel\".to_string() }}"
             ),
             "vec![\"bit\".to_string(), \"%\".to_string(), \"rel\".to_string()]".to_string(),
             0.0_f32,
@@ -1345,17 +1533,18 @@ fn field_to_param_def(
         "SizeUnits" => (
             "ParamType::SizeUnits",
             format!(
-                "match {var}.{name} {{ SizeUnits::NanoMeter => \"nm\".to_string(), SizeUnits::Pixels => \"px\".to_string() }}"
+                "match {access} {{ SizeUnits::NanoMeter => \"nm\".to_string(), SizeUnits::Pixels => \"px\".to_string() }}"
             ),
             "vec![\"nm\".to_string(), \"px\".to_string()]".to_string(),
             0.0_f32,
             0.0_f32,
         ),
         _ => {
-            if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty.as_str()) {
-                let settings_name =
-                    format!("{}{}Settings", to_pascal_case(&enum_info.source_file), ty);
-                // Build (variant_name, display_label) pairs
+            if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty) {
+                // A rich (named-field) enum's own fields are exposed by the caller as
+                // additional sibling ParameterDefs, conditional on the active variant — here
+                // we only render the discriminant dropdown itself.
+                let settings_name = enum_info.settings_name();
                 let display_map: Vec<(String, String)> = enum_info
                     .variants
                     .iter()
@@ -1381,8 +1570,11 @@ fn field_to_param_def(
                             .as_deref()
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| pascal_to_title_case(&v.name));
-                        // Data variants (e.g. Outliers(f32)) need a wildcard inner pattern
-                        let pattern = if v.data_type.is_some() {
+                        // Data variants (e.g. Outliers(f32) or a rich Scale { factor: f32 })
+                        // need a wildcard inner pattern.
+                        let pattern = if v.is_rich() {
+                            format!("{settings_name}::{} {{ .. }}", v.name)
+                        } else if v.data_type.is_some() {
                             format!("{settings_name}::{}(_)", v.name)
                         } else {
                             format!("{settings_name}::{}", v.name)
@@ -1391,7 +1583,7 @@ fn field_to_param_def(
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                let value_expr = format!("match {var}.{name} {{ {match_arms} }}");
+                let value_expr = format!("match {access} {{ {match_arms} }}");
                 (
                     "ParamType::Dropdown",
                     value_expr,
@@ -1401,7 +1593,7 @@ fn field_to_param_def(
                 )
             } else {
                 // Unknown type (ImageAddress, etc.) - skip
-                return vec![];
+                return None;
             }
         }
     };
@@ -1412,9 +1604,185 @@ fn field_to_param_def(
         1.0_f32
     };
 
-    vec![format!(
-        "{indent}ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![] }},\n",
-    )]
+    Some(format!(
+        "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: {param_type}, options: {options_expr}, min: {min:.1}f32, max: {max:.1}f32, step: {step:.4}f32, groups: vec![] }}",
+    ))
+}
+
+/// Builds the additional ParameterDefs contributed by a rich enum field's *currently active*
+/// variant — i.e. the part of "conditional fields" that actually varies the field list, not
+/// just the value of a fixed one. Returns a single `match &{access} { ... }` expression of type
+/// `Vec<ParameterDef>`, one arm per variant, so switching the discriminant naturally switches
+/// which sibling fields exist.
+fn rich_enum_variant_param_defs(
+    enum_info: &EnumInfo,
+    access: &str,
+    routing_prefix: &str,
+    enums: &[EnumInfo],
+) -> String {
+    let settings_name = enum_info.settings_name();
+    let arms: Vec<String> = enum_info
+        .variants
+        .iter()
+        .map(|v| {
+            if !v.is_rich() {
+                let pattern = if v.data_type.is_some() {
+                    format!("{settings_name}::{}(_)", v.name)
+                } else {
+                    format!("{settings_name}::{}", v.name)
+                };
+                return format!("{pattern} => vec![]");
+            }
+            let field_names: Vec<&str> =
+                v.named_fields.iter().map(|f| f.name.as_str()).collect();
+            let pattern = format!("{settings_name}::{} {{ {} }}", v.name, field_names.join(", "));
+            let field_literals: Vec<String> = v
+                .named_fields
+                .iter()
+                .filter(|f| f.metadata.visible)
+                .filter_map(|f| {
+                    let routing_name = format!("{routing_prefix}.{}", f.name);
+                    let display_label = f
+                        .metadata
+                        .display_name
+                        .as_deref()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| snake_to_title_case(&f.name));
+                    let description = escape_doc_comments(&f.doc_comments);
+                    leaf_param_def_literal(
+                        &f.ty,
+                        &f.metadata,
+                        &f.name,
+                        &routing_name,
+                        &display_label,
+                        &description,
+                        enums,
+                    )
+                })
+                .collect();
+            format!("{pattern} => vec![{}]", field_literals.join(", "))
+        })
+        .collect();
+    format!("match &{access} {{ {} }}", arms.join(", "))
+}
+
+/// Returns a list of `Vec<ParameterDef>`-typed expressions contributing this field's
+/// parameter(s); the caller (one field list per command, or per group item) joins them with
+/// [`concat_param_vecs`]. A rich-enum field contributes two expressions: the discriminant
+/// dropdown, and a `match` over the active variant for its sibling fields — which is what makes
+/// the visible field set actually change when the user switches the dropdown, rather than just
+/// changing a label's value.
+fn field_to_param_def(
+    field: &FieldInfo,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+    var: &str,
+    name_prefix: &str,
+) -> Vec<String> {
+    let ty = &field.ty;
+    let name = &field.name;
+    let meta = &field.metadata;
+
+    if !meta.visible {
+        return vec![];
+    }
+
+    let routing_name = format!("{}{}", name_prefix, name);
+    let display_label = meta
+        .display_name
+        .as_deref()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| snake_to_title_case(name));
+    let description = escape_doc_comments(&field.doc_comments);
+    let access = format!("{var}.{name}");
+
+    // Vec<UserStruct> → Group param
+    if ty.starts_with("Vec<") && ty.ends_with('>') {
+        let inner_ty = &ty[4..ty.len() - 1];
+        if let Some(inner_cmd) = commands.iter().find(|c| c.struct_name == inner_ty) {
+            let inner_parts: Vec<String> = inner_cmd
+                .fields
+                .iter()
+                .flat_map(|inner_field| {
+                    field_to_param_def(inner_field, enums, commands, "__item", "")
+                })
+                .collect();
+            let inner_expr = concat_param_vecs(&inner_parts);
+            return vec![format!(
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: {access}.iter().map(|__item| {inner_expr}).collect() }}]"
+            )];
+        }
+        // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker.
+        // options holds 33 flag strings ("1"/"0") for classes 0–32; the Slint
+        // popup reads options[i] instead of doing a string.contains() check.
+        if inner_ty == "ObjectClass" {
+            let value_expr = format!(
+                "{access}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
+            );
+            let flags_expr = format!(
+                "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
+            );
+            return vec![format!(
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}]"
+            )];
+        }
+        if inner_ty == "SegmentationClass" {
+            let value_expr = format!(
+                "{access}.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(\",\")"
+            );
+            let flags_expr = format!(
+                "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
+            );
+            return vec![format!(
+                "vec![ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}]"
+            )];
+        }
+
+        return vec![]; // Vec<primitive> or Vec<unknown> - skip
+    }
+
+    // Other non-leaf types - skip
+    if ty.starts_with("Option<") || ty.starts_with("HashMap<") || ty.starts_with('[') {
+        return vec![];
+    }
+
+    // Plain nested UserStruct → flatten its fields inline
+    if let Some(nested_cmd) = commands.iter().find(|c| c.struct_name == *ty) {
+        let new_prefix = format!("{}{}.", name_prefix, name);
+        return nested_cmd
+            .fields
+            .iter()
+            .flat_map(|inner_field| {
+                field_to_param_def(inner_field, enums, commands, &access, &new_prefix)
+            })
+            .collect();
+    }
+
+    // Rich enum (e.g. `Scale { factor: f32 }`) → discriminant dropdown, PLUS a second
+    // expression that switches in the active variant's own fields. This is what makes the
+    // *set* of visible parameters change with the dropdown, not just one field's value.
+    if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty.as_str()) {
+        if enum_info.is_rich() {
+            let dropdown = leaf_param_def_literal(
+                ty,
+                meta,
+                &access,
+                &routing_name,
+                &display_label,
+                &description,
+                enums,
+            )
+            .expect("rich enum dropdown literal is always Some");
+            let variant_fields =
+                rich_enum_variant_param_defs(enum_info, &access, &routing_name, enums);
+            return vec![format!("vec![{dropdown}]"), variant_fields];
+        }
+    }
+
+    match leaf_param_def_literal(ty, meta, &access, &routing_name, &display_label, &description, enums) {
+        Some(literal) => vec![format!("vec![{literal}]")],
+        None => vec![],
+    }
 }
 
 /// Returns (label, value_expr) pairs for fields with `summary = true`.
@@ -1467,8 +1835,7 @@ fn collect_summary_exprs(
         "String" => format!("{var}.{name}.clone()"),
         _ => {
             if let Some(enum_info) = enums.iter().find(|e| e.enum_name == *ty) {
-                let settings_name =
-                    format!("{}{}Settings", to_pascal_case(&enum_info.source_file), ty);
+                let settings_name = enum_info.settings_name();
                 let match_arms: String = enum_info
                     .variants
                     .iter()
@@ -1478,7 +1845,12 @@ fn collect_summary_exprs(
                             .as_deref()
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| pascal_to_title_case(&v.name));
-                        let pattern = if v.data_type.is_some() {
+                        // Rich (named-field) variants only ever show the variant's own name
+                        // here — the per-field values would need their own summary slots,
+                        // which collect_summary_exprs doesn't support yet.
+                        let pattern = if v.is_rich() {
+                            format!("{settings_name}::{} {{ .. }}", v.name)
+                        } else if v.data_type.is_some() {
                             format!("{settings_name}::{}(_)", v.name)
                         } else {
                             format!("{settings_name}::{}", v.name)
@@ -1606,60 +1978,74 @@ fn field_to_apply_change(
         return results;
     }
 
-    let branch = match ty.as_str() {
-        "f32" => format!(
-            "if param_name == \"{display_name}\" {{ if let Ok(v) = value.parse::<f32>() {{ {var}.{name} = v; }} }}"
-        ),
-        "f64" => format!(
-            "if param_name == \"{display_name}\" {{ if let Ok(v) = value.parse::<f64>() {{ {var}.{name} = v; }} }}"
-        ),
-        "usize" => format!(
-            "if param_name == \"{display_name}\" {{ if let Ok(v) = value.parse::<usize>() {{ {var}.{name} = v; }} }}"
-        ),
-        "u32" => format!(
-            "if param_name == \"{display_name}\" {{ if let Ok(v) = value.parse::<u32>() {{ {var}.{name} = v; }} }}"
-        ),
-        "u64" => format!(
-            "if param_name == \"{display_name}\" {{ if let Ok(v) = value.parse::<u64>() {{ {var}.{name} = v; }} }}"
-        ),
-        "i32" => format!(
-            "if param_name == \"{display_name}\" {{ if let Ok(v) = value.parse::<i32>() {{ {var}.{name} = v; }} }}"
-        ),
-        "i64" => format!(
-            "if param_name == \"{display_name}\" {{ if let Ok(v) = value.parse::<i64>() {{ {var}.{name} = v; }} }}"
-        ),
-        "bool" => {
-            format!("if param_name == \"{display_name}\" {{ {var}.{name} = value == \"true\"; }}")
+    // Rich enum (e.g. `Scale { factor: f32 }`) → setting the field itself picks a variant
+    // (constructed with its own field defaults); setting "{field}.{inner}" mutates one field
+    // of whichever variant currently happens to be active.
+    if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty.as_str()) {
+        if enum_info.is_rich() {
+            let access = format!("{var}.{name}");
+            return vec![rich_enum_apply_change(
+                enum_info,
+                &access,
+                &display_name,
+                enums,
+                commands,
+            )];
         }
-        "String" => {
-            format!("if param_name == \"{display_name}\" {{ {var}.{name} = value.to_string(); }}")
-        }
-        "PathBuf" => format!(
-            "if param_name == \"{display_name}\" {{ {var}.{name} = std::path::PathBuf::from(value); }}"
-        ),
+    }
+
+    let access = format!("{var}.{name}");
+    match leaf_apply_change_branch(ty, &access, &display_name, enums) {
+        Some(branch) => vec![branch],
+        None => vec![],
+    }
+}
+
+/// Builds the `if param_name == "{condition}" { ... }` body for a single leaf field, given
+/// the Rust expression to assign into (`assign`, e.g. `"_s.kernel_size"` for a struct field, or
+/// `"*field1"` for a field bound out of a rich enum variant via `ref mut`). Shared between a
+/// command struct's top-level fields and a rich enum variant's own fields.
+fn leaf_apply_change_branch(
+    ty: &str,
+    assign: &str,
+    condition: &str,
+    enums: &[EnumInfo],
+) -> Option<String> {
+    let body = match ty {
+        "f32" => format!("if let Ok(v) = value.parse::<f32>() {{ {assign} = v; }}"),
+        "f64" => format!("if let Ok(v) = value.parse::<f64>() {{ {assign} = v; }}"),
+        "usize" => format!("if let Ok(v) = value.parse::<usize>() {{ {assign} = v; }}"),
+        "u32" => format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = v; }}"),
+        "u64" => format!("if let Ok(v) = value.parse::<u64>() {{ {assign} = v; }}"),
+        "i32" => format!("if let Ok(v) = value.parse::<i32>() {{ {assign} = v; }}"),
+        "i64" => format!("if let Ok(v) = value.parse::<i64>() {{ {assign} = v; }}"),
+        "bool" => format!("{assign} = value == \"true\";"),
+        "String" => format!("{assign} = value.to_string();"),
+        "PathBuf" => format!("{assign} = std::path::PathBuf::from(value);"),
         "ObjectClass" => format!(
-            "if param_name == \"{display_name}\" {{ \
-                if value == \"-1\" {{ {var}.{name} = ObjectClass::Unset; }} \
-                else if let Ok(v) = value.parse::<u32>() {{ {var}.{name} = ObjectClass::Valid(v); }} \
-            }}"
+            "if value == \"-1\" {{ {assign} = ObjectClass::Unset; }} \
+             else if let Ok(v) = value.parse::<u32>() {{ {assign} = ObjectClass::Valid(v); }}"
         ),
-        "SegmentationClass" => format!(
-            "if param_name == \"{display_name}\" {{ if let Ok(v) = value.parse::<u32>() {{ {var}.{name} = SegmentationClass(v); }} }}"
-        ),
+        "SegmentationClass" => {
+            format!("if let Ok(v) = value.parse::<u32>() {{ {assign} = SegmentationClass(v); }}")
+        }
         "PixelUnits" => format!(
-            "if param_name == \"{display_name}\" {{ {var}.{name} = match value {{ \"bit\" => PixelUnits::Bit, \"%\" => PixelUnits::Percent, _ => PixelUnits::Relative }}; }}"
+            "{assign} = match value {{ \"bit\" => PixelUnits::Bit, \"%\" => PixelUnits::Percent, _ => PixelUnits::Relative }};"
         ),
         "SizeUnits" => format!(
-            "if param_name == \"{display_name}\" {{ {var}.{name} = match value {{ \"nm\" => SizeUnits::NanoMeter, _ => SizeUnits::Pixels }}; }}"
+            "{assign} = match value {{ \"nm\" => SizeUnits::NanoMeter, _ => SizeUnits::Pixels }};"
         ),
         _ => {
-            if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty.as_str()) {
-                let settings_name =
-                    format!("{}{}Settings", to_pascal_case(&enum_info.source_file), ty);
+            if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty) {
+                let settings_name = enum_info.settings_name();
+                // Only plain unit variants can be picked by label here; data-carrying
+                // variants (tuple or rich) need their own fields supplied, which a flat
+                // `param_name == condition` set can't do — see `rich_enum_apply_change` for
+                // the rich case.
                 let arms: String = enum_info
                     .variants
                     .iter()
-                    .filter(|v| v.data_type.is_none())
+                    .filter(|v| v.data_type.is_none() && !v.is_rich())
                     .map(|v| {
                         let label = v
                             .display_name
@@ -1669,16 +2055,99 @@ fn field_to_apply_change(
                         format!("\"{}\" => {}::{}, ", label, settings_name, v.name)
                     })
                     .collect();
-                format!(
-                    "if param_name == \"{display_name}\" {{ {var}.{name} = match value {{ {arms}_ => {var}.{name}.clone() }}; }}"
-                )
+                format!("{assign} = match value {{ {arms}_ => {assign}.clone() }};")
             } else {
-                return vec![];
+                return None;
             }
         }
     };
+    Some(format!("if param_name == \"{condition}\" {{ {body} }}"))
+}
 
-    vec![branch]
+/// Builds the apply_param_change branches for a rich enum field: one to switch the active
+/// variant (constructing it with its own `#[cmdsmeta(default = ...)]` field values), and one
+/// per variant to mutate a single inner field — keyed by `"{field}.{inner_field}"` — without
+/// disturbing which variant is active.
+fn rich_enum_apply_change(
+    enum_info: &EnumInfo,
+    access: &str,
+    display_name: &str,
+    enums: &[EnumInfo],
+    commands: &[CommandInfo],
+) -> String {
+    let settings_name = enum_info.settings_name();
+
+    let switch_arms: String = enum_info
+        .variants
+        .iter()
+        .map(|v| {
+            let label = v
+                .display_name
+                .as_deref()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| pascal_to_title_case(&v.name));
+            let construct = if v.is_rich() {
+                let fields: String = v
+                    .named_fields
+                    .iter()
+                    .map(|f| format!("{}: {}, ", f.name, field_default_expr(f, enums, commands)))
+                    .collect();
+                format!("{settings_name}::{} {{ {fields} }}", v.name)
+            } else if v.data_type.is_some() {
+                // Switching onto a tuple variant from the discriminant alone has no value to
+                // supply; keep whatever was already there rather than picking an arbitrary one.
+                format!("{access}.clone()")
+            } else {
+                format!("{settings_name}::{}", v.name)
+            };
+            format!("\"{label}\" => {construct}, ")
+        })
+        .collect();
+    let switch_branch = format!(
+        "if param_name == \"{display_name}\" {{ {access} = match value {{ {switch_arms}_ => {access}.clone() }}; }}"
+    );
+
+    let mut nested_branches = String::new();
+    for v in &enum_info.variants {
+        if !v.is_rich() {
+            continue;
+        }
+        let bindings: String = v
+            .named_fields
+            .iter()
+            .map(|f| format!("ref mut {}, ", f.name))
+            .collect();
+        let inner: Vec<String> = v
+            .named_fields
+            .iter()
+            .filter(|f| f.metadata.visible)
+            .filter_map(|f| {
+                let condition = format!("{display_name}.{}", f.name);
+                let assign = format!("*{}", f.name);
+                leaf_apply_change_branch(&f.ty, &assign, &condition, enums)
+            })
+            .collect();
+        if inner.is_empty() {
+            continue;
+        }
+        nested_branches.push_str(&format!(
+            "if let {settings_name}::{} {{ {bindings} }} = {access} {{ {} }} ",
+            v.name,
+            inner.join(" ")
+        ));
+    }
+
+    format!("{switch_branch} {nested_branches}")
+}
+
+/// The name shown to the user for a command: the `#[cmdsmeta(display_name = "...")]`
+/// override if present and non-empty, otherwise the bare struct name.
+fn command_display_name(cmd: &CommandInfo) -> &str {
+    cmd.struct_meta
+        .display_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&cmd.struct_name)
 }
 
 fn category_to_enum_variant(category: &str) -> &str {
@@ -1689,6 +2158,26 @@ fn category_to_enum_variant(category: &str) -> &str {
         "Measure" => "Measure",
         "Classification" => "Classify",
         _ => "Preprocess",
+    }
+}
+
+/// Default successor categories for a command that does not declare an explicit
+/// `#[cmdsmeta(next = "...")]`. Mirrors the linear pipeline order
+/// (Preprocess → Segment → Object → Measure → Classify) but lets a stage repeat
+/// (e.g. Object → Object so Watershed can follow ConnectedComponents).
+///
+/// Ordering is significant: the **first** entry is the *suggested* next category
+/// (the command picker pre-selects its chip), the rest are merely allowed. So the
+/// default after an Object step suggests Measure but still permits another Object;
+/// ConnectedComponents overrides this to suggest Object (Watershed) first.
+fn default_next_for_category(variant: &str) -> &'static [&'static str] {
+    match variant {
+        "Preprocess" => &["Segment", "Preprocess"],
+        "Segment" => &["Object"],
+        "Object" => &["Measure", "Object"],
+        "Measure" => &["Classify", "Measure"],
+        "Classify" => &["Classify"],
+        _ => &["Segment"],
     }
 }
 
@@ -1802,9 +2291,9 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
                 .join("\\n")
         };
         let cat = category_to_enum_variant(&cmd.category);
+        let display_name = command_display_name(cmd);
         out.push_str(&format!(
-            "        CommandMeta {{ id: {i}, name: \"{}\", category: CommandCategory::{cat}, summary: \"{summary}\", description: \"{description}\" }},\n",
-            cmd.struct_name
+            "        CommandMeta {{ id: {i}, name: \"{display_name}\", category: CommandCategory::{cat}, summary: \"{summary}\", description: \"{description}\" }},\n",
         ));
     }
     out.push_str("    ]\n}\n\n");
@@ -1829,7 +2318,8 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     for cmd in &algo_commands {
         out.push_str(&format!(
             "            Self::{}(_) => \"{}\",\n",
-            cmd.struct_name, cmd.struct_name
+            cmd.struct_name,
+            command_display_name(cmd)
         ));
     }
     out.push_str("        }\n    }\n\n");
@@ -1846,22 +2336,50 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     }
     out.push_str("        }\n    }\n\n");
 
+    // allowed_next(): which categories may follow this specific command in a
+    // pipeline. Defaults to the category's natural successors, but a command can
+    // override this via #[cmdsmeta(next = "...")] to decouple display grouping
+    // from flow — e.g. StarDist/Cellpose are shown under `segment` yet flow
+    // straight to `measure`, while U-Net (also `segment`) flows to `object`.
+    out.push_str(
+        "    /// Categories that may be inserted immediately after this command.\n",
+    );
+    out.push_str("    pub fn allowed_next(&self) -> &'static [CommandCategory] {\n");
+    out.push_str("        match self {\n");
+    for cmd in &algo_commands {
+        let variant = category_to_enum_variant(&cmd.category);
+        let next_variants: Vec<String> = match &cmd.struct_meta.next {
+            Some(list) => list
+                .iter()
+                .map(|c| format!("CommandCategory::{}", category_to_enum_variant(&normalize_category(c))))
+                .collect(),
+            None => default_next_for_category(variant)
+                .iter()
+                .map(|c| format!("CommandCategory::{c}"))
+                .collect(),
+        };
+        out.push_str(&format!(
+            "            Self::{}(_) => &[{}],\n",
+            cmd.struct_name,
+            next_variants.join(", ")
+        ));
+    }
+    out.push_str("        }\n    }\n\n");
+
     // to_parameters()
     out.push_str("    pub fn to_parameters(&self) -> Vec<ParameterDef> {\n");
     out.push_str("        match self {\n");
     for cmd in &algo_commands {
+        let parts: Vec<String> = cmd
+            .fields
+            .iter()
+            .flat_map(|field| field_to_param_def(field, enums, commands, "_s", ""))
+            .collect();
         out.push_str(&format!(
-            "            Self::{}(_s) => vec![\n",
-            cmd.struct_name
+            "            Self::{}(_s) => {},\n",
+            cmd.struct_name,
+            concat_param_vecs(&parts)
         ));
-        for field in &cmd.fields {
-            for param_str in
-                field_to_param_def(field, enums, commands, "_s", "                ", "")
-            {
-                out.push_str(&param_str);
-            }
-        }
-        out.push_str("            ],\n");
     }
     out.push_str("        }\n    }\n\n");
 

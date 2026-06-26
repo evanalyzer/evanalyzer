@@ -7,11 +7,22 @@ import {
     ResultsState,
     ResultsViewMode,
     ResultsGroupBy,
+    ResultsChartKind,
     ResultsColumnDef,
     ResultsRow,
     FilterItem,
 } from "results_table.slint";
-export { ResultsState, ResultsViewMode, ResultsGroupBy, ResultsColumnDef, ResultsRow, FilterItem } from "results_table.slint";
+import { ResultsChart } from "results_chart.slint";
+import { FrameStepper } from "frame_stepper.slint";
+export {
+    ResultsState,
+    ResultsViewMode,
+    ResultsGroupBy,
+    ResultsChartKind,
+    ResultsColumnDef,
+    ResultsRow,
+    FilterItem,
+}from "results_table.slint";
 
 
 // -- Radio-style option row (used in the group-by popup) ----------------------
@@ -184,7 +195,10 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- (Select All) --------------------------------------
                         col-sel-all-ta := TouchArea {
@@ -241,7 +255,10 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- Item list -----------------------------------------
                         ScrollView {
@@ -251,52 +268,110 @@ component ResultsToolbar inherits Rectangle {
                                 padding: 2px;
                                 spacing: 0px;
 
-                                for item in (col-vis-btn.col-popup-open ? ResultsState.column_popup : []): col-item-ta := TouchArea {
-                                    height: 26px;
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        ResultsState.column_label_toggled(item.label);
-                                    }
+                                for item in (col-vis-btn.col-popup-open ? ResultsState.column_popup : []): VerticalLayout {
+                                    spacing: 0px;
 
-                                    Rectangle {
-                                        background: col-item-ta.has-hover ? Theme.raised : transparent;
-                                        animate background { duration: 80ms; }
+                                    // -- Section header (e.g. "Intensity") — click toggles every
+                                    // column in this section at once, so the user doesn't have to
+                                    // untick each channel column one by one.
+                                    if item.group_header: group-header-ta := TouchArea {
+                                        height: 24px;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            ResultsState.column_group_toggle(item.group);
+                                        }
 
-                                        HorizontalLayout {
-                                            padding-left: 8px;
-                                            padding-right: 6px;
-                                            spacing: 7px;
-                                            alignment: start;
+                                        Rectangle {
+                                            background: group-header-ta.has-hover ? Theme.raised : Theme.bg;
+                                            animate background { duration: 80ms; }
 
-                                            VerticalLayout {
-                                                alignment: center;
-                                                Rectangle {
-                                                    width: 13px;
-                                                    height: 13px;
-                                                    border-radius: 2px;
-                                                    border-width: 1.5px;
-                                                    border-color: item.checked ? Theme.accent : Theme.border;
-                                                    background: item.checked ? Theme.accent : transparent;
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 6px;
+                                                spacing: 7px;
+                                                alignment: start;
 
-                                                    if item.checked: Image {
-                                                        source: @image-url("../icons/regular-black/check.svg");
-                                                        width: 9px;
-                                                        height: 9px;
-                                                        x: (parent.width - self.width) / 2;
-                                                        y: (parent.height - self.height) / 2;
-                                                        colorize: white;
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    Rectangle {
+                                                        width: 13px;
+                                                        height: 13px;
+                                                        border-radius: 2px;
+                                                        border-width: 1.5px;
+                                                        border-color: item.group_all_checked ? Theme.accent : Theme.border;
+                                                        background: item.group_all_checked ? Theme.accent : transparent;
+
+                                                        if item.group_all_checked: Image {
+                                                            source: @image-url("../icons/regular-black/check.svg");
+                                                            width: 9px;
+                                                            height: 9px;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                            colorize: white;
+                                                        }
                                                     }
                                                 }
-                                            }
 
-                                            Text {
-                                                text: item.label;
-                                                font-size: 11px;
-                                                font-family: Theme.font-mono;
-                                                color: item.checked ? Theme.text-dim : Theme.text-mute;
-                                                vertical-alignment: center;
-                                                overflow: elide;
-                                                horizontal-stretch: 1;
+                                                Text {
+                                                    text: item.group;
+                                                    font-size: 10px;
+                                                    font-family: Theme.font-sans;
+                                                    font-weight: 700;
+                                                    color: Theme.text-mute;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    col-item-ta := TouchArea {
+                                        height: 26px;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            ResultsState.column_label_toggled(item.label);
+                                        }
+
+                                        Rectangle {
+                                            background: col-item-ta.has-hover ? Theme.raised : transparent;
+                                            animate background { duration: 80ms; }
+
+                                            HorizontalLayout {
+                                                padding-left: item.group != "" ? 18px : 8px;
+                                                padding-right: 6px;
+                                                spacing: 7px;
+                                                alignment: start;
+
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    Rectangle {
+                                                        width: 13px;
+                                                        height: 13px;
+                                                        border-radius: 2px;
+                                                        border-width: 1.5px;
+                                                        border-color: item.checked ? Theme.accent : Theme.border;
+                                                        background: item.checked ? Theme.accent : transparent;
+
+                                                        if item.checked: Image {
+                                                            source: @image-url("../icons/regular-black/check.svg");
+                                                            width: 9px;
+                                                            height: 9px;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                            colorize: white;
+                                                        }
+                                                    }
+                                                }
+
+                                                Text {
+                                                    text: item.label;
+                                                    font-size: 11px;
+                                                    font-family: Theme.font-mono;
+                                                    color: item.checked ? Theme.text-dim : Theme.text-mute;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                    horizontal-stretch: 1;
+                                                }
                                             }
                                         }
                                     }
@@ -304,7 +379,10 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- Done button ---------------------------------------
                         col-done-ta := TouchArea {
@@ -355,7 +433,7 @@ component ResultsToolbar inherits Rectangle {
                 x: 0px;
                 y: group-btn.height + 2px;
                 width: 250px;
-                height: 414px;
+                height: 467px;
                 close-policy: no-auto-close;
 
                 Rectangle {
@@ -385,27 +463,41 @@ component ResultsToolbar inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         GroupOptionRow {
                             label: "None";
                             selected: ResultsState.group_by == ResultsGroupBy.none;
                             clicked => { ResultsState.group_by = ResultsGroupBy.none; }
                         }
+
                         GroupOptionRow {
                             label: "Image name";
                             selected: ResultsState.group_by == ResultsGroupBy.image;
                             clicked => { ResultsState.group_by = ResultsGroupBy.image; }
                         }
+
                         GroupOptionRow {
                             label: "Folder name";
                             selected: ResultsState.group_by == ResultsGroupBy.folder;
                             clicked => { ResultsState.group_by = ResultsGroupBy.folder; }
                         }
+
                         GroupOptionRow {
                             label: "Regex on image name";
                             selected: ResultsState.group_by == ResultsGroupBy.regex;
                             clicked => { ResultsState.group_by = ResultsGroupBy.regex; }
+                        }
+
+                        GroupOptionRow {
+                            label: "Also group by class";
+                            checkbox: true;
+                            selected: ResultsState.group_by_class;
+                            clicked => { ResultsState.group_by_class = !ResultsState.group_by_class; }
                         }
 
                         // -- Regex pattern input ---------------------------
@@ -474,7 +566,11 @@ component ResultsToolbar inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         HorizontalLayout {
                             padding: 4px;
@@ -487,12 +583,14 @@ component ResultsToolbar inherits Rectangle {
                                     selected: ResultsState.group_agg_min;
                                     clicked => { ResultsState.group_agg_min = !ResultsState.group_agg_min; }
                                 }
+
                                 GroupOptionRow {
                                     label: "Max";
                                     checkbox: true;
                                     selected: ResultsState.group_agg_max;
                                     clicked => { ResultsState.group_agg_max = !ResultsState.group_agg_max; }
                                 }
+
                                 GroupOptionRow {
                                     label: "Average";
                                     checkbox: true;
@@ -500,6 +598,7 @@ component ResultsToolbar inherits Rectangle {
                                     clicked => { ResultsState.group_agg_avg = !ResultsState.group_agg_avg; }
                                 }
                             }
+
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 GroupOptionRow {
@@ -508,12 +607,14 @@ component ResultsToolbar inherits Rectangle {
                                     selected: ResultsState.group_agg_median;
                                     clicked => { ResultsState.group_agg_median = !ResultsState.group_agg_median; }
                                 }
+
                                 GroupOptionRow {
                                     label: "Std. dev.";
                                     checkbox: true;
                                     selected: ResultsState.group_agg_stdev;
                                     clicked => { ResultsState.group_agg_stdev = !ResultsState.group_agg_stdev; }
                                 }
+
                                 GroupOptionRow {
                                     label: "Sum";
                                     checkbox: true;
@@ -523,7 +624,44 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle { height: 1px; background: Theme.border-soft; }
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        // -- "Split" section header ------------------------
+                        Rectangle {
+                            height: 26px;
+                            background: Theme.bg;
+                            Text {
+                                x: 8px;
+                                text: "Split";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                font-weight: 600;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        GroupOptionRow {
+                            label: "Colocalized / not colocalized";
+                            checkbox: true;
+                            selected: ResultsState.group_split_colocalized;
+                            clicked => {
+                                ResultsState.group_split_colocalized = !ResultsState.group_split_colocalized;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         // -- Apply button ----------------------------------
                         apply-ta := TouchArea {
@@ -565,11 +703,38 @@ component ResultsToolbar inherits Rectangle {
         }
 
         ToolToggleButton {
-            icon: @image-url("../icons/regular-black/chart-bar.svg");
+            icon: @image-url("../icons/regular-black/chart-scatter.svg");
             checked: ResultsState.view_mode == ResultsViewMode.chart;
-            enabled: false;
             clicked => {
                 ResultsState.view_mode = ResultsViewMode.chart;
+            }
+        }
+
+        if ResultsState.t_stack_active || ResultsState.z_stack_active: VerticalDivider { }
+
+        // -- Frame navigation (time/depth stacks) -------------------------------
+        if ResultsState.t_stack_active: FrameStepper {
+            axis_label: "T";
+            min: ResultsState.t_stack_min;
+            max: ResultsState.t_stack_max;
+            value: ResultsState.selected_t_stack;
+            show_all: ResultsState.t_stack_show_all;
+            changed(v, all) => {
+                ResultsState.selected_t_stack = v;
+                ResultsState.t_stack_show_all = all;
+                ResultsState.t_stack_changed(v, all);
+            }
+        }
+        if ResultsState.z_stack_active: FrameStepper {
+            axis_label: "Z";
+            min: ResultsState.z_stack_min;
+            max: ResultsState.z_stack_max;
+            value: ResultsState.selected_z_stack;
+            show_all: ResultsState.z_stack_show_all;
+            changed(v, all) => {
+                ResultsState.selected_z_stack = v;
+                ResultsState.z_stack_show_all = all;
+                ResultsState.z_stack_changed(v, all);
             }
         }
 
@@ -601,6 +766,13 @@ component ResultsToolbar inherits Rectangle {
         VerticalDivider { }
 
         // -- Export ------------------------------------------------------------
+        if ResultsState.view_mode == ResultsViewMode.chart: ToolToggleButton {
+            icon: @image-url("../icons/regular-black/file-image.svg");
+            clicked => {
+                ResultsState.chart_save_requested();
+            }
+        }
+
         ToolToggleButton {
             icon: @image-url("../icons/regular-black/file-csv.svg");
             clicked => {
@@ -714,7 +886,7 @@ export component ResultsWindow inherits Window {
     title: "Results - EVAnalyzer";
     preferred-width: 1100px;
     preferred-height: 680px;
-    min-width: 600px;
+    min-width: 900px;
     min-height: 300px;
     background: Theme.bg;
 
@@ -733,9 +905,12 @@ export component ResultsWindow inherits Window {
             background: Theme.border;
         }
 
-        ResultsTable {
+        if ResultsState.view_mode == ResultsViewMode.table: ResultsTable {
             vertical-stretch: 1;
             background: Theme.panel;
+        }
+        if ResultsState.view_mode == ResultsViewMode.chart: ResultsChart {
+            vertical-stretch: 1;
         }
 
         ResultsStatusBar { }

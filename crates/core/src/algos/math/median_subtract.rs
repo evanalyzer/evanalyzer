@@ -81,6 +81,8 @@ impl ImageAlgorithm for MedianSubtract {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::{
         image::{ImageContainer, PixelSizes},
@@ -106,6 +108,7 @@ mod tests {
 
         // Prepare context
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

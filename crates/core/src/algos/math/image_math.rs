@@ -211,6 +211,7 @@ mod tests {
     use kornia_image::Image;
     use kornia_image::ImageSize;
     use kornia_tensor::CpuAllocator;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     // Helper to create a dummy F32Gray image container
@@ -225,6 +226,7 @@ mod tests {
 
     fn run_math_test(op: Operand, val1: f32, val2: f32, swap: bool) -> f32 {
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

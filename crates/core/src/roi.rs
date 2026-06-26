@@ -4,8 +4,13 @@ use evanalyzer_cfg::{
     settings::roi_settings::{IntensitySettings, RoiSettings, TrackSettings},
 };
 use indexmap::IndexMap;
+use kornia_image::ImageSize;
 use std::collections::HashSet;
 
+use crate::pipeline::{
+    pipeline_cache::{sample_channel_pixel, PipelineCache},
+    pipeline_context::PipelineContext,
+};
 use crate::ImagePlane;
 
 #[derive(Debug, Default, Clone)]
@@ -141,6 +146,26 @@ pub struct FittingEllipse {
     /// Optional: How 'squashed' the ellipse is.
     /// Calculated as sqrt(1 - (minor^2 / major^2)).
     pub eccentricity: f32,
+}
+
+/// Rasterized mask geometry produced by a shape transform (see [`Roi::scaled_geometry`],
+/// [`Roi::circle_geometry`], [`Roi::fitting_ellipse_geometry`]).
+///
+/// Carries only the geometric fields of a [`Roi`] — identity, classes, lineage and plane are
+/// deliberately left out, since callers decide whether the transformed shape replaces the
+/// source ROI in place or becomes a brand-new ROI, and need to set those fields themselves
+/// via [`RoiInit`].
+#[derive(Debug, Default, Clone)]
+pub struct TransformedGeometry {
+    pub bbox: [u32; 4],
+    pub mask_data: BitVec<u64, Lsb0>,
+    pub area: usize,
+    pub touches_edge: bool,
+    pub sum_x: u64,
+    pub sum_y: u64,
+    pub sum_x2: u64,
+    pub sum_y2: u64,
+    pub sum_xy: u64,
 }
 
 impl Roi {
@@ -653,6 +678,288 @@ impl Roi {
             plane: self.plane.clone(),
             ..Default::default()
         }))
+    }
+
+    /// Samples per-channel pixel intensities for this ROI's mask against the channel images
+    /// held in `cache`. For ROIs assembled by [`ExtractRois`](crate::algos::classification::extract_rois::ExtractRois)
+    /// this is redundant (it already measures intensities in the same pass that builds the
+    /// mask). It exists for ROIs synthesized later in the pipeline — e.g. the intersection
+    /// ROIs colocalization creates via [`overlaps`](Self::overlaps) — which have a valid
+    /// mask/bbox but never had a chance to sample pixel data.
+    pub fn measure_intensities(
+        &self,
+        ctx: &PipelineContext,
+        cache: &PipelineCache,
+    ) -> IndexMap<i32, Intensity> {
+        let tile_offset = ctx.get_image_tile_offset();
+        let size = ctx.get_image_size();
+        let full_image_size = ctx.full_image_size();
+        let origin_width = size.width;
+        let zoom_x = size.width / full_image_size.width;
+        let zoom_y = size.height / full_image_size.height;
+
+        let channel_views = cache.image_cache.resolve_channel_views();
+
+        let [xmin, ymin, xmax, ymax] = self.bbox;
+        let rw = (xmax - xmin + 1) as usize;
+        let rh = (ymax - ymin + 1) as usize;
+
+        let mut sum = vec![0f64; channel_views.len()];
+        let mut min = vec![f32::MAX; channel_views.len()];
+        let mut max = vec![f32::MIN; channel_views.len()];
+        let mut area = 0usize;
+
+        for ry in 0..rh {
+            for rx in 0..rw {
+                if !self
+                    .mask_data
+                    .get(ry * rw + rx)
+                    .map(|b| *b)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                area += 1;
+
+                let x_abs = xmin as usize + rx;
+                let y_abs = ymin as usize + ry;
+                let tile_x = x_abs - tile_offset.x;
+                let tile_y = y_abs - tile_offset.y;
+                let sample = (tile_y * zoom_y) * origin_width + tile_x * zoom_x;
+
+                for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
+                    let val = sample_channel_pixel(*is_rgb, slice, sample);
+                    sum[ci] += val as f64;
+                    if val < min[ci] {
+                        min[ci] = val;
+                    }
+                    if val > max[ci] {
+                        max[ci] = val;
+                    }
+                }
+            }
+        }
+
+        let n = area.max(1) as f64;
+        channel_views
+            .iter()
+            .enumerate()
+            .map(|(ci, (ch_idx, _, _))| {
+                (
+                    *ch_idx,
+                    Intensity {
+                        sum_intensity: sum[ci],
+                        min_intensity: min[ci],
+                        max_intensity: max[ci],
+                        avg_intensity: (sum[ci] / n) as f32,
+                        pixel_values: Vec::new(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Builds the rasterized geometry of `self` scaled by `(scale_x, scale_y)` around its
+    /// bounding-box center.
+    ///
+    /// Each target pixel is back-mapped through the inverse scale and tested against the
+    /// *original* mask via [`is_part_of`](Self::is_part_of), so irregular/concave shapes scale
+    /// faithfully instead of just growing or shrinking the bounding box.
+    pub fn scaled_geometry(
+        &self,
+        scale_x: f32,
+        scale_y: f32,
+        image_size: ImageSize,
+    ) -> TransformedGeometry {
+        let (cx, cy) = self.get_centroid();
+        let [x_min, y_min, x_max, y_max] = self.bbox;
+        let project = |v: f32, c: f32, s: f32| c + (v - c) * s;
+        let bbox_f = [
+            project(x_min as f32, cx, scale_x),
+            project(y_min as f32, cy, scale_y),
+            project(x_max as f32, cx, scale_x),
+            project(y_max as f32, cy, scale_y),
+        ];
+
+        rasterize_geometry(bbox_f, image_size, self.touches_edge, |gx, gy| {
+            if scale_x == 0.0 || scale_y == 0.0 {
+                return false;
+            }
+            let src_x = cx + (gx - cx) / scale_x;
+            let src_y = cy + (gy - cy) / scale_y;
+            if src_x < 0.0 || src_y < 0.0 {
+                return false;
+            }
+            self.is_part_of(src_x as u32, src_y as u32)
+        })
+    }
+
+    /// Builds the rasterized geometry of a filled circle with the given `diameter`, centered
+    /// on `self`'s bounding-box center.
+    pub fn circle_geometry(&self, diameter: f32, image_size: ImageSize) -> TransformedGeometry {
+        let (cx, cy) = self.get_centroid();
+        // A radius of 0 would rasterize to an empty mask; floor it to a single pixel.
+        let radius = (diameter / 2.0).max(0.5);
+        let bbox_f = [cx - radius, cy - radius, cx + radius, cy + radius];
+
+        rasterize_geometry(bbox_f, image_size, self.touches_edge, |gx, gy| {
+            let dx = gx - cx;
+            let dy = gy - cy;
+            dx * dx + dy * dy <= radius * radius
+        })
+    }
+
+    /// Builds the rasterized geometry of the ellipse fitted to `self`'s mask moments (see
+    /// [`get_ellipse`](Self::get_ellipse)), scaled by `scale` and centered on `self`'s
+    /// bounding-box center.
+    pub fn fitting_ellipse_geometry(
+        &self,
+        scale: f32,
+        image_size: ImageSize,
+    ) -> TransformedGeometry {
+        let (cx, cy) = self.get_centroid();
+        let ellipse = self.get_ellipse();
+        // Degenerate ROIs (e.g. a single pixel) have zero moments; floor the semi-axes to a
+        // single pixel so they still rasterize to something instead of vanishing.
+        let semi_major = (ellipse.major / 2.0 * scale).max(0.5);
+        let semi_minor = (ellipse.minor / 2.0 * scale).max(0.5);
+        let (sin_a, cos_a) = ellipse.angle.sin_cos();
+
+        // Axis-aligned bounding box of a rotated ellipse.
+        let half_w = ((semi_major * cos_a).powi(2) + (semi_minor * sin_a).powi(2)).sqrt();
+        let half_h = ((semi_major * sin_a).powi(2) + (semi_minor * cos_a).powi(2)).sqrt();
+        let bbox_f = [cx - half_w, cy - half_h, cx + half_w, cy + half_h];
+
+        rasterize_geometry(bbox_f, image_size, self.touches_edge, |gx, gy| {
+            let dx = gx - cx;
+            let dy = gy - cy;
+            let rx = dx * cos_a + dy * sin_a;
+            let ry = -dx * sin_a + dy * cos_a;
+            (rx / semi_major).powi(2) + (ry / semi_minor).powi(2) <= 1.0
+        })
+    }
+}
+
+/// Rasterizes `inside_shape` (a predicate over continuous pixel-center coordinates) within
+/// `bbox_f`, clipped to `image_size`, into a [`TransformedGeometry`].
+///
+/// `base_touches_edge` is OR-ed with whatever clipping against `image_size` introduces, so a
+/// shape that already touched the edge before the transform keeps that flag even if the
+/// transformed shape happens to land fully inside the image.
+fn rasterize_geometry(
+    bbox_f: [f32; 4],
+    image_size: ImageSize,
+    base_touches_edge: bool,
+    mut inside_shape: impl FnMut(f32, f32) -> bool,
+) -> TransformedGeometry {
+    if image_size.width == 0 || image_size.height == 0 {
+        return TransformedGeometry {
+            touches_edge: true,
+            ..Default::default()
+        };
+    }
+    let max_x = (image_size.width - 1) as f32;
+    let max_y = (image_size.height - 1) as f32;
+
+    let touches_edge = base_touches_edge
+        || bbox_f[0] < 0.0
+        || bbox_f[1] < 0.0
+        || bbox_f[2] > max_x
+        || bbox_f[3] > max_y;
+
+    let x_min = bbox_f[0].floor().clamp(0.0, max_x) as u32;
+    let y_min = bbox_f[1].floor().clamp(0.0, max_y) as u32;
+    let x_max = bbox_f[2].ceil().clamp(0.0, max_x) as u32;
+    let y_max = bbox_f[3].ceil().clamp(0.0, max_y) as u32;
+
+    if x_max < x_min || y_max < y_min {
+        return TransformedGeometry {
+            bbox: [x_min, y_min, x_min, y_min],
+            touches_edge,
+            ..Default::default()
+        };
+    }
+
+    let width = (x_max - x_min + 1) as usize;
+    let height = (y_max - y_min + 1) as usize;
+    let mut mask_data = BitVec::<u64, Lsb0>::repeat(false, width * height);
+
+    let mut area = 0usize;
+    let (mut sum_x, mut sum_y, mut sum_x2, mut sum_y2, mut sum_xy) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    // Tracks the actual extent of set pixels so the candidate scan window (which floor/ceil
+    // padded outward to not miss any boundary pixel) can be cropped down to a tight bbox below
+    // — callers like `get_feret_diameter`/`get_centroid` read `bbox` directly, so a loose box
+    // would silently skew those metrics even though the mask itself is correct.
+    let (mut tight_x_min, mut tight_x_max) = (u32::MAX, 0u32);
+    let (mut tight_y_min, mut tight_y_max) = (u32::MAX, 0u32);
+
+    for ly in 0..height {
+        let gy = y_min + ly as u32;
+        for lx in 0..width {
+            let gx = x_min + lx as u32;
+            if inside_shape(gx as f32 + 0.5, gy as f32 + 0.5) {
+                mask_data.set(ly * width + lx, true);
+                area += 1;
+                let (xu, yu) = (gx as u64, gy as u64);
+                sum_x += xu;
+                sum_y += yu;
+                sum_x2 += xu * xu;
+                sum_y2 += yu * yu;
+                sum_xy += xu * yu;
+                tight_x_min = tight_x_min.min(gx);
+                tight_x_max = tight_x_max.max(gx);
+                tight_y_min = tight_y_min.min(gy);
+                tight_y_max = tight_y_max.max(gy);
+            }
+        }
+    }
+
+    if area == 0 {
+        return TransformedGeometry {
+            bbox: [x_min, y_min, x_min, y_min],
+            touches_edge,
+            ..Default::default()
+        };
+    }
+
+    if (tight_x_min, tight_y_min, tight_x_max, tight_y_max) == (x_min, y_min, x_max, y_max) {
+        return TransformedGeometry {
+            bbox: [x_min, y_min, x_max, y_max],
+            mask_data,
+            area,
+            touches_edge,
+            sum_x,
+            sum_y,
+            sum_x2,
+            sum_y2,
+            sum_xy,
+        };
+    }
+
+    let tight_width = (tight_x_max - tight_x_min + 1) as usize;
+    let tight_height = (tight_y_max - tight_y_min + 1) as usize;
+    let mut tight_mask = BitVec::<u64, Lsb0>::repeat(false, tight_width * tight_height);
+    for ly in 0..tight_height {
+        let src_row = (tight_y_min - y_min) as usize + ly;
+        let dst_row = ly * tight_width;
+        for lx in 0..tight_width {
+            let src_idx = src_row * width + (tight_x_min - x_min) as usize + lx;
+            if mask_data[src_idx] {
+                tight_mask.set(dst_row + lx, true);
+            }
+        }
+    }
+
+    TransformedGeometry {
+        bbox: [tight_x_min, tight_y_min, tight_x_max, tight_y_max],
+        mask_data: tight_mask,
+        area,
+        touches_edge,
+        sum_x,
+        sum_y,
+        sum_x2,
+        sum_y2,
+        sum_xy,
     }
 }
 

@@ -1,12 +1,9 @@
 ## Editor
 
-- [ ] feat: Force user that Waterhed must be after connected component
+- [ ] feat: Read rdf file for auto configure AI segmentation
 - [ ] feat: "old" or non used objects in the respective pipelines should not be displayed.
 - [ ] feat: channel should change with pipeline automatically
 - [ ] fix: Cy5 displayed in yellow
-- [ ] fix:Fix watershed algorithm which is not working yet
-
-
 
 ## Results
 

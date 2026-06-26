@@ -1,3 +1,4 @@
+pub mod bioimageio;
 pub mod extensions;
 pub mod frontend;
 mod project_owner;
@@ -13,9 +14,17 @@ pub mod prelude {
 }
 
 pub mod result {
+    pub use crate::results::results_chart::{
+        compute_heatmap, compute_histogram, compute_scatter, plottable_columns, render_heatmap,
+        render_histogram, render_scatter, save_heatmap_png, save_histogram_png,
+        save_rendered_chart_png, save_scatter_png, ChartHitTester, ColorBy, HeatmapCell,
+        HeatmapData, HeatmapMetric, HistogramBucket, HistogramData, RenderedChart, ScatterData,
+        ScatterPoint,
+    };
     pub use crate::results::results_exporter::ResultsExporter;
     pub use crate::results::results_loader::{
         AggFunc, ColumnSpec, DatabaseFilter, DisplayRow, GroupBy, GroupConfig, ResultsLoader,
-        RoiRow, aggregate_rows, build_column_specs, discover_channels, to_display_row,
+        RoiRow, aggregate_rows, build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
+        coloc_filter_label_with, discover_channels, sort_display_rows, to_display_row,
     };
 }

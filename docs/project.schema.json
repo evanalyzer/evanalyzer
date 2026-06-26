@@ -33,6 +33,21 @@
     "pipelines"
   ],
   "$defs": {
+    "AiSegmentationUnetUNetOutputModeSettings": {
+      "description": "How a multi-channel U-Net output should be turned into a single foreground\n probability map. Ignored for single-channel outputs, which are always\n treated as already-activated foreground probabilities.",
+      "oneOf": [
+        {
+          "description": "Channels are mutually-exclusive class scores (e.g. a background/foreground\nclassification head). `softmax` is applied over the channel dimension\nfirst, then the channel at `foreground_channel` is taken as the\nforeground probability.",
+          "type": "string",
+          "const": "SOFTMAX_CLASSES"
+        },
+        {
+          "description": "Channels are independent, already-activated probability maps — e.g. a\nforeground-mask channel plus a separate boundary channel, as produced by\nboundary-aware models (mask + boundary heads are *not* mutually\nexclusive, so they must never be put through a softmax together). The\nchannel at `foreground_channel` is used directly.",
+          "type": "string",
+          "const": "INDEPENDENT_CHANNELS"
+        }
+      ]
+    },
     "BlurSettings": {
       "description": "Smooths an image by averaging pixel intensities within a local neighborhood.\n\n This algorithm applies a uniform box filter where every pixel within the moving\n window contributes equally to the final value. It is a computationally fast\n method used for general image smoothing, blending variations, and rapid noise\n suppression where edge precision is less critical.",
       "type": "object",
@@ -44,6 +59,54 @@
           "default": 3,
           "maximum": 27,
           "minimum": 3
+        }
+      }
+    },
+    "CellposeSettings": {
+      "description": "Instance segmentation using a pretrained Cellpose model exported as TorchScript.\n\n The model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)\n grayscale image is placed in channel 0 and any remaining channels are filled\n with zeros. Standard Cellpose networks expect **two** channels (cytoplasm +\n optional nucleus), which is the default; single-channel exports use\n `input_channels = 1`. The model must return a `[1, C, H, W]` tensor with\n `C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow\n `dX` (channel 1) and the cell-probability logits (channel 2), which is\n Cellpose's spatial-gradient representation. Exports that wrap the output in a\n tuple (e.g. `(flows, style)`) are also supported — the first tensor with at\n least three channels is used.\n\n Instances are recovered with Cellpose's *dynamics*: every pixel whose\n cell probability reaches `probability_threshold` is advected for\n `flow_iterations` Euler steps along the (down-scaled) flow field until it\n converges to the sink at its cell's center. Pixels whose trajectories end in\n the same sink basin — found by connected components over the final-position\n density map — form one instance. Instances smaller than `min_object_size`\n pixels are discarded. Runs on GPU automatically if CUDA is available in the\n linked libtorch build, otherwise falls back to CPU.",
+      "type": "object",
+      "properties": {
+        "flowIterations": {
+          "description": "Number of Euler integration steps used to follow the flow field. Higher\n values let pixels of large cells reach their sink at the cost of runtime;\n Cellpose's default is `200`.",
+          "type": "integer",
+          "format": "int32",
+          "default": 200,
+          "maximum": 1000,
+          "minimum": 1
+        },
+        "inputChannels": {
+          "description": "Number of input channels the model expects. The grayscale image goes in\n channel 0; any further channels are zero-filled. Standard Cellpose models\n take `2` (cytoplasm + optional nucleus); set `1` for single-channel\n exports, or higher to match a custom model.",
+          "type": "integer",
+          "format": "int32",
+          "default": 2,
+          "maximum": 8,
+          "minimum": 1
+        },
+        "minObjectSize": {
+          "description": "Minimum object size, in pixels. After the dynamics, any instance smaller\n than this is removed (its pixels become background). `0` disables the filter.",
+          "type": "integer",
+          "format": "int32",
+          "default": 15,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "modelPath": {
+          "description": "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).",
+          "type": "string",
+          "default": ""
+        },
+        "objectClassId": {
+          "description": "The class assigned to pixels of every detected object. All other\n pixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
+        },
+        "probabilityThreshold": {
+          "description": "Cell probability above which a pixel takes part in the flow dynamics and\n can be assigned to an object. The raw cell-probability logits are passed\n through a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\n default logit threshold of `0` corresponds to `0.5`).",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
         }
       }
     },
@@ -226,6 +289,131 @@
       },
       "required": [
         "classes"
+      ]
+    },
+    "ClassificationTransformRoisTransformFunctionSettings": {
+      "description": "Each variant carries only the parameters it actually uses, so there's no shared field whose\n meaning shifts depending on which function is selected (e.g. a \"factor\" that's a unitless\n multiplier for `Scale` but a length in `size_unit` for `SnapArea`).",
+      "oneOf": [
+        {
+          "description": "Scale the ROI by the given scale factor.\n\nShape keeps and center of the ROI keeps the same, it is just shrinked or expanded.",
+          "type": "object",
+          "properties": {
+            "factor": {
+              "description": "Unitless scale factor",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "scale"
+            }
+          },
+          "required": [
+            "type",
+            "factor"
+          ]
+        },
+        {
+          "description": "Draws a circle around the ROI which is `extra_size` bigger than the ROI's bounding box.",
+          "type": "object",
+          "properties": {
+            "extraSize": {
+              "description": "Size added on top of the ROI's bounding-box diameter",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "snapArea"
+            },
+            "unit": {
+              "description": "Unit `extra_size` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "extraSize",
+            "unit"
+          ]
+        },
+        {
+          "description": "Draws a circle around the ROI's bounding box, with `min_diameter` as the minimum diameter.",
+          "type": "object",
+          "properties": {
+            "minDiameter": {
+              "description": "Minimum circle diameter",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "minCircle"
+            },
+            "unit": {
+              "description": "Unit `min_diameter` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "minDiameter",
+            "unit"
+          ]
+        },
+        {
+          "description": "Draws a circle with exactly `diameter` as diameter around the ROI.\n\nIf `diameter` is 0, the ROI's bounding box is used as the diameter instead.",
+          "type": "object",
+          "properties": {
+            "diameter": {
+              "description": "Circle diameter (0 = use the ROI's bounding box)",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "drawCircle"
+            },
+            "unit": {
+              "description": "Unit `diameter` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "diameter",
+            "unit"
+          ]
+        },
+        {
+          "description": "Replaces the ROI with the ellipse fitted to its mask.",
+          "type": "object",
+          "properties": {
+            "scale": {
+              "description": "Unitless scale factor for the fitted ellipse",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "fittingEllipse"
+            }
+          },
+          "required": [
+            "type",
+            "scale"
+          ]
+        }
       ]
     },
     "ClassifyRoisSettings": {
@@ -1327,6 +1515,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "cellpose"
+            }
+          },
+          "$ref": "#/$defs/CellposeSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "classifyRois"
             }
           },
@@ -1587,6 +1788,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "stardist"
+            }
+          },
+          "$ref": "#/$defs/StardistSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "structureTensor"
             }
           },
@@ -1604,6 +1818,32 @@
             }
           },
           "$ref": "#/$defs/ThresholdSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "transformRois"
+            }
+          },
+          "$ref": "#/$defs/TransformRoisSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "uNet"
+            }
+          },
+          "$ref": "#/$defs/UNetSettings",
           "required": [
             "type"
           ]
@@ -1986,16 +2226,17 @@
       "description": "A command that exports the current image to a persistent file on disk.\n\n This is a **transparent command**: it does not modify the image data in the\n pipeline context, nor does it perform a buffer swap. It acts as a tap\n to view the state of the image at a specific point in the pipeline.\n\n # Examples\n\n ```\n use imagec::backend::algos::SaveImage;\n let saver = SaveImage {path:\"output/processed_cell.png\"};\n ```",
       "type": "object",
       "properties": {
-        "path": {
-          "description": "The destination filesystem path where the image will be written.",
+        "name": {
+          "description": "Name the image should be stord under",
           "type": "string"
         },
         "source": {
+          "description": "Which image from the pipeline should be stored",
           "$ref": "#/$defs/MathSaveImageImageSourceSettings"
         }
       },
       "required": [
-        "path",
+        "name",
         "source"
       ]
     },
@@ -2168,6 +2409,38 @@
         "px"
       ]
     },
+    "StardistSettings": {
+      "description": "Instance segmentation using a pretrained StarDist model exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return two tensors:\n an object-probability map `[1, 1, H', W']` and a ray-distance map\n `[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\n boundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\n representation). `H'`/`W'` may be smaller than the input size if the model\n predicts on a coarser grid; this is detected from the output shape and the\n polygons are rescaled back to image resolution automatically.\n\n Some TorchScript exports concatenate both outputs into a single\n `[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\n distances); this is also supported.\n\n Per grid cell candidates above `probability_threshold` are converted to\n star-convex polygons, then greedily filtered with non-maximum suppression\n (polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n `nms_threshold` are discarded) before being rasterized into the pipeline's\n segmentation and instance maps. Runs on GPU automatically if CUDA is\n available in the linked libtorch build, otherwise falls back to CPU.",
+      "type": "object",
+      "properties": {
+        "modelPath": {
+          "description": "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).",
+          "type": "string",
+          "default": ""
+        },
+        "nmsThreshold": {
+          "description": "Pixel-overlap ratio (intersection / union) above which a lower-scoring\n candidate polygon is suppressed in favor of an overlapping higher-scoring one.",
+          "type": "number",
+          "format": "float",
+          "default": 0.30000001192092896,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "objectClassId": {
+          "description": "The class assigned to pixels of every detected object. All other\n pixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
+        },
+        "probabilityThreshold": {
+          "description": "Probability above which a grid cell is considered a candidate object center.",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        }
+      }
+    },
     "StructureTensorSettings": {
       "description": "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.\n\n This algorithm summarizes the predominant directions of the image gradient within a local\n neighborhood, smoothing the structural data with a Gaussian window. By evaluating the\n eigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\n near zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\n and complex corners or intersections (two large eigenvalues).\n\n # Examples\n\n ```\n use imagec::backend::algos::{StructureTensor, Mode};\n let settings = StructureTensor {\n     mode: Mode::Coherence,\n     kernel_size: 3,\n     sigma: 1.5\n };\n ```",
       "type": "object",
@@ -2308,6 +2581,83 @@
         "roiIds"
       ]
     },
+    "TransformRoisSettings": {
+      "description": "Transforms given ROIs and either replaces the old ones or creates new ones.\n\n This command applies a geometric transform (scale, circle, fitted ellipse) to every ROI\n carrying `input_class`. The transformed shape keeps the original ROI's bounding-box center.\n If `output_class` is unset (or equal to `input_class`) the input ROI is replaced in place;\n otherwise a new ROI carrying `output_class` is created alongside the untouched input ROI.",
+      "type": "object",
+      "properties": {
+        "function": {
+          "description": "Geometric transform applied to each input ROI",
+          "$ref": "#/$defs/ClassificationTransformRoisTransformFunctionSettings",
+          "default": {
+            "factor": 1.0,
+            "type": "scale"
+          }
+        },
+        "inputClass": {
+          "description": "ROIs carrying this class are the input to the transform",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "outputClass": {
+          "description": "If unset, the transformed shape replaces the input ROI in place.\n\n If set, a new ROI carrying this class is created for each transformed input ROI instead,\n leaving the input ROI untouched.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        }
+      }
+    },
+    "UNetSettings": {
+      "description": "Semantic segmentation using a pretrained U-Net exported as TorchScript.\n\n The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\n same normalization as the rest of the pipeline) and return either a\n `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\n applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\n channel, in which case `output_mode` and `foreground_channel` decide how the\n foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\n automatically if CUDA is available in the linked libtorch build, otherwise\n falls back to CPU.",
+      "type": "object",
+      "properties": {
+        "boundaryChannel": {
+          "description": "Index of an optional **boundary** channel for boundary-aware models\n (e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,\n which outputs mask in channel 0 and boundary in channel 1). Set to `-1`\n to disable.\n\n When enabled, a pixel is classified as foreground only where the\n foreground probability reaches `probability_threshold` **and** the\n boundary probability stays below `boundary_threshold`. This carves the\n predicted boundaries out as thin gaps, so a following `ConnectedComponents`\n separates touching objects directly — which is the whole point of a\n boundary model and the only way to split nuclei a plain mask merges.",
+          "type": "integer",
+          "format": "int32",
+          "default": -1,
+          "maximum": 16,
+          "minimum": -1
+        },
+        "boundaryThreshold": {
+          "description": "Boundary probability at or above which a pixel is treated as an object\n boundary and excluded from the foreground. Only used when\n `boundary_channel` is enabled (>= 0). Lower values cut wider gaps\n (separate more aggressively); higher values cut thinner gaps.",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        },
+        "foregroundChannel": {
+          "description": "Index of the channel holding the foreground probability, used only\n when the model output has more than one channel. Out-of-range values\n are clamped to the last available channel.\n\n * For `SoftmaxClasses`, this is typically the last channel (e.g. `1`\n   for a 2-class background/foreground head).\n * For `IndependentChannels`, this is whichever channel the model\n   dedicates to the foreground mask — commonly `0` for boundary-aware\n   models, which conventionally output mask before boundary.",
+          "type": "integer",
+          "format": "int32",
+          "default": 1,
+          "maximum": 16,
+          "minimum": 0
+        },
+        "modelPath": {
+          "description": "Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).",
+          "type": "string",
+          "default": ""
+        },
+        "objectClassId": {
+          "description": "The class assigned to pixels whose predicted probability reaches\n `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.",
+          "$ref": "#/$defs/SegmentationClass",
+          "default": 1
+        },
+        "outputMode": {
+          "description": "How to interpret the model output when it has more than one channel.\n Ignored for single-channel outputs.",
+          "$ref": "#/$defs/AiSegmentationUnetUNetOutputModeSettings",
+          "default": "SOFTMAX_CLASSES"
+        },
+        "probabilityThreshold": {
+          "description": "Probability above which a pixel is classified as foreground.",
+          "type": "number",
+          "format": "float",
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0
+        }
+      }
+    },
     "VoronoiSettings": {
       "description": "Computes a Voronoi tessellation from segmented seed objects.\n\n Each seed center expands outward until it reaches another region, the optional mask\n boundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\n with `output_class` and linked to their originating center object.",
       "type": "object",
@@ -2369,16 +2719,32 @@
       ]
     },
     "WatershedSettings": {
-      "description": "A morphological segmentation algorithm that splits touching objects using distance topography.\n\n The Watershed algorithm is a powerful tool for separating overlapping structures (like cells or grains).\n By analyzing the \"shape\" of an object via a Distance Transform, it identifies centers of mass\n and establishes boundaries at the narrowest points of connection.\n\n This implementation is adaptive:\n * It can **auto-detect** objects from grayscale intensity peaks.\n * It can **refine** existing segments if a `U32Label` image is provided as input.",
+      "description": "A morphological segmentation algorithm that splits touching objects using distance topography.\n\n This is a faithful port of ImageJ's `Process > Binary > Watershed`\n (`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n `ConnectedComponents` merged into a single blob are split at their \"necks\":\n the distance map's local maxima are the seeds, maxima protruding less than\n `maximum_finder_tolerance` above the ridge connecting them to a higher maximum\n are merged, and a constrained flood draws 1-pixel watershed lines between the\n surviving basins. The split blob is then re-labeled into separate instances.",
       "type": "object",
       "properties": {
         "maximumFinderTolerance": {
-          "description": "The prominence threshold for peak detection.\n\n This value determines how \"deep\" the valley between two peaks must be to\n keep them as separate objects.\n\n * **Low values**: Sensitive to small variations; may cause over-segmentation (splitting one object into many).\n * **High values**: More robust to noise; may cause under-segmentation (failing to split touching objects).\n\n In an EDM (Euclidean Distance Map), this value directly corresponds to the\n pixel distance from the edge of the object.",
+          "description": "Prominence tolerance for the maximum finder, in pixels of distance.\n\n A local maximum of the distance map is treated as a separate object only\n if it protrudes more than this value above the ridge connecting it to a\n higher maximum. This is ImageJ's \"prominence\"/\"noise tolerance\" parameter.\n\n * **Low values**: more sensitive; may over-segment ragged objects.\n * **High values**: more robust; may fail to split genuinely touching objects.\n\n ImageJ's default of `0.5` works well for most distance maps; raise it if a\n single object is being split into several pieces.",
           "type": "number",
           "format": "float",
           "default": 0.5,
-          "maximum": 1,
+          "maximum": 20,
           "minimum": 0.1
+        },
+        "minObjectSize": {
+          "description": "Minimum object size, in pixels. After segmentation, any object smaller than\n this is removed (its pixels become background). `0` disables the filter.\n\n Use it to drop tiny fragments left by very ragged masks.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0
+        },
+        "smoothingSigma": {
+          "description": "Standard deviation (px) of an optional Gaussian blur applied to the\n distance map *before* the maximum finder. `0` disables it.\n\n ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\n boundaries, so this is rarely needed; for extremely noisy AI masks a value\n of `1.0`–`2.0` can further suppress spurious maxima.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0,
+          "maximum": 10,
+          "minimum": 0
         }
       }
     },

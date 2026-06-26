@@ -103,6 +103,8 @@ impl ImageAlgorithm for ImageCache {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::{
         F32Gray,
@@ -126,6 +128,7 @@ mod tests {
         // 2. Setup: Context and Cache
         // Assuming PipelineContext has an 'image' and 'scratch_pad'
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

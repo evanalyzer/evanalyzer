@@ -223,6 +223,12 @@ impl ImageAlgorithm for Colocalization {
                             ids.sort_by_key(|ObjectId(n)| *n);
                             if processed_combinations.insert(ids) {
                                 intersection.add_object_class(overlap_class);
+                                // `Roi::overlaps()` only derives geometry from the parent masks
+                                // and never sampled pixel data, and this ROI never passes
+                                // through `ExtractRois` (the step that normally measures
+                                // intensities), so it needs its own measurement pass here.
+                                intersection.intensities =
+                                    intersection.measure_intensities(ctx, cache);
                                 new_rois.push(intersection);
                             }
                         }
@@ -251,14 +257,16 @@ impl ImageAlgorithm for Colocalization {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::{
-        ImageContainer, ImagePlane, ManagedImage,
         image::PixelSizes,
         pipeline::{
             pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
             pipeline_context::PipelineContext,
         },
+        ImageContainer, ImagePlane, ManagedImage,
     };
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
@@ -278,6 +286,7 @@ mod tests {
             plane: None,
         };
         PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,
@@ -349,12 +358,10 @@ mod tests {
 
         run(&coloc, &mut cache);
 
-        assert!(
-            cache
-                .roi_cache
-                .values()
-                .all(|r| r.colocalized_with.is_empty())
-        );
+        assert!(cache
+            .roi_cache
+            .values()
+            .all(|r| r.colocalized_with.is_empty()));
     }
 
     #[test]
@@ -410,12 +417,10 @@ mod tests {
 
         run(&coloc, &mut cache);
 
-        assert!(
-            cache
-                .roi_cache
-                .values()
-                .all(|r| r.colocalized_with.is_empty())
-        );
+        assert!(cache
+            .roi_cache
+            .values()
+            .all(|r| r.colocalized_with.is_empty()));
     }
 
     #[test]
@@ -474,12 +479,10 @@ mod tests {
         run(&coloc, &mut cache);
 
         // roi_a is excluded from CLASS_A bucket so no colocalization occurs
-        assert!(
-            cache
-                .roi_cache
-                .values()
-                .all(|r| r.colocalized_with.is_empty())
-        );
+        assert!(cache
+            .roi_cache
+            .values()
+            .all(|r| r.colocalized_with.is_empty()));
     }
 
     #[test]
@@ -510,6 +513,91 @@ mod tests {
             .expect("intersection ROI tagged with CLASS_OVERLAP not found");
         assert_eq!(overlap_roi.bbox, [2, 2, 3, 3]);
         assert_eq!(overlap_roi.area, 4);
+    }
+
+    #[test]
+    fn overlapping_area_roi_has_measured_intensities() {
+        // Regression test: `Roi::overlaps()` cannot sample pixel data (it only sees the two
+        // parent masks), so the intersection ROI needs its own intensity measurement pass.
+        const CHANNEL: i32 = 0;
+        const VALUE: f32 = 5.0;
+        let size = ImageSize {
+            width: 10,
+            height: 10,
+        };
+
+        // ctx's own image content is irrelevant to intensity sampling; only its size/tile_offset matter.
+        let ctx_image =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 100], CpuAllocator).unwrap();
+        let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
+            PipelineImageMeta {
+                image_tile_info: crate::ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: size.width,
+                    height: size.height,
+                },
+                full_image_width: size,
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: PixelSizes {
+                    px_size_x: 1.0,
+                    px_size_y: 1.0,
+                    px_size_z: 1.0,
+                },
+            },
+            ImageContainer::F32Gray(ManagedImage {
+                data: ctx_image,
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+            }),
+        )
+        .unwrap();
+
+        let mut cache = PipelineCache::default();
+        // Constant-value channel so the expected sum/avg/min/max are trivial to compute.
+        let channel_img =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![VALUE; 100], CpuAllocator).unwrap();
+        cache.image_cache.add_to_channel_cache(
+            Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: channel_img,
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+            })),
+            CHANNEL,
+        );
+
+        // Inclusive bboxes: A covers [0,5]×[0,5], B covers [3,8]×[3,8] → overlap [3,5]×[3,5] = 3×3 = 9 px
+        let roi_a = make_filled_roi(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
+        let roi_b = make_filled_roi(ID_B, [3, 3, 8, 8], ImagePlane::default(), CLASS_B);
+        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
+        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+
+        let coloc = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            filter_classes: vec![],
+            class_for_overlapping_areas: CLASS_OVERLAP,
+            allow_multi_object_coloc: true,
+            min_coloc_area: 0.0,
+            size_unit: SizeUnits::Pixels,
+        };
+        coloc.execute(&mut ctx, &mut cache).unwrap();
+
+        let overlap_roi = cache
+            .roi_cache
+            .values()
+            .find(|r| r.has_object_class(&CLASS_OVERLAP))
+            .expect("intersection ROI tagged with CLASS_OVERLAP not found");
+        assert_eq!(overlap_roi.area, 9);
+        let intensity = overlap_roi
+            .intensities
+            .get(&CHANNEL)
+            .expect("overlap ROI should have measured intensities for the channel");
+        assert_eq!(intensity.sum_intensity, 9.0 * VALUE as f64);
+        assert_eq!(intensity.avg_intensity, VALUE);
+        assert_eq!(intensity.min_intensity, VALUE);
+        assert_eq!(intensity.max_intensity, VALUE);
     }
 
     // --- 3-class tests ---

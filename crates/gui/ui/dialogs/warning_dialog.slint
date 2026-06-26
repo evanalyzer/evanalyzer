@@ -1,6 +1,8 @@
 import { BaseDialog } from "dialog_base.slint";
 import { Button } from "std-widgets.slint";
 import { Palette } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../style.slint";
 import {
     GlobalAppState,
     DialogType,
@@ -9,22 +11,27 @@ import {
 
 export component WarningDialog inherits BaseDialog {
     title-text: WarningState.title;
-    icon: "⚠️";
-    main-height: 220px;
+    icon: WarningState.info ? "ℹ️" : "⚠️";
+    icon-bg-color: WarningState.info ? Theme.accent.with-alpha(0.18) : Theme.icon-bg-default;
     main-width: 440px;
+    // Grow with the message, but never taller than the viewport, so the OK
+    // button is always reachable; long messages scroll inside the panel instead.
+    main-height: min(msg.preferred-height + 150px, root.height - 48px);
 
     VerticalLayout {
         spacing: 12px;
-        Text {
-            text: WarningState.message;
-            wrap: word-wrap;
-            color: Palette.foreground;
-            font-size: 14px;
-            font-weight: 500;
-        }
 
-        Rectangle {
+        ScrollView {
             vertical-stretch: 1;
+
+            msg := Text {
+                width: root.main-width - 56px;
+                text: WarningState.message;
+                wrap: word-wrap;
+                color: Palette.foreground;
+                font-size: 14px;
+                font-weight: 500;
+            }
         }
 
         HorizontalLayout {

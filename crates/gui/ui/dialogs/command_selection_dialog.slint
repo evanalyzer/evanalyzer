@@ -16,16 +16,16 @@
 //   │  All · Preprocess · Segment · Classify · Measure · Recents · ★   │   ← filter chips (40)
 //   ├----------------------------┬-------------------------------------┤
 //   │ PREPROCESS  ---------------│   Gaussian Blur                     │
-//   │ ▭ Gaussian Blur     σ ▸    │   ------------------------------    │
-//   │ ▭ Median Filter            │   Smooth an image with an isotropic │
-//   │ ▭ Background Subtract      │   Gaussian kernel. Reduces shot     │   ← list  +  detail
+//   │ ƒ Gaussian Blur     σ ▸    │   ------------------------------    │
+//   │ ƒ Median Filter            │   Smooth an image with an isotropic │
+//   │ ƒ Background Subtract      │   Gaussian kernel. Reduces shot     │   ← list  +  detail
 //   │ SEGMENT     ---------------│   noise before thresholding.        │     pane (split)
-//   │ ▭ Threshold (Otsu)         │                                     │
-//   │ ▭ Watershed                │   DEFAULT PARAMETERS                │
-//   │ ▭ Cellpose            ★    │     σ              2.0  px          │
+//   │ ƒ Threshold (Otsu)         │                                     │
+//   │ ƒ Watershed                │   DEFAULT PARAMETERS                │
+//   │ ƒ Cellpose            ★    │     σ              2.0  px          │
 //   │ MEASURE     ---------------│     Per channel    on               │
-//   │ ▭ Intensity Stats          │     Edge handling  reflect          │
-//   │ ▭ Area & Perimeter         │                                     │
+//   │ ƒ Intensity Stats          │     Edge handling  reflect          │
+//   │ ƒ Area & Perimeter         │                                     │
 //   │                            │   Category   Preprocess             │
 //   │                            │   Source     skimage · v0.22        │
 //   ├----------------------------┴-------------------------------------┤
@@ -99,7 +99,15 @@ export global CommandPickerState {
     in property <int> context-category: -1;
 
     in-out property <string> query: "";
-    in-out property <int> filter-category: -1;
+    // Per-category filter chips. Multiple can be active at once (multi-select);
+    // when none are active the picker shows every category ("All"). Driven by the
+    // host on open to pre-select the suggested next categories, and toggled freely
+    // by the user afterwards.
+    in-out property <bool> fcat-pre: false;
+    in-out property <bool> fcat-seg: false;
+    in-out property <bool> fcat-obj: false;
+    in-out property <bool> fcat-mea: false;
+    in-out property <bool> fcat-cls: false;
     in-out property <bool> filter-favorites: false;
     in-out property <int> selected-id: -1;
 
@@ -107,6 +115,7 @@ export global CommandPickerState {
     callback select(int);
     callback confirm(int);
     callback cancel();
+    callback import-bioimageio();
 }
 
 // ---------- Local visual constants ----------
@@ -617,7 +626,12 @@ export component CommandSelectionDialog inherits Rectangle {
 
     // ---- Selection / filter state (in-out so host can drive too) ----
     in-out property <string> query: "";
-    in-out property <int> filter-category: -1;   // -1 = All; else StepCategory cast to int
+    // Per-category filter chips (multi-select). None active = "All".
+    in-out property <bool> fcat-pre: false;
+    in-out property <bool> fcat-seg: false;
+    in-out property <bool> fcat-obj: false;
+    in-out property <bool> fcat-mea: false;
+    in-out property <bool> fcat-cls: false;
     in-out property <bool> filter-favorites: false;
     in-out property <bool> filter-recents: false;
     in-out property <int> selected-id: -1;
@@ -649,6 +663,7 @@ export component CommandSelectionDialog inherits Rectangle {
     callback toggle-favorite(int);
     callback confirm(int);           // commit: insert this id
     callback cancel();
+    callback import-bioimageio();    // open a bioimage.io rdf.yaml and insert the configured command
 
     // Dimmed background
     background: Theme.modal-overlay;
@@ -825,9 +840,13 @@ export component CommandSelectionDialog inherits Rectangle {
                         label: "All";
                         count: total-shown;
                         tinted: false;
-                        active: filter-category == -1 && !filter-favorites && !filter-recents;
+                        active: !fcat-pre && !fcat-seg && !fcat-obj && !fcat-mea && !fcat-cls && !filter-favorites && !filter-recents;
                         clicked => {
-                            root.filter-category = -1;
+                            root.fcat-pre = false;
+                            root.fcat-seg = false;
+                            root.fcat-obj = false;
+                            root.fcat-mea = false;
+                            root.fcat-cls = false;
                             root.filter-favorites = false;
                             root.filter-recents = false;
                             root.query-changed(query);
@@ -838,9 +857,9 @@ export component CommandSelectionDialog inherits Rectangle {
                         label: "Preprocess";
                         count: cat-count-pre;
                         tint: Theme.cat-preprocess;
-                        active: filter-category == 0;
+                        active: fcat-pre;
                         clicked => {
-                            root.filter-category = filter-category == 0 ? -1 : 0;
+                            root.fcat-pre = !fcat-pre;
                             root.filter-favorites = false;
                             root.filter-recents = false;
                             root.query-changed(query);
@@ -851,9 +870,9 @@ export component CommandSelectionDialog inherits Rectangle {
                         label: "Segment";
                         count: cat-count-seg;
                         tint: Theme.cat-segment;
-                        active: filter-category == 1;
+                        active: fcat-seg;
                         clicked => {
-                            root.filter-category = filter-category == 1 ? -1 : 1;
+                            root.fcat-seg = !fcat-seg;
                             root.filter-favorites = false;
                             root.filter-recents = false;
                             root.query-changed(query);
@@ -864,9 +883,9 @@ export component CommandSelectionDialog inherits Rectangle {
                         label: "Object";
                         count: cat-count-obj;
                         tint: Theme.cat-object;
-                        active: filter-category == 2;
+                        active: fcat-obj;
                         clicked => {
-                            root.filter-category = filter-category == 2 ? -1 : 2;
+                            root.fcat-obj = !fcat-obj;
                             root.filter-favorites = false;
                             root.filter-recents = false;
                             root.query-changed(query);
@@ -877,9 +896,9 @@ export component CommandSelectionDialog inherits Rectangle {
                         label: "Measure";
                         count: cat-count-mea;
                         tint: Theme.cat-measure;
-                        active: filter-category == 3;
+                        active: fcat-mea;
                         clicked => {
-                            root.filter-category = filter-category == 3 ? -1 : 3;
+                            root.fcat-mea = !fcat-mea;
                             root.filter-favorites = false;
                             root.filter-recents = false;
                             root.query-changed(query);
@@ -890,9 +909,9 @@ export component CommandSelectionDialog inherits Rectangle {
                         label: "Classify";
                         count: cat-count-cls;
                         tint: Theme.cat-classify;
-                        active: filter-category == 4;
+                        active: fcat-cls;
                         clicked => {
-                            root.filter-category = filter-category == 4 ? -1 : 4;
+                            root.fcat-cls = !fcat-cls;
                             root.filter-favorites = false;
                             root.filter-recents = false;
                             root.query-changed(query);
@@ -927,7 +946,11 @@ export component CommandSelectionDialog inherits Rectangle {
                         clicked => {
                             root.filter-favorites = !filter-favorites;
                             root.filter-recents = false;
-                            root.filter-category = -1;
+                            root.fcat-pre = false;
+                            root.fcat-seg = false;
+                            root.fcat-obj = false;
+                            root.fcat-mea = false;
+                            root.fcat-cls = false;
                             root.query-changed(query);
                         }
                     }
@@ -1027,6 +1050,21 @@ export component CommandSelectionDialog inherits Rectangle {
                                         }
                                         toggle-favorite => {
                                             root.toggle-favorite(c.id);
+                                        }
+                                    }
+
+                                    // Auto-configure an AI segmentation command from a
+                                    // downloaded bioimage.io model's rdf.yaml.
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-top: 6px;
+                                        padding-bottom: 4px;
+                                        alignment: start;
+                                        AppButton {
+                                            text: "Import bioimage.io model…";
+                                            clicked => {
+                                                root.import-bioimageio();
+                                            }
                                         }
                                     }
                                 }
@@ -1352,7 +1390,11 @@ export component CommandPickerModal inherits Rectangle {
     in property <int> cat-count-rec;
 
     in-out property <string> query: "";
-    in-out property <int> filter-category: -1;
+    in-out property <bool> fcat-pre: false;
+    in-out property <bool> fcat-seg: false;
+    in-out property <bool> fcat-obj: false;
+    in-out property <bool> fcat-mea: false;
+    in-out property <bool> fcat-cls: false;
     in-out property <bool> filter-favorites: false;
     in-out property <bool> filter-recents: false;
     in-out property <int> selected-id: -1;
@@ -1362,6 +1404,7 @@ export component CommandPickerModal inherits Rectangle {
     callback toggle-favorite(int);
     callback confirm(int);
     callback cancel();
+    callback import-bioimageio();
 
     // Scrim (full-screen darkening)
     background: #000000.with-alpha(0.55);
@@ -1396,7 +1439,11 @@ export component CommandPickerModal inherits Rectangle {
         cat-count-fav: root.cat-count-fav;
         cat-count-rec: root.cat-count-rec;
         query <=> root.query;
-        filter-category <=> root.filter-category;
+        fcat-pre <=> root.fcat-pre;
+        fcat-seg <=> root.fcat-seg;
+        fcat-obj <=> root.fcat-obj;
+        fcat-mea <=> root.fcat-mea;
+        fcat-cls <=> root.fcat-cls;
         filter-favorites <=> root.filter-favorites;
         filter-recents <=> root.filter-recents;
         selected-id <=> root.selected-id;
@@ -1418,6 +1465,9 @@ export component CommandPickerModal inherits Rectangle {
         }
         cancel => {
             root.cancel();
+        }
+        import-bioimageio => {
+            root.import-bioimageio();
         }
     }
 }

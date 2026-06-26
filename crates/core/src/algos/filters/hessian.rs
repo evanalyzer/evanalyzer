@@ -170,6 +170,8 @@ fn process_f32_gray(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use kornia_image::ImageSize;
 
     use super::*;
@@ -223,6 +225,7 @@ mod tests {
         .unwrap();
 
         let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
             PipelineImageMeta {
                 image_tile_info: crate::ImageTile {
                     offset_x: 0,

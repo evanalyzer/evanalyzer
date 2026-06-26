@@ -1,29 +1,47 @@
+[env]
+# libtorch (CPU or CUDA build, same path either way) is unpacked here by the
+# CI/CD pipeline before `cargo build` runs - see libs/download-*.sh.
+LIBTORCH = { value = "libs/libtorch", relative = true }
+# The bundled libtorch release rarely matches the exact version torch-sys
+# pins internally; the ABI is stable across these patch/minor versions.
+LIBTORCH_BYPASS_VERSION_CHECK = "1"
+
 [alias]
 build-win       = ["xwin", "build", "--target", "x86_64-pc-windows-msvc",   "--release"]
 build-win-arm   = ["xwin", "build", "--target", "aarch64-pc-windows-msvc",   "--release"]
 build-linux     = ["build", "--target", "x86_64-unknown-linux-gnu",          "--release"]
 build-linux-arm = ["build", "--target", "aarch64-unknown-linux-gnu",         "--release"]
+build-mac       = ["build", "--target", "aarch64-apple-darwin",              "--release"]
 
 # For Windows (MSVC) — statically linked CRT, lld linker
 [target.x86_64-pc-windows-msvc]
 rustflags = [
     "-C", "link-arg=-fuse-ld=lld",
     "-C", "target-feature=+crt-static",
-    "-L", "native=libs/win/libduckdb-windows-amd64",
+    "-L", "native=libs/libduckdb-windows-amd64",
 ]
 
 # For Windows ARM64 (MSVC) — statically linked CRT
 [target.aarch64-pc-windows-msvc]
 rustflags = [
     "-C", "target-feature=+crt-static",
-    "-L", "native=libs/win/libduckdb-windows-arm64",
+    "-L", "native=libs/libduckdb-windows-arm64",
 ]
 
 # For Linux x86_64
+# The extra rpath lets the binary find libtorch's .so files next to itself
+# (see release.yml packaging step) instead of only at the absolute build path
+# that torch-sys bakes in.
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-rpath,$ORIGIN"]
 
 # For Linux ARM64 — requires aarch64-linux-gnu-gcc cross-toolchain
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+
+# For macOS ARM64 (Apple Silicon)
+# @loader_path is macOS's equivalent of $ORIGIN: it lets the binary find the
+# libtorch / libduckdb .dylib files shipped next to it (see release.yml packaging).
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-rpath,@loader_path"]

@@ -234,6 +234,7 @@ mod tests {
         // 3. Manually construct a context with mismatched buffers
         // Usually PipelineContext handles this, but we can force it for the test
         let mut ctx = PipelineContext {
+            output_path: None,
             image: ImageContainer::new_f32_gray_from_image_test(gray_img),
             scratch_pad: ImageContainer::new_f32_rgb_from_image_test(rgb_img),
             instance_map: None,
@@ -330,6 +331,7 @@ mod tests {
 
         // 3. Manually build a broken context
         let mut ctx = PipelineContext {
+            output_path: None,
             image: ImageContainer::new_f32_gray_from_image_test(img),
             scratch_pad: ImageContainer::new_f32_gray_from_image_test(wrong_scratch), // Mismatched size!
             instance_map: None,
