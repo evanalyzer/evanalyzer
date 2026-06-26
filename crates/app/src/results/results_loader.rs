@@ -351,6 +351,9 @@ pub struct DatabaseFilter {
     /// When false the database omits `intensities_json` from the SELECT, avoiding
     /// JSON parsing cost when no channel columns are visible.
     pub needs_intensities: bool,
+    /// Results-table column id to sort by; `None` keeps the default order.
+    pub sort_column: Option<String>,
+    pub sort_ascending: bool,
 }
 
 impl Default for DatabaseFilter {
@@ -362,6 +365,8 @@ impl Default for DatabaseFilter {
             page_size: 500,
             page: 0,
             needs_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
         }
     }
 }
@@ -736,6 +741,31 @@ pub fn aggregate_rows(
     (specs, rows)
 }
 
+/// Sorts `rows` in place by the current value of `column_id` (looked up via
+/// `specs`), ascending or descending. Values that parse as numbers sort
+/// numerically; everything else sorts as text. A `column_id` absent from
+/// `specs` leaves `rows` untouched.
+///
+/// The grouped view is always fully materialized in memory (see
+/// [`aggregate_rows`]), so sorting it is a plain in-memory sort; the
+/// paginated per-ROI view sorts via SQL `ORDER BY` instead (see
+/// `DatabaseFilter::sort_column`), since only a fraction of its rows are
+/// ever loaded at once.
+pub fn sort_display_rows(rows: &mut [DisplayRow], specs: &[ColumnSpec], column_id: &str, ascending: bool) {
+    let Some(idx) = specs.iter().position(|c| c.id == column_id) else {
+        return;
+    };
+    rows.sort_by(|a, b| {
+        let av = a.values.get(idx).map(String::as_str).unwrap_or("");
+        let bv = b.values.get(idx).map(String::as_str).unwrap_or("");
+        let ord = match (av.parse::<f64>(), bv.parse::<f64>()) {
+            (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            _ => av.cmp(bv),
+        };
+        if ascending { ord } else { ord.reverse() }
+    });
+}
+
 pub struct ResultsLoader {
     path: PathBuf,
 }
@@ -753,6 +783,8 @@ impl ResultsLoader {
             page_size: filter.page_size,
             page: filter.page,
             fetch_intensities: filter.needs_intensities,
+            sort_column: filter.sort_column,
+            sort_ascending: filter.sort_ascending,
         })
     }
 
@@ -1279,5 +1311,60 @@ mod tests {
         );
         assert_eq!(rows[0].values[1], "ClassA");
         assert_eq!(rows[1].values[1], "ClassB");
+    }
+
+    // ---- sort_display_rows ----
+
+    #[test]
+    fn sort_display_rows_orders_numerically_ascending_and_descending() {
+        let specs = vec![ColumnSpec {
+            id: "area_px".into(),
+            label: "Area".into(),
+            filterable: false,
+            visible: true,
+        }];
+        let mut rows = vec![
+            DisplayRow { roi_id: 1, values: vec!["300".into()] },
+            DisplayRow { roi_id: 2, values: vec!["100".into()] },
+            DisplayRow { roi_id: 3, values: vec!["200".into()] },
+        ];
+
+        sort_display_rows(&mut rows, &specs, "area_px", true);
+        assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![2, 3, 1]);
+
+        sort_display_rows(&mut rows, &specs, "area_px", false);
+        assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![1, 3, 2]);
+    }
+
+    #[test]
+    fn sort_display_rows_falls_back_to_text_for_non_numeric_values() {
+        let specs = vec![ColumnSpec {
+            id: "group".into(),
+            label: "Group".into(),
+            filterable: false,
+            visible: true,
+        }];
+        let mut rows = vec![
+            DisplayRow { roi_id: 1, values: vec!["banana".into()] },
+            DisplayRow { roi_id: 2, values: vec!["apple".into()] },
+        ];
+        sort_display_rows(&mut rows, &specs, "group", true);
+        assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![2, 1]);
+    }
+
+    #[test]
+    fn sort_display_rows_unknown_column_leaves_rows_untouched() {
+        let specs = vec![ColumnSpec {
+            id: "area_px".into(),
+            label: "Area".into(),
+            filterable: false,
+            visible: true,
+        }];
+        let mut rows = vec![
+            DisplayRow { roi_id: 1, values: vec!["300".into()] },
+            DisplayRow { roi_id: 2, values: vec!["100".into()] },
+        ];
+        sort_display_rows(&mut rows, &specs, "does_not_exist", true);
+        assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![1, 2]);
     }
 }

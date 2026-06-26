@@ -498,6 +498,10 @@ pub struct RoiFilter {
     /// When false, `intensities_json` is replaced with an empty string in the
     /// query result, avoiding JSON parsing cost for hidden channel columns.
     pub fetch_intensities: bool,
+    /// Results-table column id to sort by (see [`column_order_expr`] for which
+    /// ids are supported). `None` keeps the default `ORDER BY object_id`.
+    pub sort_column: Option<String>,
+    pub sort_ascending: bool,
 }
 
 impl Default for RoiFilter {
@@ -509,7 +513,67 @@ impl Default for RoiFilter {
             page_size: 500,
             page: 0,
             fetch_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
         }
+    }
+}
+
+/// SQL expression computing the same display class string used throughout the
+/// results table/filters/export: the joined `object_class_name` list, falling
+/// back to `seg_class_name` when a ROI carries no object classes.
+fn class_case_expr() -> &'static str {
+    "CASE WHEN json_array_length(object_class_name) = 0 \
+     THEN COALESCE(seg_class_name, '') \
+     ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END"
+}
+
+/// SQL expression for one of `RoiRow`'s scaled per-channel intensity stats
+/// (`min_scaled` / `max_scaled` / `mean_scaled`, see `intensities_to_json`).
+fn channel_stat_expr(ch: i32, stat: &str) -> String {
+    format!("CAST(json_extract(intensities_json, ['{ch}']) ->> '{stat}' AS DOUBLE)")
+}
+
+/// SQL expression for the number of `class`-colocalizing partners a ROI has —
+/// the same value the `coloc_partner__{class}__count` results-table column shows.
+fn coloc_partner_count_expr(class: &str) -> String {
+    format!(
+        "COALESCE(json_array_length(coloc_json -> '{}'), 0)",
+        class.replace('\'', "''")
+    )
+}
+
+/// Maps a results-table column id to the SQL expression `ORDER BY` should sort
+/// on, or `None` if that column isn't backed by a sortable SQL value (e.g. the
+/// comma-joined `coloc_partner__{class}__ids` text column).
+fn column_order_expr(col_id: &str) -> Option<String> {
+    match col_id {
+        "roi_id" => Some("object_id".to_string()),
+        "image" => Some("image_name".to_string()),
+        "class" => Some(class_case_expr().to_string()),
+        "area_px" => Some("area_px".to_string()),
+        "area_nm2" => Some("area_nm2".to_string()),
+        "circularity" => Some("circularity".to_string()),
+        "colocalized" => {
+            Some("(coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}')".to_string())
+        }
+        id if id.starts_with("coloc_partner__") => {
+            let (class, suffix) = id.strip_prefix("coloc_partner__")?.rsplit_once("__")?;
+            (suffix == "count").then(|| coloc_partner_count_expr(class))
+        }
+        id if id.starts_with("ch") => {
+            let rest = id.strip_prefix("ch")?;
+            let under = rest.find('_')?;
+            let ch: i32 = rest[..under].parse().ok()?;
+            let stat = match &rest[under + 1..] {
+                "min_bit" => "min_scaled",
+                "max_bit" => "max_scaled",
+                "avg_bit" => "mean_scaled",
+                _ => return None,
+            };
+            Some(channel_stat_expr(ch, stat))
+        }
+        _ => None,
     }
 }
 
@@ -637,9 +701,8 @@ impl DuckDbReader {
         }
         if let Some(classes) = &filter.class_filter {
             conditions.push(format!(
-                "CASE WHEN json_array_length(object_class_name) = 0 \
-                 THEN COALESCE(seg_class_name, '') \
-                 ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END IN ({})",
+                "{} IN ({})",
+                class_case_expr(),
                 sql_in_list(classes)
             ));
         }
@@ -667,8 +730,22 @@ impl DuckDbReader {
             String::new()
         };
 
+        // `object_id` is always the final tiebreaker so pages stay stably ordered
+        // even when many rows share the same sort-column value.
+        let order_by = match filter
+            .sort_column
+            .as_deref()
+            .and_then(column_order_expr)
+        {
+            Some(expr) => format!(
+                "ORDER BY {expr} {}, object_id",
+                if filter.sort_ascending { "ASC" } else { "DESC" }
+            ),
+            None => "ORDER BY object_id".to_string(),
+        };
+
         let sql = format!(
-            "{} {} ORDER BY object_id {}",
+            "{} {} {order_by} {}",
             roi_select_sql(filter.fetch_intensities),
             where_clause,
             pagination
@@ -683,12 +760,11 @@ impl DuckDbReader {
     /// Returns all distinct computed class strings present in the file, sorted alphabetically.
     pub fn get_class_names(&self) -> Result<Vec<String>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let sql = "SELECT DISTINCT \
-                   CASE WHEN json_array_length(object_class_name) = 0 \
-                   THEN COALESCE(seg_class_name, '') \
-                   ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END AS class_str \
-                   FROM rois ORDER BY class_str";
-        let mut stmt = self.conn.prepare(sql).map_err(err)?;
+        let sql = format!(
+            "SELECT DISTINCT {} AS class_str FROM rois ORDER BY class_str",
+            class_case_expr()
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(err)?;
         stmt.query_map([], |row| row.get(0))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
@@ -906,5 +982,61 @@ mod tests {
             .unwrap();
         assert_eq!(with_b.len(), 1);
         assert_eq!(with_b[0].object_id, id_with_b);
+    }
+
+    #[test]
+    fn get_rois_sorts_by_requested_column() {
+        const ID_SMALL: u128 = 1;
+        const ID_LARGE: u128 = 2;
+        let small_id = ObjectId(ID_SMALL).to_string();
+        let large_id = ObjectId(ID_LARGE).to_string();
+
+        // bbox [0,0,1,1] -> 2x2 = 4px; bbox [0,0,9,9] -> 10x10 = 100px.
+        let small = make_filled_roi(ID_SMALL, [0, 0, 1, 1]);
+        let large = make_filled_roi(ID_LARGE, [0, 0, 9, 9]);
+        let (_dir, reader) = export_and_open(vec![large, small]);
+
+        let asc = reader
+            .get_rois(&RoiFilter {
+                sort_column: Some("area_px".into()),
+                sort_ascending: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            asc.iter().map(|r| r.object_id.clone()).collect::<Vec<_>>(),
+            vec![small_id.clone(), large_id.clone()]
+        );
+
+        let desc = reader
+            .get_rois(&RoiFilter {
+                sort_column: Some("area_px".into()),
+                sort_ascending: false,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            desc.iter().map(|r| r.object_id.clone()).collect::<Vec<_>>(),
+            vec![large_id, small_id]
+        );
+    }
+
+    #[test]
+    fn get_rois_unsortable_column_falls_back_to_object_id_order() {
+        let roi_a = make_filled_roi(1, [0, 0, 1, 1]);
+        let roi_b = make_filled_roi(2, [0, 0, 1, 1]);
+        let (_dir, reader) = export_and_open(vec![roi_b, roi_a]);
+
+        let rows = reader
+            .get_rois(&RoiFilter {
+                sort_column: Some("coloc_partner__ClassA__ids".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.object_id.clone()).collect::<Vec<_>>(),
+            vec![ObjectId(1).to_string(), ObjectId(2).to_string()],
+            "unsortable column id falls back to the default ORDER BY object_id"
+        );
     }
 }

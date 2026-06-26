@@ -5,8 +5,8 @@ use crate::{
 };
 use evanalyzer_app::result::{
     aggregate_rows, build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
-    coloc_filter_label_with, discover_channels, to_display_row, AggFunc, ColumnSpec,
-    DatabaseFilter, GroupBy, GroupConfig, ResultsExporter, ResultsLoader, RoiRow,
+    coloc_filter_label_with, discover_channels, sort_display_rows, to_display_row, AggFunc,
+    ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, ResultsExporter, ResultsLoader, RoiRow,
 };
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
@@ -38,6 +38,11 @@ pub struct ResultsTableController {
     pub(crate) class_filter: Arc<Mutex<Option<Vec<String>>>>,
     pub(crate) coloc_filter: Arc<Mutex<Option<Vec<String>>>>,
     pub(crate) group_config: Arc<Mutex<GroupConfig>>,
+    /// Results-table column id the view is currently sorted by, or `None` for
+    /// the default order. Re-applied on every reload (filter/group/page) the
+    /// same way the active filters are, until the user picks another column.
+    pub(crate) sort_column: Arc<Mutex<Option<String>>>,
+    pub(crate) sort_ascending: Arc<Mutex<bool>>,
     pub(crate) image_search: Mutex<String>,
     pub(crate) class_search: Mutex<String>,
     pub(crate) coloc_search: Mutex<String>,
@@ -65,6 +70,8 @@ impl ResultsTableController {
             class_filter: Arc::new(Mutex::new(None)),
             coloc_filter: Arc::new(Mutex::new(None)),
             group_config: Arc::new(Mutex::new(GroupConfig::default())),
+            sort_column: Arc::new(Mutex::new(None)),
+            sort_ascending: Arc::new(Mutex::new(true)),
             image_search: Mutex::new(String::new()),
             class_search: Mutex::new(String::new()),
             coloc_search: Mutex::new(String::new()),
@@ -401,6 +408,8 @@ impl ResultsTableController {
         *self.class_filter.lock().unwrap() = None;
         *self.coloc_filter.lock().unwrap() = None;
         *self.group_config.lock().unwrap() = GroupConfig::default();
+        *self.sort_column.lock().unwrap() = None;
+        *self.sort_ascending.lock().unwrap() = true;
         *self.image_search.lock().unwrap() = String::new();
         *self.class_search.lock().unwrap() = String::new();
         *self.coloc_search.lock().unwrap() = String::new();
@@ -530,6 +539,8 @@ impl ResultsTableController {
                             state.set_group_active(false);
                             state.set_group_by(ResultsGroupBy::None);
                             state.set_group_regex(slint::SharedString::new());
+                            state.set_sort_column_id(slint::SharedString::new());
+                            state.set_sort_ascending(true);
                             state.set_all_rows_loaded(all_loaded);
                             state.set_loading_more(false);
                             state.set_rows(slint::ModelRc::new(slint::VecModel::from(
@@ -596,6 +607,8 @@ impl ResultsTableController {
         // Per-ROI specs carry the column-visibility selection; only visible
         // metrics become grouped columns.
         let base_specs = this.column_specs.lock().unwrap().clone();
+        let sort_column = this.sort_column.lock().unwrap().clone();
+        let sort_ascending = *this.sort_ascending.lock().unwrap();
 
         let loader = ResultsLoader::new(&path);
         // Aggregation needs every matching row, so fetch all (page_size 0).
@@ -606,9 +619,17 @@ impl ResultsTableController {
             page_size: 0,
             page: 0,
             needs_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
         }) {
             Ok(rois) => {
-                let (specs, display_rows) = aggregate_rows(&rois, &config, &base_specs);
+                let (specs, mut display_rows) = aggregate_rows(&rois, &config, &base_specs);
+                // The grouped view is fully materialized in memory (unlike the
+                // paginated per-ROI view), so sorting it is a plain in-memory
+                // sort rather than another DB round-trip.
+                if let Some(col) = &sort_column {
+                    sort_display_rows(&mut display_rows, &specs, col, sort_ascending);
+                }
                 // Grouped view is never paginated.
                 *this.all_loaded.lock().unwrap() = true;
                 // Grouped rows aggregate many ROIs, so there is no single source
@@ -667,6 +688,8 @@ impl ResultsTableController {
         let coloc_filter = this.coloc_filter.lock().unwrap().clone();
         let specs = this.column_specs.lock().unwrap().clone();
         let needs_intensities = specs.iter().any(|c| c.visible && c.id.starts_with("ch"));
+        let sort_column = this.sort_column.lock().unwrap().clone();
+        let sort_ascending = *this.sort_ascending.lock().unwrap();
         let ui = this.ui.clone();
 
         let loader = ResultsLoader::new(&path);
@@ -677,6 +700,8 @@ impl ResultsTableController {
             page_size: PAGE_SIZE,
             page: 0,
             needs_intensities,
+            sort_column,
+            sort_ascending,
         }) {
             Ok(rois) => {
                 let all_loaded = rois.len() < PAGE_SIZE;
@@ -741,6 +766,8 @@ impl ResultsTableController {
         let coloc_filter = this.coloc_filter.lock().unwrap().clone();
         let specs = this.column_specs.lock().unwrap().clone();
         let needs_intensities = specs.iter().any(|c| c.visible && c.id.starts_with("ch"));
+        let sort_column = this.sort_column.lock().unwrap().clone();
+        let sort_ascending = *this.sort_ascending.lock().unwrap();
         let ui = this.ui.clone();
 
         let _ = slint::invoke_from_event_loop({
@@ -760,6 +787,8 @@ impl ResultsTableController {
             page_size: PAGE_SIZE,
             page: next_page,
             needs_intensities,
+            sort_column,
+            sort_ascending,
         }) {
             Ok(new_rois) => {
                 let all_loaded = new_rois.len() < PAGE_SIZE;
@@ -807,8 +836,16 @@ impl ResultsTableController {
     // Sorting
     // -------------------------------------------------------------------------
 
-    fn on_sort_column_changed(&self, column_id: SharedString, sort_ascending: bool) {
-        println!("Sort: {}/{}", column_id, sort_ascending);
+    fn on_sort_column_changed(self: &Arc<Self>, column_id: SharedString, sort_ascending: bool) {
+        *self.sort_column.lock().unwrap() = Some(column_id.to_string());
+        *self.sort_ascending.lock().unwrap() = sort_ascending;
+        *self.current_page.lock().unwrap() = 0;
+        *self.all_loaded.lock().unwrap() = false;
+
+        let Some(window) = self.ui.upgrade() else { return };
+        window.global::<ResultsState>().set_loading_more(true);
+
+        Self::spawn_reload(Arc::clone(self));
     }
 
     // -------------------------------------------------------------------------
