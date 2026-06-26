@@ -251,52 +251,110 @@ component ResultsToolbar inherits Rectangle {
                                 padding: 2px;
                                 spacing: 0px;
 
-                                for item in (col-vis-btn.col-popup-open ? ResultsState.column_popup : []): col-item-ta := TouchArea {
-                                    height: 26px;
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        ResultsState.column_label_toggled(item.label);
-                                    }
+                                for item in (col-vis-btn.col-popup-open ? ResultsState.column_popup : []): VerticalLayout {
+                                    spacing: 0px;
 
-                                    Rectangle {
-                                        background: col-item-ta.has-hover ? Theme.raised : transparent;
-                                        animate background { duration: 80ms; }
+                                    // -- Section header (e.g. "Intensity") — click toggles every
+                                    // column in this section at once, so the user doesn't have to
+                                    // untick each channel column one by one.
+                                    if item.group_header: group-header-ta := TouchArea {
+                                        height: 24px;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            ResultsState.column_group_toggle(item.group);
+                                        }
 
-                                        HorizontalLayout {
-                                            padding-left: 8px;
-                                            padding-right: 6px;
-                                            spacing: 7px;
-                                            alignment: start;
+                                        Rectangle {
+                                            background: group-header-ta.has-hover ? Theme.raised : Theme.bg;
+                                            animate background { duration: 80ms; }
 
-                                            VerticalLayout {
-                                                alignment: center;
-                                                Rectangle {
-                                                    width: 13px;
-                                                    height: 13px;
-                                                    border-radius: 2px;
-                                                    border-width: 1.5px;
-                                                    border-color: item.checked ? Theme.accent : Theme.border;
-                                                    background: item.checked ? Theme.accent : transparent;
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 6px;
+                                                spacing: 7px;
+                                                alignment: start;
 
-                                                    if item.checked: Image {
-                                                        source: @image-url("../icons/regular-black/check.svg");
-                                                        width: 9px;
-                                                        height: 9px;
-                                                        x: (parent.width - self.width) / 2;
-                                                        y: (parent.height - self.height) / 2;
-                                                        colorize: white;
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    Rectangle {
+                                                        width: 13px;
+                                                        height: 13px;
+                                                        border-radius: 2px;
+                                                        border-width: 1.5px;
+                                                        border-color: item.group_all_checked ? Theme.accent : Theme.border;
+                                                        background: item.group_all_checked ? Theme.accent : transparent;
+
+                                                        if item.group_all_checked: Image {
+                                                            source: @image-url("../icons/regular-black/check.svg");
+                                                            width: 9px;
+                                                            height: 9px;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                            colorize: white;
+                                                        }
                                                     }
                                                 }
-                                            }
 
-                                            Text {
-                                                text: item.label;
-                                                font-size: 11px;
-                                                font-family: Theme.font-mono;
-                                                color: item.checked ? Theme.text-dim : Theme.text-mute;
-                                                vertical-alignment: center;
-                                                overflow: elide;
-                                                horizontal-stretch: 1;
+                                                Text {
+                                                    text: item.group;
+                                                    font-size: 10px;
+                                                    font-family: Theme.font-sans;
+                                                    font-weight: 700;
+                                                    color: Theme.text-mute;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    col-item-ta := TouchArea {
+                                        height: 26px;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            ResultsState.column_label_toggled(item.label);
+                                        }
+
+                                        Rectangle {
+                                            background: col-item-ta.has-hover ? Theme.raised : transparent;
+                                            animate background { duration: 80ms; }
+
+                                            HorizontalLayout {
+                                                padding-left: item.group != "" ? 18px : 8px;
+                                                padding-right: 6px;
+                                                spacing: 7px;
+                                                alignment: start;
+
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    Rectangle {
+                                                        width: 13px;
+                                                        height: 13px;
+                                                        border-radius: 2px;
+                                                        border-width: 1.5px;
+                                                        border-color: item.checked ? Theme.accent : Theme.border;
+                                                        background: item.checked ? Theme.accent : transparent;
+
+                                                        if item.checked: Image {
+                                                            source: @image-url("../icons/regular-black/check.svg");
+                                                            width: 9px;
+                                                            height: 9px;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                            colorize: white;
+                                                        }
+                                                    }
+                                                }
+
+                                                Text {
+                                                    text: item.label;
+                                                    font-size: 11px;
+                                                    font-family: Theme.font-mono;
+                                                    color: item.checked ? Theme.text-dim : Theme.text-mute;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                    horizontal-stretch: 1;
+                                                }
                                             }
                                         }
                                     }

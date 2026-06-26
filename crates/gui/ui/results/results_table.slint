@@ -20,6 +20,17 @@ export struct ResultsRow {
 export struct FilterItem {
     label: string,
     checked: bool,
+    // Section this item belongs to in the column-visibility popup (e.g.
+    // "Intensity" for all Ch* columns), or "" for an ungrouped item. Unused by
+    // the image/class/coloc filter popups, which never set a group.
+    group: string,
+    // True on the first item of a new `group` run — the popup renders a
+    // section header (with its own select-all toggle) right before it.
+    group_header: bool,
+    // Only meaningful when `group_header` is true: whether every item
+    // sharing this `group` is currently checked, for the header's own
+    // checkbox visual.
+    group_all_checked: bool,
 }
 
 export enum ResultsViewMode { table, chart }
@@ -114,6 +125,10 @@ export global ResultsState {
     callback column_select_all();
     callback column_clear_all();
     callback column_filter_apply();
+    // Selects/clears every column belonging to one popup section at once
+    // (e.g. all "Intensity" columns), so the user doesn't have to untick
+    // each channel column one by one.
+    callback column_group_toggle(string);
 
     // -- Group-by / aggregation -------------------------------------------
     in-out property <ResultsGroupBy> group_by:   ResultsGroupBy.none;

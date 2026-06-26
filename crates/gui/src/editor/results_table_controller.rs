@@ -114,6 +114,7 @@ impl ResultsTableController {
         state.on_column_clear_all(cb!(column_clear_all));
         state.on_column_filter_apply(cb!(column_filter_apply));
         state.on_column_width_changed(cb!(on_column_width_changed, SharedString, f32));
+        state.on_column_group_toggle(cb!(column_group_toggle, SharedString));
 
         state.on_sort_requested(cb!(on_sort_column_changed, SharedString, bool));
 
@@ -459,13 +460,18 @@ impl ResultsTableController {
                                 .map(|c| c.width)
                                 .sum();
 
-                            let column_items: Vec<FilterItem> = specs
-                                .iter()
-                                .map(|c| FilterItem {
-                                    label: c.label.as_str().into(),
-                                    checked: c.visible,
-                                })
-                                .collect();
+                            let column_items: Vec<FilterItem> = mark_group_headers(
+                                specs
+                                    .iter()
+                                    .map(|c| FilterItem {
+                                        label: c.label.as_str().into(),
+                                        checked: c.visible,
+                                        group: column_group(&c.id).into(),
+                                        group_header: false,
+                                        group_all_checked: false,
+                                    })
+                                    .collect(),
+                            );
 
                             state.set_columns(slint::ModelRc::new(
                                 slint::VecModel::from(slint_cols),
@@ -1004,8 +1010,8 @@ impl ResultsTableController {
         let items = toggle_item_by_label(&current, label.as_str());
         let popup = sync_popup_checked(&items, &current_popup);
         state.set_column_popup_all_checked(all_checked(&popup));
-        state.set_column_items(to_model(items));
-        state.set_column_popup(to_model(popup));
+        state.set_column_items(to_model(mark_group_headers(items)));
+        state.set_column_popup(to_model(mark_group_headers(popup)));
     }
 
     fn column_search_changed(&self, search: SharedString) {
@@ -1015,7 +1021,7 @@ impl ResultsTableController {
         let current = model_to_vec(&state.get_column_items());
         let popup = filter_popup_by_search(&current, search.as_str());
         state.set_column_popup_all_checked(all_checked(&popup));
-        state.set_column_popup(to_model(popup));
+        state.set_column_popup(to_model(mark_group_headers(popup)));
     }
 
     fn column_select_all(&self) {
@@ -1026,8 +1032,8 @@ impl ResultsTableController {
         let items = set_checked_for_search(&current, &search, true);
         let popup = filter_popup_by_search(&items, &search);
         state.set_column_popup_all_checked(all_checked(&popup));
-        state.set_column_items(to_model(items));
-        state.set_column_popup(to_model(popup));
+        state.set_column_items(to_model(mark_group_headers(items)));
+        state.set_column_popup(to_model(mark_group_headers(popup)));
     }
 
     fn column_clear_all(&self) {
@@ -1038,8 +1044,27 @@ impl ResultsTableController {
         let items = set_checked_for_search(&current, &search, false);
         let popup = filter_popup_by_search(&items, &search);
         state.set_column_popup_all_checked(all_checked(&popup));
-        state.set_column_items(to_model(items));
-        state.set_column_popup(to_model(popup));
+        state.set_column_items(to_model(mark_group_headers(items)));
+        state.set_column_popup(to_model(mark_group_headers(popup)));
+    }
+
+    /// Selects/clears every column in one popup section at once (e.g. all
+    /// "Intensity" columns), scoped to the active search the same way
+    /// `(Select All)` is — searching first, then toggling the group, only
+    /// affects the rows currently visible.
+    fn column_group_toggle(&self, group: SharedString) {
+        let Some(window) = self.ui.upgrade() else { return };
+        let state = window.global::<ResultsState>();
+        let search = self.column_search.lock().unwrap().clone();
+        let current = model_to_vec(&state.get_column_items());
+        let currently_all_checked =
+            group_all_checked_for_search(&current, group.as_str(), &search);
+        let items =
+            set_group_checked_for_search(&current, group.as_str(), &search, !currently_all_checked);
+        let popup = filter_popup_by_search(&items, &search);
+        state.set_column_popup_all_checked(all_checked(&popup));
+        state.set_column_items(to_model(mark_group_headers(items)));
+        state.set_column_popup(to_model(mark_group_headers(popup)));
     }
 
     /// Applies column-visibility selection: updates the stored `column_specs`
@@ -1282,6 +1307,92 @@ fn all_checked(items: &[FilterItem]) -> bool {
 fn names_to_filter_items(names: &[String]) -> Vec<FilterItem> {
     names
         .iter()
-        .map(|n| FilterItem { label: n.as_str().into(), checked: true })
+        .map(|n| FilterItem {
+            label: n.as_str().into(),
+            checked: true,
+            group: SharedString::new(),
+            group_header: false,
+            group_all_checked: false,
+        })
+        .collect()
+}
+
+/// Popup section a column belongs to (e.g. all "Intensity" columns can be
+/// switched on/off as one group instead of one column at a time), or `""` for
+/// columns that don't belong to a section.
+fn column_group(col_id: &str) -> &'static str {
+    if col_id.starts_with("ch") {
+        "Intensity"
+    } else if col_id.starts_with("coloc_partner__") {
+        "Colocalization"
+    } else {
+        ""
+    }
+}
+
+/// Recomputes `group_header`/`group_all_checked` for an ordered list of
+/// [`FilterItem`]s: the first item of each contiguous `group` run gets
+/// `group_header = true` and `group_all_checked` set to whether every item
+/// sharing that group is currently checked. Must be re-run any time the list
+/// is rebuilt (toggle, search, select/clear-all, group toggle) since those
+/// operations don't otherwise know about section boundaries.
+fn mark_group_headers(items: Vec<FilterItem>) -> Vec<FilterItem> {
+    let mut group_checked: BTreeMap<String, bool> = BTreeMap::new();
+    for item in &items {
+        if item.group.is_empty() {
+            continue;
+        }
+        let entry = group_checked.entry(item.group.to_string()).or_insert(true);
+        *entry &= item.checked;
+    }
+
+    let mut prev_group: Option<String> = None;
+    items
+        .into_iter()
+        .map(|mut item| {
+            let is_header =
+                !item.group.is_empty() && prev_group.as_deref() != Some(item.group.as_str());
+            item.group_header = is_header;
+            item.group_all_checked = is_header
+                && *group_checked.get(item.group.as_str()).unwrap_or(&false);
+            prev_group = Some(item.group.to_string());
+            item
+        })
+        .collect()
+}
+
+/// Whether every item belonging to `group` *and* matching `search` is
+/// currently checked — scoped the same way `(Select All)` already is, so a
+/// group toggle while searching only affects the rows the user can see.
+fn group_all_checked_for_search(items: &[FilterItem], group: &str, search: &str) -> bool {
+    let lower = search.to_lowercase();
+    items
+        .iter()
+        .filter(|i| {
+            i.group == group && (lower.is_empty() || i.label.to_lowercase().contains(&lower))
+        })
+        .all(|i| i.checked)
+}
+
+/// Sets `checked` on every item belonging to `group` *and* matching `search`,
+/// leaving all other items untouched.
+fn set_group_checked_for_search(
+    items: &[FilterItem],
+    group: &str,
+    search: &str,
+    checked: bool,
+) -> Vec<FilterItem> {
+    let lower = search.to_lowercase();
+    items
+        .iter()
+        .map(|item| {
+            let mut item = item.clone();
+            if item.group == group
+                && (lower.is_empty() || item.label.to_lowercase().contains(&lower))
+            {
+                item.checked = checked;
+            }
+            item
+        })
         .collect()
 }
