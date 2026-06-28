@@ -1324,3 +1324,29 @@ pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors
     project.tmp_settings.current_project = Some(path.clone());
     Ok(project)
 }
+
+/// Imports an old (`.icproj`) project, converting it to the current format.
+///
+/// Unlike [`load_project`], the result has no `current_project` path set - the
+/// imported project doesn't exist as a `.evaproj` file yet, so saving it goes
+/// through the normal "please select a file" flow rather than silently
+/// overwriting the legacy file.
+///
+/// Returns the converted project, a list of conversion warnings (commands or
+/// fields the old project used that have no equivalent and were skipped or
+/// approximated), and the old project's configured image folder, if any - the
+/// caller is responsible for resolving that folder (e.g. relative to `path`'s
+/// parent) and scanning it for images, mirroring whatever flow already adds
+/// images to a new project; this function only converts settings.
+pub fn import_legacy_project(
+    path: &PathBuf,
+) -> Result<(ProjectWithRuntime, Vec<String>, Option<String>), InternalErrors> {
+    let data = fs::read_to_string(path)?;
+    let outcome = evanalyzer_cfg::import_legacy_project(&data)
+        .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
+    let project = ProjectWithRuntime {
+        settings: outcome.project,
+        tmp_settings: ProjectTmpSettings::default(),
+    };
+    Ok((project, outcome.warnings, outcome.legacy_image_folder))
+}

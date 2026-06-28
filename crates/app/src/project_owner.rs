@@ -167,6 +167,22 @@ impl AppHandle {
         Ok(())
     }
 
+    /// Imports an old (`.icproj`) project, replacing the current project.
+    ///
+    /// Returns the conversion warnings and the legacy project's configured
+    /// image folder (if any), so the caller can surface the warnings and decide
+    /// whether to scan that folder for images.
+    pub fn import_legacy_project(
+        &self,
+        path: &PathBuf,
+    ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
+        let (project, warnings, legacy_image_folder) =
+            crate::extensions::project_ext::import_legacy_project(path)
+                .map_err(|e| InternalErrors::Internal(format!("Could not import legacy project: {e}")))?;
+        *self.project.write().expect("Poisoned") = project;
+        Ok((warnings, legacy_image_folder))
+    }
+
     /// Returns or creates an image reader for the given path.
     /// Reuses the existing reader if the path has not changed.
     pub fn get_or_create_reader(

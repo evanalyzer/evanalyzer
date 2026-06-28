@@ -62,6 +62,15 @@ impl UiState {
         self.app.load_project(path)
     }
 
+    /// Imports an old (`.icproj`) project, replacing the current project.
+    /// Returns conversion warnings and the legacy project's image folder, if any.
+    pub fn import_legacy_project(
+        &self,
+        path: &PathBuf,
+    ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
+        self.app.import_legacy_project(path)
+    }
+
     /// Marks the project as having unsaved changes.
     pub fn mark_dirty(&self) {
         let ui = self.ui_handle.clone();
