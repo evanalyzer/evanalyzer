@@ -348,13 +348,10 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                     }
                     let field_type = map_to_settings_type(&field.ty, enums, commands);
                     let fn_name = format!("_serde_default_{}_{}", prefix, field.name);
-                    let body = if let Some(ref expr) = field.metadata.default_expr {
-                        remap_default_expr(expr, enums, commands)
-                    } else if let Some(val) = field.metadata.default {
-                        format_default_for_type(&field.ty, val)
-                    } else {
-                        format!("{}::default()", field_type)
-                    };
+                    // Reuse the same default-expression logic as the struct's `Default`
+                    // impl so generic types (`Vec<T>`, `Option<T>`) get a valid
+                    // expression instead of the invalid `Vec<T>::default()`.
+                    let body = field_default_expr(field, enums, commands);
                     out.push_str(&format!(
                         "fn {}() -> {} {{ {} }}\n",
                         fn_name, field_type, body

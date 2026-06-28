@@ -88,6 +88,41 @@ impl PipelineWorker {
                     zoom: vp.zoom,
                     process_all_tiles: false,
                 });
+                drop(vp);
+
+                // Reject previews that would cover too much of a whole-slide image at
+                // once: at low zoom the viewport can span hundreds of tiles, each
+                // potentially producing huge numbers of ROIs that the viewport renderer
+                // and ROI list can't handle responsively. Tell the user to zoom in
+                // instead of silently grinding through it.
+                const MAX_PREVIEW_VISIBLE_TILES: usize = 4;
+                match job_exec.count_preview_visible_tiles() {
+                    Ok(n) if n > MAX_PREVIEW_VISIBLE_TILES => {
+                        info!(
+                            "Preview rejected: viewport covers {n} tiles (max {MAX_PREVIEW_VISIBLE_TILES})"
+                        );
+                        self.pipeline_controller.disable_auto_preview();
+                        let ui_handle = self.app_state.ui_handle.clone();
+                        let message = format!(
+                            "Zoomed out too far to preview live: the visible area covers {n} tiles \
+                             (max {MAX_PREVIEW_VISIBLE_TILES}). Zoom in, then run the preview again. \
+                             Auto preview has been turned off."
+                        );
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_handle.upgrade() {
+                                ui.global::<PipelineRunningState>()
+                                    .set_status_message(message.into());
+                                ui.global::<PipelineRunningState>().set_has_error(true);
+                                ui.global::<PipelineRunningState>().set_done(true);
+                            }
+                        });
+                        continue;
+                    }
+                    Err(e) => {
+                        error!("Failed to count visible preview tiles: {e:?}");
+                    }
+                    _ => {}
+                }
 
                 if let Some((pipeline_id, step_id, mode)) = task.breakpoint {
                     job_exec.breakpoint = Some(evanalyzer_core::BreakpointSettings {
@@ -102,11 +137,10 @@ impl PipelineWorker {
 
             info!("Pipeline job started ...");
 
-            let Ok(parallel) = std::thread::available_parallelism() else {
-                error!("Could not get number of cores!");
-                continue;
-            };
-            let (handle, rx, cancel_flag) = job_exec.run_async(parallel.get() - 1);
+            // Caps parallelism to available RAM as well as CPU cores, so a low-memory
+            // machine doesn't try to run as many concurrent workers as it has cores.
+            let parallelism = evanalyzer_core::recommended_parallelism();
+            let (handle, rx, cancel_flag) = job_exec.run_async(parallelism);
             *self
                 .pipeline_controller
                 .pipeline_cancel_flag

@@ -97,12 +97,12 @@ impl ImageAlgorithm for ExtractRois {
             t: -1,
         });
 
-        // Resolve each channel's pixel slice and sampling geometry once. The previous
-        // per-pixel path re-matched the container type and recomputed zoom for every
-        // pixel — all loop-invariant per channel.
-        let origin_width = size.width;
-        let zoom_x = size.width / full_image_size.width;
-        let zoom_y = size.height / full_image_size.height;
+        // Resolve each channel's pixel slice once. The previous per-pixel path
+        // re-matched the container type for every pixel — loop-invariant per channel.
+        // Channel images are loaded for this exact tile (see `prepare_pipeline_cache`),
+        // so they share the tile's own pixel grid 1:1 with the label/instance maps -
+        // no resolution scaling against `full_image_size` applies here, the channel
+        // index is identical to the label map's `row + x`.
         let channel_views = cache.image_cache.resolve_channel_views();
         let n_ch = channel_views.len();
         let n_obj = max_id + 1;
@@ -133,7 +133,6 @@ impl ImageAlgorithm for ExtractRois {
         let edge_y = full_image_size.height.saturating_sub(1);
         for y in 0..h {
             let row = y * w;
-            let sample_row = (y * zoom_y) * origin_width;
             for x in 0..w {
                 let id = instance_map_slice[row + x] as usize;
                 if id == 0 {
@@ -146,7 +145,7 @@ impl ImageAlgorithm for ExtractRois {
                 seg_class[id] = segmentation_slice[row + x];
 
                 // Sample intensity for each pre-resolved channel.
-                let sample = sample_row + x * zoom_x;
+                let sample = row + x;
                 let base = id * n_ch;
                 for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
                     let val = sample_channel_pixel(*is_rgb, slice, sample);
@@ -622,6 +621,76 @@ mod tests {
 
         // Intensity check
         assert_eq!(roi.intensities.get(&0).unwrap().sum_intensity, 50.0);
+    }
+
+    #[test]
+    fn test_extract_rois_samples_correct_pixel_per_object_in_a_multi_tile_image() {
+        // Regression test: when the full image is larger than the current tile (the
+        // whole-slide-image / multi-tile case), intensity sampling must use the tile's
+        // own pixel grid directly - not scale coordinates by tile_size/full_image_size,
+        // which truncates to 0 for any real multi-tile image and made every object
+        // sample channel pixel 0 regardless of its actual position.
+        let full_size = ImageSize {
+            width: 50,
+            height: 60,
+        };
+        let tile_size = ImageSize {
+            width: 15,
+            height: 20,
+        };
+        let offset = Point2d { x: 10, y: 15 };
+
+        let mut ctx =
+            PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
+        let mut cache = PipelineCache::default();
+
+        // Two objects at different tile-local positions, each with a distinct intensity.
+        let mut classes = vec![0u32; 15 * 20];
+        classes[0] = 1; // local (0,0)
+        classes[5 * 15 + 7] = 2; // local (7,5)
+
+        let mut intensity = vec![0.0f32; 15 * 20];
+        intensity[0] = 10.0;
+        intensity[5 * 15 + 7] = 99.0;
+
+        ctx.image = crate::image::ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::from_size_slice(tile_size, &intensity, CpuAllocator)
+                .unwrap(),
+            tile_offset: offset,
+            plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        });
+
+        ctx.instance_map = Some(
+            Image::<u32, 1, CpuAllocator>::from_size_slice(tile_size, &classes, CpuAllocator)
+                .unwrap(),
+        );
+        let labels = vec![1u32; 15 * 20];
+        ctx.segmentation_map = Some(
+            Image::<u32, 1, CpuAllocator>::from_size_slice(tile_size, &labels, CpuAllocator)
+                .unwrap(),
+        );
+
+        cache
+            .image_cache
+            .add_to_channel_cache(Arc::new(ctx.image.clone()), 0);
+
+        let extractor = ExtractRois {
+            max_objects_before_fail: 100_000,
+        };
+        extractor
+            .execute(&mut ctx, &mut cache)
+            .expect("Extraction failed");
+
+        assert_eq!(cache.roi_cache.len(), 2);
+        let mut rois: Vec<&Roi> = cache.roi_cache.values().collect();
+        rois.sort_by_key(|r| r.intensities.get(&0).unwrap().sum_intensity as i64);
+
+        assert_eq!(rois[0].intensities.get(&0).unwrap().sum_intensity, 10.0);
+        assert_eq!(
+            rois[1].intensities.get(&0).unwrap().sum_intensity,
+            99.0,
+            "second object must sample its own pixel, not object 1's"
+        );
     }
 
     #[test]

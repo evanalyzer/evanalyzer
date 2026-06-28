@@ -342,11 +342,82 @@ impl<'a> JobExecutor {
         self.pipelines.insert(p.id, p);
     }
 
+    /// Picks the tile size for a single-image preview run.
+    ///
+    /// At higher zoom the viewport covers a smaller area of the full image, so
+    /// using the same fixed 4096px tile means re-reading and re-analyzing a lot
+    /// of pixels the user can't see just to get the small visible patch. Shrinking
+    /// the tile as zoom increases keeps the analyzed area closer to what's on
+    /// screen, so feedback for that area arrives faster.
+    fn preview_tile_size(&self) -> usize {
+        const BASE_TILE_SIZE: usize = 4096;
+        let Some(zoom) = self.preview_tile_settings.as_ref().map(|s| s.zoom) else {
+            return BASE_TILE_SIZE;
+        };
+        if zoom >= 8.0 {
+            512
+        } else if zoom >= 4.0 {
+            1024
+        } else if zoom >= 2.0 {
+            2048
+        } else {
+            BASE_TILE_SIZE
+        }
+    }
+
+    /// Pure tile-count math, factored out of [`count_preview_visible_tiles`] so it
+    /// can be unit-tested without needing a real image file on disk.
+    fn count_visible_tiles_for_image(&self, full_width: usize, full_height: usize) -> usize {
+        let tile_size = self.preview_tile_size();
+        let tiles = self.prepare_tile_iterator(full_width, full_height, tile_size);
+        match &self.preview_tile_settings {
+            Some(settings) => tiles.filter(|t| settings.is_tile_visible(t)).count(),
+            None => tiles.count(),
+        }
+    }
+
+    /// Counts how many tiles a preview run would actually process, without running
+    /// the pipeline. Mirrors the tile-size and viewport-visibility logic
+    /// `analyze_image_tiles_parallel` uses (same `preview_tile_size`/`prepare_tile_iterator`/
+    /// `is_tile_visible` calls), so callers can gate on the same number the real run
+    /// would use before paying for a full pipeline dispatch.
+    ///
+    /// Only reads image metadata (dimensions), not pixel data, so this is cheap
+    /// enough to call synchronously before starting a preview.
+    pub fn count_preview_visible_tiles(&self) -> Result<usize, InternalErrors> {
+        const RES_IDX: i32 = 0;
+        let mut total = 0usize;
+        for (rel_path, image_entry) in &self.images {
+            let abs_path = self.image_base_path.join(rel_path);
+            let reader = ImageReader::new(&abs_path, ReadMode::Default)?;
+            let series_info = reader
+                .image_meta
+                .series
+                .get(&image_entry.selected_series)
+                .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
+            let py_meta = series_info
+                .resolutions
+                .get(&RES_IDX)
+                .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
+
+            total +=
+                self.count_visible_tiles_for_image(py_meta.width as usize, py_meta.height as usize);
+        }
+        Ok(total)
+    }
+
     /// Analyze one image
     ///
     /// This function analyzes one whole image, including all configured time and z-stacks.
     /// If this is whole slide image, which is too big to load to RAM at once, the function
-    /// splits the image into tiles and analyze tile per tile
+    /// splits the image into tiles and analyzes tiles in parallel.
+    ///
+    /// Tile processing runs on the same rayon pool that [`run`](Self::run) uses to
+    /// parallelize over images. Nested `par_iter` calls share that pool via work
+    /// stealing, so when there are fewer images than cores the otherwise-idle
+    /// cores pick up tile work for the images that *are* running instead of
+    /// sitting idle - no manual thread-budget split between "image parallelism"
+    /// and "tile parallelism" is needed.
     fn analyze_image(
         &self,
         image_rel_path: &PathBuf,
@@ -360,33 +431,74 @@ impl<'a> JobExecutor {
         const TILE_SIZE: usize = 4096;
         let start_image = Instant::now();
 
-        let start = Instant::now();
-        let reader = ImageReader::new(image_path, ReadMode::Default)?;
-        let duration = start.elapsed();
-        info!("Prepare image reader {:?} {:?}", image_rel_path, duration);
+        // Extract everything needed from the reader in a scoped block so the
+        // borrow ends before tiles are processed in parallel - each tile work
+        // item below opens its own reader so concurrent threads never share
+        // mutable file-handle state (see analyze_image_tiles_parallel).
+        let (full_size, z_proj, z_handling, z_stacks, t_stacks, is_rgb, nr_bits, pixel_sizes) = {
+            let start = Instant::now();
+            let reader = ImageReader::new(image_path, ReadMode::Default)?;
+            let duration = start.elapsed();
+            info!("Prepare image reader {:?} {:?}", image_rel_path, duration);
 
-        let series_info = reader
-            .image_meta
-            .series
-            .get(&image_entry.selected_series)
-            .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
+            let series_info = reader
+                .image_meta
+                .series
+                .get(&image_entry.selected_series)
+                .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
 
-        let py_meta = series_info
-            .resolutions
-            .get(&RES_IDX)
-            .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
+            let py_meta = series_info
+                .resolutions
+                .get(&RES_IDX)
+                .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
 
-        let full_size = ImageSize {
-            width: py_meta.width as usize,
-            height: py_meta.height as usize,
+            let full_size = ImageSize {
+                width: py_meta.width as usize,
+                height: py_meta.height as usize,
+            };
+            let (z_proj, z_handling, z_range) =
+                self.prepare_z_stack_iterator(series_info, image_entry);
+            let z_stacks: Vec<i32> = z_range.collect();
+            let t_stacks: Vec<i32> = self
+                .prepare_t_stack_iterator(series_info, image_entry)
+                .collect();
+            let pixel_sizes = match &self.override_pixel_sizes {
+                Some(from_user) => from_user.clone(),
+                None => PixelSizes {
+                    px_size_x: series_info.pixel_sizes.px_size_x,
+                    px_size_y: series_info.pixel_sizes.px_size_y,
+                    px_size_z: series_info.pixel_sizes.px_size_z,
+                },
+            };
+            (
+                full_size,
+                z_proj,
+                z_handling,
+                z_stacks,
+                t_stacks,
+                py_meta.is_rgb,
+                py_meta.nr_bits,
+                pixel_sizes,
+            )
         };
-        let (z_proj, z_handling, z_range) =
-            self.prepare_z_stack_iterator(series_info, &image_entry);
 
-        let t_stack_iter = self.prepare_t_stack_iterator(series_info, &image_entry);
+        let tiles: Vec<ImageTile> = self
+            .prepare_tile_iterator(full_size.width, full_size.height, TILE_SIZE)
+            .collect();
 
-        // Spawn a dedicated DB writer thread so tile N+1's image loading and
-        // pipeline execution can overlap with tile N's DuckDB insert.
+        // Flat (t, z, tile) work list, processed in parallel below.
+        let mut all_work: Vec<(i32, i32, ImageTile)> =
+            Vec::with_capacity(t_stacks.len() * z_stacks.len() * tiles.len());
+        for &t in &t_stacks {
+            for &z in &z_stacks {
+                for tile in &tiles {
+                    all_work.push((t, z, tile.clone()));
+                }
+            }
+        }
+
+        // Spawn a dedicated DB writer thread so one tile's image loading and
+        // pipeline execution can overlap with another tile's DuckDB insert.
         let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<PipelineCache>(4);
         let writer_handle = {
             let exporter = exporter.clone();
@@ -400,31 +512,21 @@ impl<'a> JobExecutor {
             })
         };
 
-        let pixel_sizes = match &self.override_pixel_sizes {
-            Some(from_user) => from_user.clone(),
-            None => PixelSizes {
-                px_size_x: series_info.pixel_sizes.px_size_x,
-                px_size_y: series_info.pixel_sizes.px_size_y,
-                px_size_z: series_info.pixel_sizes.px_size_z,
-            },
-        };
-
-        let mut tile_result: Result<(), InternalErrors> = Ok(());
-        'outer: for t in t_stack_iter {
-            for z in z_range.clone() {
-                for tile in self.prepare_tile_iterator(full_size.width, full_size.height, TILE_SIZE)
-                {
+        let tile_result =
+            all_work
+                .into_par_iter()
+                .try_for_each(|(t, z, tile)| -> Result<(), InternalErrors> {
                     if cancel.load(Ordering::Relaxed) {
-                        tile_result = Err(InternalErrors::Cancelled);
-                        break 'outer;
+                        return Err(InternalErrors::Cancelled);
                     }
+
+                    let reader = ImageReader::new(image_path, ReadMode::Default)?;
                     let z_range_in = matches!(
                         z_handling,
                         ZStackHandling::AllStacks | ZStackHandling::SingleStack
                     )
                     .then(|| z..=z);
 
-                    let start = Instant::now();
                     let mut cache = self.prepare_pipeline_cache(
                         &reader,
                         Arc::new(image_entry.clone()),
@@ -434,16 +536,11 @@ impl<'a> JobExecutor {
                         &z_range_in,
                         RES_IDX,
                         full_size,
-                        py_meta.is_rgb,
+                        is_rgb,
                         image_rel_path,
-                        py_meta.nr_bits,
+                        nr_bits,
                         pixel_sizes.clone(),
                     )?;
-                    let duration = start.elapsed();
-                    info!(
-                        "Read image to pipeline cache {:?} {:?}",
-                        image_rel_path, duration
-                    );
 
                     let mut bp_hit = false;
                     for pipe_id in order {
@@ -467,29 +564,25 @@ impl<'a> JobExecutor {
                     }
                     if bp_hit {
                         // Skip DB write for a Stop breakpoint run.
-                        continue;
+                        return Ok(());
                     }
 
                     match cache_tx.try_send(cache) {
                         Ok(()) => {}
                         Err(std::sync::mpsc::TrySendError::Full(cache)) => {
                             warn!("DB writer backpressure: channel full, tile stalling");
-                            if let Err(e) = cache_tx.send(cache) {
-                                tile_result =
-                                    Err(InternalErrors::Io(format!("DB writer exited: {e}")));
-                                break 'outer;
-                            }
+                            cache_tx.send(cache).map_err(|e| {
+                                InternalErrors::Io(format!("DB writer exited: {e}"))
+                            })?;
                         }
                         Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                            tile_result = Err(InternalErrors::Io(
+                            return Err(InternalErrors::Io(
                                 "DB writer thread exited unexpectedly".into(),
                             ));
-                            break 'outer;
                         }
                     }
-                }
-            }
-        }
+                    Ok(())
+                });
 
         drop(cache_tx);
         let writer_result = writer_handle.join().expect("DB writer thread panicked");
@@ -521,7 +614,7 @@ impl<'a> JobExecutor {
         cancel: Arc<AtomicBool>,
     ) -> Result<(), InternalErrors> {
         const RES_IDX: i32 = 0;
-        const TILE_SIZE: usize = 4096;
+        let tile_size = self.preview_tile_size();
 
         // Extract everything we need from the reader in a scoped block so the
         // borrow of `reader` ends before we enter the parallel section.
@@ -567,7 +660,7 @@ impl<'a> JobExecutor {
         };
 
         let tiles: Vec<ImageTile> = self
-            .prepare_tile_iterator(full_size.width, full_size.height, TILE_SIZE)
+            .prepare_tile_iterator(full_size.width, full_size.height, tile_size)
             .collect();
         let z_stacks: Vec<i32> = z_range.collect();
 
@@ -864,6 +957,14 @@ impl<'a> JobExecutor {
     /// T-stack handling mode. It can either return a single time frame or a range
     /// covering all available time points in the image.
     ///
+    /// Resolves settings as **per-series override -> global setting -> default**
+    /// (matching the equivalent resolution the GUI itself uses, in
+    /// `evanalyzer_app`'s `images_ext.rs`/`project_ext.rs`). A series entry always
+    /// exists once an image is added to a project, but its `t_stack` field is only
+    /// ever populated by an explicit per-series override - so checking *whether
+    /// the field is set* (not whether the entry exists) is what makes the global
+    /// setting reachable.
+    ///
     /// # Arguments
     /// * `project` - The project containing global and image-specific settings
     /// * `image_info` - Metadata about the image, including the total number of time stacks
@@ -878,36 +979,36 @@ impl<'a> JobExecutor {
         image_info: &ImageInfo,
         image_entry: &ImageEntry,
     ) -> RangeInclusive<i32> {
-        let t_stack_settings = match image_entry.series.get(&image_entry.selected_series) {
-            Some(t_stack_settings_image) => &t_stack_settings_image.t_stack,
-            None => &self.global_image_settings.t_stack,
-        };
+        let local = image_entry
+            .series
+            .get(&image_entry.selected_series)
+            .and_then(|s| s.t_stack.clone());
+        let settings = local
+            .or_else(|| self.global_image_settings.t_stack.clone())
+            .unwrap_or_default();
 
-        if let Some(t_stack_settings_some) = t_stack_settings {
-            match t_stack_settings_some.stack_handling {
-                TStackHandling::SingleStack => {
-                    return t_stack_settings_some.t_stack..=t_stack_settings_some.t_stack;
-                }
-                TStackHandling::AllStacks => {
-                    return 0..=image_info.nr_t_stacks - 1;
-                }
-            };
-        } else {
-            return 0..=image_info.nr_t_stacks - 1;
+        match settings.stack_handling {
+            TStackHandling::SingleStack => settings.t_stack..=settings.t_stack,
+            TStackHandling::AllStacks => 0..=image_info.nr_t_stacks - 1,
         }
     }
 
+    /// Resolves the active Z-stack settings as **per-series override -> global
+    /// setting -> default**. See [`prepare_t_stack_iterator`](Self::prepare_t_stack_iterator)
+    /// for why checking field presence (not series-entry presence) matters here:
+    /// every image has a series entry with `z_stack: None` unless explicitly
+    /// overridden, so the previous entry-existence check meant a project-wide
+    /// projection choice (e.g. Maximum Intensity) was silently discarded in favor
+    /// of the `SingleStack` default for every image.
     fn get_z_stack_settings(&self, image_entry: &ImageEntry) -> ZStackSettings {
-        let z_stack_settings = match image_entry.series.get(&image_entry.selected_series) {
-            Some(z_stack_settings) => &z_stack_settings.z_stack,
-            None => &self.global_image_settings.z_stack,
-        };
+        let local = image_entry
+            .series
+            .get(&image_entry.selected_series)
+            .and_then(|s| s.z_stack.clone());
 
-        if let Some(t_stack_settings_some) = z_stack_settings {
-            return t_stack_settings_some.clone();
-        } else {
-            return ZStackSettings::default();
-        }
+        local
+            .or_else(|| self.global_image_settings.z_stack.clone())
+            .unwrap_or_default()
     }
 
     /// Prepares Z-stack projection settings and generates a range of Z indices.
@@ -1061,6 +1162,231 @@ impl<'a> JobExecutor {
             );
         }
         order
+    }
+}
+
+#[cfg(test)]
+mod z_t_stack_precedence_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use evanalyzer_cfg::settings::images_settings::{SeriesSettings, TStackSettings};
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    fn make_job_executor(
+        global_z: Option<ZStackSettings>,
+        global_t: Option<TStackSettings>,
+    ) -> JobExecutor {
+        let global_image_settings = GlobalImageSettings {
+            z_stack: global_z,
+            t_stack: global_t,
+            ..Default::default()
+        };
+
+        JobExecutor::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+            IndexMap::new(),
+            std::path::PathBuf::new(),
+            global_image_settings,
+            Arc::new(Mutex::new(MemoryExporter {
+                out_rois: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        )
+    }
+
+    /// Mirrors what `add_image_to_list` actually produces for every image: a
+    /// series entry exists, but its `z_stack`/`t_stack` fields are unset unless
+    /// the (currently unreachable from the GUI) per-series override is used.
+    fn make_image_entry_with_default_series() -> ImageEntry {
+        let mut series = BTreeMap::new();
+        series.insert(0, SeriesSettings::default());
+        ImageEntry {
+            rel_path: std::path::PathBuf::new(),
+            file_size: 0,
+            selected_series: 0,
+            series,
+        }
+    }
+
+    #[test]
+    fn global_z_projection_is_honored_when_no_per_series_override_exists() {
+        let job = make_job_executor(
+            Some(ZStackSettings {
+                z_projection: ZStackHandling::MaxIntensity,
+                z_range: None,
+            }),
+            None,
+        );
+        let entry = make_image_entry_with_default_series();
+
+        let resolved = job.get_z_stack_settings(&entry);
+
+        assert_eq!(resolved.z_projection, ZStackHandling::MaxIntensity);
+    }
+
+    #[test]
+    fn per_series_z_override_takes_precedence_over_global() {
+        let job = make_job_executor(
+            Some(ZStackSettings {
+                z_projection: ZStackHandling::MaxIntensity,
+                z_range: None,
+            }),
+            None,
+        );
+        let mut entry = make_image_entry_with_default_series();
+        entry.series.get_mut(&0).unwrap().z_stack = Some(ZStackSettings {
+            z_projection: ZStackHandling::SumIntensity,
+            z_range: None,
+        });
+
+        let resolved = job.get_z_stack_settings(&entry);
+
+        assert_eq!(resolved.z_projection, ZStackHandling::SumIntensity);
+    }
+
+    #[test]
+    fn z_settings_fall_back_to_default_when_neither_local_nor_global_is_set() {
+        let job = make_job_executor(None, None);
+        let entry = make_image_entry_with_default_series();
+
+        let resolved = job.get_z_stack_settings(&entry);
+
+        assert_eq!(resolved.z_projection, ZStackHandling::SingleStack);
+    }
+
+    #[test]
+    fn global_t_all_stacks_is_honored_when_no_per_series_override_exists() {
+        let job = make_job_executor(
+            None,
+            Some(TStackSettings {
+                stack_handling: TStackHandling::AllStacks,
+                playback_speed: 1.0,
+                t_stack: 0,
+            }),
+        );
+        let entry = make_image_entry_with_default_series();
+        let image_info = ImageInfo {
+            nr_t_stacks: 5,
+            ..Default::default()
+        };
+
+        let range = job.prepare_t_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 0..=4);
+    }
+
+    #[test]
+    fn per_series_t_override_takes_precedence_over_global() {
+        let job = make_job_executor(
+            None,
+            Some(TStackSettings {
+                stack_handling: TStackHandling::AllStacks,
+                playback_speed: 1.0,
+                t_stack: 0,
+            }),
+        );
+        let mut entry = make_image_entry_with_default_series();
+        entry.series.get_mut(&0).unwrap().t_stack = Some(TStackSettings {
+            stack_handling: TStackHandling::SingleStack,
+            playback_speed: 1.0,
+            t_stack: 3,
+        });
+        let image_info = ImageInfo {
+            nr_t_stacks: 5,
+            ..Default::default()
+        };
+
+        let range = job.prepare_t_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 3..=3);
+    }
+}
+
+#[cfg(test)]
+mod preview_visible_tile_count_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use std::sync::{Arc, Mutex};
+
+    fn make_job(preview_tile_settings: Option<PreviewTileSettings>) -> JobExecutor {
+        let mut job = JobExecutor::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+            IndexMap::new(),
+            std::path::PathBuf::new(),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter {
+                out_rois: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        );
+        job.preview_tile_settings = preview_tile_settings;
+        job
+    }
+
+    /// No preview settings means a full (non-preview) run: every tile counts.
+    #[test]
+    fn without_preview_settings_counts_every_tile() {
+        let job = make_job(None);
+        // 4096px base tile size, 10000x10000 image -> 3x3 = 9 tiles.
+        assert_eq!(job.count_visible_tiles_for_image(10_000, 10_000), 9);
+    }
+
+    /// Zoomed out so far that the whole 10000x10000 image fits the viewport: every
+    /// tile in the (fixed 4096px, since zoom < 2.0) grid intersects the viewport.
+    #[test]
+    fn zoomed_out_to_fit_the_whole_slide_counts_every_tile() {
+        let job = make_job(Some(PreviewTileSettings {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 1000.0,
+            viewport_height: 1000.0,
+            zoom: 0.1,
+            process_all_tiles: false,
+        }));
+        assert_eq!(job.count_visible_tiles_for_image(10_000, 10_000), 9);
+    }
+
+    /// Zoomed in enough that the viewport only covers a small image-space patch:
+    /// only the tiles actually under the viewport should count, not the whole grid.
+    #[test]
+    fn zoomed_in_on_one_tile_counts_only_that_tile() {
+        let job = make_job(Some(PreviewTileSettings {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 1000.0,
+            viewport_height: 1000.0,
+            // zoom >= 2.0 shrinks the tile size to 2048px (see `preview_tile_size`),
+            // and the viewport (1000px screen / 2.0 zoom = 500 image px) sits
+            // entirely inside the first 2048px tile.
+            zoom: 2.0,
+            process_all_tiles: false,
+        }));
+        assert_eq!(job.count_visible_tiles_for_image(10_000, 10_000), 1);
+    }
+
+    /// Sanity check for the gate's exact use case: a whole-slide image (e.g.
+    /// 40000x30000, comparable to a real WSI) viewed fully zoomed out covers far
+    /// more than a handful of 4096px tiles - this is the scenario the GUI's
+    /// preview-rejection threshold (`MAX_PREVIEW_VISIBLE_TILES` in
+    /// `pipeline_worker.rs`) is meant to catch.
+    #[test]
+    fn whole_slide_zoomed_out_exceeds_a_small_tile_budget() {
+        let job = make_job(Some(PreviewTileSettings {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 1200.0,
+            viewport_height: 900.0,
+            zoom: 0.03,
+            process_all_tiles: false,
+        }));
+        let visible = job.count_visible_tiles_for_image(40_000, 30_000);
+        assert!(
+            visible > 4,
+            "expected a fully zoomed-out whole-slide view to exceed a 4-tile budget, got {visible}"
+        );
     }
 }
 

@@ -100,12 +100,20 @@ impl MaximumFinder {
             return vec![0u8; n]; // flat image: nothing to segment
         }
 
-        let max_points = self.get_sorted_max_points(ip, &mut types, global_min, global_max);
+        // `true_edm_height` is a pure function of `ip`, but both passes below
+        // probe it for every pixel and again for several of its neighbors -
+        // precomputing it once turns that repeated, branch-heavy recomputation
+        // into a single array lookup at each call site.
+        let true_heights = self.compute_true_heights(ip);
+
+        let max_points =
+            self.get_sorted_max_points(ip, &true_heights, &mut types, global_min, global_max);
 
         // For float EDMs the integer-encoded sort order may be off by this much.
         let max_sorting_error = 1.1 * (SQRT2 / 2.0);
         self.analyze_and_mark_maxima(
             ip,
+            &true_heights,
             &mut types,
             &max_points,
             global_min,
@@ -125,6 +133,7 @@ impl MaximumFinder {
     fn get_sorted_max_points(
         &self,
         ip: &[f32],
+        true_heights: &[f32],
         types: &mut [u8],
         global_min: f32,
         global_max: f32,
@@ -138,16 +147,14 @@ impl MaximumFinder {
                 if v == global_min {
                     continue;
                 }
-                let v_true = self.true_edm_height(x as i32, y as i32, ip);
+                let v_true = true_heights[i];
                 let is_inner = y != 0 && y != h - 1 && x != 0 && x != w - 1;
                 let mut is_max = true;
                 for d in 0..8 {
                     if is_inner || self.is_within(x as i32, y as i32, d) {
                         let n_idx = (i as i32 + self.dir_offset[d]) as usize;
                         let v_neighbor = ip[n_idx];
-                        let nx = x as i32 + DIR_X_OFFSET[d];
-                        let ny = y as i32 + DIR_Y_OFFSET[d];
-                        let v_neighbor_true = self.true_edm_height(nx, ny, ip);
+                        let v_neighbor_true = true_heights[n_idx];
                         if v_neighbor > v && v_neighbor_true > v_true {
                             is_max = false;
                             break;
@@ -167,7 +174,7 @@ impl MaximumFinder {
             for x in 0..w {
                 let p = x + y * w;
                 if types[p] == MAXIMUM {
-                    let f_value = self.true_edm_height(x as i32, y as i32, ip);
+                    let f_value = true_heights[p];
                     let i_value = ((f_value - global_min) * v_factor) as i64;
                     max_points.push(((i_value as u64) << 32) | p as u64);
                 }
@@ -182,6 +189,7 @@ impl MaximumFinder {
     fn analyze_and_mark_maxima(
         &self,
         ip: &[f32],
+        true_heights: &[f32],
         types: &mut [u8],
         max_points: &[u64],
         _global_min: f32,
@@ -199,7 +207,7 @@ impl MaximumFinder {
             }
             let mut x0 = (offset0 % w) as i32;
             let mut y0 = (offset0 / w) as i32;
-            let mut v0 = self.true_edm_height(x0, y0, ip);
+            let mut v0 = true_heights[offset0];
 
             loop {
                 p_list[0] = offset0;
@@ -229,7 +237,7 @@ impl MaximumFinder {
                             }
                             let x2 = x + DIR_X_OFFSET[d];
                             let y2 = y + DIR_Y_OFFSET[d];
-                            let v2 = self.true_edm_height(x2, y2, ip);
+                            let v2 = true_heights[offset2];
                             if v2 > v0 + max_sorting_error {
                                 max_possible = false; // reached a higher point
                                 break;
@@ -306,6 +314,21 @@ impl MaximumFinder {
                 *t = PROCESSED | MAX_AREA;
             }
         }
+    }
+
+    /// Precomputes [`Self::true_edm_height`] for every pixel. The callers below
+    /// each probe this for a pixel and several of its neighbors, so memoizing it
+    /// up front avoids recomputing the same border checks and ridge tests many
+    /// times over for the same coordinates.
+    fn compute_true_heights(&self, ip: &[f32]) -> Vec<f32> {
+        let (w, h) = (self.width, self.height);
+        let mut out = vec![0.0f32; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                out[x + y * w] = self.true_edm_height(x as i32, y as i32, ip);
+            }
+        }
+        out
     }
 
     /// Sub-pixel ridge/maximum height of an EDM, port of `trueEdmHeight`.

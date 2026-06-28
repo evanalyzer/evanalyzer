@@ -1233,6 +1233,23 @@ impl PipelinesController {
         }
     }
 
+    /// Turns auto-preview off, e.g. when a preview run is rejected for covering
+    /// too many tiles - otherwise the next debounced settings change would
+    /// immediately retrigger and get rejected again while the user is still
+    /// zoomed out.
+    pub(crate) fn disable_auto_preview(&self) {
+        *self.auto_preview_enabled.lock().expect("Poisned") = false;
+        let ui_weak = self.ui.clone();
+        if let Err(e) = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<PipelinesPanelState>()
+                    .set_auto_preview_enabled(false);
+            }
+        }) {
+            warn!("Failed to disable auto-preview toggle in Slint: {e}");
+        }
+    }
+
     fn modify_group_item(
         self: &Arc<Self>,
         pipeline_id: u32,

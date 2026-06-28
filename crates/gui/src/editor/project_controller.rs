@@ -7,6 +7,7 @@ use crate::ProjectTemplateDef;
 use crate::ProjectTemplateState;
 use crate::ToolbarState;
 use crate::UiState;
+use crate::WarningState;
 use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::pipelines_controller::PipelinesController;
@@ -16,6 +17,7 @@ use crate::editor::template_controller::TemplateController;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::extensions::project_ext::SaveProjectActions;
 use evanalyzer_app::templates::load_project_templates;
+use evanalyzer_cfg::LEGACY_PROJECT_FILE_EXTENSION;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
 use evanalyzer_cfg::settings::templates::ProjectTemplate;
 use evanalyzer_core::SUPPORTED_IMAGE_FORMATS;
@@ -112,6 +114,103 @@ impl ProjectController {
         self.image_list_controller
             .set_new_image_root(&image_root_dir);
         info!("Project opened!")
+    }
+
+    /// Imports an old (`.icproj`) project into a brand-new, unsaved project.
+    ///
+    /// Unlike [`Self::open_new_project`], the converted project has no recorded
+    /// image list yet (the old format only stored an image *folder*, discovered
+    /// at runtime) - if the old project's image folder resolves to a real
+    /// directory next to the `.icproj` file, it is scanned immediately so the
+    /// imported project is usable right away. Any commands or fields the old
+    /// project used with no equivalent in this format are reported to the user
+    /// as a non-blocking warning, listing what was skipped or approximated.
+    pub fn import_legacy_project_file(self: Arc<Self>, legacy_path: &PathBuf) {
+        let (warnings, legacy_image_folder) = match self.app_state.import_legacy_project(legacy_path) {
+            Ok(result) => result,
+            Err(e) => {
+                warn!("Could not import legacy project {:?}: {}", legacy_path, e);
+                self.show_warning(
+                    "Cannot import legacy project",
+                    &format!("Failed to import '{}': {e}", legacy_path.display()),
+                );
+                return;
+            }
+        };
+
+        self.app_state.mark_dirty();
+
+        let image_root_dir = legacy_image_folder
+            .filter(|folder| !folder.is_empty())
+            .and_then(|folder| {
+                let resolved = legacy_path.parent().unwrap_or(legacy_path).join(&folder);
+                resolved.is_dir().then_some(resolved)
+            });
+
+        if let Some(root) = &image_root_dir {
+            let mut project = self.app_state.get_project_write();
+            project.images.root = Some(root.clone());
+            project.scan_image_folder_and_add();
+        }
+
+        // Do all the project load tasks here, mirroring `open_new_project`.
+        self.image_list_controller.sync_image_list_to_slint();
+        self.project_settings_controller
+            .sync_project_settings_to_slint();
+        self.classification_controller
+            .sync_classification_to_slint();
+        self.pipelines_controller.sync_pipelines_to_slint();
+        self.results_list_controller.sync_results_files_to_slint();
+
+        if let Some(root) = image_root_dir {
+            let ui_weak = self.ui.clone();
+            let image_root_dir_str = root.to_string_lossy().into_owned();
+            slint::invoke_from_event_loop(move || {
+                if let Some(ui_ready) = ui_weak.upgrade() {
+                    ui_ready
+                        .global::<ImagesListState>()
+                        .set_act_image_root_dir(image_root_dir_str.into());
+                }
+            })
+            .ok();
+        }
+
+        info!("Legacy project imported ({} warning(s))", warnings.len());
+        if !warnings.is_empty() {
+            let message = format!(
+                "The project imported successfully, but {} item(s) from the old format had no exact equivalent and were skipped or approximated:\n\n- {}\n\nReview the affected pipeline steps before running this project. Use \"Save As\" to keep this project in the new format.",
+                warnings.len(),
+                warnings.join("\n- ")
+            );
+            self.show_warning_info("Legacy project imported with caveats", &message);
+        }
+    }
+
+    /// Shows the generic warning dialog (error style) with `title`/`message`.
+    fn show_warning(&self, title: &str, message: &str) {
+        self.show_warning_with_style(title, message, false);
+    }
+
+    /// Shows the generic warning dialog (informational style) with `title`/`message`.
+    fn show_warning_info(&self, title: &str, message: &str) {
+        self.show_warning_with_style(title, message, true);
+    }
+
+    fn show_warning_with_style(&self, title: &str, message: &str, info: bool) {
+        let title = title.to_owned();
+        let message = message.to_owned();
+        let ui_weak = self.ui.clone();
+        if let Err(e) = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let warning = ui.global::<WarningState>();
+                warning.set_info(info);
+                warning.set_title(title.into());
+                warning.set_message(message.into());
+                ui.global::<GlobalAppState>().set_active_dialog(DialogType::Warning);
+            }
+        }) {
+            warn!("Failed to show warning dialog: {e}");
+        }
     }
 
     /// Attach UI callbacks related to image operations.
@@ -248,21 +347,24 @@ impl ProjectController {
     fn open_file_handler(self: &Arc<Self>) {
         let mut allowed_files = SUPPORTED_IMAGE_FORMATS.to_vec();
         allowed_files.push(PROJECT_FILE_EXTENSIONS);
+        allowed_files.push(LEGACY_PROJECT_FILE_EXTENSION);
 
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Supported Files", &allowed_files)
             .add_filter("Image Files", &SUPPORTED_IMAGE_FORMATS)
             .add_filter("Project Files", &[PROJECT_FILE_EXTENSIONS])
+            .add_filter("Legacy Project Files", &[LEGACY_PROJECT_FILE_EXTENSION])
             .pick_file()
         {
             let manager = Arc::clone(self);
 
             std::thread::spawn(move || {
-                let is_project =
-                    path.extension().and_then(|ext| ext.to_str()) == Some(PROJECT_FILE_EXTENSIONS);
+                let ext = path.extension().and_then(|ext| ext.to_str());
 
-                if is_project {
+                if ext == Some(PROJECT_FILE_EXTENSIONS) {
                     manager.open_new_project(&path);
+                } else if ext == Some(LEGACY_PROJECT_FILE_EXTENSION) {
+                    manager.import_legacy_project_file(&path);
                 } else {
                     manager.image_list_controller.open_new_image(&path);
                 }

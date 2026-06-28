@@ -29,6 +29,12 @@ export global ClassificationState {
     // classes_list changes, then push into the global.
     in property <int> total_visible_objects: 0;
 
+    // Whether ROIs with no object class assigned (shown in red as "Unclassified")
+    // are hidden from the list and viewport. Defaults to hidden - see Rust side
+    // (ProjectTmpSettings::hide_unclassified_rois) for the persisted source of truth.
+    in-out property <bool> hide_unclassified_rois: true;
+
+    callback hide_unclassified_toggled();
     callback class_selected(int);
     callback class_visibility_toggled(int);
     callback class_auto_add_and_replace();
@@ -219,12 +225,15 @@ export component ClassificationPanel inherits Rectangle {
         // ----- HEADER -----
         HorizontalLayout {
             alignment: space-between;
+            spacing: 6px;
             Text {
                 text: "Classification";
                 font-size: 14px;
                 font-weight: 600;
                 color: Theme.text;
                 vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
             }
 
             Text {
@@ -233,6 +242,32 @@ export component ClassificationPanel inherits Rectangle {
                 font-family: Theme.font-mono;
                 color: Theme.text-mute;
                 vertical-alignment: center;
+            }
+
+            // Hide/show unclassified ("None" / red) ROIs - hidden by default.
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                border-radius: 4px;
+                background: unclassified_eye_ta.has-hover ? Theme.bg : transparent;
+                animate background { duration: 100ms; }
+
+                Image {
+                    source: ClassificationState.hide_unclassified_rois
+                        ? @image-url("../icons/regular-white/eye-slash.svg")
+                        : @image-url("../icons/regular-white/eye.svg");
+                    width: 13px;
+                    height: 13px;
+                    colorize: ClassificationState.hide_unclassified_rois ? Theme.text-faint : Theme.text-dim;
+                }
+
+                unclassified_eye_ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        ClassificationState.hide_unclassified_rois = !ClassificationState.hide_unclassified_rois;
+                        ClassificationState.hide_unclassified_toggled();
+                    }
+                }
             }
         }
 

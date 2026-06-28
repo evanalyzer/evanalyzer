@@ -23,10 +23,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     builder.init();
 
-    // Core init
-    evanalyzer_core::init(CoreConfig {
-        jvm_heap_size: 1_000_000_000,
-    })?;
+    // Core init - JVM heap is sized from available system RAM, see CoreConfig::default()
+    evanalyzer_core::init(CoreConfig::default())?;
 
     let args = parse_args();
 

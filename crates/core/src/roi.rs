@@ -148,6 +148,19 @@ pub struct FittingEllipse {
     pub eccentricity: f32,
 }
 
+/// A boolean set operation between two ROI masks, used by [`Roi::combine_geometry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BooleanOp {
+    /// Intersection: pixels present in both operands.
+    And,
+    /// Union: pixels present in either operand.
+    Or,
+    /// Symmetric difference: pixels present in exactly one operand.
+    Xor,
+    /// Set difference: pixels present in the first operand but not the second.
+    Subtract,
+}
+
 /// Rasterized mask geometry produced by a shape transform (see [`Roi::scaled_geometry`],
 /// [`Roi::circle_geometry`], [`Roi::fitting_ellipse_geometry`]).
 ///
@@ -692,11 +705,12 @@ impl Roi {
         cache: &PipelineCache,
     ) -> IndexMap<i32, Intensity> {
         let tile_offset = ctx.get_image_tile_offset();
-        let size = ctx.get_image_size();
-        let full_image_size = ctx.full_image_size();
-        let origin_width = size.width;
-        let zoom_x = size.width / full_image_size.width;
-        let zoom_y = size.height / full_image_size.height;
+        // Channel images are loaded for the current tile, so they share that tile's
+        // pixel grid 1:1 - no resolution scaling against `full_image_size` applies
+        // here (that ratio is meaningless for tile-local indexing: a tile is a crop
+        // of the full image at the same resolution, not a smaller-resolution pyramid
+        // level of it).
+        let origin_width = ctx.get_image_size().width;
 
         let channel_views = cache.image_cache.resolve_channel_views();
 
@@ -725,7 +739,7 @@ impl Roi {
                 let y_abs = ymin as usize + ry;
                 let tile_x = x_abs - tile_offset.x;
                 let tile_y = y_abs - tile_offset.y;
-                let sample = (tile_y * zoom_y) * origin_width + tile_x * zoom_x;
+                let sample = tile_y * origin_width + tile_x;
 
                 for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
                     let val = sample_channel_pixel(*is_rgb, slice, sample);
@@ -838,6 +852,108 @@ impl Roi {
             (rx / semi_major).powi(2) + (ry / semi_minor).powi(2) <= 1.0
         })
     }
+
+    /// Boolean set operation between `self` ("A") and the union of `others` ("B"):
+    /// intersection (AND), union (OR), symmetric difference (XOR), or set difference
+    /// (Subtract, A \ B). Used for object-pair "ROI math" - unlike a pixel-level
+    /// binary-image operation, this keeps the result tied to exactly the input ROI(s)
+    /// it came from (via `parent_id`, set by the caller), and only ever touches the
+    /// small bbox window spanned by the operands instead of rasterizing the whole
+    /// tile/image.
+    ///
+    /// AND and Subtract can only ever remove pixels from `self`, so the result stays
+    /// within `self`'s own bbox. OR and XOR can extend into `others`' territory too,
+    /// so the working window covers the union of every operand's bbox.
+    pub fn combine_geometry(
+        &self,
+        others: &[&Roi],
+        op: BooleanOp,
+        image_size: ImageSize,
+    ) -> TransformedGeometry {
+        let [mut x_min, mut y_min, mut x_max, mut y_max] = self.bbox;
+        let grows_beyond_self = matches!(op, BooleanOp::Or | BooleanOp::Xor);
+        if grows_beyond_self {
+            for o in others {
+                let [oxmin, oymin, oxmax, oymax] = o.bbox;
+                x_min = x_min.min(oxmin);
+                y_min = y_min.min(oymin);
+                x_max = x_max.max(oxmax);
+                y_max = y_max.max(oymax);
+            }
+        }
+        let bbox_f = [x_min as f32, y_min as f32, x_max as f32, y_max as f32];
+        let base_touches_edge = self.touches_edge
+            || (grows_beyond_self && others.iter().any(|o| o.touches_edge));
+
+        rasterize_geometry(bbox_f, image_size, base_touches_edge, |gx, gy| {
+            let (px, py) = (gx as u32, gy as u32);
+            let in_a = self.is_part_of(px, py);
+            let in_b = others.iter().any(|o| o.is_part_of(px, py));
+            match op {
+                BooleanOp::And => in_a && in_b,
+                BooleanOp::Or => in_a || in_b,
+                BooleanOp::Xor => in_a != in_b,
+                BooleanOp::Subtract => in_a && !in_b,
+            }
+        })
+    }
+
+    /// Grows `self`'s mask outward by `margin` pixels using a disk-shaped structuring
+    /// element - the standard flat dilation used by most bio-image tools (e.g.
+    /// ImageJ's "Enlarge"): a pixel is included if it lies within `margin` of any
+    /// pixel already in the mask.
+    pub fn dilated_geometry(&self, margin: f32, image_size: ImageSize) -> TransformedGeometry {
+        let margin = margin.max(0.0);
+        let [x_min, y_min, x_max, y_max] = self.bbox;
+        let bbox_f = [
+            x_min as f32 - margin,
+            y_min as f32 - margin,
+            x_max as f32 + margin,
+            y_max as f32 + margin,
+        ];
+        rasterize_geometry(bbox_f, image_size, self.touches_edge, |gx, gy| {
+            disk_hits_mask(self, gx as i64, gy as i64, margin, /* require_all */ false)
+        })
+    }
+
+    /// Shrinks `self`'s mask inward by `margin` pixels using a disk-shaped structuring
+    /// element - the standard flat erosion: a pixel survives only if every pixel
+    /// within `margin` of it is also part of the original mask.
+    pub fn eroded_geometry(&self, margin: f32, image_size: ImageSize) -> TransformedGeometry {
+        let margin = margin.max(0.0);
+        let [x_min, y_min, x_max, y_max] = self.bbox;
+        // Erosion only ever shrinks - the result can't extend past the original bbox.
+        let bbox_f = [x_min as f32, y_min as f32, x_max as f32, y_max as f32];
+        rasterize_geometry(bbox_f, image_size, self.touches_edge, |gx, gy| {
+            disk_hits_mask(self, gx as i64, gy as i64, margin, /* require_all */ true)
+        })
+    }
+}
+
+/// Tests the disk of radius `margin` centered at pixel `(px, py)` against `roi`'s mask.
+///
+/// `require_all = false` (dilation): true if *any* pixel in the disk is part of the mask.
+/// `require_all = true` (erosion): true only if *every* pixel in the disk is part of the mask.
+fn disk_hits_mask(roi: &Roi, px: i64, py: i64, margin: f32, require_all: bool) -> bool {
+    let r = margin.ceil() as i64;
+    let margin_sq = margin * margin;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            if (dx * dx + dy * dy) as f32 > margin_sq {
+                continue;
+            }
+            let (nx, ny) = (px + dx, py + dy);
+            let inside = nx >= 0 && ny >= 0 && roi.is_part_of(nx as u32, ny as u32);
+            if require_all {
+                if !inside {
+                    return false;
+                }
+            } else if inside {
+                return true;
+            }
+        }
+    }
+    require_all
 }
 
 /// Rasterizes `inside_shape` (a predicate over continuous pixel-center coordinates) within
@@ -1038,6 +1154,204 @@ mod tests {
             area,
             ..Default::default()
         })
+    }
+
+    /// A filled square ROI, `side` pixels wide, with top-left corner at `(x, y)`.
+    fn square_roi_at(x: u32, y: u32, side: u32) -> Roi {
+        let area = (side * side) as usize;
+        Roi::new(RoiInit {
+            id: ObjectId(1),
+            bbox: [x, y, x + side - 1, y + side - 1],
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, area),
+            area,
+            ..Default::default()
+        })
+    }
+
+    const LARGE: ImageSize = ImageSize {
+        width: 1000,
+        height: 1000,
+    };
+
+    #[test]
+    fn dilated_geometry_grows_bbox_by_exactly_the_margin() {
+        let roi = square_roi_at(100, 100, 4); // bbox [100,100,103,103]
+        let grown = roi.dilated_geometry(2.0, LARGE);
+        assert_eq!(grown.bbox, [98, 98, 105, 105]);
+        assert!(grown.area > 16);
+    }
+
+    #[test]
+    fn dilated_geometry_zero_margin_is_identity() {
+        let roi = square_roi_at(100, 100, 4);
+        let grown = roi.dilated_geometry(0.0, LARGE);
+        assert_eq!(grown.bbox, roi.bbox);
+        assert_eq!(grown.area, roi.area);
+    }
+
+    #[test]
+    fn eroded_geometry_shrinks_bbox_by_exactly_the_margin() {
+        let roi = square_roi_at(100, 100, 8); // bbox [100,100,107,107]
+        let shrunk = roi.eroded_geometry(2.0, LARGE);
+        assert_eq!(shrunk.bbox, [102, 102, 105, 105]);
+        assert!(shrunk.area > 0 && shrunk.area <= 16);
+    }
+
+    #[test]
+    fn eroded_geometry_past_the_whole_mask_is_empty() {
+        let roi = square_roi_at(100, 100, 4);
+        let shrunk = roi.eroded_geometry(10.0, LARGE);
+        assert_eq!(shrunk.area, 0);
+    }
+
+    #[test]
+    fn combine_geometry_subtract_removes_only_the_overlapping_pixels() {
+        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
+        let b = square_roi_at(13, 13, 4); // [13,13,16,16], area 16, inside a
+        let result = a.combine_geometry(&[&b], BooleanOp::Subtract, LARGE);
+        assert_eq!(result.area, 100 - 16);
+    }
+
+    #[test]
+    fn combine_geometry_subtract_with_no_overlap_is_unchanged() {
+        let a = square_roi_at(10, 10, 10);
+        let b = square_roi_at(50, 50, 4); // far away, no overlap
+        let result = a.combine_geometry(&[&b], BooleanOp::Subtract, LARGE);
+        assert_eq!(result.area, a.area);
+        assert_eq!(result.bbox, a.bbox);
+    }
+
+    #[test]
+    fn combine_geometry_subtract_unions_multiple_subtrahends() {
+        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
+        let b1 = square_roi_at(10, 10, 3); // corner, area 9
+        let b2 = square_roi_at(16, 16, 3); // opposite corner, area 9, no overlap with b1
+        let result = a.combine_geometry(&[&b1, &b2], BooleanOp::Subtract, LARGE);
+        assert_eq!(result.area, 100 - 9 - 9);
+    }
+
+    #[test]
+    fn combine_geometry_and_is_the_overlap_only() {
+        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
+        let b = square_roi_at(15, 15, 10); // [15,15,24,24], area 100, overlaps a in [15,15,19,19]
+        let result = a.combine_geometry(&[&b], BooleanOp::And, LARGE);
+        assert_eq!(result.area, 25); // 5x5 overlap
+        assert_eq!(result.bbox, [15, 15, 19, 19]);
+    }
+
+    #[test]
+    fn combine_geometry_and_with_no_overlap_is_empty() {
+        let a = square_roi_at(10, 10, 10);
+        let b = square_roi_at(50, 50, 4);
+        let result = a.combine_geometry(&[&b], BooleanOp::And, LARGE);
+        assert_eq!(result.area, 0);
+    }
+
+    #[test]
+    fn combine_geometry_and_unions_multiple_partners_before_intersecting() {
+        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
+        let b1 = square_roi_at(10, 10, 3); // corner, area 9, fully inside a
+        let b2 = square_roi_at(16, 16, 3); // opposite corner, area 9, fully inside a
+        let result = a.combine_geometry(&[&b1, &b2], BooleanOp::And, LARGE);
+        assert_eq!(result.area, 9 + 9, "AND with the union of both partners, not just one");
+    }
+
+    #[test]
+    fn combine_geometry_or_extends_beyond_self_bbox() {
+        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
+        let b = square_roi_at(15, 15, 10); // [15,15,24,24], area 100, overlap 25
+        let result = a.combine_geometry(&[&b], BooleanOp::Or, LARGE);
+        assert_eq!(result.bbox, [10, 10, 24, 24], "union bbox must cover both operands");
+        assert_eq!(result.area, 100 + 100 - 25);
+    }
+
+    #[test]
+    fn combine_geometry_or_with_no_overlap_is_just_self() {
+        let a = square_roi_at(10, 10, 10);
+        let b = square_roi_at(50, 50, 4);
+        // No overlap means "no partner" at the command level, but the raw geometry
+        // primitive itself still computes a true union if asked.
+        let result = a.combine_geometry(&[&b], BooleanOp::Or, LARGE);
+        assert_eq!(result.area, a.area + b.area);
+    }
+
+    #[test]
+    fn combine_geometry_xor_excludes_the_overlap() {
+        let a = square_roi_at(10, 10, 10); // area 100
+        let b = square_roi_at(15, 15, 10); // area 100, overlap 25
+        let result = a.combine_geometry(&[&b], BooleanOp::Xor, LARGE);
+        assert_eq!(result.area, 100 + 100 - 2 * 25, "XOR must exclude the overlap entirely");
+        let result_roi = Roi::new(RoiInit {
+            id: ObjectId(1),
+            bbox: result.bbox,
+            mask_data: result.mask_data,
+            area: result.area,
+            ..Default::default()
+        });
+        assert!(
+            !result_roi.is_part_of(17, 17),
+            "a pixel in both operands must be excluded"
+        );
+    }
+
+    #[test]
+    fn measure_intensities_samples_correct_pixel_in_a_multi_tile_image() {
+        // Regression test: when the full image is larger than the current tile (the
+        // whole-slide-image / multi-tile case), sampling must use the tile's own
+        // pixel grid directly - not scale coordinates by tile_size/full_image_size,
+        // which truncates to 0 for any real multi-tile image and made every
+        // synthesized ROI (e.g. colocalization intersections, Voronoi regions)
+        // sample channel pixel 0 regardless of its actual tile-local position.
+        use crate::image::ManagedImage;
+        use crate::pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext};
+        use crate::{F32Gray, ImageContainer, ImagePlane};
+        use kornia_apriltag::utils::Point2d;
+        use kornia_image::{Image, ImageSize};
+        use kornia_tensor::CpuAllocator;
+        use std::sync::Arc;
+
+        let full_size = ImageSize {
+            width: 50,
+            height: 60,
+        };
+        let tile_size = ImageSize {
+            width: 15,
+            height: 20,
+        };
+        let offset = Point2d { x: 10, y: 15 };
+
+        let ctx =
+            PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
+        let mut cache = PipelineCache::default();
+
+        // Distinct intensities at two different tile-local positions.
+        let mut intensity = vec![0.0f32; 15 * 20];
+        intensity[0] = 10.0; // local (0,0)
+        intensity[5 * 15 + 7] = 99.0; // local (7,5)
+        let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::from_size_slice(tile_size, &intensity, CpuAllocator)
+                .unwrap(),
+            tile_offset: offset,
+            plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        }));
+        cache.image_cache.add_to_channel_cache(channel, 0);
+
+        // A 1-pixel ROI at the global position corresponding to tile-local (7,5).
+        let roi = Roi::new(RoiInit {
+            id: ObjectId(1),
+            bbox: [10 + 7, 15 + 5, 10 + 7, 15 + 5],
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, 1),
+            area: 1,
+            ..Default::default()
+        });
+
+        let intensities = roi.measure_intensities(&ctx, &cache);
+
+        assert_eq!(
+            intensities.get(&0).unwrap().sum_intensity,
+            99.0,
+            "ROI at tile-local (7,5) must sample its own pixel, not pixel (0,0)"
+        );
     }
 
     #[test]

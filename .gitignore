@@ -13,3 +13,4 @@ lcov.info
 !/libs/.gitkeep
 !/libs/*.sh
 /crates/core/java
+docs/old
