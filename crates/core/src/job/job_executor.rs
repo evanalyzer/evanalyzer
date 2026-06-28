@@ -916,6 +916,14 @@ impl<'a> JobExecutor {
     /// T-stack handling mode. It can either return a single time frame or a range
     /// covering all available time points in the image.
     ///
+    /// Resolves settings as **per-series override -> global setting -> default**
+    /// (matching the equivalent resolution the GUI itself uses, in
+    /// `evanalyzer_app`'s `images_ext.rs`/`project_ext.rs`). A series entry always
+    /// exists once an image is added to a project, but its `t_stack` field is only
+    /// ever populated by an explicit per-series override - so checking *whether
+    /// the field is set* (not whether the entry exists) is what makes the global
+    /// setting reachable.
+    ///
     /// # Arguments
     /// * `project` - The project containing global and image-specific settings
     /// * `image_info` - Metadata about the image, including the total number of time stacks
@@ -930,36 +938,36 @@ impl<'a> JobExecutor {
         image_info: &ImageInfo,
         image_entry: &ImageEntry,
     ) -> RangeInclusive<i32> {
-        let t_stack_settings = match image_entry.series.get(&image_entry.selected_series) {
-            Some(t_stack_settings_image) => &t_stack_settings_image.t_stack,
-            None => &self.global_image_settings.t_stack,
-        };
+        let local = image_entry
+            .series
+            .get(&image_entry.selected_series)
+            .and_then(|s| s.t_stack.clone());
+        let settings = local
+            .or_else(|| self.global_image_settings.t_stack.clone())
+            .unwrap_or_default();
 
-        if let Some(t_stack_settings_some) = t_stack_settings {
-            match t_stack_settings_some.stack_handling {
-                TStackHandling::SingleStack => {
-                    return t_stack_settings_some.t_stack..=t_stack_settings_some.t_stack;
-                }
-                TStackHandling::AllStacks => {
-                    return 0..=image_info.nr_t_stacks - 1;
-                }
-            };
-        } else {
-            return 0..=image_info.nr_t_stacks - 1;
+        match settings.stack_handling {
+            TStackHandling::SingleStack => settings.t_stack..=settings.t_stack,
+            TStackHandling::AllStacks => 0..=image_info.nr_t_stacks - 1,
         }
     }
 
+    /// Resolves the active Z-stack settings as **per-series override -> global
+    /// setting -> default**. See [`prepare_t_stack_iterator`](Self::prepare_t_stack_iterator)
+    /// for why checking field presence (not series-entry presence) matters here:
+    /// every image has a series entry with `z_stack: None` unless explicitly
+    /// overridden, so the previous entry-existence check meant a project-wide
+    /// projection choice (e.g. Maximum Intensity) was silently discarded in favor
+    /// of the `SingleStack` default for every image.
     fn get_z_stack_settings(&self, image_entry: &ImageEntry) -> ZStackSettings {
-        let z_stack_settings = match image_entry.series.get(&image_entry.selected_series) {
-            Some(z_stack_settings) => &z_stack_settings.z_stack,
-            None => &self.global_image_settings.z_stack,
-        };
+        let local = image_entry
+            .series
+            .get(&image_entry.selected_series)
+            .and_then(|s| s.z_stack.clone());
 
-        if let Some(t_stack_settings_some) = z_stack_settings {
-            return t_stack_settings_some.clone();
-        } else {
-            return ZStackSettings::default();
-        }
+        local
+            .or_else(|| self.global_image_settings.z_stack.clone())
+            .unwrap_or_default()
     }
 
     /// Prepares Z-stack projection settings and generates a range of Z indices.
@@ -1113,6 +1121,145 @@ impl<'a> JobExecutor {
             );
         }
         order
+    }
+}
+
+#[cfg(test)]
+mod z_t_stack_precedence_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use evanalyzer_cfg::settings::images_settings::{SeriesSettings, TStackSettings};
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    fn make_job_executor(
+        global_z: Option<ZStackSettings>,
+        global_t: Option<TStackSettings>,
+    ) -> JobExecutor {
+        let global_image_settings = GlobalImageSettings {
+            z_stack: global_z,
+            t_stack: global_t,
+            ..Default::default()
+        };
+
+        JobExecutor::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+            IndexMap::new(),
+            std::path::PathBuf::new(),
+            global_image_settings,
+            Arc::new(Mutex::new(MemoryExporter {
+                out_rois: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        )
+    }
+
+    /// Mirrors what `add_image_to_list` actually produces for every image: a
+    /// series entry exists, but its `z_stack`/`t_stack` fields are unset unless
+    /// the (currently unreachable from the GUI) per-series override is used.
+    fn make_image_entry_with_default_series() -> ImageEntry {
+        let mut series = BTreeMap::new();
+        series.insert(0, SeriesSettings::default());
+        ImageEntry {
+            rel_path: std::path::PathBuf::new(),
+            file_size: 0,
+            selected_series: 0,
+            series,
+        }
+    }
+
+    #[test]
+    fn global_z_projection_is_honored_when_no_per_series_override_exists() {
+        let job = make_job_executor(
+            Some(ZStackSettings {
+                z_projection: ZStackHandling::MaxIntensity,
+                z_range: None,
+            }),
+            None,
+        );
+        let entry = make_image_entry_with_default_series();
+
+        let resolved = job.get_z_stack_settings(&entry);
+
+        assert_eq!(resolved.z_projection, ZStackHandling::MaxIntensity);
+    }
+
+    #[test]
+    fn per_series_z_override_takes_precedence_over_global() {
+        let job = make_job_executor(
+            Some(ZStackSettings {
+                z_projection: ZStackHandling::MaxIntensity,
+                z_range: None,
+            }),
+            None,
+        );
+        let mut entry = make_image_entry_with_default_series();
+        entry.series.get_mut(&0).unwrap().z_stack = Some(ZStackSettings {
+            z_projection: ZStackHandling::SumIntensity,
+            z_range: None,
+        });
+
+        let resolved = job.get_z_stack_settings(&entry);
+
+        assert_eq!(resolved.z_projection, ZStackHandling::SumIntensity);
+    }
+
+    #[test]
+    fn z_settings_fall_back_to_default_when_neither_local_nor_global_is_set() {
+        let job = make_job_executor(None, None);
+        let entry = make_image_entry_with_default_series();
+
+        let resolved = job.get_z_stack_settings(&entry);
+
+        assert_eq!(resolved.z_projection, ZStackHandling::SingleStack);
+    }
+
+    #[test]
+    fn global_t_all_stacks_is_honored_when_no_per_series_override_exists() {
+        let job = make_job_executor(
+            None,
+            Some(TStackSettings {
+                stack_handling: TStackHandling::AllStacks,
+                playback_speed: 1.0,
+                t_stack: 0,
+            }),
+        );
+        let entry = make_image_entry_with_default_series();
+        let image_info = ImageInfo {
+            nr_t_stacks: 5,
+            ..Default::default()
+        };
+
+        let range = job.prepare_t_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 0..=4);
+    }
+
+    #[test]
+    fn per_series_t_override_takes_precedence_over_global() {
+        let job = make_job_executor(
+            None,
+            Some(TStackSettings {
+                stack_handling: TStackHandling::AllStacks,
+                playback_speed: 1.0,
+                t_stack: 0,
+            }),
+        );
+        let mut entry = make_image_entry_with_default_series();
+        entry.series.get_mut(&0).unwrap().t_stack = Some(TStackSettings {
+            stack_handling: TStackHandling::SingleStack,
+            playback_speed: 1.0,
+            t_stack: 3,
+        });
+        let image_info = ImageInfo {
+            nr_t_stacks: 5,
+            ..Default::default()
+        };
+
+        let range = job.prepare_t_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 3..=3);
     }
 }
 
