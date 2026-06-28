@@ -76,6 +76,29 @@ pub enum TransformFunction {
         #[cmdsmeta(default = 1.0, min = 0.0, max = 65535.0, step = 1.0)]
         scale: f32,
     },
+
+    /// Grows the ROI outward by `margin`, following its actual contour (standard flat
+    /// dilation with a disk structuring element) - unlike `Scale`, irregular shapes
+    /// grow by a uniform margin instead of being stretched proportionally.
+    Expand {
+        /// Margin added on every side of the mask's contour
+        #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1.0)]
+        margin: f32,
+        /// Unit `margin` is expressed in
+        #[cmdsmeta(default = SizeUnits::NanoMeter)]
+        unit: SizeUnits,
+    },
+
+    /// Shrinks the ROI inward by `margin`, following its actual contour (standard flat
+    /// erosion with a disk structuring element).
+    Shrink {
+        /// Margin removed from every side of the mask's contour
+        #[cmdsmeta(default = 0.0, min = 0.0, max = 65535.0, step = 1.0)]
+        margin: f32,
+        /// Unit `margin` is expressed in
+        #[cmdsmeta(default = SizeUnits::NanoMeter)]
+        unit: SizeUnits,
+    },
 }
 
 /// Transforms given ROIs and either replaces the old ones or creates new ones.
@@ -133,29 +156,40 @@ impl ImageAlgorithm for TransformRois {
                 continue;
             };
             let geometry = self.transform_geometry(roi, image_size, &px_sizes);
+            let (segmentation_class, parent_id, plane) =
+                (roi.segmentation_class, roi.parent_id.clone(), roi.plane.clone());
+
+            // Build the transformed shape as its own (not-yet-inserted) ROI so
+            // intensities can be sampled against the *new* mask via
+            // `measure_intensities` before mutating the cache - `cache` can't be
+            // borrowed both mutably (to update the cached ROI) and immutably (to read
+            // channel data) at the same time.
+            let transformed = Roi::new(RoiInit {
+                id: ObjectId::next(),
+                segmentation_class,
+                parent_id: parent_id.clone(),
+                plane: plane.clone(),
+                bbox: geometry.bbox,
+                area: geometry.area,
+                mask_data: geometry.mask_data.clone(),
+                touches_edge: geometry.touches_edge,
+                sum_x: geometry.sum_x,
+                sum_y: geometry.sum_y,
+                sum_x2: geometry.sum_x2,
+                sum_y2: geometry.sum_y2,
+                sum_xy: geometry.sum_xy,
+                ..Default::default()
+            });
+            let intensities = transformed.measure_intensities(ctx, cache);
 
             if replace_in_place {
                 if let Some(roi) = cache.roi_cache.get_mut(&id) {
                     apply_geometry(roi, geometry);
+                    roi.intensities = intensities;
                 }
             } else {
-                let roi = cache.roi_cache.get(&id).expect("checked above");
-                let mut new_roi = Roi::new(RoiInit {
-                    id: ObjectId::next(),
-                    segmentation_class: roi.segmentation_class,
-                    parent_id: roi.parent_id.clone(),
-                    plane: roi.plane.clone(),
-                    bbox: geometry.bbox,
-                    area: geometry.area,
-                    mask_data: geometry.mask_data,
-                    touches_edge: geometry.touches_edge,
-                    sum_x: geometry.sum_x,
-                    sum_y: geometry.sum_y,
-                    sum_x2: geometry.sum_x2,
-                    sum_y2: geometry.sum_y2,
-                    sum_xy: geometry.sum_xy,
-                    ..Default::default()
-                });
+                let mut new_roi = transformed;
+                new_roi.intensities = intensities;
                 new_roi.add_object_class(self.output_class);
                 new_rois.push(new_roi);
             }
@@ -209,6 +243,14 @@ impl TransformRois {
             TransformFunction::FittingEllipse { scale } => {
                 let scale = if *scale > 1.0 { *scale } else { 1.0 };
                 roi.fitting_ellipse_geometry(scale, image_size)
+            }
+            TransformFunction::Expand { margin, unit } => {
+                let margin = unit.to_pixel(*margin, pixel_size_nm) as f32;
+                roi.dilated_geometry(margin, image_size)
+            }
+            TransformFunction::Shrink { margin, unit } => {
+                let margin = unit.to_pixel(*margin, pixel_size_nm) as f32;
+                roi.eroded_geometry(margin, image_size)
             }
         }
     }
@@ -307,6 +349,39 @@ mod tests {
 
     fn run(cmd: &TransformRois, cache: &mut PipelineCache, image_size: ImageSize) {
         cmd.execute(&mut make_ctx(image_size), cache).unwrap();
+    }
+
+    /// Like `make_ctx`, but also registers a constant-value channel-0 image in
+    /// `cache`, so intensity measurement has something real to sample.
+    fn make_ctx_with_channel(size: ImageSize, cache: &mut PipelineCache, value: f32) -> PipelineContext {
+        let ctx = make_ctx(size);
+        let img = Image::<f32, 1, CpuAllocator>::new(size, vec![value; size.width * size.height], CpuAllocator)
+            .unwrap();
+        cache.image_cache.image_meta = PipelineImageMeta {
+            image_tile_info: crate::ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
+            full_image_width: size,
+            is_rgb: false,
+            nr_of_bits: 8,
+            pixel_sizes: PixelSizes {
+                px_size_x: 1.0,
+                px_size_y: 1.0,
+                px_size_z: 1.0,
+            },
+        };
+        cache.image_cache.add_to_channel_cache(
+            std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: img,
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+            })),
+            0,
+        );
+        ctx
     }
 
     #[test]
@@ -507,5 +582,125 @@ mod tests {
         let scaled = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(scaled.touches_edge);
         assert!(scaled.bbox[2] <= 19 && scaled.bbox[3] <= 19, "mask must stay inside the image");
+    }
+
+    #[test]
+    fn expand_grows_mask_by_margin_following_the_contour() {
+        let cmd = TransformRois {
+            function: TransformFunction::Expand {
+                margin: 2.0,
+                unit: SizeUnits::Pixels,
+            },
+            input_class: CLASS_IN,
+            output_class: ObjectClass::Unset,
+        };
+        let mut cache = PipelineCache::default();
+        // 4x4 square at (20,20) -> bbox [20,20,23,23].
+        let roi = make_square_roi(ID_A, 20, 20, 4, CLASS_IN);
+        cache.roi_cache.insert(roi.id.clone(), roi);
+
+        run(&cmd, &mut cache, ImageSize {
+            width: 100,
+            height: 100,
+        });
+
+        let expanded = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        assert_eq!(
+            expanded.bbox,
+            [18, 18, 25, 25],
+            "a disk margin of 2 must grow the bbox by exactly 2 on every side"
+        );
+        assert!(expanded.area > 16, "expanded area must exceed the original 4x4=16");
+    }
+
+    #[test]
+    fn shrink_shrinks_mask_by_margin_following_the_contour() {
+        let cmd = TransformRois {
+            function: TransformFunction::Shrink {
+                margin: 2.0,
+                unit: SizeUnits::Pixels,
+            },
+            input_class: CLASS_IN,
+            output_class: ObjectClass::Unset,
+        };
+        let mut cache = PipelineCache::default();
+        // 8x8 square at (20,20) -> bbox [20,20,27,27].
+        let roi = make_square_roi(ID_A, 20, 20, 8, CLASS_IN);
+        cache.roi_cache.insert(roi.id.clone(), roi);
+
+        run(&cmd, &mut cache, ImageSize {
+            width: 100,
+            height: 100,
+        });
+
+        let shrunk = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        assert_eq!(
+            shrunk.bbox,
+            [22, 22, 25, 25],
+            "a disk margin of 2 must shrink the bbox by exactly 2 on every side"
+        );
+        assert!(shrunk.area > 0 && shrunk.area <= 16);
+    }
+
+    #[test]
+    fn shrink_past_the_whole_mask_leaves_nothing() {
+        let cmd = TransformRois {
+            function: TransformFunction::Shrink {
+                margin: 10.0, // bigger than the 4x4 square itself
+                unit: SizeUnits::Pixels,
+            },
+            input_class: CLASS_IN,
+            output_class: ObjectClass::Unset,
+        };
+        let mut cache = PipelineCache::default();
+        let roi = make_square_roi(ID_A, 20, 20, 4, CLASS_IN);
+        cache.roi_cache.insert(roi.id.clone(), roi);
+
+        run(&cmd, &mut cache, ImageSize {
+            width: 100,
+            height: 100,
+        });
+
+        let shrunk = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        assert_eq!(shrunk.area, 0);
+    }
+
+    #[test]
+    fn transform_recomputes_intensities_after_geometry_change() {
+        // Regression test: applying a geometric transform must resample intensities
+        // against the *new* mask - leaving stale (or, for a brand-new output ROI,
+        // entirely empty/default) intensities was a dormant bug shared by every
+        // TransformFunction variant, the same class of bug fixed for Voronoi.
+        const CHANNEL: i32 = 0;
+        const VALUE: f32 = 7.0;
+        let cmd = TransformRois {
+            function: TransformFunction::Scale { factor: 2.0 },
+            input_class: CLASS_IN,
+            output_class: CLASS_OUT,
+        };
+        let mut cache = PipelineCache::default();
+        let roi = make_square_roi(ID_A, 10, 10, 4, CLASS_IN);
+        cache.roi_cache.insert(roi.id.clone(), roi);
+
+        let mut ctx = make_ctx_with_channel(
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+            &mut cache,
+            VALUE,
+        );
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let transformed = cache
+            .roi_cache
+            .values()
+            .find(|r| r.has_object_class(&CLASS_OUT))
+            .expect("transformed ROI not found");
+        let intensity = transformed
+            .intensities
+            .get(&CHANNEL)
+            .expect("transformed ROI must have measured intensities, not be left empty");
+        assert_eq!(intensity.sum_intensity, transformed.area as f64 * VALUE as f64);
     }
 }

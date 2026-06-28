@@ -127,6 +127,17 @@ impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
     }
 }
 
+impl From<ClassificationMathRoiRoiSetOperationSettings> for RoiSetOperation {
+    fn from(_s: ClassificationMathRoiRoiSetOperationSettings) -> Self {
+        match _s {
+            ClassificationMathRoiRoiSetOperationSettings::And => RoiSetOperation::And,
+            ClassificationMathRoiRoiSetOperationSettings::Or => RoiSetOperation::Or,
+            ClassificationMathRoiRoiSetOperationSettings::Xor => RoiSetOperation::Xor,
+            ClassificationMathRoiRoiSetOperationSettings::Subtract => RoiSetOperation::Subtract,
+        }
+    }
+}
+
 impl From<FiltersStructureTensorTensorModeSettings> for TensorMode {
     fn from(_s: FiltersStructureTensorTensorModeSettings) -> Self {
         match _s {
@@ -193,6 +204,18 @@ impl From<ClassificationTransformRoisTransformFunctionSettings> for TransformFun
             ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale } => {
                 TransformFunction::FittingEllipse {
                     scale: scale.clamp(0.0, 65535.0),
+                }
+            }
+            ClassificationTransformRoisTransformFunctionSettings::Expand { margin, unit } => {
+                TransformFunction::Expand {
+                    margin: margin.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
+            }
+            ClassificationTransformRoisTransformFunctionSettings::Shrink { margin, unit } => {
+                TransformFunction::Shrink {
+                    margin: margin.clamp(0.0, 65535.0),
+                    unit: unit,
                 }
             }
         }
@@ -432,6 +455,25 @@ impl From<RankFilterSettings> for RankFilter {
     }
 }
 
+impl From<RoiMathSettings> for RoiMath {
+    fn from(_s: RoiMathSettings) -> Self {
+        RoiMath {
+            operation: RoiSetOperation::from(_s.operation),
+            input_class: _s.input_class,
+            other_class: _s.other_class,
+            other_filter_classes: _s
+                .other_filter_classes
+                .into_iter()
+                .map(|v| v.into())
+                .collect(),
+            size_unit: _s.size_unit,
+            min_overlap_area: _s.min_overlap_area,
+            output_class: _s.output_class,
+            keep_unmatched: _s.keep_unmatched,
+        }
+    }
+}
+
 impl From<RollingBallSettings> for RollingBall {
     fn from(_s: RollingBallSettings) -> Self {
         RollingBall {
@@ -627,6 +669,7 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::RankFilter(settings) => {
             Ok(Box::new(crate::algos::RankFilter::from(settings)))
         }
+        PipelineCommand::RoiMath(settings) => Ok(Box::new(crate::algos::RoiMath::from(settings))),
         PipelineCommand::RollingBall(settings) => {
             Ok(Box::new(crate::algos::RollingBall::from(settings)))
         }

@@ -191,6 +191,26 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     Outliers(f32),
 }
 
+///  Boolean set operation applied between an `input_class` ROI ("A") and the union of
+///  its overlapping `other_class` ROIs ("B").
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ClassificationMathRoiRoiSetOperationSettings {
+    /// Intersection: pixels present in both A and B. With no overlapping B, the
+    /// result is empty - there is nothing to keep regardless of `keep_unmatched`.
+    #[default]
+    And,
+    /// Union: pixels present in A or B (or both). The result can extend beyond A's
+    /// own bounding box into B's territory.
+    Or,
+    /// Symmetric difference: pixels present in exactly one of A, B (the overlap
+    /// itself is excluded). Like `Or`, the result can extend beyond A's bbox.
+    Xor,
+    /// Set difference: pixels in A that are NOT in B (A \ B). The classic use case
+    /// is deriving a cytoplasm-only region from a whole-cell mask and its nucleus.
+    Subtract,
+}
+
 ///  The specific calculation to extract from the Structure Tensor.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -307,6 +327,27 @@ pub enum ClassificationTransformRoisTransformFunctionSettings {
         ///  Unitless scale factor for the fitted ellipse
         #[schemars(range(min = 0, max = 65535))]
         scale: f32,
+    },
+    /// Grows the ROI outward by `margin`, following its actual contour (standard flat
+    /// dilation with a disk structuring element) - unlike `Scale`, irregular shapes
+    /// grow by a uniform margin instead of being stretched proportionally.
+    #[serde(rename_all = "camelCase")]
+    Expand {
+        ///  Margin added on every side of the mask's contour
+        #[schemars(range(min = 0, max = 65535))]
+        margin: f32,
+        ///  Unit `margin` is expressed in
+        unit: SizeUnits,
+    },
+    /// Shrinks the ROI inward by `margin`, following its actual contour (standard flat
+    /// erosion with a disk structuring element).
+    #[serde(rename_all = "camelCase")]
+    Shrink {
+        ///  Margin removed from every side of the mask's contour
+        #[schemars(range(min = 0, max = 65535))]
+        margin: f32,
+        ///  Unit `margin` is expressed in
+        unit: SizeUnits,
     },
 }
 
@@ -1424,6 +1465,60 @@ pub struct ColocalizationSettings {
     pub size_unit: SizeUnits,
     ///  Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
+}
+
+///  Computes a boolean set operation between two object classes, object pair by
+///  object pair.
+///
+///  When more than one `other_class` object overlaps a given input ROI, all of them
+///  are unioned into a single "B" before the operation is applied, so the result
+///  doesn't depend on the order they'd otherwise be combined in.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct RoiMathSettings {
+    ///  Boolean set operation to apply
+    pub operation: ClassificationMathRoiRoiSetOperationSettings,
+    ///  ROIs carrying this class are the left-hand operand ("A").
+    pub input_class: ObjectClass,
+    ///  ROIs carrying this class are the right-hand operand ("B").
+    pub other_class: ObjectClass,
+    ///  Optional additional label filters applied to `other_class` objects.
+    ///
+    ///  Only `other_class` objects that carry all listed classes are used.
+    pub other_filter_classes: Vec<ObjectClass>,
+    ///  Size unit for `min_overlap_area`
+    pub size_unit: SizeUnits,
+    ///  Minimum overlap area before an `other_class` object is treated as a partner
+    ///  of an input ROI; objects overlapping less than this are ignored.
+    pub min_overlap_area: f32,
+    ///  If unset, the result replaces the input ROI in place.
+    ///
+    ///  If set, a new ROI carrying this class is created for each input ROI instead,
+    ///  leaving the input ROI untouched.
+    pub output_class: ObjectClass,
+    ///  When an input ROI has no qualifying overlapping partner: keep it unchanged in
+    ///  the output (true), or drop it entirely - no output for it at all - (false).
+    ///
+    ///  Note this is a policy override, not the literal mathematical result: e.g. for
+    ///  `And`, the true result of "A and nothing" is empty, but `keep_unmatched = true`
+    ///  still leaves A untouched rather than emitting a zero-area ROI.
+    pub keep_unmatched: bool,
+}
+
+impl Default for RoiMathSettings {
+    fn default() -> Self {
+        Self {
+            operation: ClassificationMathRoiRoiSetOperationSettings::default(),
+            input_class: ObjectClass::default(),
+            other_class: ObjectClass::default(),
+            other_filter_classes: vec![],
+            size_unit: SizeUnits::default(),
+            min_overlap_area: f32::default(),
+            output_class: ObjectClass::Unset,
+            keep_unmatched: true,
+        }
+    }
 }
 
 ///  Transforms given ROIs and either replaces the old ones or creates new ones.

@@ -277,6 +277,31 @@
         "RECLASSIFY_IF_NOT_MATCH"
       ]
     },
+    "ClassificationMathRoiRoiSetOperationSettings": {
+      "description": "Boolean set operation applied between an `input_class` ROI (\"A\") and the union of\n its overlapping `other_class` ROIs (\"B\").",
+      "oneOf": [
+        {
+          "description": "Intersection: pixels present in both A and B. With no overlapping B, the\nresult is empty - there is nothing to keep regardless of `keep_unmatched`.",
+          "type": "string",
+          "const": "AND"
+        },
+        {
+          "description": "Union: pixels present in A or B (or both). The result can extend beyond A's\nown bounding box into B's territory.",
+          "type": "string",
+          "const": "OR"
+        },
+        {
+          "description": "Symmetric difference: pixels present in exactly one of A, B (the overlap\nitself is excluded). Like `Or`, the result can extend beyond A's bbox.",
+          "type": "string",
+          "const": "XOR"
+        },
+        {
+          "description": "Set difference: pixels in A that are NOT in B (A \\ B). The classic use case\nis deriving a cytoplasm-only region from a whole-cell mask and its nucleus.",
+          "type": "string",
+          "const": "SUBTRACT"
+        }
+      ]
+    },
     "ClassificationSettings": {
       "type": "object",
       "properties": {
@@ -412,6 +437,58 @@
           "required": [
             "type",
             "scale"
+          ]
+        },
+        {
+          "description": "Grows the ROI outward by `margin`, following its actual contour (standard flat\ndilation with a disk structuring element) - unlike `Scale`, irregular shapes\ngrow by a uniform margin instead of being stretched proportionally.",
+          "type": "object",
+          "properties": {
+            "margin": {
+              "description": "Margin added on every side of the mask's contour",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "expand"
+            },
+            "unit": {
+              "description": "Unit `margin` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "margin",
+            "unit"
+          ]
+        },
+        {
+          "description": "Shrinks the ROI inward by `margin`, following its actual contour (standard flat\nerosion with a disk structuring element).",
+          "type": "object",
+          "properties": {
+            "margin": {
+              "description": "Margin removed from every side of the mask's contour",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "shrink"
+            },
+            "unit": {
+              "description": "Unit `margin` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "margin",
+            "unit"
           ]
         }
       ]
@@ -1770,6 +1847,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "roiMath"
+            }
+          },
+          "$ref": "#/$defs/RoiMathSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "rollingBall"
             }
           },
@@ -2064,6 +2154,56 @@
         "radius",
         "filterType"
       ]
+    },
+    "RoiMathSettings": {
+      "description": "Computes a boolean set operation between two object classes, object pair by\n object pair.\n\n When more than one `other_class` object overlaps a given input ROI, all of them\n are unioned into a single \"B\" before the operation is applied, so the result\n doesn't depend on the order they'd otherwise be combined in.",
+      "type": "object",
+      "properties": {
+        "inputClass": {
+          "description": "ROIs carrying this class are the left-hand operand (\"A\").",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "keepUnmatched": {
+          "description": "When an input ROI has no qualifying overlapping partner: keep it unchanged in\n the output (true), or drop it entirely - no output for it at all - (false).\n\n Note this is a policy override, not the literal mathematical result: e.g. for\n `And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\n still leaves A untouched rather than emitting a zero-area ROI.",
+          "type": "boolean",
+          "default": true
+        },
+        "minOverlapArea": {
+          "description": "Minimum overlap area before an `other_class` object is treated as a partner\n of an input ROI; objects overlapping less than this are ignored.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
+        "operation": {
+          "description": "Boolean set operation to apply",
+          "$ref": "#/$defs/ClassificationMathRoiRoiSetOperationSettings",
+          "default": "AND"
+        },
+        "otherClass": {
+          "description": "ROIs carrying this class are the right-hand operand (\"B\").",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "otherFilterClasses": {
+          "description": "Optional additional label filters applied to `other_class` objects.\n\n Only `other_class` objects that carry all listed classes are used.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "outputClass": {
+          "description": "If unset, the result replaces the input ROI in place.\n\n If set, a new ROI carrying this class is created for each input ROI instead,\n leaving the input ROI untouched.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "sizeUnit": {
+          "description": "Size unit for `min_overlap_area`",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "nm"
+        }
+      }
     },
     "RoiSettings": {
       "type": "object",
