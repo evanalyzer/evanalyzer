@@ -454,15 +454,6 @@ impl ViewportController {
         let buf_w = viewport_width as u32;
         let buf_h = viewport_height as u32;
 
-        let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(buf_w, buf_h);
-        let pixels = buffer.make_mut_slice();
-
-        // Instance map: tracks which ROI instance owns each screen pixel.
-        // 0 = no ROI; n+1 = the ROI at loop index n.
-        // Used by the border pass to detect boundaries between same-colour adjacent instances.
-        let pixel_count = (buf_w * buf_h) as usize;
-        let mut instance_map = vec![0u32; pixel_count];
-
         let selected_roi_id = project.get_selected_roi_id();
         let rois_option = project.get_rois();
         let Some(rois) = rois_option else {
@@ -473,7 +464,11 @@ impl ViewportController {
 
         let hide_unclassified = project.hide_unclassified_rois();
 
-        for (roi_idx, roi) in rois.iter().chain(auto_rois.iter()).enumerate() {
+        // Resolve project-level filtering/coloring decisions up front, so the
+        // actual compositing pass (`composite_roi_instances`) is pure pixel math
+        // with no project access - that's what makes it cheap to unit test.
+        let mut instances: Vec<RoiDrawInstance> = Vec::new();
+        for roi in rois.iter().chain(auto_rois.iter()) {
             if hide_unclassified && roi.object_class.is_empty() {
                 continue;
             }
@@ -494,95 +489,22 @@ impl ViewportController {
                 get_colors_from_class(&project, roi_transparency, &roi.object_class)
             };
 
-            let pixel_fill = slint::Rgba8Pixel {
-                r: color.red(),
-                g: color.green(),
-                b: color.blue(),
-                a: color.alpha(),
-            };
-
-            let instance_id = (roi_idx + 1) as u32;
-
-            let bbox_w = (roi.bbox[2] - roi.bbox[0] + 1) as usize;
-            if bbox_w == 0 {
-                continue;
-            }
-
-            for idx in roi.mask_data.iter_ones() {
-                let local_x = (idx % bbox_w) as f32;
-                let local_y = (idx / bbox_w) as f32;
-
-                let abs_x = roi.bbox[0] as f32 + local_x;
-                let abs_y = roi.bbox[1] as f32 + local_y;
-
-                // Derive the screen rect from the image-pixel edges so adjacent pixels
-                // are always exactly adjacent on screen - no gaps and no overlap.
-                // Using (abs+1)*zoom for the far edge instead of abs*zoom+ceil(zoom)
-                // is what eliminates the grid: ceil(zoom) > zoom for fractional zoom,
-                // so the old approach created overlapping regions that composited twice.
-                let x0 = ((abs_x * zoom + off_x).max(0.0) as usize).min(buf_w as usize);
-                let y0 = ((abs_y * zoom + off_y).max(0.0) as usize).min(buf_h as usize);
-                let x1 = (((abs_x + 1.0) * zoom + off_x).max(0.0) as usize).min(buf_w as usize);
-                let y1 = (((abs_y + 1.0) * zoom + off_y).max(0.0) as usize).min(buf_h as usize);
-
-                if x0 >= x1 || y0 >= y1 {
-                    continue; // entirely off-screen or zoomed-out pixel
-                }
-
-                for py in y0..y1 {
-                    for px in x0..x1 {
-                        let i = py * buf_w as usize + px;
-                        let dst = pixels[i];
-                        if dst.a == 0 {
-                            pixels[i] = pixel_fill;
-                        } else {
-                            // Porter-Duff "over" for overlapping ROIs of different colors.
-                            let sa = pixel_fill.a as f32 / 255.0;
-                            let da = dst.a as f32 / 255.0;
-                            let out_a = sa + da * (1.0 - sa);
-                            pixels[i] = slint::Rgba8Pixel {
-                                r: ((pixel_fill.r as f32 * sa + dst.r as f32 * da * (1.0 - sa))
-                                    / out_a) as u8,
-                                g: ((pixel_fill.g as f32 * sa + dst.g as f32 * da * (1.0 - sa))
-                                    / out_a) as u8,
-                                b: ((pixel_fill.b as f32 * sa + dst.b as f32 * da * (1.0 - sa))
-                                    / out_a) as u8,
-                                a: (out_a * 255.0) as u8,
-                            };
-                        }
-                        instance_map[i] = instance_id;
-                    }
-                }
-            }
+            instances.push(RoiDrawInstance {
+                bbox: roi.bbox,
+                mask: &roi.mask_data,
+                color: slint::Rgba8Pixel {
+                    r: color.red(),
+                    g: color.green(),
+                    b: color.blue(),
+                    a: color.alpha(),
+                },
+            });
         }
 
-        // Border pass: make the outline of every ROI instance fully opaque.
-        // A pixel is a border pixel if any 4-connected neighbour belongs to a
-        // different instance (including the background, which has instance_id 0).
-        // This correctly separates same-colour adjacent instances that rgb comparison
-        // cannot distinguish.
-        let bw = buf_w as usize;
-        let bh = buf_h as usize;
-        for by in 0..bh {
-            for bx in 0..bw {
-                let i = by * bw + bx;
-                let inst = instance_map[i];
-                if inst == 0 {
-                    continue;
-                }
-                let is_border = bx == 0
-                    || bx + 1 >= bw
-                    || by == 0
-                    || by + 1 >= bh
-                    || instance_map[i - 1] != inst
-                    || instance_map[i + 1] != inst
-                    || instance_map[i - bw] != inst
-                    || instance_map[i + bw] != inst;
-                if is_border {
-                    pixels[i].a = 255;
-                }
-            }
-        }
+        let pixels = composite_roi_instances(&instances, buf_w, buf_h, zoom, off_x, off_y);
+
+        let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(buf_w, buf_h);
+        buffer.make_mut_slice().copy_from_slice(&pixels);
 
         let ui_weak = self.ui.clone();
         slint::invoke_from_event_loop(move || {
@@ -757,5 +679,344 @@ impl ViewportController {
             }
         })
         .ok();
+    }
+}
+
+/// One ROI's pre-resolved render inputs. All project-level filtering and color
+/// resolution (selection, class visibility, hide-unclassified) happens before this
+/// is built, so [`composite_roi_instances`] is pure pixel math with no project
+/// access - that's what makes it cheap to unit test independently of the Slint/UI
+/// plumbing in [`ViewportController::sync_rois_to_slint_viewport`].
+struct RoiDrawInstance<'a> {
+    bbox: [u32; 4],
+    mask: &'a bitvec::vec::BitVec<u64, bitvec::order::Lsb0>,
+    color: slint::Rgba8Pixel,
+}
+
+/// Porter-Duff "over": blends `src` onto `dst` in place.
+fn blend_pixel_over(dst: &mut slint::Rgba8Pixel, src: slint::Rgba8Pixel) {
+    if dst.a == 0 {
+        *dst = src;
+        return;
+    }
+    let sa = src.a as f32 / 255.0;
+    let da = dst.a as f32 / 255.0;
+    let out_a = sa + da * (1.0 - sa);
+    *dst = slint::Rgba8Pixel {
+        r: ((src.r as f32 * sa + dst.r as f32 * da * (1.0 - sa)) / out_a) as u8,
+        g: ((src.g as f32 * sa + dst.g as f32 * da * (1.0 - sa)) / out_a) as u8,
+        b: ((src.b as f32 * sa + dst.b as f32 * da * (1.0 - sa)) / out_a) as u8,
+        a: (out_a * 255.0) as u8,
+    };
+}
+
+/// Composites pre-resolved ROI instances into a viewport-sized RGBA buffer.
+///
+/// Two perf shortcuts, both no-ops for ROIs whose screen footprint covers more
+/// than one pixel - i.e. normal/zoomed-in viewing walks every mask pixel exactly
+/// as before:
+///
+/// - **Viewport culling**: an instance whose bbox doesn't project onto the buffer
+///   at all is skipped before touching its mask. Mask pixels are always within the
+///   bbox, so an off-screen bbox guarantees every mask pixel is off-screen too -
+///   this cannot change the rendered output, only skip work that would have been a
+///   no-op anyway.
+/// - **Sub-pixel collapse**: when the whole bbox's screen footprint fits within a
+///   single pixel cell (e.g. viewing a whole-slide image zoomed out far enough
+///   that a cell's mask is smaller than one screen pixel), the mask shape can't be
+///   distinguished on screen anyway, so one pixel is stamped directly from the
+///   bbox centre instead of walking every bit.
+///
+/// Without these, cost scales with total mask pixels across every ROI in the
+/// project; with them it scales with the number of ROIs that are actually visible
+/// and bigger than a pixel - which is what makes hundreds of thousands of ROIs in
+/// a whole-slide project viable to render interactively.
+fn composite_roi_instances(
+    instances: &[RoiDrawInstance],
+    buf_w: u32,
+    buf_h: u32,
+    zoom: f32,
+    off_x: f32,
+    off_y: f32,
+) -> Vec<slint::Rgba8Pixel> {
+    let pixel_count = (buf_w as usize) * (buf_h as usize);
+    let mut pixels = vec![
+        slint::Rgba8Pixel {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0
+        };
+        pixel_count
+    ];
+    // Instance map: tracks which ROI instance owns each screen pixel.
+    // 0 = no ROI; n+1 = the ROI at `instances[n]`.
+    // Used by the border pass to detect boundaries between same-colour adjacent instances.
+    let mut instance_map = vec![0u32; pixel_count];
+
+    for (idx, inst) in instances.iter().enumerate() {
+        let instance_id = (idx + 1) as u32;
+        let bbox = inst.bbox;
+        let bbox_w = (bbox[2] - bbox[0] + 1) as usize;
+        if bbox_w == 0 {
+            continue;
+        }
+
+        // Screen-space footprint of the whole bbox. `+1` because bbox[2]/[3] are
+        // inclusive max coordinates (mirrors the per-pixel `abs+1` edge below).
+        let sx0 = bbox[0] as f32 * zoom + off_x;
+        let sy0 = bbox[1] as f32 * zoom + off_y;
+        let sx1 = (bbox[2] + 1) as f32 * zoom + off_x;
+        let sy1 = (bbox[3] + 1) as f32 * zoom + off_y;
+
+        // Viewport culling: bbox doesn't overlap the buffer at all.
+        if sx1 <= 0.0 || sy1 <= 0.0 || sx0 >= buf_w as f32 || sy0 >= buf_h as f32 {
+            continue;
+        }
+
+        // Sub-pixel collapse: the whole bbox fits within one pixel cell on screen.
+        if sx1 - sx0 <= 1.0 && sy1 - sy0 <= 1.0 {
+            let px = (((sx0 + sx1) * 0.5).max(0.0) as usize).min(buf_w as usize - 1);
+            let py = (((sy0 + sy1) * 0.5).max(0.0) as usize).min(buf_h as usize - 1);
+            let i = py * buf_w as usize + px;
+            blend_pixel_over(&mut pixels[i], inst.color);
+            instance_map[i] = instance_id;
+            continue;
+        }
+
+        for bit_idx in inst.mask.iter_ones() {
+            let local_x = (bit_idx % bbox_w) as f32;
+            let local_y = (bit_idx / bbox_w) as f32;
+
+            let abs_x = bbox[0] as f32 + local_x;
+            let abs_y = bbox[1] as f32 + local_y;
+
+            // Derive the screen rect from the image-pixel edges so adjacent pixels
+            // are always exactly adjacent on screen - no gaps and no overlap.
+            // Using (abs+1)*zoom for the far edge instead of abs*zoom+ceil(zoom)
+            // is what eliminates the grid: ceil(zoom) > zoom for fractional zoom,
+            // so the old approach created overlapping regions that composited twice.
+            let x0 = ((abs_x * zoom + off_x).max(0.0) as usize).min(buf_w as usize);
+            let y0 = ((abs_y * zoom + off_y).max(0.0) as usize).min(buf_h as usize);
+            let x1 = (((abs_x + 1.0) * zoom + off_x).max(0.0) as usize).min(buf_w as usize);
+            let y1 = (((abs_y + 1.0) * zoom + off_y).max(0.0) as usize).min(buf_h as usize);
+
+            if x0 >= x1 || y0 >= y1 {
+                continue; // entirely off-screen or zoomed-out pixel
+            }
+
+            for py in y0..y1 {
+                for px in x0..x1 {
+                    let i = py * buf_w as usize + px;
+                    blend_pixel_over(&mut pixels[i], inst.color);
+                    instance_map[i] = instance_id;
+                }
+            }
+        }
+    }
+
+    // Border pass: make the outline of every ROI instance fully opaque.
+    // A pixel is a border pixel if any 4-connected neighbour belongs to a
+    // different instance (including the background, which has instance_id 0).
+    // This correctly separates same-colour adjacent instances that rgb comparison
+    // cannot distinguish.
+    let bw = buf_w as usize;
+    let bh = buf_h as usize;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let i = by * bw + bx;
+            let inst = instance_map[i];
+            if inst == 0 {
+                continue;
+            }
+            let is_border = bx == 0
+                || bx + 1 >= bw
+                || by == 0
+                || by + 1 >= bh
+                || instance_map[i - 1] != inst
+                || instance_map[i + 1] != inst
+                || instance_map[i - bw] != inst
+                || instance_map[i + bw] != inst;
+            if is_border {
+                pixels[i].a = 255;
+            }
+        }
+    }
+
+    pixels
+}
+
+#[cfg(test)]
+mod composite_roi_instances_tests {
+    use super::*;
+    use bitvec::prelude::*;
+
+    fn rgba(r: u8, g: u8, b: u8, a: u8) -> slint::Rgba8Pixel {
+        slint::Rgba8Pixel { r, g, b, a }
+    }
+
+    fn full_mask(bbox: [u32; 4]) -> BitVec<u64, Lsb0> {
+        let w = (bbox[2] - bbox[0] + 1) as usize;
+        let h = (bbox[3] - bbox[1] + 1) as usize;
+        bitvec![u64, Lsb0; 1; w * h]
+    }
+
+    #[test]
+    fn single_pixel_roi_renders_at_correct_location_with_border_alpha() {
+        // 3x3 bbox, only the centre bit set -> one isolated screen pixel.
+        let bbox = [0u32, 0, 2, 2];
+        let mut mask = bitvec![u64, Lsb0; 0; 9];
+        mask.set(4, true); // local (1,1) in a 3-wide bbox
+        let color = rgba(10, 20, 30, 128);
+        let instances = [RoiDrawInstance {
+            bbox,
+            mask: &mask,
+            color,
+        }];
+
+        let pixels = composite_roi_instances(&instances, 5, 5, 1.0, 0.0, 0.0);
+
+        for y in 0..5usize {
+            for x in 0..5usize {
+                let i = y * 5 + x;
+                if x == 1 && y == 1 {
+                    // Isolated pixel: every neighbour is background, so it's a
+                    // border pixel and alpha is forced to 255.
+                    assert_eq!(pixels[i], rgba(10, 20, 30, 255), "at ({x},{y})");
+                } else {
+                    assert_eq!(pixels[i].a, 0, "expected background at ({x},{y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zoomed_in_block_has_no_gaps_and_distinguishes_border_from_interior_alpha() {
+        // 2x2 fully-set mask, zoom=2 -> a gapless 4x4 screen block at (2,2)-(6,6)
+        // inside an 8x8 buffer, with a 2x2 interior that isn't a border.
+        let bbox = [1u32, 1, 2, 2];
+        let mask = full_mask(bbox);
+        let color = rgba(200, 0, 0, 128);
+        let instances = [RoiDrawInstance {
+            bbox,
+            mask: &mask,
+            color,
+        }];
+
+        let pixels = composite_roi_instances(&instances, 8, 8, 2.0, 0.0, 0.0);
+
+        for y in 0..8usize {
+            for x in 0..8usize {
+                let i = y * 8 + x;
+                let in_block = (2..6).contains(&x) && (2..6).contains(&y);
+                if !in_block {
+                    assert_eq!(pixels[i].a, 0, "expected background at ({x},{y})");
+                    continue;
+                }
+                let is_interior = (3..5).contains(&x) && (3..5).contains(&y);
+                assert_eq!(pixels[i].r, 200, "at ({x},{y})");
+                if is_interior {
+                    // Not a border pixel: keeps the original blended alpha.
+                    assert_eq!(pixels[i].a, 128, "interior alpha at ({x},{y})");
+                } else {
+                    assert_eq!(pixels[i].a, 255, "border alpha at ({x},{y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn roi_entirely_outside_viewport_is_culled_and_produces_no_pixels() {
+        let bbox = [1000u32, 1000, 1001, 1001];
+        let mask = full_mask(bbox);
+        let instances = [RoiDrawInstance {
+            bbox,
+            mask: &mask,
+            color: rgba(255, 255, 255, 255),
+        }];
+
+        let pixels = composite_roi_instances(&instances, 8, 8, 1.0, 0.0, 0.0);
+
+        assert!(pixels.iter().all(|p| p.a == 0));
+    }
+
+    #[test]
+    fn roi_straddling_the_viewport_edge_is_not_over_culled() {
+        // 3x3 fully-set mask anchored at the origin, but the buffer is only 2x2:
+        // the bbox extends past the buffer, yet still overlaps it and must not be
+        // culled - the visible 2x2 corner should render fully.
+        let bbox = [0u32, 0, 2, 2];
+        let mask = full_mask(bbox);
+        let instances = [RoiDrawInstance {
+            bbox,
+            mask: &mask,
+            color: rgba(1, 2, 3, 200),
+        }];
+
+        let pixels = composite_roi_instances(&instances, 2, 2, 1.0, 0.0, 0.0);
+
+        assert!(
+            pixels.iter().all(|p| p.r == 1 && p.g == 2 && p.b == 3),
+            "every pixel of the visible corner should be painted: {pixels:?}"
+        );
+    }
+
+    #[test]
+    fn far_zoomed_out_roi_collapses_to_exactly_one_pixel_instead_of_vanishing() {
+        // A small (2x2) ROI viewed at zoom=0.01: its screen footprint
+        // (2 * 0.01 = 0.02px) is far below one pixel. Without the collapse path
+        // this would either vanish (every mask pixel rounds into the same
+        // sub-pixel slot that the old per-pixel clipping logic could drop) or
+        // require iterating mask bits for no visual gain; with it, exactly one
+        // pixel must be painted so the ROI doesn't silently disappear.
+        let bbox = [100u32, 100, 101, 101];
+        let mask = full_mask(bbox);
+        let color = rgba(50, 60, 70, 222);
+        let instances = [RoiDrawInstance {
+            bbox,
+            mask: &mask,
+            color,
+        }];
+
+        let pixels = composite_roi_instances(&instances, 50, 50, 0.01, 0.0, 0.0);
+
+        let painted: Vec<_> = pixels.iter().filter(|p| p.a != 0).collect();
+        assert_eq!(
+            painted.len(),
+            1,
+            "expected exactly one painted pixel, got {painted:?}"
+        );
+        assert_eq!(painted[0].r, 50);
+        assert_eq!(painted[0].g, 60);
+        assert_eq!(painted[0].b, 70);
+        // Isolated single pixel -> border pass forces full opacity.
+        assert_eq!(painted[0].a, 255);
+    }
+
+    #[test]
+    fn overlapping_rois_blend_with_porter_duff_over() {
+        let bbox = [0u32, 0, 0, 0]; // single-pixel bbox
+        let mask = full_mask(bbox);
+        let bottom = rgba(255, 0, 0, 128);
+        let top = rgba(0, 0, 255, 128);
+        let instances = [
+            RoiDrawInstance {
+                bbox,
+                mask: &mask,
+                color: bottom,
+            },
+            RoiDrawInstance {
+                bbox,
+                mask: &mask,
+                color: top,
+            },
+        ];
+
+        let pixels = composite_roi_instances(&instances, 3, 3, 1.0, 0.0, 0.0);
+
+        let mut expected = bottom;
+        blend_pixel_over(&mut expected, top);
+        expected.a = 255; // isolated pixel -> border pass forces full opacity
+        assert_eq!(pixels[0], expected);
     }
 }
