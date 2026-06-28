@@ -1386,6 +1386,9 @@ impl Default for ClassifyRoisSettings {
     }
 }
 
+fn _serde_default_colocalization_exclude_classes() -> Vec<ObjectClass> {
+    vec![]
+}
 ///  Calculates spatial colocalization and intersections between specified object classes.
 ///
 ///  This command scans the ROI cache, groups objects by their designated classes,
@@ -1405,6 +1408,17 @@ pub struct ColocalizationSettings {
     ///
     ///  If defined the overlapping coloc area is added as new ROI and labeled with this class
     pub class_for_overlapping_areas: ObjectClass,
+    ///  Classes an object must NOT overlap to be considered colocalized.
+    ///
+    ///  An object that otherwise satisfies `classes_to_coloc` is excluded entirely
+    ///  (no relation recorded, no intersection ROI created) if it also overlaps any
+    ///  object from one of these classes with at least `min_coloc_area`. Leave empty
+    ///  (the default) to disable this filter - exclusion is opt-in.
+    ///
+    ///  Example: to find objects colocalizing with class 1 and 2 but *not* 3, set
+    ///  `classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.
+    #[serde(default = "_serde_default_colocalization_exclude_classes")]
+    pub exclude_classes: Vec<ObjectClass>,
     ///  If set one object is allowed to coloc with more than one other object
     pub allow_multi_object_coloc: bool,
     pub size_unit: SizeUnits,

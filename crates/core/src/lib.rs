@@ -7,12 +7,17 @@ mod image;
 mod init;
 mod job;
 mod pipeline;
+mod resources;
 mod roi;
 mod storage;
 
 // Init function which must be called once
 pub use crate::init::CoreConfig;
 pub use crate::init::init;
+
+// System resource sizing (JVM heap, parallelism) based on available RAM
+pub use crate::resources::recommended_jvm_heap_bytes;
+pub use crate::resources::recommended_parallelism;
 
 // Image reader
 pub use crate::image::ChannelInfo;

@@ -272,6 +272,7 @@ impl From<ColocalizationSettings> for Colocalization {
             classes_to_coloc: _s.classes_to_coloc.into_iter().map(|v| v.into()).collect(),
             filter_classes: _s.filter_classes.into_iter().map(|v| v.into()).collect(),
             class_for_overlapping_areas: _s.class_for_overlapping_areas,
+            exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
             allow_multi_object_coloc: _s.allow_multi_object_coloc,
             size_unit: _s.size_unit,
             min_coloc_area: _s.min_coloc_area,

@@ -573,6 +573,14 @@
             "$ref": "#/$defs/ObjectClass"
           }
         },
+        "excludeClasses": {
+          "description": "Classes an object must NOT overlap to be considered colocalized.\n\n An object that otherwise satisfies `classes_to_coloc` is excluded entirely\n (no relation recorded, no intersection ROI created) if it also overlaps any\n object from one of these classes with at least `min_coloc_area`. Leave empty\n (the default) to disable this filter - exclusion is opt-in.\n\n Example: to find objects colocalizing with class 1 and 2 but *not* 3, set\n `classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
         "filterClasses": {
           "description": "Optional additional label filters.\n\n Only classes which matches all of these filters are used for coloc calculation",
           "type": "array",

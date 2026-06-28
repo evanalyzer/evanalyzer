@@ -102,11 +102,10 @@ impl PipelineWorker {
 
             info!("Pipeline job started ...");
 
-            let Ok(parallel) = std::thread::available_parallelism() else {
-                error!("Could not get number of cores!");
-                continue;
-            };
-            let (handle, rx, cancel_flag) = job_exec.run_async(parallel.get() - 1);
+            // Caps parallelism to available RAM as well as CPU cores, so a low-memory
+            // machine doesn't try to run as many concurrent workers as it has cores.
+            let parallelism = evanalyzer_core::recommended_parallelism();
+            let (handle, rx, cancel_flag) = job_exec.run_async(parallelism);
             *self
                 .pipeline_controller
                 .pipeline_cancel_flag
