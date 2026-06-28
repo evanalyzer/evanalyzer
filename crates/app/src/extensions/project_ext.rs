@@ -192,6 +192,9 @@ pub trait ProjectExt {
     fn toggle_class_visibility(&mut self, class_id: ObjectClass);
     fn is_class_visible(&self, class_id: &ObjectClass) -> bool;
     fn count_rois_for_class(&self, class_id: &ObjectClass) -> usize;
+
+    fn toggle_hide_unclassified_rois(&mut self);
+    fn hide_unclassified_rois(&self) -> bool;
 }
 
 impl ProjectExt for ProjectWithRuntime {
@@ -1283,6 +1286,14 @@ impl ProjectExt for ProjectWithRuntime {
 
     fn is_class_visible(&self, class_id: &ObjectClass) -> bool {
         !self.tmp_settings.hidden_classes.contains(class_id)
+    }
+
+    fn toggle_hide_unclassified_rois(&mut self) {
+        self.tmp_settings.hide_unclassified_rois = !self.tmp_settings.hide_unclassified_rois;
+    }
+
+    fn hide_unclassified_rois(&self) -> bool {
+        self.tmp_settings.hide_unclassified_rois
     }
 
     fn count_rois_for_class(&self, class_id: &ObjectClass) -> usize {

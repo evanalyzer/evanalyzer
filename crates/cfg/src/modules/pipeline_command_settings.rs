@@ -1513,8 +1513,8 @@ impl Default for RoiMathSettings {
             input_class: ObjectClass::default(),
             other_class: ObjectClass::default(),
             other_filter_classes: vec![],
-            size_unit: SizeUnits::default(),
-            min_overlap_area: f32::default(),
+            size_unit: SizeUnits::Pixels,
+            min_overlap_area: 2.0f32,
             output_class: ObjectClass::Unset,
             keep_unmatched: true,
         }

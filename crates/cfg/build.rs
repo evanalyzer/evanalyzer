@@ -141,4 +141,9 @@ fn main() {
         eprintln!("Schema generator Error: {}", e);
         std::process::exit(1);
     }
+
+    if let Err(e) = schema_generator::generate_template_schemas() {
+        eprintln!("Template schema generator Error: {}", e);
+        std::process::exit(1);
+    }
 }

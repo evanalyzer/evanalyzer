@@ -471,7 +471,13 @@ impl ViewportController {
 
         let auto_rois = project.get_preview_rois();
 
+        let hide_unclassified = project.hide_unclassified_rois();
+
         for (roi_idx, roi) in rois.iter().chain(auto_rois.iter()).enumerate() {
+            if hide_unclassified && roi.object_class.is_empty() {
+                continue;
+            }
+
             // Skip ROIs whose every assigned class is hidden.
             let all_hidden = !roi.object_class.is_empty()
                 && roi

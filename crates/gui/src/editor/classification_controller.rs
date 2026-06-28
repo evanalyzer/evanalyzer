@@ -144,6 +144,19 @@ impl ClassificationController {
                     manager.sync_classification_to_slint();
                     manager.viewport_controller.trigger_image_redraw_rois();
                 });
+
+            // Toggle hide/show unclassified ROIs
+            let manager = self.clone();
+            ui.global::<ClassificationState>()
+                .on_hide_unclassified_toggled(move || {
+                    manager
+                        .app_state
+                        .get_project_write()
+                        .toggle_hide_unclassified_rois();
+                    manager.sync_classification_to_slint();
+                    manager.roi_list_controller.sync_rois_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_rois();
+                });
         }
     }
 
@@ -178,6 +191,7 @@ impl ClassificationController {
                     .filter(|c| project.is_class_visible(&c.id))
                     .map(|c| project.count_rois_for_class(&c.id) as i32)
                     .sum();
+                let hide_unclassified = project.hide_unclassified_rois();
                 drop(project);
 
                 let bridge = Rc::new(ClassificationModelBridge {
@@ -188,6 +202,7 @@ impl ClassificationController {
                 let class_state = ui.global::<ClassificationState>();
                 class_state.set_classes_list(model_rc);
                 class_state.set_total_visible_objects(total_visible);
+                class_state.set_hide_unclassified_rois(hide_unclassified);
             }
         }) {
             warn!("Failed to sync classification to Slint: {}", e);

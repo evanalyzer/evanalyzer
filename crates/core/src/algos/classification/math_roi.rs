@@ -78,10 +78,12 @@ pub struct RoiMath {
     pub other_filter_classes: Vec<ObjectClass>,
 
     /// Size unit for `min_overlap_area`
+    #[cmdsmeta(default = SizeUnits::Pixels)]
     pub size_unit: SizeUnits,
 
     /// Minimum overlap area before an `other_class` object is treated as a partner
     /// of an input ROI; objects overlapping less than this are ignored.
+    #[cmdsmeta(default = 2)]
     pub min_overlap_area: f32,
 
     /// If unset, the result replaces the input ROI in place.
@@ -114,7 +116,9 @@ impl ImageAlgorithm for RoiMath {
         let image_size = ctx.full_image_size();
         let px_sizes = ctx.pixel_sizes();
         let pixel_area_nm2 = px_sizes.px_size_x * px_sizes.px_size_y;
-        let min_area_px = self.size_unit.to_pixel(self.min_overlap_area, pixel_area_nm2);
+        let min_area_px = self
+            .size_unit
+            .to_pixel(self.min_overlap_area, pixel_area_nm2);
         let op = BooleanOp::from(&self.operation);
 
         let other_ids: Vec<ObjectId> = cache
@@ -151,11 +155,7 @@ impl ImageAlgorithm for RoiMath {
                 .iter()
                 .filter(|oid| *oid != input_id)
                 .filter_map(|oid| cache.roi_cache.get(oid))
-                .filter(|o| {
-                    input_roi
-                        .overlaps(o)
-                        .is_some_and(|i| i.area >= min_area_px)
-                })
+                .filter(|o| input_roi.overlaps(o).is_some_and(|i| i.area >= min_area_px))
                 .collect();
 
             if overlapping.is_empty() {
@@ -166,7 +166,8 @@ impl ImageAlgorithm for RoiMath {
             }
 
             let geometry = input_roi.combine_geometry(&overlapping, op, image_size);
-            let (segmentation_class, plane) = (input_roi.segmentation_class, input_roi.plane.clone());
+            let (segmentation_class, plane) =
+                (input_roi.segmentation_class, input_roi.plane.clone());
 
             // Build the result as its own (not-yet-inserted) ROI so intensities can be
             // sampled against the *new* mask before mutating the cache - `cache` can't
@@ -230,12 +231,12 @@ impl ImageAlgorithm for RoiMath {
 mod tests {
     use super::*;
     use crate::{
+        ImageContainer, ImagePlane, ManagedImage,
         image::PixelSizes,
         pipeline::{
             pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
             pipeline_context::PipelineContext,
         },
-        ImageContainer, ImagePlane, ManagedImage,
     };
     use bitvec::prelude::*;
     use kornia_apriltag::utils::Point2d;
@@ -281,10 +282,18 @@ mod tests {
 
     /// Like `make_ctx`, but also registers a constant-value channel-0 image in
     /// `cache`, so intensity measurement has something real to sample.
-    fn make_ctx_with_channel(size: ImageSize, cache: &mut PipelineCache, value: f32) -> PipelineContext {
+    fn make_ctx_with_channel(
+        size: ImageSize,
+        cache: &mut PipelineCache,
+        value: f32,
+    ) -> PipelineContext {
         let ctx = make_ctx(size);
-        let img = Image::<f32, 1, CpuAllocator>::new(size, vec![value; size.width * size.height], CpuAllocator)
-            .unwrap();
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            size,
+            vec![value; size.width * size.height],
+            CpuAllocator,
+        )
+        .unwrap();
         cache.image_cache.image_meta = PipelineImageMeta {
             image_tile_info: crate::ImageTile {
                 offset_x: 0,
@@ -362,15 +371,25 @@ mod tests {
         });
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
-        assert_eq!(cache.roi_cache.len(), 3, "original cell and nucleus stay untouched");
+        assert_eq!(
+            cache.roi_cache.len(),
+            3,
+            "original cell and nucleus stay untouched"
+        );
         let cytoplasm = cache
             .roi_cache
             .values()
             .find(|r| r.has_object_class(&OUT))
             .expect("cytoplasm ROI not found");
         assert_eq!(cytoplasm.area, 100 - 16);
-        assert!(!cytoplasm.is_part_of(14, 14), "nucleus region must be excluded");
-        assert!(cytoplasm.is_part_of(10, 10), "cell region outside the nucleus must remain");
+        assert!(
+            !cytoplasm.is_part_of(14, 14),
+            "nucleus region must be excluded"
+        );
+        assert!(
+            cytoplasm.is_part_of(10, 10),
+            "cell region outside the nucleus must remain"
+        );
     }
 
     #[test]
@@ -393,7 +412,10 @@ mod tests {
             .values()
             .find(|r| r.has_object_class(&OUT))
             .expect("AND result not found");
-        assert_eq!(result.area, 16, "AND must equal the nucleus area (fully inside the cell)");
+        assert_eq!(
+            result.area, 16,
+            "AND must equal the nucleus area (fully inside the cell)"
+        );
         assert_eq!(result.bbox, [13, 13, 16, 16]);
     }
 
@@ -417,7 +439,11 @@ mod tests {
             .values()
             .find(|r| r.has_object_class(&OUT))
             .expect("OR result not found");
-        assert_eq!(result.bbox, [10, 10, 24, 24], "union bbox must cover both operands");
+        assert_eq!(
+            result.bbox,
+            [10, 10, 24, 24],
+            "union bbox must cover both operands"
+        );
         assert_eq!(result.area, 100 + 100 - 25);
     }
 
@@ -442,7 +468,10 @@ mod tests {
             .find(|r| r.has_object_class(&OUT))
             .expect("XOR result not found");
         assert_eq!(result.area, 100 + 100 - 2 * 25);
-        assert!(!result.is_part_of(17, 17), "the overlap region must be excluded");
+        assert!(
+            !result.is_part_of(17, 17),
+            "the overlap region must be excluded"
+        );
     }
 
     #[test]
@@ -527,7 +556,11 @@ mod tests {
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let cell = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
-        assert_eq!(cell.area, 100 - 9 - 9, "both debris blobs must be removed, not just one");
+        assert_eq!(
+            cell.area,
+            100 - 9 - 9,
+            "both debris blobs must be removed, not just one"
+        );
     }
 
     #[test]
@@ -560,7 +593,10 @@ mod tests {
             .intensities
             .get(&CHANNEL)
             .expect("cytoplasm ROI must have measured intensities");
-        assert_eq!(intensity.sum_intensity, cytoplasm.area as f64 * VALUE as f64);
+        assert_eq!(
+            intensity.sum_intensity,
+            cytoplasm.area as f64 * VALUE as f64
+        );
     }
 
     #[test]
