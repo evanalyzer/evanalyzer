@@ -281,7 +281,9 @@
           "enabled": true,
           "command": {
             "type": "watershed",
-            "maximumFinderTolerance": 0.5
+            "maximumFinderTolerance": 0.5,
+            "smoothingSigma": 0.0,
+            "minObjectSize": 0
           }
         },
         {
@@ -523,7 +525,9 @@
           "enabled": true,
           "command": {
             "type": "watershed",
-            "maximumFinderTolerance": 0.5
+            "maximumFinderTolerance": 0.5,
+            "smoothingSigma": 0.0,
+            "minObjectSize": 0
           }
         },
         {
@@ -642,7 +646,9 @@
           "enabled": true,
           "command": {
             "type": "watershed",
-            "maximumFinderTolerance": 0.5
+            "maximumFinderTolerance": 0.5,
+            "smoothingSigma": 0.0,
+            "minObjectSize": 0
           }
         },
         {

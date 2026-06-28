@@ -148,8 +148,6 @@ impl ViewportWorker {
                 continue;
             }
 
-            debug!("Started heavy thread!");
-
             // ----------------------------------------------------------------
             // STEP 2: Extract viewport state - separate lock, acquired after
             // project lock is already dropped
@@ -375,8 +373,7 @@ impl ViewportWorker {
                 // screen-space ROI overlay exactly on every platform.
                 let vp_w = prepared.viewport_width.max(1.0) as usize;
                 let vp_h = prepared.viewport_height.max(1.0) as usize;
-                if screen_buffer.width() as usize != vp_w
-                    || screen_buffer.height() as usize != vp_h
+                if screen_buffer.width() as usize != vp_w || screen_buffer.height() as usize != vp_h
                 {
                     screen_buffer = SharedPixelBuffer::new(vp_w as u32, vp_h as u32);
                 }
