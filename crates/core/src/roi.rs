@@ -692,11 +692,12 @@ impl Roi {
         cache: &PipelineCache,
     ) -> IndexMap<i32, Intensity> {
         let tile_offset = ctx.get_image_tile_offset();
-        let size = ctx.get_image_size();
-        let full_image_size = ctx.full_image_size();
-        let origin_width = size.width;
-        let zoom_x = size.width / full_image_size.width;
-        let zoom_y = size.height / full_image_size.height;
+        // Channel images are loaded for the current tile, so they share that tile's
+        // pixel grid 1:1 - no resolution scaling against `full_image_size` applies
+        // here (that ratio is meaningless for tile-local indexing: a tile is a crop
+        // of the full image at the same resolution, not a smaller-resolution pyramid
+        // level of it).
+        let origin_width = ctx.get_image_size().width;
 
         let channel_views = cache.image_cache.resolve_channel_views();
 
@@ -725,7 +726,7 @@ impl Roi {
                 let y_abs = ymin as usize + ry;
                 let tile_x = x_abs - tile_offset.x;
                 let tile_y = y_abs - tile_offset.y;
-                let sample = (tile_y * zoom_y) * origin_width + tile_x * zoom_x;
+                let sample = tile_y * origin_width + tile_x;
 
                 for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
                     let val = sample_channel_pixel(*is_rgb, slice, sample);
@@ -1038,6 +1039,66 @@ mod tests {
             area,
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn measure_intensities_samples_correct_pixel_in_a_multi_tile_image() {
+        // Regression test: when the full image is larger than the current tile (the
+        // whole-slide-image / multi-tile case), sampling must use the tile's own
+        // pixel grid directly - not scale coordinates by tile_size/full_image_size,
+        // which truncates to 0 for any real multi-tile image and made every
+        // synthesized ROI (e.g. colocalization intersections, Voronoi regions)
+        // sample channel pixel 0 regardless of its actual tile-local position.
+        use crate::image::ManagedImage;
+        use crate::pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext};
+        use crate::{F32Gray, ImageContainer, ImagePlane};
+        use kornia_apriltag::utils::Point2d;
+        use kornia_image::{Image, ImageSize};
+        use kornia_tensor::CpuAllocator;
+        use std::sync::Arc;
+
+        let full_size = ImageSize {
+            width: 50,
+            height: 60,
+        };
+        let tile_size = ImageSize {
+            width: 15,
+            height: 20,
+        };
+        let offset = Point2d { x: 10, y: 15 };
+
+        let ctx =
+            PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
+        let mut cache = PipelineCache::default();
+
+        // Distinct intensities at two different tile-local positions.
+        let mut intensity = vec![0.0f32; 15 * 20];
+        intensity[0] = 10.0; // local (0,0)
+        intensity[5 * 15 + 7] = 99.0; // local (7,5)
+        let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::from_size_slice(tile_size, &intensity, CpuAllocator)
+                .unwrap(),
+            tile_offset: offset,
+            plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        }));
+        cache.image_cache.add_to_channel_cache(channel, 0);
+
+        // A 1-pixel ROI at the global position corresponding to tile-local (7,5).
+        let roi = Roi::new(RoiInit {
+            id: ObjectId(1),
+            bbox: [10 + 7, 15 + 5, 10 + 7, 15 + 5],
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, 1),
+            area: 1,
+            ..Default::default()
+        });
+
+        let intensities = roi.measure_intensities(&ctx, &cache);
+
+        assert_eq!(
+            intensities.get(&0).unwrap().sum_intensity,
+            99.0,
+            "ROI at tile-local (7,5) must sample its own pixel, not pixel (0,0)"
+        );
     }
 
     #[test]
