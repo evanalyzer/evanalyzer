@@ -369,7 +369,14 @@ impl<'a> JobExecutor {
     ///
     /// This function analyzes one whole image, including all configured time and z-stacks.
     /// If this is whole slide image, which is too big to load to RAM at once, the function
-    /// splits the image into tiles and analyze tile per tile
+    /// splits the image into tiles and analyzes tiles in parallel.
+    ///
+    /// Tile processing runs on the same rayon pool that [`run`](Self::run) uses to
+    /// parallelize over images. Nested `par_iter` calls share that pool via work
+    /// stealing, so when there are fewer images than cores the otherwise-idle
+    /// cores pick up tile work for the images that *are* running instead of
+    /// sitting idle - no manual thread-budget split between "image parallelism"
+    /// and "tile parallelism" is needed.
     fn analyze_image(
         &self,
         image_rel_path: &PathBuf,
@@ -383,33 +390,74 @@ impl<'a> JobExecutor {
         const TILE_SIZE: usize = 4096;
         let start_image = Instant::now();
 
-        let start = Instant::now();
-        let reader = ImageReader::new(image_path, ReadMode::Default)?;
-        let duration = start.elapsed();
-        info!("Prepare image reader {:?} {:?}", image_rel_path, duration);
+        // Extract everything needed from the reader in a scoped block so the
+        // borrow ends before tiles are processed in parallel - each tile work
+        // item below opens its own reader so concurrent threads never share
+        // mutable file-handle state (see analyze_image_tiles_parallel).
+        let (full_size, z_proj, z_handling, z_stacks, t_stacks, is_rgb, nr_bits, pixel_sizes) = {
+            let start = Instant::now();
+            let reader = ImageReader::new(image_path, ReadMode::Default)?;
+            let duration = start.elapsed();
+            info!("Prepare image reader {:?} {:?}", image_rel_path, duration);
 
-        let series_info = reader
-            .image_meta
-            .series
-            .get(&image_entry.selected_series)
-            .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
+            let series_info = reader
+                .image_meta
+                .series
+                .get(&image_entry.selected_series)
+                .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
 
-        let py_meta = series_info
-            .resolutions
-            .get(&RES_IDX)
-            .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
+            let py_meta = series_info
+                .resolutions
+                .get(&RES_IDX)
+                .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
 
-        let full_size = ImageSize {
-            width: py_meta.width as usize,
-            height: py_meta.height as usize,
+            let full_size = ImageSize {
+                width: py_meta.width as usize,
+                height: py_meta.height as usize,
+            };
+            let (z_proj, z_handling, z_range) =
+                self.prepare_z_stack_iterator(series_info, image_entry);
+            let z_stacks: Vec<i32> = z_range.collect();
+            let t_stacks: Vec<i32> = self
+                .prepare_t_stack_iterator(series_info, image_entry)
+                .collect();
+            let pixel_sizes = match &self.override_pixel_sizes {
+                Some(from_user) => from_user.clone(),
+                None => PixelSizes {
+                    px_size_x: series_info.pixel_sizes.px_size_x,
+                    px_size_y: series_info.pixel_sizes.px_size_y,
+                    px_size_z: series_info.pixel_sizes.px_size_z,
+                },
+            };
+            (
+                full_size,
+                z_proj,
+                z_handling,
+                z_stacks,
+                t_stacks,
+                py_meta.is_rgb,
+                py_meta.nr_bits,
+                pixel_sizes,
+            )
         };
-        let (z_proj, z_handling, z_range) =
-            self.prepare_z_stack_iterator(series_info, &image_entry);
 
-        let t_stack_iter = self.prepare_t_stack_iterator(series_info, &image_entry);
+        let tiles: Vec<ImageTile> = self
+            .prepare_tile_iterator(full_size.width, full_size.height, TILE_SIZE)
+            .collect();
 
-        // Spawn a dedicated DB writer thread so tile N+1's image loading and
-        // pipeline execution can overlap with tile N's DuckDB insert.
+        // Flat (t, z, tile) work list, processed in parallel below.
+        let mut all_work: Vec<(i32, i32, ImageTile)> =
+            Vec::with_capacity(t_stacks.len() * z_stacks.len() * tiles.len());
+        for &t in &t_stacks {
+            for &z in &z_stacks {
+                for tile in &tiles {
+                    all_work.push((t, z, tile.clone()));
+                }
+            }
+        }
+
+        // Spawn a dedicated DB writer thread so one tile's image loading and
+        // pipeline execution can overlap with another tile's DuckDB insert.
         let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<PipelineCache>(4);
         let writer_handle = {
             let exporter = exporter.clone();
@@ -423,31 +471,21 @@ impl<'a> JobExecutor {
             })
         };
 
-        let pixel_sizes = match &self.override_pixel_sizes {
-            Some(from_user) => from_user.clone(),
-            None => PixelSizes {
-                px_size_x: series_info.pixel_sizes.px_size_x,
-                px_size_y: series_info.pixel_sizes.px_size_y,
-                px_size_z: series_info.pixel_sizes.px_size_z,
-            },
-        };
-
-        let mut tile_result: Result<(), InternalErrors> = Ok(());
-        'outer: for t in t_stack_iter {
-            for z in z_range.clone() {
-                for tile in self.prepare_tile_iterator(full_size.width, full_size.height, TILE_SIZE)
-                {
+        let tile_result =
+            all_work
+                .into_par_iter()
+                .try_for_each(|(t, z, tile)| -> Result<(), InternalErrors> {
                     if cancel.load(Ordering::Relaxed) {
-                        tile_result = Err(InternalErrors::Cancelled);
-                        break 'outer;
+                        return Err(InternalErrors::Cancelled);
                     }
+
+                    let reader = ImageReader::new(image_path, ReadMode::Default)?;
                     let z_range_in = matches!(
                         z_handling,
                         ZStackHandling::AllStacks | ZStackHandling::SingleStack
                     )
                     .then(|| z..=z);
 
-                    let start = Instant::now();
                     let mut cache = self.prepare_pipeline_cache(
                         &reader,
                         Arc::new(image_entry.clone()),
@@ -457,16 +495,11 @@ impl<'a> JobExecutor {
                         &z_range_in,
                         RES_IDX,
                         full_size,
-                        py_meta.is_rgb,
+                        is_rgb,
                         image_rel_path,
-                        py_meta.nr_bits,
+                        nr_bits,
                         pixel_sizes.clone(),
                     )?;
-                    let duration = start.elapsed();
-                    info!(
-                        "Read image to pipeline cache {:?} {:?}",
-                        image_rel_path, duration
-                    );
 
                     let mut bp_hit = false;
                     for pipe_id in order {
@@ -490,29 +523,25 @@ impl<'a> JobExecutor {
                     }
                     if bp_hit {
                         // Skip DB write for a Stop breakpoint run.
-                        continue;
+                        return Ok(());
                     }
 
                     match cache_tx.try_send(cache) {
                         Ok(()) => {}
                         Err(std::sync::mpsc::TrySendError::Full(cache)) => {
                             warn!("DB writer backpressure: channel full, tile stalling");
-                            if let Err(e) = cache_tx.send(cache) {
-                                tile_result =
-                                    Err(InternalErrors::Io(format!("DB writer exited: {e}")));
-                                break 'outer;
-                            }
+                            cache_tx.send(cache).map_err(|e| {
+                                InternalErrors::Io(format!("DB writer exited: {e}"))
+                            })?;
                         }
                         Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                            tile_result = Err(InternalErrors::Io(
+                            return Err(InternalErrors::Io(
                                 "DB writer thread exited unexpectedly".into(),
                             ));
-                            break 'outer;
                         }
                     }
-                }
-            }
-        }
+                    Ok(())
+                });
 
         drop(cache_tx);
         let writer_result = writer_handle.join().expect("DB writer thread panicked");
