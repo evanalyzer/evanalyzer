@@ -365,6 +365,47 @@ impl<'a> JobExecutor {
         }
     }
 
+    /// Pure tile-count math, factored out of [`count_preview_visible_tiles`] so it
+    /// can be unit-tested without needing a real image file on disk.
+    fn count_visible_tiles_for_image(&self, full_width: usize, full_height: usize) -> usize {
+        let tile_size = self.preview_tile_size();
+        let tiles = self.prepare_tile_iterator(full_width, full_height, tile_size);
+        match &self.preview_tile_settings {
+            Some(settings) => tiles.filter(|t| settings.is_tile_visible(t)).count(),
+            None => tiles.count(),
+        }
+    }
+
+    /// Counts how many tiles a preview run would actually process, without running
+    /// the pipeline. Mirrors the tile-size and viewport-visibility logic
+    /// `analyze_image_tiles_parallel` uses (same `preview_tile_size`/`prepare_tile_iterator`/
+    /// `is_tile_visible` calls), so callers can gate on the same number the real run
+    /// would use before paying for a full pipeline dispatch.
+    ///
+    /// Only reads image metadata (dimensions), not pixel data, so this is cheap
+    /// enough to call synchronously before starting a preview.
+    pub fn count_preview_visible_tiles(&self) -> Result<usize, InternalErrors> {
+        const RES_IDX: i32 = 0;
+        let mut total = 0usize;
+        for (rel_path, image_entry) in &self.images {
+            let abs_path = self.image_base_path.join(rel_path);
+            let reader = ImageReader::new(&abs_path, ReadMode::Default)?;
+            let series_info = reader
+                .image_meta
+                .series
+                .get(&image_entry.selected_series)
+                .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
+            let py_meta = series_info
+                .resolutions
+                .get(&RES_IDX)
+                .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
+
+            total +=
+                self.count_visible_tiles_for_image(py_meta.width as usize, py_meta.height as usize);
+        }
+        Ok(total)
+    }
+
     /// Analyze one image
     ///
     /// This function analyzes one whole image, including all configured time and z-stacks.
@@ -1260,6 +1301,92 @@ mod z_t_stack_precedence_tests {
         let range = job.prepare_t_stack_iterator(&image_info, &entry);
 
         assert_eq!(range, 3..=3);
+    }
+}
+
+#[cfg(test)]
+mod preview_visible_tile_count_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use std::sync::{Arc, Mutex};
+
+    fn make_job(preview_tile_settings: Option<PreviewTileSettings>) -> JobExecutor {
+        let mut job = JobExecutor::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+            IndexMap::new(),
+            std::path::PathBuf::new(),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter {
+                out_rois: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        );
+        job.preview_tile_settings = preview_tile_settings;
+        job
+    }
+
+    /// No preview settings means a full (non-preview) run: every tile counts.
+    #[test]
+    fn without_preview_settings_counts_every_tile() {
+        let job = make_job(None);
+        // 4096px base tile size, 10000x10000 image -> 3x3 = 9 tiles.
+        assert_eq!(job.count_visible_tiles_for_image(10_000, 10_000), 9);
+    }
+
+    /// Zoomed out so far that the whole 10000x10000 image fits the viewport: every
+    /// tile in the (fixed 4096px, since zoom < 2.0) grid intersects the viewport.
+    #[test]
+    fn zoomed_out_to_fit_the_whole_slide_counts_every_tile() {
+        let job = make_job(Some(PreviewTileSettings {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 1000.0,
+            viewport_height: 1000.0,
+            zoom: 0.1,
+            process_all_tiles: false,
+        }));
+        assert_eq!(job.count_visible_tiles_for_image(10_000, 10_000), 9);
+    }
+
+    /// Zoomed in enough that the viewport only covers a small image-space patch:
+    /// only the tiles actually under the viewport should count, not the whole grid.
+    #[test]
+    fn zoomed_in_on_one_tile_counts_only_that_tile() {
+        let job = make_job(Some(PreviewTileSettings {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 1000.0,
+            viewport_height: 1000.0,
+            // zoom >= 2.0 shrinks the tile size to 2048px (see `preview_tile_size`),
+            // and the viewport (1000px screen / 2.0 zoom = 500 image px) sits
+            // entirely inside the first 2048px tile.
+            zoom: 2.0,
+            process_all_tiles: false,
+        }));
+        assert_eq!(job.count_visible_tiles_for_image(10_000, 10_000), 1);
+    }
+
+    /// Sanity check for the gate's exact use case: a whole-slide image (e.g.
+    /// 40000x30000, comparable to a real WSI) viewed fully zoomed out covers far
+    /// more than a handful of 4096px tiles - this is the scenario the GUI's
+    /// preview-rejection threshold (`MAX_PREVIEW_VISIBLE_TILES` in
+    /// `pipeline_worker.rs`) is meant to catch.
+    #[test]
+    fn whole_slide_zoomed_out_exceeds_a_small_tile_budget() {
+        let job = make_job(Some(PreviewTileSettings {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 1200.0,
+            viewport_height: 900.0,
+            zoom: 0.03,
+            process_all_tiles: false,
+        }));
+        let visible = job.count_visible_tiles_for_image(40_000, 30_000);
+        assert!(
+            visible > 4,
+            "expected a fully zoomed-out whole-slide view to exceed a 4-tile budget, got {visible}"
+        );
     }
 }
 
