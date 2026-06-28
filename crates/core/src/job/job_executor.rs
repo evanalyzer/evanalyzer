@@ -342,6 +342,29 @@ impl<'a> JobExecutor {
         self.pipelines.insert(p.id, p);
     }
 
+    /// Picks the tile size for a single-image preview run.
+    ///
+    /// At higher zoom the viewport covers a smaller area of the full image, so
+    /// using the same fixed 4096px tile means re-reading and re-analyzing a lot
+    /// of pixels the user can't see just to get the small visible patch. Shrinking
+    /// the tile as zoom increases keeps the analyzed area closer to what's on
+    /// screen, so feedback for that area arrives faster.
+    fn preview_tile_size(&self) -> usize {
+        const BASE_TILE_SIZE: usize = 4096;
+        let Some(zoom) = self.preview_tile_settings.as_ref().map(|s| s.zoom) else {
+            return BASE_TILE_SIZE;
+        };
+        if zoom >= 8.0 {
+            512
+        } else if zoom >= 4.0 {
+            1024
+        } else if zoom >= 2.0 {
+            2048
+        } else {
+            BASE_TILE_SIZE
+        }
+    }
+
     /// Analyze one image
     ///
     /// This function analyzes one whole image, including all configured time and z-stacks.
@@ -521,7 +544,7 @@ impl<'a> JobExecutor {
         cancel: Arc<AtomicBool>,
     ) -> Result<(), InternalErrors> {
         const RES_IDX: i32 = 0;
-        const TILE_SIZE: usize = 4096;
+        let tile_size = self.preview_tile_size();
 
         // Extract everything we need from the reader in a scoped block so the
         // borrow of `reader` ends before we enter the parallel section.
@@ -567,7 +590,7 @@ impl<'a> JobExecutor {
         };
 
         let tiles: Vec<ImageTile> = self
-            .prepare_tile_iterator(full_size.width, full_size.height, TILE_SIZE)
+            .prepare_tile_iterator(full_size.width, full_size.height, tile_size)
             .collect();
         let z_stacks: Vec<i32> = z_range.collect();
 

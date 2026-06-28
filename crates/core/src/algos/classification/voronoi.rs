@@ -76,6 +76,129 @@ pub struct Voronoi {
     pub exclude_areas_with_no_center: bool,
 }
 
+/// Uniform spatial grid over center seed points.
+///
+/// Lets the per-pixel nearest-center query check only the centers in nearby cells
+/// instead of scanning every center, without changing the result: the search expands
+/// ring by ring until the guaranteed minimum distance to any unscanned cell exceeds
+/// the best candidate found so far, so it always converges on the true nearest center.
+struct CenterGrid {
+    cell_size: f64,
+    grid_w: usize,
+    grid_h: usize,
+    cells: Vec<Vec<u32>>,
+}
+
+impl CenterGrid {
+    fn build(centers: &[(ObjectId, f64, f64)], img_w: u32, img_h: u32) -> Self {
+        let cell_size = (img_w as f64 * img_h as f64 / centers.len() as f64)
+            .sqrt()
+            .max(1.0);
+        let grid_w = ((img_w as f64 / cell_size).ceil() as usize).max(1);
+        let grid_h = ((img_h as f64 / cell_size).ceil() as usize).max(1);
+
+        let mut cells = vec![Vec::new(); grid_w * grid_h];
+        for (i, &(_, cx, cy)) in centers.iter().enumerate() {
+            let gx = ((cx / cell_size) as isize).clamp(0, grid_w as isize - 1) as usize;
+            let gy = ((cy / cell_size) as isize).clamp(0, grid_h as isize - 1) as usize;
+            cells[gy * grid_w + gx].push(i as u32);
+        }
+
+        Self {
+            cell_size,
+            grid_w,
+            grid_h,
+            cells,
+        }
+    }
+
+    fn cell_of(&self, x: f64, y: f64) -> (isize, isize) {
+        let gx = ((x / self.cell_size) as isize).clamp(0, self.grid_w as isize - 1);
+        let gy = ((y / self.cell_size) as isize).clamp(0, self.grid_h as isize - 1);
+        (gx, gy)
+    }
+
+    /// Updates `best_dist_sq`/`nearest` with any center in cell `(gx, gy)` closer to
+    /// `(x, y)` than the current best. Ties keep the lower index, matching a
+    /// brute-force scan in index order.
+    fn scan_cell(
+        &self,
+        gx: isize,
+        gy: isize,
+        centers: &[(ObjectId, f64, f64)],
+        x: f64,
+        y: f64,
+        best_dist_sq: &mut f64,
+        nearest: &mut usize,
+    ) {
+        if gx < 0 || gy < 0 || gx as usize >= self.grid_w || gy as usize >= self.grid_h {
+            return;
+        }
+        for &i in &self.cells[gy as usize * self.grid_w + gx as usize] {
+            let i = i as usize;
+            let (_, cx, cy) = &centers[i];
+            let dx = x - cx;
+            let dy = y - cy;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq < *best_dist_sq || (dist_sq == *best_dist_sq && i < *nearest) {
+                *best_dist_sq = dist_sq;
+                *nearest = i;
+            }
+        }
+    }
+
+    /// Finds the center nearest to `(x, y)`, returning its index into `centers` and the
+    /// squared distance. `max_dist_sq` allows the search to stop early once no
+    /// unscanned cell could possibly hold a center within that bound.
+    fn nearest(
+        &self,
+        centers: &[(ObjectId, f64, f64)],
+        x: f64,
+        y: f64,
+        max_dist_sq: f64,
+    ) -> Option<(usize, f64)> {
+        let (px_gx, px_gy) = self.cell_of(x, y);
+        let mut best_dist_sq = f64::MAX;
+        let mut nearest = usize::MAX;
+        let max_r = (self.grid_w + self.grid_h) as isize;
+
+        let mut r: isize = 0;
+        loop {
+            if r == 0 {
+                self.scan_cell(px_gx, px_gy, centers, x, y, &mut best_dist_sq, &mut nearest);
+            } else {
+                for gx in (px_gx - r)..=(px_gx + r) {
+                    self.scan_cell(gx, px_gy - r, centers, x, y, &mut best_dist_sq, &mut nearest);
+                    self.scan_cell(gx, px_gy + r, centers, x, y, &mut best_dist_sq, &mut nearest);
+                }
+                for gy in (px_gy - r + 1)..=(px_gy + r - 1) {
+                    self.scan_cell(px_gx - r, gy, centers, x, y, &mut best_dist_sq, &mut nearest);
+                    self.scan_cell(px_gx + r, gy, centers, x, y, &mut best_dist_sq, &mut nearest);
+                }
+            }
+
+            // After fully scanning rings 0..=r, any unscanned cell is at Chebyshev grid
+            // distance > r, so the closest point it could contain is at least r*cell_size
+            // away - safe to stop once that bound can no longer beat the best match.
+            let bound_sq = (r as f64 * self.cell_size).powi(2);
+            if nearest != usize::MAX && best_dist_sq <= bound_sq {
+                break;
+            }
+            // Once the bound alone exceeds max_dist_sq, anything still unscanned would be
+            // excluded by the radius limit anyway, regardless of how "near" it is.
+            if bound_sq > max_dist_sq {
+                break;
+            }
+            r += 1;
+            if r > max_r {
+                break;
+            }
+        }
+
+        (nearest != usize::MAX).then(|| (nearest, best_dist_sq))
+    }
+}
+
 impl ImageAlgorithm for Voronoi {
     fn execute(
         &self,
@@ -147,8 +270,12 @@ impl ImageAlgorithm for Voronoi {
 
         // --- Phase 3: Assign each pixel to its nearest center (distance-transform Voronoi) ---
         // Simultaneously apply the mask constraint to avoid a second full-image scan.
+        // A uniform spatial grid over the centers turns the per-pixel nearest-center
+        // query into a small expanding-ring search instead of scanning every center,
+        // which matters a lot once there are many seed objects.
         let n = centers.len();
         let mut center_pixels: Vec<Vec<(u32, u32)>> = vec![Vec::new(); n];
+        let grid = CenterGrid::build(&centers, img_w, img_h);
 
         for y in 0..img_h {
             for x in 0..img_w {
@@ -157,23 +284,14 @@ impl ImageAlgorithm for Voronoi {
                     continue;
                 }
 
-                // Find the nearest center using strict < so that equidistant centers
-                // are always resolved to whichever appears first - no flip-flopping.
-                let mut min_dist_sq = f64::MAX;
-                let mut nearest = usize::MAX;
-                for (i, (_, cx, cy)) in centers.iter().enumerate() {
-                    let dx = x as f64 - cx;
-                    let dy = y as f64 - cy;
-                    let dist_sq = dx * dx + dy * dy;
-                    if dist_sq < min_dist_sq {
-                        min_dist_sq = dist_sq;
-                        nearest = i;
-                    }
-                }
                 // Apply max_radius separately with <= so boundary pixels are included,
                 // matching the filled-ellipse behaviour of the C++ reference.
-                if nearest != usize::MAX && min_dist_sq <= max_dist_sq {
-                    center_pixels[nearest].push((x, y));
+                if let Some((nearest, dist_sq)) =
+                    grid.nearest(&centers, x as f64, y as f64, max_dist_sq)
+                {
+                    if dist_sq <= max_dist_sq {
+                        center_pixels[nearest].push((x, y));
+                    }
                 }
             }
         }
@@ -616,5 +734,61 @@ mod tests {
         let regions = voronoi_rois(&cache);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].area, 100);
+    }
+
+    /// Tiny deterministic LCG so the stress test below doesn't need a `rand` dependency.
+    fn next_rand(state: &mut u64) -> u64 {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *state
+    }
+
+    /// `CenterGrid::nearest` is a performance optimisation over a brute-force scan of
+    /// every center; this checks it produces identical (index, tie-break) results to
+    /// that brute-force scan across many random center layouts, not just the simple
+    /// hand-picked layouts used by the other tests above.
+    #[test]
+    fn center_grid_matches_brute_force_for_many_random_centers() {
+        let img_w = 80u32;
+        let img_h = 60u32;
+        let mut state = 0xC0FFEEu64;
+
+        for trial in 0..20 {
+            let n = 2 + (trial % 30);
+            let centers: Vec<(ObjectId, f64, f64)> = (0..n)
+                .map(|i| {
+                    let cx = (next_rand(&mut state) % (img_w as u64 * 4)) as f64 / 4.0;
+                    let cy = (next_rand(&mut state) % (img_h as u64 * 4)) as f64 / 4.0;
+                    (ObjectId(i as u128), cx, cy)
+                })
+                .collect();
+
+            let grid = CenterGrid::build(&centers, img_w, img_h);
+
+            for y in 0..img_h {
+                for x in 0..img_w {
+                    let (gx, gy) = grid
+                        .nearest(&centers, x as f64, y as f64, f64::MAX)
+                        .expect("non-empty centers must yield a nearest match");
+
+                    let mut brute_dist_sq = f64::MAX;
+                    let mut brute_idx = usize::MAX;
+                    for (i, (_, cx, cy)) in centers.iter().enumerate() {
+                        let dx = x as f64 - cx;
+                        let dy = y as f64 - cy;
+                        let dist_sq = dx * dx + dy * dy;
+                        if dist_sq < brute_dist_sq {
+                            brute_dist_sq = dist_sq;
+                            brute_idx = i;
+                        }
+                    }
+
+                    assert_eq!(
+                        gx, brute_idx,
+                        "trial {trial} pixel ({x},{y}): grid picked center {gx} but brute force picked {brute_idx}"
+                    );
+                    assert_eq!(gy, brute_dist_sq);
+                }
+            }
+        }
     }
 }
