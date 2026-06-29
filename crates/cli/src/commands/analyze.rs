@@ -40,11 +40,11 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     )?;
     let output_path = job.output_path.clone();
 
-    let threads = args.threads.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get().saturating_sub(1).max(1))
-            .unwrap_or(1)
-    });
+    // Caps parallelism to available RAM as well as CPU cores, so a low-memory
+    // machine doesn't try to run as many concurrent workers as it has cores.
+    let threads = args
+        .threads
+        .unwrap_or_else(evanalyzer_core::recommended_parallelism);
     println!("Output:    {}", output_path.display());
     println!("Running with {threads} parallel thread(s) (Ctrl+C to cancel)...\n");
 

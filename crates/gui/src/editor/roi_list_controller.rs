@@ -19,6 +19,13 @@ struct RoiModalBridge {
     notify: ModelNotify,
     /// Count of ROIs per segmentation class – precomputed at bridge creation.
     label_counts: HashMap<SegmentationClass, i32>,
+    /// Indices into the combined (manual ++ preview) ROI list that should actually
+    /// be displayed - precomputed at bridge creation, same pattern as `label_counts`.
+    /// Lets `row_count`/`row_data` filter out unclassified ROIs (when hidden) while
+    /// the `id` passed to Slint still reflects the true underlying position, so the
+    /// existing selection/edit callbacks (which index into the unfiltered list) keep
+    /// working unchanged.
+    visible_rows: Vec<usize>,
 }
 
 pub struct RoiListController {
@@ -127,10 +134,12 @@ impl RoiListController {
         if let Err(e) = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let label_counts = precompute_label_counts(&bridge_ptr.app_state);
+                let visible_rows = compute_visible_rows(&bridge_ptr.app_state);
                 let bridge = Rc::new(RoiModalBridge {
                     app_state: bridge_ptr.app_state.clone(),
                     notify: ModelNotify::default(),
                     label_counts,
+                    visible_rows,
                 });
                 let model_rc = ModelRc::new(bridge);
                 ui.global::<RoiListState>().set_roi_list(model_rc);
@@ -198,27 +207,32 @@ impl Model for RoiModalBridge {
     type Data = RoiItemDataSlint;
 
     fn row_count(&self) -> usize {
-        let project = self.app_state.get_project();
-        let manual = project.get_rois().map(|r| r.len()).unwrap_or(0);
-        let preview = project.get_preview_rois().len();
-        manual + preview
+        self.visible_rows.len()
     }
 
     fn row_data(&self, row: usize) -> Option<Self::Data> {
+        // `row` is a position in the *filtered* list; map it back to the true
+        // position in the underlying (manual ++ preview) list, which `id` must
+        // keep reflecting so the existing selection/edit callbacks (indexed
+        // against the unfiltered list) keep working unchanged.
+        let underlying_row = *self.visible_rows.get(row)?;
+
         let project = self.app_state.get_project();
         let manual_len = project.get_rois().map(|r| r.len()).unwrap_or(0);
 
-        if row < manual_len {
-            project.get_rois()?.get(row).map(|roi| {
+        if underlying_row < manual_len {
+            project.get_rois()?.get(underlying_row).map(|roi| {
                 let count = *self.label_counts.get(&roi.segmentation_class).unwrap_or(&0);
-                roi_rust_to_roi_slint(roi, &project, count, false, row as i32)
+                roi_rust_to_roi_slint(roi, &project, count, false, underlying_row as i32)
             })
         } else {
             let preview_rois = project.get_preview_rois();
-            preview_rois.get(row - manual_len).map(|roi| {
-                let count = *self.label_counts.get(&roi.segmentation_class).unwrap_or(&0);
-                roi_rust_to_roi_slint(roi, &project, count, false, row as i32)
-            })
+            preview_rois
+                .get(underlying_row - manual_len)
+                .map(|roi| {
+                    let count = *self.label_counts.get(&roi.segmentation_class).unwrap_or(&0);
+                    roi_rust_to_roi_slint(roi, &project, count, false, underlying_row as i32)
+                })
         }
     }
 
@@ -230,6 +244,23 @@ impl Model for RoiModalBridge {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Indices into the combined (manual ++ preview) ROI list that should be shown in
+/// the list panel, respecting `hide_unclassified_rois`.
+fn compute_visible_rows(app_state: &Arc<UiState>) -> Vec<usize> {
+    let project = app_state.get_project();
+    let hide_unclassified = project.hide_unclassified_rois();
+    let manual = project.get_rois().unwrap_or(&[]);
+    let preview = project.get_preview_rois();
+
+    manual
+        .iter()
+        .chain(preview.iter())
+        .enumerate()
+        .filter(|(_, roi)| !hide_unclassified || !roi.object_class.is_empty())
+        .map(|(i, _)| i)
+        .collect()
+}
 
 fn precompute_label_counts(app_state: &Arc<UiState>) -> HashMap<SegmentationClass, i32> {
     let project = app_state.get_project();

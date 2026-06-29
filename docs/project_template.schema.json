@@ -1,35 +1,32 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ProjectSettings",
+  "title": "ProjectTemplate",
   "type": "object",
   "properties": {
     "classification": {
+      "description": "Defined classes, labels, names and measurements",
       "$ref": "#/$defs/ClassificationSettings"
     },
-    "images": {
-      "description": "The collection of images and their associated processing states.",
-      "$ref": "#/$defs/ImageSettings"
-    },
-    "metadata": {
-      "description": "Descriptive information about the project (name, version, etc.).",
+    "meta": {
+      "description": "Metadata of this project template",
       "$ref": "#/$defs/MetaData"
     },
     "pipelines": {
       "description": "Pipelines to execute",
       "type": "array",
       "items": {
-        "$ref": "#/$defs/PipelineSettings"
+        "$ref": "#/$defs/PipelineTemplate"
       }
     },
     "plate": {
+      "description": "Plate settings",
       "$ref": "#/$defs/PlateSettings"
     }
   },
   "required": [
-    "metadata",
+    "meta",
     "classification",
     "plate",
-    "images",
     "pipelines"
   ],
   "$defs": {
@@ -109,38 +106,6 @@
           "minimum": 0
         }
       }
-    },
-    "ChannelSettings": {
-      "type": "object",
-      "properties": {
-        "emissionWaveLength": {
-          "type": "number",
-          "format": "float"
-        },
-        "histogram": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HistogramSettings"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "visible": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "name",
-        "emissionWaveLength"
-      ]
     },
     "Class": {
       "type": "object",
@@ -930,60 +895,6 @@
         }
       }
     },
-    "GlobalImageSettings": {
-      "type": "object",
-      "properties": {
-        "channels": {
-          "type": "object",
-          "additionalProperties": false,
-          "patternProperties": {
-            "^-?\\d+$": {
-              "$ref": "#/$defs/ChannelSettings"
-            }
-          }
-        },
-        "pixelSizes": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PixelSizeSettings"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "selectedChannel": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "tStack": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TStackSettings"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "zStack": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ZStackSettings"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "channels"
-      ]
-    },
     "GroupingMode": {
       "type": "string",
       "enum": [
@@ -1003,33 +914,6 @@
       },
       "required": [
         "mode"
-      ]
-    },
-    "HistogramSettings": {
-      "type": "object",
-      "properties": {
-        "max": {
-          "type": "number",
-          "format": "float"
-        },
-        "maxLimit": {
-          "type": "number",
-          "format": "float"
-        },
-        "min": {
-          "type": "number",
-          "format": "float"
-        },
-        "minLimit": {
-          "type": "number",
-          "format": "float"
-        }
-      },
-      "required": [
-        "min",
-        "max",
-        "minLimit",
-        "maxLimit"
       ]
     },
     "HsvRangeSettings": {
@@ -1129,38 +1013,6 @@
         "address"
       ]
     },
-    "ImageEntry": {
-      "type": "object",
-      "properties": {
-        "fileSize": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "relPath": {
-          "type": "string"
-        },
-        "selectedSeries": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "series": {
-          "type": "object",
-          "additionalProperties": false,
-          "patternProperties": {
-            "^-?\\d+$": {
-              "$ref": "#/$defs/SeriesSettings"
-            }
-          }
-        }
-      },
-      "required": [
-        "relPath",
-        "fileSize",
-        "selectedSeries",
-        "series"
-      ]
-    },
     "ImageMathSettings": {
       "description": "A filter that performs pixel-wise mathematical operations between the current\n pipeline image and a secondary image stored in the cache.\n\n This command allows for complex image blending, masking, and comparison.\n\n # Examples\n\n ```\n use imagec::backend::algos::{ImageMath, Operand};\n let subtract_bg = ImageMath {\n     operand: Operand::Subtract,\n     second_image_address: ImageAddress::from(\"background\"),\n     swap_operands: false,\n };\n ```",
       "type": "object",
@@ -1182,64 +1034,6 @@
         "operand",
         "secondImageAddress",
         "swapOperands"
-      ]
-    },
-    "ImageSettings": {
-      "type": "object",
-      "properties": {
-        "list": {
-          "description": "Map of images where the key is the path relative to `root`.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/ImageEntry"
-          }
-        },
-        "root": {
-          "description": "The absolute base path for all image resources.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "settings": {
-          "description": "Project-wide render and display settings.",
-          "$ref": "#/$defs/GlobalImageSettings"
-        }
-      },
-      "required": [
-        "list",
-        "settings"
-      ]
-    },
-    "IntensitySettings": {
-      "type": "object",
-      "properties": {
-        "avgIntensity": {
-          "description": "Average pixel intensity in the ROI",
-          "type": "number",
-          "format": "float",
-          "default": 0.0
-        },
-        "maxIntensity": {
-          "description": "Maximum pixel intensity in the ROI",
-          "type": "number",
-          "format": "float"
-        },
-        "minIntensity": {
-          "description": "Minimum pixel intensity in the ROI",
-          "type": "number",
-          "format": "float"
-        },
-        "sumIntensity": {
-          "description": "Sum of all pixel intensities in the ROI",
-          "type": "number",
-          "format": "double"
-        }
-      },
-      "required": [
-        "sumIntensity",
-        "minIntensity",
-        "maxIntensity"
       ]
     },
     "IntensityTransformationSettings": {
@@ -1574,11 +1368,6 @@
           ]
         }
       ]
-    },
-    "ObjectId": {
-      "type": "integer",
-      "format": "uint128",
-      "minimum": 0
     },
     "PipelineCommand": {
       "oneOf": [
@@ -1987,48 +1776,6 @@
         }
       ]
     },
-    "PipelineId": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
-    },
-    "PipelineSettings": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "description": "Pipelines which are enabled are executed, pipelines, which are disabled are skipt during analysis.",
-          "type": "boolean"
-        },
-        "id": {
-          "description": "Unique pipeline ID",
-          "$ref": "#/$defs/PipelineId"
-        },
-        "imageSource": {
-          "description": "This is the image which is used as initial image for this pipeline.\nUse Scratchpad if this is just a object manipulation pipeline",
-          "$ref": "#/$defs/ImageAddress"
-        },
-        "name": {
-          "description": "Display name of the pipeline",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "steps": {
-          "description": "The steps which are execute in the given order when the pipeline runs",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PipelineStepSettings"
-          }
-        }
-      },
-      "required": [
-        "id",
-        "imageSource",
-        "enabled",
-        "steps"
-      ]
-    },
     "PipelineStepSettings": {
       "type": "object",
       "properties": {
@@ -2046,26 +1793,24 @@
         "command"
       ]
     },
-    "PixelSizeSettings": {
+    "PipelineTemplate": {
       "type": "object",
       "properties": {
-        "x": {
-          "type": "number",
-          "format": "float"
+        "meta": {
+          "description": "Metadata of this pipeline template",
+          "$ref": "#/$defs/MetaData"
         },
-        "y": {
-          "type": "number",
-          "format": "float"
-        },
-        "z": {
-          "type": "number",
-          "format": "float"
+        "pipelineSteps": {
+          "description": "The pipeline settings",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineStepSettings"
+          }
         }
       },
       "required": [
-        "x",
-        "y",
-        "z"
+        "meta",
+        "pipelineSteps"
       ]
     },
     "PixelUnits": {
@@ -2117,23 +1862,6 @@
         "wellCols",
         "wellRows",
         "wellImageOrder"
-      ]
-    },
-    "Range_of_int32": {
-      "type": "object",
-      "properties": {
-        "end": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "start": {
-          "type": "integer",
-          "format": "int32"
-        }
-      },
-      "required": [
-        "start",
-        "end"
       ]
     },
     "RankFilterSettings": {
@@ -2204,148 +1932,6 @@
           "default": "px"
         }
       }
-    },
-    "RoiSettings": {
-      "type": "object",
-      "properties": {
-        "area": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "bbox": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "maxItems": 4,
-          "minItems": 4
-        },
-        "cStack": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "children": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ObjectId"
-          }
-        },
-        "colocalizedWith": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/ObjectId"
-            }
-          }
-        },
-        "id": {
-          "$ref": "#/$defs/ObjectId"
-        },
-        "intensities": {
-          "type": "object",
-          "additionalProperties": false,
-          "patternProperties": {
-            "^-?\\d+$": {
-              "$ref": "#/$defs/IntensitySettings"
-            }
-          }
-        },
-        "maskData": {
-          "type": "array",
-          "items": {
-            "type": "boolean"
-          }
-        },
-        "objectClass": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ObjectClass"
-          },
-          "uniqueItems": true
-        },
-        "parentId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ObjectId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "perimeter": {
-          "type": "number",
-          "format": "float",
-          "default": 0.0
-        },
-        "segmentationClass": {
-          "$ref": "#/$defs/SegmentationClass"
-        },
-        "sumX": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sumX2": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sumXy": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sumY": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sumY2": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "tStack": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "touchesEdge": {
-          "type": "boolean"
-        },
-        "track": {
-          "$ref": "#/$defs/TrackSettings"
-        },
-        "zStack": {
-          "type": "integer",
-          "format": "int32"
-        }
-      },
-      "required": [
-        "id",
-        "segmentationClass",
-        "objectClass",
-        "colocalizedWith",
-        "children",
-        "track",
-        "area",
-        "bbox",
-        "maskData",
-        "touchesEdge",
-        "sumX",
-        "sumY",
-        "sumX2",
-        "sumY2",
-        "sumXy",
-        "intensities",
-        "zStack",
-        "cStack",
-        "tStack"
-      ]
     },
     "RollingBallSettings": {
       "description": "Removes non-uniform background illumination by calculating a local intensity baseline.\n\n This algorithm models the image as a 3D intensity landscape and conceptually rolls\n a sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\n intensity peaks (true signal objects) but follows the sweeping, lower-frequency\n curves of background variations. The path traced by the ball establishes a local\n baseline map that is subtracted from the original image to isolate foreground features.",
@@ -2483,73 +2069,6 @@
         }
       ]
     },
-    "SeriesSettings": {
-      "type": "object",
-      "properties": {
-        "channels": {
-          "type": "object",
-          "additionalProperties": false,
-          "patternProperties": {
-            "^-?\\d+$": {
-              "$ref": "#/$defs/ChannelSettings"
-            }
-          }
-        },
-        "imageHeight": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "imageWidth": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "pixelSizes": {
-          "$ref": "#/$defs/PixelSizeSettings"
-        },
-        "rois": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/RoiSettings"
-          }
-        },
-        "selectedChannel": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "tStack": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TStackSettings"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "zStack": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ZStackSettings"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "channels",
-        "imageWidth",
-        "imageHeight",
-        "pixelSizes",
-        "rois"
-      ]
-    },
     "SizeUnits": {
       "type": "string",
       "enum": [
@@ -2615,34 +2134,6 @@
         "sigma"
       ]
     },
-    "TStackHandling": {
-      "type": "string",
-      "enum": [
-        "SINGLE_STACK",
-        "ALL_STACKS"
-      ]
-    },
-    "TStackSettings": {
-      "type": "object",
-      "properties": {
-        "playbackSpeed": {
-          "type": "number",
-          "format": "float"
-        },
-        "stackHandling": {
-          "$ref": "#/$defs/TStackHandling"
-        },
-        "tStack": {
-          "type": "integer",
-          "format": "int32"
-        }
-      },
-      "required": [
-        "stackHandling",
-        "playbackSpeed",
-        "tStack"
-      ]
-    },
     "ThresholdEntrySettings": {
       "description": "Configuration for a single thresholding operation within a multi-threshold stack.",
       "type": "object",
@@ -2694,39 +2185,6 @@
       },
       "required": [
         "thresholds"
-      ]
-    },
-    "TrackId": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    },
-    "TrackSettings": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/TrackId"
-        },
-        "parentTrack": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TrackId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "roiIds": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ObjectId"
-          }
-        }
-      },
-      "required": [
-        "id",
-        "roiIds"
       ]
     },
     "TransformRoisSettings": {
@@ -2915,39 +2373,6 @@
       "required": [
         "kernelSize",
         "sigma"
-      ]
-    },
-    "ZStackHandling": {
-      "type": "string",
-      "enum": [
-        "SINGLE_STACK",
-        "ALL_STACKS",
-        "MAX_INTENSITY",
-        "MIN_INTENSITY",
-        "AVG_INTENSITY",
-        "SUM_INTENSITY",
-        "TAKE_THE_MIDDLE"
-      ]
-    },
-    "ZStackSettings": {
-      "type": "object",
-      "properties": {
-        "zProjection": {
-          "$ref": "#/$defs/ZStackHandling"
-        },
-        "zRange": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Range_of_int32"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "zProjection"
       ]
     }
   }

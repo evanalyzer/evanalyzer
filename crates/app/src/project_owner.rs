@@ -16,7 +16,7 @@ use crate::extensions::project_ext::ProjectExt;
 
 /// ProjectTmpSettings transient, never serialised
 /// Lives alongside ProjectSettings but owned by evanalyzer_app.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ProjectTmpSettings {
     /// Path of the currently open project file (None = unsaved).
     pub current_project: Option<PathBuf>,
@@ -31,6 +31,26 @@ pub struct ProjectTmpSettings {
 
     /// Class IDs currently hidden from the viewport overlay.
     pub hidden_classes: HashSet<ObjectClass>,
+
+    /// Hide ROIs that carry no object class at all (shown in red as
+    /// "Unclassified" otherwise). Defaults to hidden - these are usually
+    /// pipeline output the user hasn't classified yet, not something worth
+    /// cluttering the list/viewport with by default.
+    pub hide_unclassified_rois: bool,
+}
+
+impl Default for ProjectTmpSettings {
+    fn default() -> Self {
+        Self {
+            current_project: None,
+            current_image: None,
+            selected_object_class: ObjectClass::default(),
+            preview_rois: Vec::new(),
+            selected_roi: None,
+            hidden_classes: HashSet::new(),
+            hide_unclassified_rois: true,
+        }
+    }
 }
 
 /// ProjectWithRuntime pairs serialisable settings with runtime state.
@@ -145,6 +165,22 @@ impl AppHandle {
             .map_err(|_| InternalErrors::Internal("Could not open project".into()))?;
         *self.project.write().expect("Poisoned") = project;
         Ok(())
+    }
+
+    /// Imports an old (`.icproj`) project, replacing the current project.
+    ///
+    /// Returns the conversion warnings and the legacy project's configured
+    /// image folder (if any), so the caller can surface the warnings and decide
+    /// whether to scan that folder for images.
+    pub fn import_legacy_project(
+        &self,
+        path: &PathBuf,
+    ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
+        let (project, warnings, legacy_image_folder) =
+            crate::extensions::project_ext::import_legacy_project(path)
+                .map_err(|e| InternalErrors::Internal(format!("Could not import legacy project: {e}")))?;
+        *self.project.write().expect("Poisoned") = project;
+        Ok((warnings, legacy_image_folder))
     }
 
     /// Returns or creates an image reader for the given path.

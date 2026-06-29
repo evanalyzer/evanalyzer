@@ -86,21 +86,26 @@ struct CenterGrid {
     cell_size: f64,
     grid_w: usize,
     grid_h: usize,
+    // Centers (and queried points) carry absolute, full-image coordinates - which can
+    // be far from 0 for a tile deep inside a large image - while the grid only ever
+    // covers the small area spanned by this tile's own centers. Subtracting this
+    // origin before bucketing keeps cells well distributed instead of every center
+    // clamping into the same edge cell.
+    origin_x: f64,
+    origin_y: f64,
     cells: Vec<Vec<u32>>,
 }
 
 impl CenterGrid {
-    fn build(centers: &[(ObjectId, f64, f64)], img_w: u32, img_h: u32) -> Self {
-        let cell_size = (img_w as f64 * img_h as f64 / centers.len() as f64)
-            .sqrt()
-            .max(1.0);
-        let grid_w = ((img_w as f64 / cell_size).ceil() as usize).max(1);
-        let grid_h = ((img_h as f64 / cell_size).ceil() as usize).max(1);
+    fn build(centers: &[(ObjectId, f64, f64)], origin_x: f64, origin_y: f64, w: u32, h: u32) -> Self {
+        let cell_size = (w as f64 * h as f64 / centers.len() as f64).sqrt().max(1.0);
+        let grid_w = ((w as f64 / cell_size).ceil() as usize).max(1);
+        let grid_h = ((h as f64 / cell_size).ceil() as usize).max(1);
 
         let mut cells = vec![Vec::new(); grid_w * grid_h];
         for (i, &(_, cx, cy)) in centers.iter().enumerate() {
-            let gx = ((cx / cell_size) as isize).clamp(0, grid_w as isize - 1) as usize;
-            let gy = ((cy / cell_size) as isize).clamp(0, grid_h as isize - 1) as usize;
+            let gx = (((cx - origin_x) / cell_size) as isize).clamp(0, grid_w as isize - 1) as usize;
+            let gy = (((cy - origin_y) / cell_size) as isize).clamp(0, grid_h as isize - 1) as usize;
             cells[gy * grid_w + gx].push(i as u32);
         }
 
@@ -108,13 +113,15 @@ impl CenterGrid {
             cell_size,
             grid_w,
             grid_h,
+            origin_x,
+            origin_y,
             cells,
         }
     }
 
     fn cell_of(&self, x: f64, y: f64) -> (isize, isize) {
-        let gx = ((x / self.cell_size) as isize).clamp(0, self.grid_w as isize - 1);
-        let gy = ((y / self.cell_size) as isize).clamp(0, self.grid_h as isize - 1);
+        let gx = (((x - self.origin_x) / self.cell_size) as isize).clamp(0, self.grid_w as isize - 1);
+        let gy = (((y - self.origin_y) / self.cell_size) as isize).clamp(0, self.grid_h as isize - 1);
         (gx, gy)
     }
 
@@ -205,11 +212,22 @@ impl ImageAlgorithm for Voronoi {
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
         cache: &mut crate::pipeline::pipeline_cache::PipelineCache,
     ) -> Result<(), InternalErrors> {
-        let img_size = ctx.full_image_size();
-        let img_w = img_size.width as u32;
-        let img_h = img_size.height as u32;
+        // Voronoi runs per tile, same as every other pipeline step - it must only
+        // touch pixels within the current tile, in absolute (full-image) coordinates,
+        // not iterate the whole image on every tile (which both wastes work and, once
+        // a region's pixels are later sampled for intensity, reads channel data that
+        // was only ever loaded for this tile, far out of bounds for large images).
+        let full_size = ctx.full_image_size();
+        let full_w = full_size.width as u32;
+        let full_h = full_size.height as u32;
+        let tile_size = ctx.get_image_size();
+        let tile_offset = ctx.get_image_tile_offset();
+        let tile_w = tile_size.width as u32;
+        let tile_h = tile_size.height as u32;
+        let off_x = tile_offset.x as u32;
+        let off_y = tile_offset.y as u32;
 
-        if img_w == 0 || img_h == 0 {
+        if tile_w == 0 || tile_h == 0 {
             return Ok(());
         }
 
@@ -275,10 +293,13 @@ impl ImageAlgorithm for Voronoi {
         // which matters a lot once there are many seed objects.
         let n = centers.len();
         let mut center_pixels: Vec<Vec<(u32, u32)>> = vec![Vec::new(); n];
-        let grid = CenterGrid::build(&centers, img_w, img_h);
+        let grid = CenterGrid::build(&centers, off_x as f64, off_y as f64, tile_w, tile_h);
 
-        for y in 0..img_h {
-            for x in 0..img_w {
+        for ty in 0..tile_h {
+            for tx in 0..tile_w {
+                let x = off_x + tx;
+                let y = off_y + ty;
+
                 // Skip pixels outside the mask when a mask is configured.
                 if has_mask && !mask_rois.iter().any(|mr| mr.is_part_of(x, y)) {
                     continue;
@@ -297,11 +318,18 @@ impl ImageAlgorithm for Voronoi {
         }
 
         // --- Phase 4: Build one ROI per center from its assigned pixel set ---
-        let plane = ctx.image.plane().unwrap_or(ImagePlane {
+        // Each region's plane comes from its own seeding center, not from
+        // `ctx.image`: when Voronoi runs in a separate, Scratchpad-sourced
+        // pipeline (the recommended setup for a pure object-manipulation step
+        // with no pixel input), `ctx.image` is a freshly allocated buffer with
+        // no plane metadata at all, while the center ROIs - read from
+        // `cache.roi_cache`, which does survive across pipelines - already carry
+        // the correct z/c/t from whichever pipeline originally extracted them.
+        let fallback_plane = ImagePlane {
             z: -1,
             c: -1,
             t: -1,
-        });
+        };
 
         // Collect new ROIs before mutating the cache.
         let mut new_rois: Vec<Roi> = Vec::new();
@@ -342,8 +370,11 @@ impl ImageAlgorithm for Voronoi {
             }
 
             // With inclusive bbox: touching the right/bottom edge means the max pixel
-            // is the last column/row of the image (index img_w-1 / img_h-1).
-            let touches_edge = x_min == 0 || y_min == 0 || x_max + 1 >= img_w || y_max + 1 >= img_h;
+            // is the last column/row of the *full* image (index full_w-1 / full_h-1) -
+            // a tile boundary is not an image edge, the object may continue in the
+            // neighboring tile.
+            let touches_edge =
+                x_min == 0 || y_min == 0 || x_max + 1 >= full_w || y_max + 1 >= full_h;
 
             if self.exclude_areas_at_the_edges && touches_edge {
                 continue;
@@ -369,6 +400,11 @@ impl ImageAlgorithm for Voronoi {
             }
 
             let (center_id, _, _) = &centers[i];
+            let plane = cache
+                .roi_cache
+                .get(center_id)
+                .map(|center_roi| center_roi.plane)
+                .unwrap_or(fallback_plane);
             let mut roi = Roi::new(RoiInit {
                 id: ObjectId::next(),
                 segmentation_class: SegmentationClass::MANUAL_ANNOTATED,
@@ -386,6 +422,10 @@ impl ImageAlgorithm for Voronoi {
                 ..Default::default()
             });
             roi.add_object_class(self.output_class);
+            // `Roi::new` only derives geometry from the mask; Voronoi regions never
+            // pass through `ExtractRois` (the step that normally samples pixel data),
+            // so they need their own intensity measurement pass here.
+            roi.intensities = roi.measure_intensities(ctx, cache);
             new_rois.push(roi);
         }
 
@@ -461,6 +501,57 @@ mod tests {
         .unwrap()
     }
 
+    /// Builds a context for a tile that is smaller than the full image, at a
+    /// nonzero offset - the multi-tile (whole-slide-image) case.
+    fn make_tiled_ctx(
+        tile_w: usize,
+        tile_h: usize,
+        full_w: usize,
+        full_h: usize,
+        off_x: usize,
+        off_y: usize,
+    ) -> PipelineContext {
+        let tile_size = ImageSize {
+            width: tile_w,
+            height: tile_h,
+        };
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            tile_size,
+            vec![0.0f32; tile_w * tile_h],
+            CpuAllocator,
+        )
+        .unwrap();
+        let managed = ManagedImage {
+            data: img,
+            tile_offset: Point2d { x: off_x, y: off_y },
+            plane: None,
+        };
+        PipelineContext::new_from_image(
+            PathBuf::default(),
+            PipelineImageMeta {
+                image_tile_info: crate::ImageTile {
+                    offset_x: off_x,
+                    offset_y: off_y,
+                    width: tile_size.width,
+                    height: tile_size.height,
+                },
+                full_image_width: ImageSize {
+                    width: full_w,
+                    height: full_h,
+                },
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: PixelSizes {
+                    px_size_x: 1.0,
+                    px_size_y: 1.0,
+                    px_size_z: 1.0,
+                },
+            },
+            ImageContainer::F32Gray(managed),
+        )
+        .unwrap()
+    }
+
     fn make_filled_roi(id: u128, bbox: [u32; 4], class: ObjectClass) -> Roi {
         let [x_min, y_min, x_max, y_max] = bbox;
         // bbox uses inclusive convention: width = xmax - xmin + 1
@@ -511,6 +602,122 @@ mod tests {
     }
 
     // --- Tests ---
+
+    #[test]
+    fn voronoi_regions_have_measured_intensities() {
+        // Regression test: Voronoi regions never pass through ExtractRois (the step
+        // that normally samples pixel data), so without their own measurement pass
+        // they'd be left with empty intensities.
+        const CHANNEL: i32 = 0;
+        const VALUE: f32 = 5.0;
+        let mut ctx = make_ctx(10, 10);
+        let mut cache = PipelineCache::default();
+
+        let channel_img =
+            Image::<f32, 1, CpuAllocator>::new(
+                ImageSize {
+                    width: 10,
+                    height: 10,
+                },
+                vec![VALUE; 100],
+                CpuAllocator,
+            )
+            .unwrap();
+        cache.image_cache.add_to_channel_cache(
+            std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: channel_img,
+                tile_offset: Point2d { x: 0, y: 0 },
+                plane: None,
+            })),
+            CHANNEL,
+        );
+
+        cache.roi_cache.insert(
+            ObjectId(ID_A),
+            make_filled_roi(ID_A, center_bbox(5, 5), CENTER_CLASS),
+        );
+
+        run(&default_voronoi(), &mut ctx, &mut cache);
+
+        let regions = voronoi_rois(&cache);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].area, 100);
+        let intensity = regions[0]
+            .intensities
+            .get(&CHANNEL)
+            .expect("Voronoi region should have measured intensities for the channel");
+        assert_eq!(intensity.sum_intensity, 100.0 * VALUE as f64);
+        assert_eq!(intensity.avg_intensity, VALUE);
+        assert_eq!(intensity.min_intensity, VALUE);
+        assert_eq!(intensity.max_intensity, VALUE);
+    }
+
+    #[test]
+    fn voronoi_stays_within_tile_bounds_for_a_tile_smaller_than_the_full_image() {
+        // Regression test: for a multi-tile (whole-slide-image) job, Voronoi used to
+        // iterate `0..full_image_width/height` on every tile invocation - far beyond
+        // the pixels actually loaded for the current tile. That silently produced
+        // wrong, oversized regions, and panicked with an out-of-bounds slice index
+        // once intensity sampling (which only has this tile's channel buffer) was
+        // added. The tile here (20x20) sits at offset (100,100) inside a much larger
+        // (500x500) full image - any pixel assigned outside [100,120)x[100,120) would
+        // either panic during intensity sampling or prove the tile boundary leaked.
+        const CHANNEL: i32 = 0;
+        let tile_w = 20usize;
+        let tile_h = 20usize;
+        let off_x = 100usize;
+        let off_y = 100usize;
+        let mut ctx = make_tiled_ctx(tile_w, tile_h, 500, 500, off_x, off_y);
+        let mut cache = PipelineCache::default();
+
+        // Channel buffer is sized to the tile only, matching how `prepare_pipeline_cache`
+        // loads channels per tile - this is exactly what made the old full-image loop
+        // panic when it tried to sample pixels far outside this small buffer.
+        let channel_img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: tile_w,
+                height: tile_h,
+            },
+            vec![7.0f32; tile_w * tile_h],
+            CpuAllocator,
+        )
+        .unwrap();
+        cache.image_cache.add_to_channel_cache(
+            std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
+                data: channel_img,
+                tile_offset: Point2d { x: off_x, y: off_y },
+                plane: None,
+            })),
+            CHANNEL,
+        );
+
+        // A center near the middle of the tile, in absolute (full-image) coordinates.
+        cache.roi_cache.insert(
+            ObjectId(ID_A),
+            make_filled_roi(ID_A, center_bbox(110, 110), CENTER_CLASS),
+        );
+
+        run(&default_voronoi(), &mut ctx, &mut cache);
+
+        let regions = voronoi_rois(&cache);
+        assert_eq!(regions.len(), 1);
+        let [x_min, y_min, x_max, y_max] = regions[0].bbox;
+        assert!(
+            x_min >= off_x as u32
+                && y_min >= off_y as u32
+                && x_max < (off_x + tile_w) as u32
+                && y_max < (off_y + tile_h) as u32,
+            "region bbox {:?} must stay within the tile [{off_x},{},{off_y},{}]",
+            regions[0].bbox,
+            off_x + tile_w,
+            off_y + tile_h
+        );
+        assert_eq!(regions[0].area, tile_w * tile_h);
+        assert_eq!(
+            regions[0].intensities.get(&CHANNEL).unwrap().sum_intensity,
+            (tile_w * tile_h) as f64 * 7.0
+        );
+    }
 
     #[test]
     fn no_centers_produces_no_output() {
@@ -736,6 +943,30 @@ mod tests {
         assert_eq!(regions[0].area, 100);
     }
 
+    #[test]
+    fn region_plane_comes_from_its_center_not_from_ctx_image() {
+        // Simulates Voronoi running in a separate, Scratchpad-sourced pipeline:
+        // `ctx.image` carries no plane metadata at all (`make_ctx` always builds
+        // it with `plane: None`), while the center ROI - surviving in
+        // `cache.roi_cache` from an earlier pipeline - carries a real plane.
+        let mut ctx = make_ctx(10, 10);
+        let mut cache = PipelineCache::default();
+        let center_plane = ImagePlane { z: 3, c: 1, t: 2 };
+        let mut roi_a = make_filled_roi(ID_A, center_bbox(5, 5), CENTER_CLASS);
+        roi_a.plane = center_plane;
+        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
+
+        run(&default_voronoi(), &mut ctx, &mut cache);
+
+        let regions = voronoi_rois(&cache);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(
+            regions[0].plane, center_plane,
+            "Voronoi region must inherit its center's plane, not ctx.image's (which is \
+             None/unset when Voronoi runs from a Scratchpad-sourced pipeline)"
+        );
+    }
+
     /// Tiny deterministic LCG so the stress test below doesn't need a `rand` dependency.
     fn next_rand(state: &mut u64) -> u64 {
         *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -762,7 +993,7 @@ mod tests {
                 })
                 .collect();
 
-            let grid = CenterGrid::build(&centers, img_w, img_h);
+            let grid = CenterGrid::build(&centers, 0.0, 0.0, img_w, img_h);
 
             for y in 0..img_h {
                 for x in 0..img_w {
