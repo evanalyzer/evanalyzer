@@ -88,11 +88,108 @@ component GroupOptionRow inherits TouchArea {
     }
 }
 
+// -- Ribbon-style labeled dropdown button -------------------------------------
+
+component RibbonButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label: "";
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    height: 36px;
+    border-radius: 6px;
+    background: root.active ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.bg);
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 5px;
+        alignment: center;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 16px;
+                height: 16px;
+                colorize: Theme.text;
+            }
+        }
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-family: Theme.font-sans;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("../icons/regular-black/caret-down.svg");
+                width: 8px;
+                height: 8px;
+                colorize: Theme.text-mute;
+            }
+        }
+    }
+}
+
 // -- Toolbar -------------------------------------------------------------------
 
 component ResultsToolbar inherits Rectangle {
     height: 48px;
     background: Theme.bg;
+
+    // Preset 1: group by image name + class, avg + sum only
+    property <bool> quick-preset1-active:
+        ResultsState.group_active &&
+        ResultsState.group_by == ResultsGroupBy.image &&
+        ResultsState.group_by_class &&
+        ResultsState.group_agg_avg &&
+        ResultsState.group_agg_sum &&
+        !ResultsState.group_agg_min &&
+        !ResultsState.group_agg_max &&
+        !ResultsState.group_agg_median &&
+        !ResultsState.group_agg_stdev;
+    // Preset 2: group by regex on image name + class, avg + sum only
+    property <bool> quick-preset2-active:
+        ResultsState.group_active &&
+        ResultsState.group_by == ResultsGroupBy.regex &&
+        ResultsState.group_by_class &&
+        ResultsState.group_agg_avg &&
+        ResultsState.group_agg_sum &&
+        !ResultsState.group_agg_min &&
+        !ResultsState.group_agg_max &&
+        !ResultsState.group_agg_median &&
+        !ResultsState.group_agg_stdev;
+    // Preset 3: no grouping active
+    property <bool> quick-preset3-active: !ResultsState.group_active;
+    // Manual: grouping active but doesn't match any quick preset
+    property <bool> quick-manual-active:
+        ResultsState.group_active &&
+        !root.quick-preset1-active &&
+        !root.quick-preset2-active;
+    // Optimistic pending state: set on click so the button lights up immediately
+    // while Rust is still computing the grouped result (group_active lags behind).
+    property <int> pending-preset: 0;
+    changed quick-preset1-active => {
+        if (root.quick-preset1-active) { root.pending-preset = 0; }
+    }
+    changed quick-preset2-active => {
+        if (root.quick-preset2-active) { root.pending-preset = 0; }
+    }
+    changed quick-preset3-active => {
+        if (root.quick-preset3-active) { root.pending-preset = 0; }
+    }
 
     HorizontalLayout {
         padding-top: 5px;
@@ -103,12 +200,13 @@ component ResultsToolbar inherits Rectangle {
 
         // -- Column visibility (funnel icon opens popup) -----------------------
         col-vis-btn := Rectangle {
-            width: 36px;
+            width: 96px;
             height: 36px;
             property <bool> col-popup-open: false;
 
-            ToolToggleButton {
+            RibbonButton {
                 icon: @image-url("../icons/regular-black/funnel.svg");
+                label: "Columns";
                 clicked => {
                     col-vis-btn.col-popup-open = true;
                     col-filter-popup.show();
@@ -416,22 +514,295 @@ component ResultsToolbar inherits Rectangle {
             }
         }
 
-        // -- Group by (stack icon opens popup) ---------------------------------
-        group-btn := Rectangle {
-            width: 36px;
+        // -- Group by ribbon dropdown ------------------------------------------
+        group-ribbon-btn := Rectangle {
+            width: 110px;
             height: 36px;
 
-            ToolToggleButton {
+            RibbonButton {
                 icon: @image-url("../icons/regular-black/stack.svg");
-                checked: ResultsState.group_active;
-                clicked => {
-                    group-popup.show();
+                label: "Group by";
+                active: ResultsState.group_active || root.pending-preset != 0;
+                clicked => { group-quick-popup.show(); }
+            }
+
+            // Quick-pick dropdown: 3 presets + separator + custom settings
+            group-quick-popup := PopupWindow {
+                x: 0px;
+                y: group-ribbon-btn.height + 2px;
+                width: 230px;
+                close-policy: close-on-click-outside;
+
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-md;
+                    drop-shadow-blur: 12px;
+                    drop-shadow-color: #00000036;
+                    drop-shadow-offset-y: 4px;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+                        padding: 4px;
+
+                        // Preset 1: Image name + class
+                        p1-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.pending-preset = 1;
+                                ResultsState.clear_all_filters();
+                                ResultsState.group_by = ResultsGroupBy.image;
+                                ResultsState.group_agg_min = false;
+                                ResultsState.group_agg_max = false;
+                                ResultsState.group_agg_avg = true;
+                                ResultsState.group_agg_median = false;
+                                ResultsState.group_agg_stdev = false;
+                                ResultsState.group_agg_sum = true;
+                                ResultsState.group_split_colocalized = false;
+                                ResultsState.group_by_class = true;
+                                ResultsState.group_apply();
+                                group-quick-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: p1-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (root.quick-preset1-active || root.pending-preset == 1) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/image.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (root.quick-preset1-active || root.pending-preset == 1) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Image name + class";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (root.quick-preset1-active || root.pending-preset == 1) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Preset 2: Regex on name + class
+                        p2-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.pending-preset = 2;
+                                ResultsState.clear_all_filters();
+                                ResultsState.group_by = ResultsGroupBy.regex;
+                                ResultsState.group_agg_min = false;
+                                ResultsState.group_agg_max = false;
+                                ResultsState.group_agg_avg = true;
+                                ResultsState.group_agg_median = false;
+                                ResultsState.group_agg_stdev = false;
+                                ResultsState.group_agg_sum = true;
+                                ResultsState.group_split_colocalized = false;
+                                ResultsState.group_by_class = true;
+                                ResultsState.group_apply();
+                                group-quick-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: p2-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (root.quick-preset2-active || root.pending-preset == 2) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/asterisk.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (root.quick-preset2-active || root.pending-preset == 2) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Regex on name + class";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (root.quick-preset2-active || root.pending-preset == 2) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Preset 3: No grouping
+                        p3-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.pending-preset = 3;
+                                ResultsState.group_by = ResultsGroupBy.none;
+                                ResultsState.group_apply();
+                                group-quick-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: p3-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (root.quick-preset3-active || root.pending-preset == 3) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/stack-minus.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (root.quick-preset3-active || root.pending-preset == 3) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "No grouping";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (root.quick-preset3-active || root.pending-preset == 3) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        // Custom settings (opens the detailed popup)
+                        custom-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                group-quick-popup.close();
+                                group-settings-popup.show();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: custom-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: root.quick-manual-active ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/sliders-horizontal.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: root.quick-manual-active ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Custom settings…";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: root.quick-manual-active ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            group-popup := PopupWindow {
+            // Detailed custom group settings (all knobs — same content as before)
+            group-settings-popup := PopupWindow {
                 x: 0px;
-                y: group-btn.height + 2px;
+                y: group-ribbon-btn.height + 2px;
                 width: 250px;
                 height: 467px;
                 close-policy: no-auto-close;
@@ -449,7 +820,6 @@ component ResultsToolbar inherits Rectangle {
                     VerticalLayout {
                         spacing: 0px;
 
-                        // -- "Group by" section header ---------------------
                         Rectangle {
                             height: 26px;
                             background: Theme.bg;
@@ -464,10 +834,7 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
+                        Rectangle { height: 1px; background: Theme.border-soft; }
 
                         GroupOptionRow {
                             label: "None";
@@ -500,7 +867,6 @@ component ResultsToolbar inherits Rectangle {
                             clicked => { ResultsState.group_by_class = !ResultsState.group_by_class; }
                         }
 
-                        // -- Regex pattern input ---------------------------
                         Rectangle {
                             height: 36px;
                             background: Theme.bg;
@@ -533,9 +899,7 @@ component ResultsToolbar inherits Rectangle {
                                                 vertical-alignment: center;
                                                 enabled: ResultsState.group_by == ResultsGroupBy.regex;
                                                 text: ResultsState.group_regex;
-                                                edited => {
-                                                    ResultsState.group_regex = self.text;
-                                                }
+                                                edited => { ResultsState.group_regex = self.text; }
                                             }
 
                                             if regex-input.text == "": Text {
@@ -552,7 +916,6 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        // -- "Aggregate" section header --------------------
                         Rectangle {
                             height: 26px;
                             background: Theme.bg;
@@ -567,69 +930,27 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
+                        Rectangle { height: 1px; background: Theme.border-soft; }
 
                         HorizontalLayout {
                             padding: 4px;
                             spacing: 0px;
                             VerticalLayout {
                                 horizontal-stretch: 1;
-                                GroupOptionRow {
-                                    label: "Min";
-                                    checkbox: true;
-                                    selected: ResultsState.group_agg_min;
-                                    clicked => { ResultsState.group_agg_min = !ResultsState.group_agg_min; }
-                                }
-
-                                GroupOptionRow {
-                                    label: "Max";
-                                    checkbox: true;
-                                    selected: ResultsState.group_agg_max;
-                                    clicked => { ResultsState.group_agg_max = !ResultsState.group_agg_max; }
-                                }
-
-                                GroupOptionRow {
-                                    label: "Average";
-                                    checkbox: true;
-                                    selected: ResultsState.group_agg_avg;
-                                    clicked => { ResultsState.group_agg_avg = !ResultsState.group_agg_avg; }
-                                }
+                                GroupOptionRow { label: "Min"; checkbox: true; selected: ResultsState.group_agg_min; clicked => { ResultsState.group_agg_min = !ResultsState.group_agg_min; } }
+                                GroupOptionRow { label: "Max"; checkbox: true; selected: ResultsState.group_agg_max; clicked => { ResultsState.group_agg_max = !ResultsState.group_agg_max; } }
+                                GroupOptionRow { label: "Average"; checkbox: true; selected: ResultsState.group_agg_avg; clicked => { ResultsState.group_agg_avg = !ResultsState.group_agg_avg; } }
                             }
-
                             VerticalLayout {
                                 horizontal-stretch: 1;
-                                GroupOptionRow {
-                                    label: "Median";
-                                    checkbox: true;
-                                    selected: ResultsState.group_agg_median;
-                                    clicked => { ResultsState.group_agg_median = !ResultsState.group_agg_median; }
-                                }
-
-                                GroupOptionRow {
-                                    label: "Std. dev.";
-                                    checkbox: true;
-                                    selected: ResultsState.group_agg_stdev;
-                                    clicked => { ResultsState.group_agg_stdev = !ResultsState.group_agg_stdev; }
-                                }
-
-                                GroupOptionRow {
-                                    label: "Sum";
-                                    checkbox: true;
-                                    selected: ResultsState.group_agg_sum;
-                                    clicked => { ResultsState.group_agg_sum = !ResultsState.group_agg_sum; }
-                                }
+                                GroupOptionRow { label: "Median"; checkbox: true; selected: ResultsState.group_agg_median; clicked => { ResultsState.group_agg_median = !ResultsState.group_agg_median; } }
+                                GroupOptionRow { label: "Std. dev."; checkbox: true; selected: ResultsState.group_agg_stdev; clicked => { ResultsState.group_agg_stdev = !ResultsState.group_agg_stdev; } }
+                                GroupOptionRow { label: "Sum"; checkbox: true; selected: ResultsState.group_agg_sum; clicked => { ResultsState.group_agg_sum = !ResultsState.group_agg_sum; } }
                             }
                         }
 
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
+                        Rectangle { height: 1px; background: Theme.border-soft; }
 
-                        // -- "Split" section header ------------------------
                         Rectangle {
                             height: 26px;
                             background: Theme.bg;
@@ -644,32 +965,24 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
+                        Rectangle { height: 1px; background: Theme.border-soft; }
 
                         GroupOptionRow {
                             label: "Colocalized / not colocalized";
                             checkbox: true;
                             selected: ResultsState.group_split_colocalized;
-                            clicked => {
-                                ResultsState.group_split_colocalized = !ResultsState.group_split_colocalized;
-                            }
+                            clicked => { ResultsState.group_split_colocalized = !ResultsState.group_split_colocalized; }
                         }
 
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
+                        Rectangle { height: 1px; background: Theme.border-soft; }
 
-                        // -- Apply button ----------------------------------
                         apply-ta := TouchArea {
                             height: 30px;
                             mouse-cursor: pointer;
                             clicked => {
+                                root.pending-preset = 0;
                                 ResultsState.group_apply();
-                                group-popup.close();
+                                group-settings-popup.close();
                             }
 
                             Rectangle {

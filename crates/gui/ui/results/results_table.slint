@@ -877,16 +877,28 @@ export component ResultsTable inherits Rectangle {
                 }
             }
 
-            // Spinner shown while the next page is loading (overlays the list bottom).
+            // Spinner shown while the next page is loading — centered floating card.
             if ResultsState.loading_more: Rectangle {
-                y: parent.height - 40px;
-                height: 40px;
+                x: (parent.width - 52px) / 2;
+                y: (parent.height - 52px) / 2;
+                width: 52px;
+                height: 52px;
+                background: Theme.panel;
+                border-radius: Theme.radius-md;
+                border-width: 1px;
+                border-color: Theme.border;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: #00000024;
+
                 VerticalLayout {
                     alignment: center;
-                    Spinner {
-                        indeterminate: true;
-                        width: 20px;
-                        height: 20px;
+                    HorizontalLayout {
+                        alignment: center;
+                        Spinner {
+                            indeterminate: true;
+                            width: 24px;
+                            height: 24px;
+                        }
                     }
                 }
             }
