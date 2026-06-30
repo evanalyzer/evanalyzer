@@ -116,6 +116,10 @@ fn generate_job_from_project_settings_intenal(
     );
 
     for pipeline_setting in &config.pipelines {
+        if !pipeline_setting.enabled {
+            continue;
+        }
+
         let mut pipeline = Pipeline::new(
             pipeline_setting.id.clone(),
             CorePipelineSettings {
