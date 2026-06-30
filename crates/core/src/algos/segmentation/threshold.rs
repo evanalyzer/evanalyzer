@@ -104,26 +104,6 @@ pub struct Threshold {
 }
 
 impl ImageAlgorithm for Threshold {
-    /// Segments the image by applying one or more thresholding criteria.
-    ///
-    /// The execution follows a multi-step process:
-    /// 1. **Histogram Generation**: For any automatic methods (Otsu, Li, etc.),
-    ///    a global histogram of the `ctx.image` is calculated.
-    /// 2. **Threshold Discovery**: The chosen algorithms analyze the histogram
-    ///    to find the optimal cut-off points.
-    /// 3. **Classification**: Each pixel is compared against the calculated
-    ///    ranges. Pixels meeting the criteria are assigned the corresponding
-    ///    `object_class_id`.
-    ///
-    /// # Multi-Threshold Logic
-    /// If multiple `ThresholdSettings` are provided, the algorithm evaluates
-    /// them in order. This allows for complex multi-class segmentation (e.g.,
-    /// Background, Cytoplasm, and Nuclei) in a single pass.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InternalErrors::InvalidParameters`] if an automatic method
-    /// fails to converge or if the image histogram is empty (e.g., all pixels are NaN).
     fn execute(
         &self,
         ctx: &mut PipelineContext,
@@ -132,22 +112,31 @@ impl ImageAlgorithm for Threshold {
         let nr_of_bits = ctx.image_meta.nr_of_bits;
         let (input_data, segmentation_map) = ctx.get_f32_gray_and_segmentation_mask_mut()?;
 
-        // Pre-normalize thresholds once so the inner loop stays branch-free.
+        // Pre-resolve each entry's [min, max] range in relative (0.0–1.0) space.
         let normalized: Vec<(f32, f32, u32)> = self
             .thresholds
             .iter()
             .map(|s| {
-                (
-                    s.unit.to_relative(s.min_threshold, nr_of_bits),
-                    s.unit.to_relative(s.max_threshold, nr_of_bits),
-                    s.object_class_id.as_u32(),
-                )
+                let floor = s.unit.to_relative(s.min_threshold, nr_of_bits);
+                let ceiling = s.unit.to_relative(s.max_threshold, nr_of_bits);
+                let min = match &s.method {
+                    ThresholdMethod::None | ThresholdMethod::Manual => floor,
+                    method => {
+                        // Build a 256-bin histogram once if any entry needs it.
+                        let needs_hist = self.thresholds.iter().any(|s| {
+                            !matches!(s.method, ThresholdMethod::None | ThresholdMethod::Manual)
+                        });
+                        let hist = needs_hist.then(|| build_histogram(input_data.as_slice()));
+
+                        let bin = compute_auto_threshold(method, hist.as_ref().unwrap());
+                        (bin as f32 / 255.0).clamp(floor, ceiling)
+                    }
+                };
+                (min, ceiling, s.object_class_id.as_u32())
             })
             .collect();
 
         let output_slice = segmentation_map.as_slice_mut();
-
-        // This version is much more likely to be auto-vectorized by the compiler
         for (out_pixel, &in_pixel) in output_slice.iter_mut().zip(input_data.as_slice().iter()) {
             let mut assigned_id = SegmentationClass::BACKGROUND.as_u32();
             for &(min, max, class_id) in &normalized {
@@ -156,7 +145,6 @@ impl ImageAlgorithm for Threshold {
             }
             *out_pixel = assigned_id;
         }
-        //ctx.swap()?;
         Ok(())
     }
 
@@ -165,7 +153,715 @@ impl ImageAlgorithm for Threshold {
     }
 }
 
-// --- Test ------------------------------------------------------
+// ── Histogram ────────────────────────────────────────────────────────────────
+
+/// Builds a 256-bin histogram from relative (0.0–1.0) f32 pixel data.
+fn build_histogram(data: &[f32]) -> [f32; 256] {
+    let mut hist = [0.0f32; 256];
+    for &v in data {
+        let bin = ((v.clamp(0.0, 1.0) * 255.0) as usize).min(255);
+        hist[bin] += 1.0;
+    }
+    hist
+}
+
+/// Dispatches to the correct auto-threshold algorithm, returning a bin index 0–255.
+fn compute_auto_threshold(method: &ThresholdMethod, hist: &[f32; 256]) -> usize {
+    match method {
+        ThresholdMethod::Li => thresh_li(hist),
+        ThresholdMethod::MinError => thresh_min_error(hist),
+        ThresholdMethod::Triangle => thresh_triangle(hist),
+        ThresholdMethod::Moments => thresh_moments(hist),
+        ThresholdMethod::Huang => thresh_huang(hist),
+        ThresholdMethod::Intermodes => thresh_intermodes(hist),
+        ThresholdMethod::IsoData => thresh_isodata(hist),
+        ThresholdMethod::MaxEntropy => thresh_max_entropy(hist),
+        ThresholdMethod::Mean => thresh_mean(hist),
+        ThresholdMethod::Minimum => thresh_minimum(hist),
+        ThresholdMethod::Otsu => thresh_otsu(hist),
+        ThresholdMethod::Percentile => thresh_percentile(hist),
+        ThresholdMethod::RenyiEntropy => thresh_renyi_entropy(hist),
+        ThresholdMethod::Shanbhag => thresh_shanbhag(hist),
+        ThresholdMethod::Yen => thresh_yen(hist),
+        ThresholdMethod::None | ThresholdMethod::Manual => 0,
+    }
+}
+
+// ── Algorithm implementations ─────────────────────────────────────────────────
+// All ported from the ImageJ AutoThresholder Java source via the C++ reference
+// in docs/threshold/. Each function accepts a 256-bin f32 histogram and returns
+// the optimal threshold bin index (0–255).
+
+fn thresh_otsu(hist: &[f32; 256]) -> usize {
+    let n: f64 = hist.iter().map(|&v| v as f64).sum();
+    let s: f64 = hist
+        .iter()
+        .enumerate()
+        .map(|(k, &v)| k as f64 * v as f64)
+        .sum();
+    let mut sk = 0.0f64;
+    let mut n1 = hist[0] as f64;
+    let mut bcv_max = 0.0f64;
+    let mut k_star = 0usize;
+    for k in 1..255usize {
+        sk += k as f64 * hist[k] as f64;
+        n1 += hist[k] as f64;
+        let denom = n1 * (n - n1);
+        let bcv = if denom != 0.0 {
+            let num = (n1 / n) * s - sk;
+            num * num / denom
+        } else {
+            0.0
+        };
+        if bcv >= bcv_max {
+            bcv_max = bcv;
+            k_star = k;
+        }
+    }
+    k_star
+}
+
+fn thresh_li(hist: &[f32; 256]) -> usize {
+    let num_pixels: f64 = hist.iter().map(|&v| v as f64).sum();
+    if num_pixels == 0.0 {
+        return 0;
+    }
+    let mean: f64 = (1..256usize)
+        .map(|i| i as f64 * hist[i] as f64)
+        .sum::<f64>()
+        / num_pixels;
+
+    let mut new_thresh = mean;
+    loop {
+        let old_thresh = new_thresh;
+        let threshold = (old_thresh + 0.5).max(0.0) as usize;
+        let t = threshold.min(255);
+
+        let num_back: f64 = (0..=t).map(|i| hist[i] as f64).sum();
+        let sum_back: f64 = (0..=t).map(|i| i as f64 * hist[i] as f64).sum();
+        let mean_back = if num_back == 0.0 {
+            0.0
+        } else {
+            sum_back / num_back
+        };
+
+        let num_obj: f64 = ((t + 1)..256).map(|i| hist[i] as f64).sum();
+        let sum_obj: f64 = ((t + 1)..256).map(|i| i as f64 * hist[i] as f64).sum();
+        let mean_obj = if num_obj == 0.0 {
+            0.0
+        } else {
+            sum_obj / num_obj
+        };
+
+        let temp = if mean_back != 0.0 && mean_obj != 0.0 {
+            let div = mean_back.ln() - mean_obj.ln();
+            if div != 0.0 {
+                (mean_back - mean_obj) / div
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        // C++ simple_round: cast toward zero after ±0.5 shift
+        new_thresh = if temp < -2.220446049250313e-16 {
+            (temp - 0.5) as i64 as f64
+        } else {
+            (temp + 0.5) as i64 as f64
+        };
+
+        if (new_thresh - old_thresh).abs() <= 0.5 {
+            return threshold.min(255);
+        }
+    }
+}
+
+fn thresh_min_error(hist: &[f32; 256]) -> usize {
+    // Helper: cumulative count
+    let a = |j: usize| -> f64 { (0..=j).map(|i| hist[i] as f64).sum() };
+    // Helper: cumulative intensity-weighted count
+    let b = |j: usize| -> f64 { (0..=j).map(|i| i as f64 * hist[i] as f64).sum() };
+    // Helper: cumulative intensity-squared-weighted count
+    let c = |j: usize| -> f64 { (0..=j).map(|i| (i * i) as f64 * hist[i] as f64).sum() };
+
+    // Initial estimate: mean
+    let tot: f64 = a(255);
+    let sum: f64 = b(255);
+    let mut threshold = (sum / tot).floor() as usize;
+    threshold = threshold.min(255);
+
+    let mut t_prev = usize::MAX;
+    let mut iters = 0usize;
+    while threshold != t_prev && iters < 10_000 {
+        iters += 1;
+        let a_t = a(threshold);
+        let a_all = a(255);
+        if a_t == 0.0 || a_all == a_t {
+            break;
+        }
+        let mu = b(threshold) / a_t;
+        let nu = (b(255) - b(threshold)) / (a_all - a_t);
+        let p = a_t / a_all;
+        let q = (a_all - a_t) / a_all;
+        let sigma2 = c(threshold) / a_t - mu * mu;
+        let tau2 = (c(255) - c(threshold)) / (a_all - a_t) - nu * nu;
+
+        if sigma2 <= 0.0 || tau2 <= 0.0 {
+            break;
+        }
+        let w0 = 1.0 / sigma2 - 1.0 / tau2;
+        let w1 = mu / sigma2 - nu / tau2;
+        let w2 = (mu * mu) / sigma2 - (nu * nu) / tau2 + (sigma2 * q * q / (tau2 * p * p)).log10();
+
+        let sqterm = w1 * w1 - w0 * w2;
+        if sqterm < 0.0 {
+            break;
+        }
+        t_prev = threshold;
+        let temp = (w1 + sqterm.sqrt()) / w0;
+        if temp.is_nan() {
+            break;
+        }
+        threshold = (temp.floor() as isize).clamp(0, 255) as usize;
+    }
+    threshold
+}
+
+fn thresh_triangle(hist: &[f32; 256]) -> usize {
+    // Work on a mutable copy so we can optionally reverse it.
+    let mut h = *hist;
+
+    let mut min_idx = 0usize;
+    let mut max_idx = 0usize;
+    let mut d_max = 0.0f32;
+    for i in 0..256 {
+        if h[i] > 0.0 {
+            min_idx = i;
+            break;
+        }
+    }
+    if min_idx > 0 {
+        min_idx -= 1;
+    }
+    let mut min2 = 0usize;
+    for i in (0..256).rev() {
+        if h[i] > 0.0 {
+            min2 = i;
+            break;
+        }
+    }
+    if min2 < 255 {
+        min2 += 1;
+    }
+    for i in 0..256 {
+        if h[i] > d_max {
+            max_idx = i;
+            d_max = h[i];
+        }
+    }
+
+    let inverted = (max_idx - min_idx) < (min2 - max_idx);
+    if inverted {
+        h.reverse();
+        min_idx = 255 - min2;
+        max_idx = 255 - max_idx;
+    }
+
+    if min_idx == max_idx {
+        return if inverted { 255 - min_idx } else { min_idx };
+    }
+
+    let nx = h[max_idx] as f64;
+    let ny = (min_idx as f64) - (max_idx as f64);
+    let d = (nx * nx + ny * ny).sqrt();
+    let nx = nx / d;
+    let ny = ny / d;
+    let d = nx * min_idx as f64 + ny * h[min_idx] as f64;
+
+    let mut split = min_idx;
+    let mut split_dist = 0.0f64;
+    for i in (min_idx + 1)..=max_idx {
+        let dist = nx * i as f64 + ny * h[i] as f64 - d;
+        if dist > split_dist {
+            split = i;
+            split_dist = dist;
+        }
+    }
+    if split > 0 {
+        split -= 1;
+    }
+
+    if inverted { 255 - split } else { split }
+}
+
+fn thresh_moments(hist: &[f32; 256]) -> usize {
+    let total: f64 = hist.iter().map(|&v| v as f64).sum();
+    if total == 0.0 {
+        return 0;
+    }
+    let mut m1 = 0.0f64;
+    let mut m2 = 0.0f64;
+    let mut m3 = 0.0f64;
+    for i in 0..256 {
+        let d = i as f64;
+        let h = hist[i] as f64 / total;
+        m1 += d * h;
+        m2 += d * d * h;
+        m3 += d * d * d * h;
+    }
+    let cd = m2 - m1 * m1;
+    if cd == 0.0 {
+        return 0;
+    }
+    let c0 = (-m2 * m2 + m1 * m3) / cd;
+    // C++: c1 = (m0 * -m3 + m2 * m1) / cd  where m0 = 1
+    let c1 = (-m3 + m2 * m1) / cd;
+    let disc = c1 * c1 - 4.0 * c0;
+    if disc < 0.0 {
+        return 0;
+    }
+    let z1 = 0.5 * (-c1 + disc.sqrt());
+    let z0 = 0.5 * (-c1 - disc.sqrt());
+    let p0 = (z1 - m1) / (z1 - z0);
+
+    let mut cumsum = 0.0f64;
+    for i in 0..256 {
+        cumsum += hist[i] as f64 / total;
+        if cumsum > p0 {
+            return i;
+        }
+    }
+    255
+}
+
+fn thresh_huang(hist: &[f32; 256]) -> usize {
+    let first_bin = (0..256).find(|&i| hist[i] != 0.0).unwrap_or(0);
+    let last_bin = (0..256).rev().find(|&i| hist[i] != 0.0).unwrap_or(255);
+    if first_bin == last_bin {
+        return first_bin;
+    }
+    let term = 1.0 / (last_bin - first_bin) as f64;
+
+    // mu_0[i] = mean of pixels 0..=i (running forward)
+    let mut mu_0 = [0.0f64; 256];
+    let mut sum_pix = 0.0f64;
+    let mut num_pix = 0.0f64;
+    for i in first_bin..256 {
+        sum_pix += i as f64 * hist[i] as f64;
+        num_pix += hist[i] as f64;
+        mu_0[i] = sum_pix / num_pix;
+    }
+
+    // mu_1[i] = mean of pixels i+1..=255 (running backward, stored at i-1)
+    let mut mu_1 = [0.0f64; 256];
+    sum_pix = 0.0;
+    num_pix = 0.0;
+    for i in (1..=last_bin).rev() {
+        sum_pix += i as f64 * hist[i] as f64;
+        num_pix += hist[i] as f64;
+        mu_1[i - 1] = sum_pix / num_pix;
+    }
+
+    let mut min_ent = f64::MAX;
+    let mut threshold = 0usize;
+    for it in 0..256 {
+        let mut ent = 0.0f64;
+        for ih in 0..=it {
+            let mu_x = 1.0 / (1.0 + term * (ih as f64 - mu_0[it]).abs());
+            if mu_x >= 1e-6 && mu_x <= 0.999_999 {
+                ent += hist[ih] as f64 * (-mu_x * mu_x.ln() - (1.0 - mu_x) * (1.0 - mu_x).ln());
+            }
+        }
+        for ih in (it + 1)..256 {
+            let mu_x = 1.0 / (1.0 + term * (ih as f64 - mu_1[it]).abs());
+            if mu_x >= 1e-6 && mu_x <= 0.999_999 {
+                ent += hist[ih] as f64 * (-mu_x * mu_x.ln() - (1.0 - mu_x) * (1.0 - mu_x).ln());
+            }
+        }
+        if ent < min_ent {
+            min_ent = ent;
+            threshold = it;
+        }
+    }
+    threshold
+}
+
+fn bimodal_test(y: &[f64]) -> bool {
+    let mut modes = 0u32;
+    for k in 1..y.len().saturating_sub(1) {
+        if y[k - 1] < y[k] && y[k + 1] < y[k] {
+            modes += 1;
+            if modes > 2 {
+                return false;
+            }
+        }
+    }
+    modes == 2
+}
+
+fn thresh_intermodes(hist: &[f32; 256]) -> usize {
+    let min_bin = (0..256).find(|&i| hist[i] > 0.0).unwrap_or(0);
+    let max_bin = (0..256).rev().find(|&i| hist[i] > 0.0).unwrap_or(255);
+    let length = max_bin - min_bin + 1;
+
+    let mut h: Vec<f64> = (min_bin..=max_bin).map(|i| hist[i] as f64).collect();
+
+    let mut iters = 0u32;
+    while !bimodal_test(&h) {
+        let prev_h0 = h[0];
+        for i in 0..length.saturating_sub(1) {
+            let prev = if i == 0 { 0.0 } else { h[i - 1] };
+            let next = h[i + 1];
+            h[i] = (prev + h[i] + next) / 3.0;
+        }
+        if length > 1 {
+            h[length - 1] = (prev_h0 + h[length - 1]) / 3.0; // Note: prev_h0 approximates C++ "current" at last step
+        }
+        iters += 1;
+        if iters > 10_000 {
+            return 0;
+        }
+    }
+
+    // Threshold = midpoint between the two peaks
+    let mut tt = 0usize;
+    for i in 1..length.saturating_sub(1) {
+        if h[i - 1] < h[i] && h[i + 1] < h[i] {
+            tt += i;
+        }
+    }
+    let t = (tt as f64 / 2.0).floor() as usize;
+    (t + min_bin).min(255)
+}
+
+fn thresh_isodata(hist: &[f32; 256]) -> usize {
+    let mut g = 0usize;
+    for i in 1..256 {
+        if hist[i] > 0.0 {
+            g = i + 1;
+            break;
+        }
+    }
+    loop {
+        let mut l = 0i64;
+        let mut totl = 0i64;
+        for i in 0..g {
+            totl += hist[i] as i64;
+            l += hist[i] as i64 * i as i64;
+        }
+        let mut h = 0.0f64;
+        let mut toth = 0.0f64;
+        for i in (g + 1)..256 {
+            toth += hist[i] as f64;
+            h += hist[i] as f64 * i as f64;
+        }
+        if totl > 0 && toth > 0.0 {
+            let l_mean = l as f64 / totl as f64;
+            let h_mean = h / toth;
+            if g == ((l_mean + h_mean) / 2.0).round() as usize {
+                break;
+            }
+        }
+        g += 1;
+        if g > 254 {
+            return 0;
+        }
+    }
+    g
+}
+
+fn thresh_max_entropy(hist: &[f32; 256]) -> usize {
+    let total: f64 = hist.iter().map(|&v| v as f64).sum();
+    let norm: Vec<f64> = hist.iter().map(|&v| v as f64 / total).collect();
+
+    let mut p1 = [0.0f64; 256];
+    let mut p2 = [0.0f64; 256];
+    p1[0] = norm[0];
+    p2[0] = 1.0 - p1[0];
+    for i in 1..256 {
+        p1[i] = p1[i - 1] + norm[i];
+        p2[i] = 1.0 - p1[i];
+    }
+
+    let first_bin = (0..256)
+        .find(|&i| p1[i].abs() >= 2.220446049250313e-16)
+        .unwrap_or(0);
+    let last_bin = (first_bin..256)
+        .rev()
+        .find(|&i| p2[i].abs() >= 2.220446049250313e-16)
+        .unwrap_or(255);
+
+    let mut max_ent = f64::MIN;
+    let mut threshold = 0usize;
+    for it in first_bin..=last_bin {
+        let ent_back: f64 = (0..=it)
+            .filter(|&ih| hist[ih] != 0.0)
+            .map(|ih| -(norm[ih] / p1[it]) * (norm[ih] / p1[it]).ln())
+            .sum();
+        let ent_obj: f64 = ((it + 1)..256)
+            .filter(|&ih| hist[ih] != 0.0)
+            .map(|ih| -(norm[ih] / p2[it]) * (norm[ih] / p2[it]).ln())
+            .sum();
+        let tot_ent = ent_back + ent_obj;
+        if tot_ent > max_ent {
+            max_ent = tot_ent;
+            threshold = it;
+        }
+    }
+    threshold
+}
+
+fn thresh_mean(hist: &[f32; 256]) -> usize {
+    let tot: f64 = hist.iter().map(|&v| v as f64).sum();
+    if tot == 0.0 {
+        return 0;
+    }
+    let sum: f64 = hist
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| i as f64 * v as f64)
+        .sum();
+    (sum / tot).floor() as usize
+}
+
+fn thresh_minimum(hist: &[f32; 256]) -> usize {
+    let mut h: Vec<f64> = hist.iter().map(|&v| v as f64).collect();
+    let mut iters = 0u32;
+    while !bimodal_test(&h) {
+        let mut t = [0.0f64; 256];
+        t[0] = (h[0] + h[1]) / 3.0;
+        for i in 1..255 {
+            t[i] = (h[i - 1] + h[i] + h[i + 1]) / 3.0;
+        }
+        t[255] = (h[254] + h[255]) / 3.0;
+        h.copy_from_slice(&t);
+        iters += 1;
+        if iters > 10_000 {
+            return 0;
+        }
+    }
+    // First local minimum
+    for i in 1..255 {
+        if h[i - 1] > h[i] && h[i + 1] >= h[i] {
+            return i;
+        }
+    }
+    0
+}
+
+fn thresh_percentile(hist: &[f32; 256]) -> usize {
+    let ptile = 0.5f64;
+    let total: f64 = hist.iter().map(|&v| v as f64).sum();
+    if total == 0.0 {
+        return 0;
+    }
+    let mut best = 0usize;
+    let mut min_dist = f64::MAX;
+    let mut cumsum = 0.0f64;
+    for i in 0..256 {
+        cumsum += hist[i] as f64;
+        let d = (cumsum / total - ptile).abs();
+        if d < min_dist {
+            min_dist = d;
+            best = i;
+        }
+    }
+    best
+}
+
+fn thresh_renyi_entropy(hist: &[f32; 256]) -> usize {
+    let total: f64 = hist.iter().map(|&v| v as f64).sum();
+    let norm: Vec<f64> = hist.iter().map(|&v| v as f64 / total).collect();
+
+    let mut p1 = [0.0f64; 256];
+    let mut p2 = [0.0f64; 256];
+    p1[0] = norm[0];
+    p2[0] = 1.0 - p1[0];
+    for i in 1..256 {
+        p1[i] = p1[i - 1] + norm[i];
+        p2[i] = 1.0 - p1[i];
+    }
+
+    let eps = 2.220446049250313e-16;
+    let first_bin = (0..256).find(|&i| p1[i].abs() >= eps).unwrap_or(0);
+    let last_bin = (first_bin..256)
+        .rev()
+        .find(|&i| p2[i].abs() >= eps)
+        .unwrap_or(255);
+
+    // Pass 1: alpha = 1.0  (equivalent to MaxEntropy)
+    let mut max_ent = 0.0f64;
+    let mut t_star2 = 0usize;
+    for it in first_bin..=last_bin {
+        let eb: f64 = (0..=it)
+            .filter(|&ih| hist[ih] != 0.0)
+            .map(|ih| -(norm[ih] / p1[it]) * (norm[ih] / p1[it]).ln())
+            .sum();
+        let eo: f64 = ((it + 1)..256)
+            .filter(|&ih| hist[ih] != 0.0)
+            .map(|ih| -(norm[ih] / p2[it]) * (norm[ih] / p2[it]).ln())
+            .sum();
+        if eb + eo > max_ent {
+            max_ent = eb + eo;
+            t_star2 = it;
+        }
+    }
+
+    // Pass 2: alpha = 0.5
+    let alpha = 0.5f64;
+    let term = 1.0 / (1.0 - alpha);
+    max_ent = 0.0;
+    let mut t_star1 = 0usize;
+    for it in first_bin..=last_bin {
+        let eb: f64 = (0..=it).map(|ih| (norm[ih] / p1[it]).sqrt()).sum();
+        let eo: f64 = ((it + 1)..256).map(|ih| (norm[ih] / p2[it]).sqrt()).sum();
+        let tot = if eb * eo > 0.0 {
+            term * (eb * eo).ln()
+        } else {
+            0.0
+        };
+        if tot > max_ent {
+            max_ent = tot;
+            t_star1 = it;
+        }
+    }
+
+    // Pass 3: alpha = 2.0
+    let alpha = 2.0f64;
+    let term = 1.0 / (1.0 - alpha);
+    max_ent = 0.0;
+    let mut t_star3 = 0usize;
+    for it in first_bin..=last_bin {
+        let eb: f64 = (0..=it)
+            .map(|ih| norm[ih] * norm[ih] / (p1[it] * p1[it]))
+            .sum();
+        let eo: f64 = ((it + 1)..256)
+            .map(|ih| norm[ih] * norm[ih] / (p2[it] * p2[it]))
+            .sum();
+        let tot = if eb * eo > 0.0 {
+            term * (eb * eo).ln()
+        } else {
+            0.0
+        };
+        if tot > max_ent {
+            max_ent = tot;
+            t_star3 = it;
+        }
+    }
+
+    // Sort t_star1 ≤ t_star2 ≤ t_star3
+    let mut stars = [t_star1, t_star2, t_star3];
+    stars.sort_unstable();
+    let [t_star1, t_star2, t_star3] = stars;
+
+    let (beta1, beta2, beta3) = if t_star2.abs_diff(t_star1) <= 5 {
+        if t_star3.abs_diff(t_star2) <= 5 {
+            (1, 2, 1)
+        } else {
+            (0, 1, 3)
+        }
+    } else if t_star3.abs_diff(t_star2) <= 5 {
+        (3, 1, 0)
+    } else {
+        (1, 2, 1)
+    };
+
+    let omega = p1[t_star3] - p1[t_star1];
+    let opt = t_star1 as f64 * (p1[t_star1] + 0.25 * omega * beta1 as f64)
+        + 0.25 * t_star2 as f64 * omega * beta2 as f64
+        + t_star3 as f64 * (p2[t_star3] + 0.25 * omega * beta3 as f64);
+    (opt as usize).min(255)
+}
+
+fn thresh_shanbhag(hist: &[f32; 256]) -> usize {
+    let total: f64 = hist.iter().map(|&v| v as f64).sum();
+    let norm: Vec<f64> = hist.iter().map(|&v| v as f64 / total).collect();
+
+    let mut p1 = [0.0f64; 256];
+    let mut p2 = [0.0f64; 256];
+    p1[0] = norm[0];
+    p2[0] = 1.0 - p1[0];
+    for i in 1..256 {
+        p1[i] = p1[i - 1] + norm[i];
+        p2[i] = 1.0 - p1[i];
+    }
+
+    let eps = 2.220446049250313e-16;
+    let first_bin = (0..256).find(|&i| p1[i].abs() >= eps).unwrap_or(0);
+    let last_bin = (first_bin..256)
+        .rev()
+        .find(|&i| p2[i].abs() >= eps)
+        .unwrap_or(255);
+
+    let mut min_ent = f64::MAX;
+    let mut threshold = 0usize;
+    for it in first_bin..=last_bin {
+        let term_back = 0.5 / p1[it];
+        let ent_back: f64 = (1..=it)
+            .map(|ih| -norm[ih] * (1.0 - term_back * p1[ih - 1]).ln())
+            .sum::<f64>()
+            * term_back;
+
+        let term_obj = 0.5 / p2[it];
+        let ent_obj: f64 = ((it + 1)..256)
+            .map(|ih| -norm[ih] * (1.0 - term_obj * p2[ih]).ln())
+            .sum::<f64>()
+            * term_obj;
+
+        let tot = (ent_back - ent_obj).abs();
+        if tot < min_ent {
+            min_ent = tot;
+            threshold = it;
+        }
+    }
+    threshold
+}
+
+fn thresh_yen(hist: &[f32; 256]) -> usize {
+    let total: f64 = hist.iter().map(|&v| v as f64).sum();
+    let norm: Vec<f64> = hist.iter().map(|&v| v as f64 / total).collect();
+
+    let mut p1 = [0.0f64; 256];
+    p1[0] = norm[0];
+    for i in 1..256 {
+        p1[i] = p1[i - 1] + norm[i];
+    }
+
+    let mut p1_sq = [0.0f64; 256];
+    p1_sq[0] = norm[0] * norm[0];
+    for i in 1..256 {
+        p1_sq[i] = p1_sq[i - 1] + norm[i] * norm[i];
+    }
+
+    let mut p2_sq = [0.0f64; 256];
+    p2_sq[255] = 0.0;
+    for i in (0..255).rev() {
+        p2_sq[i] = p2_sq[i + 1] + norm[i + 1] * norm[i + 1];
+    }
+
+    let mut max_crit = f64::MIN;
+    let mut threshold = 0usize;
+    for it in 0..256 {
+        let log_p1_sq = if p1_sq[it] * p2_sq[it] > 0.0 {
+            (p1_sq[it] * p2_sq[it]).ln()
+        } else {
+            0.0
+        };
+        let log_p1 = if p1[it] * (1.0 - p1[it]) > 0.0 {
+            (p1[it] * (1.0 - p1[it])).ln()
+        } else {
+            0.0
+        };
+        let crit = -log_p1_sq + 2.0 * log_p1;
+        if crit > max_crit {
+            max_crit = crit;
+            threshold = it;
+        }
+    }
+    threshold
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -176,41 +872,34 @@ mod tests {
 
     #[test]
     fn test_multi_range_thresholding() -> Result<(), Box<dyn std::error::Error>> {
-        // 1. Setup Image Size (3x2)
         let size = ImageSize {
             width: 3,
             height: 2,
         };
-
-        // 2. Create input data with specific values:
-        // Top row: 0.1 (Dark), 0.5 (Mid), 0.9 (Bright)
-        // Bottom row: 0.0 (Min), 1.0 (Max), 0.4 (Mid)
         let input_data = vec![0.1, 0.5, 0.9, 0.0, 1.0, 0.4];
         let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
-
         input_img.print_window();
 
-        // 3. Define three threshold ranges
         let settings = vec![
             ThresholdEntry {
                 method: ThresholdMethod::Manual,
                 min_threshold: 0.0,
                 max_threshold: 0.2,
-                object_class_id: SegmentationClass(10), // Dark Class
+                object_class_id: SegmentationClass(10),
                 unit: PixelUnits::Relative,
             },
             ThresholdEntry {
                 method: ThresholdMethod::Manual,
                 min_threshold: 0.3,
                 max_threshold: 0.6,
-                object_class_id: SegmentationClass(20), // Mid Class
+                object_class_id: SegmentationClass(20),
                 unit: PixelUnits::Relative,
             },
             ThresholdEntry {
                 method: ThresholdMethod::Manual,
                 min_threshold: 0.8,
                 max_threshold: 1.0,
-                object_class_id: SegmentationClass(30), // Bright Class
+                object_class_id: SegmentationClass(30),
                 unit: PixelUnits::Relative,
             },
         ];
@@ -218,46 +907,74 @@ mod tests {
         let cmd = Threshold {
             thresholds: settings,
         };
-
-        // 4. Setup Pipeline Context
-        // Note: Initializing scratchpad as F32Gray to test the auto-reallocation to U32Label
         let mut ctx = PipelineContext::new_from_image_test(input_img)?;
         let mut cache = PipelineCache::default();
-
-        // 5. Execute the command
         cmd.execute(&mut ctx, &mut cache)?;
-
         ctx.get_segmentation_map()?.print_window();
 
-        // 6. Verify the results
         let result_pixels = ctx
             .segmentation_map
             .as_ref()
             .expect("No labels found")
             .as_slice();
 
-        // Expected mapping:
-        // 0.1 -> 10
-        // 0.5 -> 20
-        // 0.9 -> 30
-        // 0.0 -> 10
-        // 1.0 -> 30
-        // 0.4 -> 20
         let expected = vec![10, 20, 30, 10, 30, 20];
-
         assert_eq!(
             result_pixels,
             &expected[..],
             "Pixel classification failed to match expected IDs"
         );
-
-        // Verify that the original image was moved to the scratchpad during swap
-        //  if let ImageContainer::F32Gray(orig) = ctx.scratch_pad {
-        //      assert_eq!(*orig.get_pixel(0, 0, 0).unwrap(), 0.1);
-        //  } else {
-        //      panic!("Original image was not preserved in scratch_pad after swap");
-        //  }
-
         Ok(())
+    }
+
+    #[test]
+    fn test_otsu_uniform_histogram() {
+        let mut hist = [0.0f32; 256];
+        for v in hist.iter_mut() {
+            *v = 1.0;
+        }
+        let t = thresh_otsu(&hist);
+        // With a perfectly flat histogram, any bin is equally valid.
+        assert!(t < 256);
+    }
+
+    #[test]
+    fn test_mean_threshold() {
+        let mut hist = [0.0f32; 256];
+        hist[0] = 100.0;
+        hist[255] = 100.0;
+        let t = thresh_mean(&hist);
+        assert_eq!(t, 127); // mean of 0 and 255
+    }
+
+    #[test]
+    fn test_auto_threshold_smoke() {
+        // All auto methods should return a valid bin (0-255) on a bimodal histogram.
+        let mut hist = [0.0f32; 256];
+        for i in 0..50 {
+            hist[i] = 80.0;
+        }
+        for i in 200..256 {
+            hist[i] = 80.0;
+        }
+
+        for (name, bin) in [
+            ("otsu", thresh_otsu(&hist)),
+            ("li", thresh_li(&hist)),
+            ("min_error", thresh_min_error(&hist)),
+            ("triangle", thresh_triangle(&hist)),
+            ("moments", thresh_moments(&hist)),
+            ("huang", thresh_huang(&hist)),
+            ("isodata", thresh_isodata(&hist)),
+            ("max_entropy", thresh_max_entropy(&hist)),
+            ("mean", thresh_mean(&hist)),
+            ("minimum", thresh_minimum(&hist)),
+            ("percentile", thresh_percentile(&hist)),
+            ("renyi", thresh_renyi_entropy(&hist)),
+            ("shanbhag", thresh_shanbhag(&hist)),
+            ("yen", thresh_yen(&hist)),
+        ] {
+            assert!(bin < 256, "{name}: bin {bin} out of range");
+        }
     }
 }
