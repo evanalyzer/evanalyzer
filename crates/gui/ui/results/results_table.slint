@@ -97,6 +97,11 @@ export global ResultsState {
 
     in-out property <bool> loading_more:    false;
     in-out property <bool> all_rows_loaded: false;
+    // True while a group_apply() is being processed by Rust. Set by the Slint UI
+    // immediately on any group action; cleared when rows arrive or preset state
+    // settles. Keeps the spinner visible across the gap where loading_more has
+    // already gone false but the grouped rows haven't been delivered yet.
+    in-out property <bool> group_computing: false;
     in-out property <int>  visible_column_count: 7;
     // Sum of visible columns' widths (logical px), recomputed whenever `columns` is rebuilt.
     in-out property <float> columns_total_width: 700.0;
@@ -742,6 +747,12 @@ export component ResultsTable inherits Rectangle {
     // row read each column's width directly off `ResultsState.columns[i].width`, so the two
     // can never drift apart.
     property <length> content-width: max(table-scroll.visible-width, ResultsState.columns_total_width * 1px);
+    property <int> rows-count-proxy: ResultsState.rows.length;
+    changed rows-count-proxy => {
+        if (ResultsState.rows.length > 0) {
+            ResultsState.group_computing = false;
+        }
+    }
 
     VerticalLayout {
         spacing: 0;
@@ -878,7 +889,7 @@ export component ResultsTable inherits Rectangle {
             }
 
             // Spinner shown while the next page is loading — centered floating card.
-            if ResultsState.loading_more: Rectangle {
+            if ResultsState.loading_more || ResultsState.group_computing: Rectangle {
                 x: (parent.width - 52px) / 2;
                 y: (parent.height - 52px) / 2;
                 width: 52px;
