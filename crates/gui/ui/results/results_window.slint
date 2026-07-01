@@ -526,8 +526,16 @@ component ResultsToolbar inherits Rectangle {
             height: 36px;
 
             RibbonButton {
-                icon: @image-url("../icons/regular-green/stack.svg");
                 icon-color: #006039;
+                icon: (root.pending-preset == 1 || root.quick-preset1-active)
+                    ? @image-url("../icons/regular-black/image.svg")
+                    : ((root.pending-preset == 2 || root.quick-preset2-active)
+                    ? @image-url("../icons/regular-black/asterisk.svg")
+                    : ((root.pending-preset == 3 || root.quick-preset3-active)
+                    ? @image-url("../icons/regular-black/stack-minus.svg")
+                    : (root.quick-manual-active
+                    ? @image-url("../icons/regular-black/sliders-horizontal.svg")
+                    : @image-url("../icons/regular-black/stack.svg"))));
                 label: "Group by";
                 active: ResultsState.group_active || root.pending-preset != 0;
                 clicked => { group-quick-popup.show(); }
