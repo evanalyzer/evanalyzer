@@ -173,8 +173,12 @@ component ResultsToolbar inherits Rectangle {
         !ResultsState.group_agg_stdev;
     // Preset 3: no grouping active
     property <bool> quick-preset3-active: !ResultsState.group_active;
-    // Manual: grouping active but doesn't match any quick preset
+    // Manual: grouping active but doesn't match any quick preset.
+    // Gated on pending-preset == 0 so a preset click's in-flight Rust round-trip
+    // (where group_active is still true but group_by changed) doesn't briefly
+    // satisfy this condition and flash "Custom settings…" as selected.
     property <bool> quick-manual-active:
+        root.pending-preset == 0 &&
         ResultsState.group_active &&
         !root.quick-preset1-active &&
         !root.quick-preset2-active;
@@ -1006,20 +1010,187 @@ component ResultsToolbar inherits Rectangle {
 
         VerticalDivider { }
 
-        // -- View mode ---------------------------------------------------------
-        ToolToggleButton {
-            icon: @image-url("../icons/regular-black/table.svg");
-            checked: ResultsState.view_mode == ResultsViewMode.table;
-            clicked => {
-                ResultsState.view_mode = ResultsViewMode.table;
-            }
-        }
+        // -- View mode ribbon dropdown -----------------------------------------
+        view-ribbon-btn := Rectangle {
+            width: 80px;
+            height: 36px;
 
-        ToolToggleButton {
-            icon: @image-url("../icons/regular-black/chart-scatter.svg");
-            checked: ResultsState.view_mode == ResultsViewMode.chart;
-            clicked => {
-                ResultsState.view_mode = ResultsViewMode.chart;
+            RibbonButton {
+                // Icon tracks the active selection so the user sees what's shown at a glance.
+                icon: ResultsState.view_mode == ResultsViewMode.table
+                    ? @image-url("../icons/regular-black/table.svg")
+                    : (ResultsState.chart_kind == ResultsChartKind.histogram
+                        ? @image-url("../icons/regular-black/chart-bar.svg")
+                        : (ResultsState.chart_kind == ResultsChartKind.scatter
+                            ? @image-url("../icons/regular-black/chart-scatter.svg")
+                            : @image-url("../icons/regular-black/grid-four.svg")));
+                label: "View";
+                active: ResultsState.view_mode == ResultsViewMode.chart;
+                clicked => { view-popup.show(); }
+            }
+
+            view-popup := PopupWindow {
+                x: 0px;
+                y: view-ribbon-btn.height + 2px;
+                width: 180px;
+                close-policy: close-on-click-outside;
+
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-md;
+                    drop-shadow-blur: 12px;
+                    drop-shadow-color: #00000036;
+                    drop-shadow-offset-y: 4px;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+                        padding: 4px;
+
+                        // Table
+                        vt-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.view_mode = ResultsViewMode.table;
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vt-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px; padding-right: 8px; spacing: 6px; alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center; width: 14px;
+                                        Image { source: @image-url("../icons/regular-black/check.svg"); width: 10px; height: 10px; colorize: Theme.accent; opacity: ResultsState.view_mode == ResultsViewMode.table ? 1.0 : 0.0; }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center; width: 18px;
+                                        Image { source: @image-url("../icons/regular-black/table.svg"); width: 14px; height: 14px; colorize: ResultsState.view_mode == ResultsViewMode.table ? Theme.accent : Theme.text-dim; }
+                                    }
+                                    Text {
+                                        text: "Table"; font-size: 11px; font-family: Theme.font-sans;
+                                        color: ResultsState.view_mode == ResultsViewMode.table ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center; horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: Theme.border-soft; }
+
+                        // Histogram
+                        vh-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.view_mode = ResultsViewMode.chart;
+                                ResultsState.chart_kind = ResultsChartKind.histogram;
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vh-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px; padding-right: 8px; spacing: 6px; alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center; width: 14px;
+                                        Image { source: @image-url("../icons/regular-black/check.svg"); width: 10px; height: 10px; colorize: Theme.accent; opacity: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.histogram) ? 1.0 : 0.0; }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center; width: 18px;
+                                        Image { source: @image-url("../icons/regular-black/chart-bar.svg"); width: 14px; height: 14px; colorize: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.histogram) ? Theme.accent : Theme.text-dim; }
+                                    }
+                                    Text {
+                                        text: "Histogram"; font-size: 11px; font-family: Theme.font-sans;
+                                        color: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.histogram) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center; horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Scatter
+                        vs-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.view_mode = ResultsViewMode.chart;
+                                ResultsState.chart_kind = ResultsChartKind.scatter;
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vs-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px; padding-right: 8px; spacing: 6px; alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center; width: 14px;
+                                        Image { source: @image-url("../icons/regular-black/check.svg"); width: 10px; height: 10px; colorize: Theme.accent; opacity: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.scatter) ? 1.0 : 0.0; }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center; width: 18px;
+                                        Image { source: @image-url("../icons/regular-black/chart-scatter.svg"); width: 14px; height: 14px; colorize: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.scatter) ? Theme.accent : Theme.text-dim; }
+                                    }
+                                    Text {
+                                        text: "Scatter"; font-size: 11px; font-family: Theme.font-sans;
+                                        color: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.scatter) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center; horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Heatmap
+                        vmh-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.view_mode = ResultsViewMode.chart;
+                                ResultsState.chart_kind = ResultsChartKind.heatmap;
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vmh-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px; padding-right: 8px; spacing: 6px; alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center; width: 14px;
+                                        Image { source: @image-url("../icons/regular-black/check.svg"); width: 10px; height: 10px; colorize: Theme.accent; opacity: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.heatmap) ? 1.0 : 0.0; }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center; width: 18px;
+                                        Image { source: @image-url("../icons/regular-black/grid-four.svg"); width: 14px; height: 14px; colorize: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.heatmap) ? Theme.accent : Theme.text-dim; }
+                                    }
+                                    Text {
+                                        text: "Heatmap"; font-size: 11px; font-family: Theme.font-sans;
+                                        color: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.heatmap) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center; horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
