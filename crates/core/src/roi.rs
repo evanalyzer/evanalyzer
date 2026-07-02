@@ -710,7 +710,8 @@ impl Roi {
         // here (that ratio is meaningless for tile-local indexing: a tile is a crop
         // of the full image at the same resolution, not a smaller-resolution pyramid
         // level of it).
-        let origin_width = ctx.get_image_size().width;
+        let tile_size = ctx.get_image_size();
+        let origin_width = tile_size.width;
 
         let channel_views = cache.image_cache.resolve_channel_views();
 
@@ -733,12 +734,24 @@ impl Roi {
                 {
                     continue;
                 }
-                area += 1;
-
                 let x_abs = xmin as usize + rx;
                 let y_abs = ymin as usize + ry;
+
+                // Transforms (Expand/Scale/Circle/...) clamp the mask against the *full*
+                // image, not this tile, since the mask/bbox they produce must stay valid
+                // regardless of which tile is being processed. So a mask pixel can legally
+                // fall outside the tile currently loaded in `cache` - there's no channel
+                // data for it here, so skip it instead of underflowing `x_abs - tile_offset.x`.
+                if x_abs < tile_offset.x || y_abs < tile_offset.y {
+                    continue;
+                }
                 let tile_x = x_abs - tile_offset.x;
                 let tile_y = y_abs - tile_offset.y;
+                if tile_x >= tile_size.width || tile_y >= tile_size.height {
+                    continue;
+                }
+
+                area += 1;
                 let sample = tile_y * origin_width + tile_x;
 
                 for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
@@ -1352,6 +1365,67 @@ mod tests {
             99.0,
             "ROI at tile-local (7,5) must sample its own pixel, not pixel (0,0)"
         );
+    }
+
+    #[test]
+    fn measure_intensities_skips_mask_pixels_outside_the_current_tile() {
+        // Regression test: `TransformRois` (Expand/Scale/Circle/...) clamps a ROI's mask
+        // against the *full* image, not the tile it's being processed in, so a transformed
+        // ROI near a non-origin tile's top/left edge can legally have mask pixels that fall
+        // outside the tile currently loaded in `cache`. Before the fix, `x_abs - tile_offset`
+        // underflowed for those pixels (silently wrapping in release builds) and indexed the
+        // channel slice miles out of bounds, panicking. Now those pixels must simply be
+        // skipped rather than sampled.
+        use crate::image::ManagedImage;
+        use crate::pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext};
+        use crate::{F32Gray, ImageContainer, ImagePlane};
+        use kornia_apriltag::utils::Point2d;
+        use kornia_image::{Image, ImageSize};
+        use kornia_tensor::CpuAllocator;
+        use std::sync::Arc;
+
+        let full_size = ImageSize {
+            width: 50,
+            height: 60,
+        };
+        let tile_size = ImageSize {
+            width: 15,
+            height: 20,
+        };
+        let offset = Point2d { x: 10, y: 15 };
+
+        let ctx =
+            PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
+        let mut cache = PipelineCache::default();
+
+        let mut intensity = vec![7.0f32; 15 * 20];
+        intensity[5 * 15 + 7] = 99.0; // tile-local (7,5)
+        let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::from_size_slice(tile_size, &intensity, CpuAllocator)
+                .unwrap(),
+            tile_offset: offset,
+            plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        }));
+        cache.image_cache.add_to_channel_cache(channel, 0);
+
+        // A 4x4 mask straddling the tile's top-left corner: global x in [8, 11], y in
+        // [13, 16] against a tile that only starts at (10, 15). Only the bottom-right
+        // 2x2 quadrant (global (10,15)..(11,16), i.e. tile-local (0,0)..(1,1)) is in-tile.
+        let mask = BitVec::<u64, Lsb0>::repeat(true, 4 * 4);
+        let roi = Roi::new(RoiInit {
+            id: ObjectId(1),
+            bbox: [8, 13, 11, 16],
+            mask_data: mask,
+            area: 16,
+            ..Default::default()
+        });
+
+        // Must not panic, and must only have sampled the four in-tile pixels (tile-local
+        // (0,0), (1,0), (0,1), (1,1)), all value 7.0 - away from the 99.0 marker.
+        let intensities = roi.measure_intensities(&ctx, &cache);
+        let intensity = intensities.get(&0).unwrap();
+        assert_eq!(intensity.sum_intensity, 28.0);
+        assert_eq!(intensity.max_intensity, 7.0);
     }
 
     #[test]
