@@ -1084,14 +1084,17 @@ component ResultsToolbar inherits Rectangle {
                 // Icon tracks the active selection so the user sees what's shown at a glance.
                 icon: ResultsState.view_mode == ResultsViewMode.table
                     ? @image-url("../icons/regular-black/table.svg")
+                    : (ResultsState.view_mode == ResultsViewMode.coloc_table
+                    ? @image-url("../icons/regular-black/intersect-three.svg")
                     : (ResultsState.chart_kind == ResultsChartKind.histogram
                     ? @image-url("../icons/regular-black/chart-bar.svg")
                     : (ResultsState.chart_kind == ResultsChartKind.scatter
                     ? @image-url("../icons/regular-black/chart-scatter.svg")
-                    : @image-url("../icons/regular-black/grid-four.svg")));
+                    : @image-url("../icons/regular-black/grid-four.svg"))));
                 label: "View";
                 icon-color: #4A90E2;
-                active: ResultsState.view_mode == ResultsViewMode.chart;
+                active: ResultsState.view_mode == ResultsViewMode.chart
+                     || ResultsState.view_mode == ResultsViewMode.coloc_table;
                 clicked => { view-popup.show(); }
             }
 
@@ -1120,6 +1123,13 @@ component ResultsToolbar inherits Rectangle {
                             height: 28px;
                             mouse-cursor: pointer;
                             clicked => {
+                                // When leaving coloc_table, trigger a normal reload to
+                                // restore per-ROI columns/rows (group_apply re-uses the
+                                // current group config, which may be none = plain table).
+                                if (ResultsState.view_mode == ResultsViewMode.coloc_table) {
+                                    ResultsState.loading_more = true;
+                                    ResultsState.group_apply();
+                                }
                                 ResultsState.view_mode = ResultsViewMode.table;
                                 view-popup.close();
                             }
@@ -1342,6 +1352,69 @@ component ResultsToolbar inherits Rectangle {
                                 }
                             }
                         }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        // Coloc Detail — flat table, one row per source × partner pair
+                        vcd-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.group_computing = true;
+                                ResultsState.loading_more = true;
+                                ResultsState.view_mode = ResultsViewMode.coloc_table;
+                                ResultsState.coloc_detail_requested();
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vcd-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: ResultsState.view_mode == ResultsViewMode.coloc_table ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/intersect-three.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: ResultsState.view_mode == ResultsViewMode.coloc_table ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Coloc Detail";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: ResultsState.view_mode == ResultsViewMode.coloc_table ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1542,7 +1615,8 @@ export component ResultsWindow inherits Window {
             background: Theme.border;
         }
 
-        if ResultsState.view_mode == ResultsViewMode.table: ResultsTable {
+        if ResultsState.view_mode == ResultsViewMode.table
+        || ResultsState.view_mode == ResultsViewMode.coloc_table: ResultsTable {
             vertical-stretch: 1;
             background: Theme.panel;
         }

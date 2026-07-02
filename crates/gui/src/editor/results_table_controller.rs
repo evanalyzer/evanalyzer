@@ -4,12 +4,12 @@ use crate::{
     ResultsState, ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
-    aggregate_rows, build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
-    coloc_filter_label_with, compute_heatmap, compute_histogram, compute_scatter,
-    discover_channels, plottable_columns, render_heatmap, render_histogram, render_scatter,
-    save_rendered_chart_png, sort_display_rows, to_display_row, AggFunc, ColorBy, ColumnSpec,
-    DatabaseFilter, GroupBy, GroupConfig, HeatmapMetric, RenderedChart, ResultsExporter,
-    ResultsLoader, RoiRow,
+    aggregate_rows, build_coloc_detail_column_specs, build_column_specs, coloc_filter_label_any,
+    coloc_filter_label_no, coloc_filter_label_with, compute_heatmap, compute_histogram,
+    compute_scatter, discover_channels, flatten_coloc_rows, plottable_columns, render_heatmap,
+    render_histogram, render_scatter, save_rendered_chart_png, sort_display_rows, to_display_row,
+    AggFunc, ColorBy, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, HeatmapMetric,
+    RenderedChart, ResultsExporter, ResultsLoader, RoiRow,
 };
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
@@ -97,6 +97,9 @@ pub struct ResultsTableController {
     /// out exactly what's on screen without re-rendering. `None` until the
     /// first successful Plot click.
     pub(crate) last_chart: Arc<Mutex<Option<LastChart>>>,
+    /// True while the colocalization detail flat table is the active view.
+    /// Cleared whenever `group_apply` fires (switching back to normal view).
+    pub(crate) coloc_detail_mode: Arc<Mutex<bool>>,
 }
 
 impl ResultsTableController {
@@ -129,6 +132,7 @@ impl ResultsTableController {
             coloc_search: Mutex::new(String::new()),
             column_search: Mutex::new(String::new()),
             last_chart: Arc::new(Mutex::new(None)),
+            coloc_detail_mode: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -309,6 +313,9 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
 
+                // Switching back from coloc detail to normal view.
+                *this.coloc_detail_mode.lock().unwrap() = false;
+
                 let config = GroupConfig {
                     group_by: map_group_by(state.get_group_by()),
                     regex: state.get_group_regex().to_string(),
@@ -322,6 +329,16 @@ impl ResultsTableController {
 
                 state.set_loading_more(true);
                 Self::spawn_reload(Arc::clone(&this));
+            });
+        }
+
+        // --- coloc_detail_requested: load the flat (source × partner) table ---
+        {
+            let this = Arc::clone(self);
+            state.on_coloc_detail_requested(move || {
+                *this.coloc_detail_mode.lock().unwrap() = true;
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || Self::bg_reload_coloc_detail(this));
             });
         }
 
@@ -504,10 +521,11 @@ impl ResultsTableController {
                 let z_stack_filter = *this.z_stack_filter.lock().unwrap();
                 let group = this.group_config.lock().unwrap().clone();
                 let base_specs = this.column_specs.lock().unwrap().clone();
+                let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
 
                 let Some(export_path) = rfd::FileDialog::new()
                     .add_filter("CSV", &["csv"])
-                    .set_file_name("results.csv")
+                    .set_file_name(if is_coloc_detail { "coloc_detail.csv" } else { "results.csv" })
                     .save_file()
                 else {
                     return;
@@ -524,9 +542,12 @@ impl ResultsTableController {
                         z_stack_filter,
                         ..Default::default()
                     };
-                    if let Err(e) =
+                    let result = if is_coloc_detail {
+                        exporter.export_coloc_detail_to_csv(filter, &export_path)
+                    } else {
                         exporter.export_to_csv(filter, &group, &base_specs, &export_path)
-                    {
+                    };
+                    if let Err(e) = result {
                         warn!("CSV export failed: {:?}", e);
                     }
                 });
@@ -545,10 +566,11 @@ impl ResultsTableController {
                 let z_stack_filter = *this.z_stack_filter.lock().unwrap();
                 let group = this.group_config.lock().unwrap().clone();
                 let base_specs = this.column_specs.lock().unwrap().clone();
+                let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
 
                 let Some(export_path) = rfd::FileDialog::new()
                     .add_filter("Excel", &["xlsx"])
-                    .set_file_name("results.xlsx")
+                    .set_file_name(if is_coloc_detail { "coloc_detail.xlsx" } else { "results.xlsx" })
                     .save_file()
                 else {
                     return;
@@ -565,9 +587,12 @@ impl ResultsTableController {
                         z_stack_filter,
                         ..Default::default()
                     };
-                    if let Err(e) =
+                    let result = if is_coloc_detail {
+                        exporter.export_coloc_detail_to_xlsx(filter, &export_path)
+                    } else {
                         exporter.export_to_xlsx(filter, &group, &base_specs, &export_path)
-                    {
+                    };
+                    if let Err(e) = result {
                         warn!("XLSX export failed: {:?}", e);
                     }
                 });
@@ -883,6 +908,109 @@ impl ResultsTableController {
             Err(e) => {
                 warn!("bg_reload_grouped failed: {:?}", e);
                 finish_loading(ui);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Background: colocalization detail flat table (one row per source × partner)
+    // -------------------------------------------------------------------------
+
+    fn bg_reload_coloc_detail(this: Arc<Self>) {
+        let ui = this.ui.clone();
+        let finish = |ui: slint::Weak<ResultsWindow>| {
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = ui.upgrade() {
+                    let state = w.global::<ResultsState>();
+                    state.set_loading_more(false);
+                    state.set_group_computing(false);
+                }
+            });
+        };
+
+        let Some(path) = this.path.lock().unwrap().clone() else {
+            finish(ui);
+            return;
+        };
+
+        let image_filter = this.image_filter.lock().unwrap().clone();
+        let class_filter = this.class_filter.lock().unwrap().clone();
+        let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+        let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+        let z_stack_filter = *this.z_stack_filter.lock().unwrap();
+        let widths = this.column_widths.lock().unwrap().clone();
+
+        let loader = ResultsLoader::new(&path);
+        let coloc_partner_classes = loader.get_coloc_partner_class_names().unwrap_or_default();
+
+        // Load all ROIs in the same image/time-frame for partner property lookup.
+        // Class and coloc filters are intentionally omitted so that partner ROIs from
+        // any class are always available for the detail columns.
+        let partner_lookup = match loader.get_rois(DatabaseFilter {
+            image_filter: image_filter.clone(),
+            class_filter: None,
+            coloc_filter: None,
+            t_stack_filter,
+            z_stack_filter,
+            page_size: 0,
+            page: 0,
+            needs_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
+        }) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("bg_reload_coloc_detail (partner lookup) failed: {:?}", e);
+                finish(ui);
+                return;
+            }
+        };
+
+        match loader.get_rois(DatabaseFilter {
+            image_filter,
+            class_filter,
+            coloc_filter,
+            t_stack_filter,
+            z_stack_filter,
+            page_size: 0,
+            page: 0,
+            needs_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
+        }) {
+            Ok(source_rois) => {
+                let channels = discover_channels(&partner_lookup);
+                let specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
+                let display_rows = flatten_coloc_rows(&source_rois, &partner_lookup, &specs);
+
+                // Row selection doesn't apply to the flat coloc view.
+                this.displayed_rois.lock().unwrap().clear();
+                *this.all_loaded.lock().unwrap() = true;
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = ui.upgrade() {
+                        let state = window.global::<ResultsState>();
+                        let slint_rows: Vec<ResultsRow> =
+                            display_rows.into_iter().map(to_slint_row).collect();
+                        let slint_cols = specs_to_slint_cols(&specs, &widths);
+                        let visible_count = specs.len() as i32;
+                        let total_width: f32 =
+                            slint_cols.iter().filter(|c| c.visible).map(|c| c.width).sum();
+
+                        state.set_columns(slint::ModelRc::new(slint::VecModel::from(slint_cols)));
+                        state.set_visible_column_count(visible_count);
+                        state.set_columns_total_width(total_width);
+                        state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
+                        state.set_all_rows_loaded(true);
+                        state.set_loading_more(false);
+                        state.set_group_computing(false);
+                        state.set_group_active(false);
+                    }
+                });
+            }
+            Err(e) => {
+                warn!("bg_reload_coloc_detail failed: {:?}", e);
+                finish(ui);
             }
         }
     }

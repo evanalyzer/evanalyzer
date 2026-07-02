@@ -33,7 +33,7 @@ export struct FilterItem {
     group_all_checked: bool,
 }
 
-export enum ResultsViewMode { table, chart }
+export enum ResultsViewMode { table, chart, coloc_table }
 
 // Which chart the chart view currently shows.
 export enum ResultsChartKind { histogram, scatter, heatmap }
@@ -159,6 +159,8 @@ export global ResultsState {
     in-out property <bool> group_active:         false;
     // Applies the current group_by / group_regex / aggregate selection.
     callback group_apply();
+    // Switches to the colocalization detail flat table (one row per source × partner pair).
+    callback coloc_detail_requested();
 
     // -- Chart view ---------------------------------------------------------
     in-out property <ResultsChartKind> chart_kind: ResultsChartKind.histogram;

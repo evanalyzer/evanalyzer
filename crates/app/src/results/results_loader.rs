@@ -335,9 +335,184 @@ fn coloc_partner_value(col_id: &str, partners: &BTreeMap<String, Vec<String>>) -
 }
 
 // ---------------------------------------------------------------------------
+// Colocalization detail flat table
+// ---------------------------------------------------------------------------
+
+/// Builds column specs for the colocalization detail flat table.
+///
+/// Source ROI columns come first (fixed fields + per-channel intensities).
+/// Then, for each partner class, a group of property columns is appended:
+/// `coloc_detail__{cls}__roi_id`, `coloc_detail__{cls}__area_px`, …,
+/// `coloc_detail__{cls}__ch{N}_avg_bit`, etc.
+///
+/// The `__` separator uses `rsplit_once`, so class names that themselves
+/// contain `__` round-trip correctly (same convention as the normal
+/// `coloc_partner__` columns).
+pub fn build_coloc_detail_column_specs(
+    channels: &[i32],
+    coloc_partner_classes: &[String],
+) -> Vec<ColumnSpec> {
+    let mk = |id: &str, label: &str| ColumnSpec {
+        id: id.into(),
+        label: label.into(),
+        filterable: false,
+        visible: true,
+    };
+    let mut cols = vec![
+        mk("roi_id", "ROI ID"),
+        mk("image", "Image"),
+        mk("class", "Class"),
+        mk("area_px", "Area (px\u{00B2})"),
+        mk("area_nm2", "Area (nm\u{00B2})"),
+        mk("circularity", "Circularity"),
+    ];
+    for &ch in channels {
+        cols.push(mk(&format!("ch{ch}_min_bit"), &format!("Ch{ch} Min (bit)")));
+        cols.push(mk(&format!("ch{ch}_max_bit"), &format!("Ch{ch} Max (bit)")));
+        cols.push(mk(&format!("ch{ch}_avg_bit"), &format!("Ch{ch} Avg (bit)")));
+    }
+    // One property group per partner class — mirrors the normal table's per-class columns.
+    for cls in coloc_partner_classes {
+        let p = |field: &str| format!("coloc_detail__{cls}__{field}");
+        let l = |label: &str| format!("Coloc {cls} {label}");
+        cols.push(mk(&p("roi_id"), &l("ROI ID")));
+        cols.push(mk(&p("area_px"), &l("Area (px\u{00B2})")));
+        cols.push(mk(&p("area_nm2"), &l("Area (nm\u{00B2})")));
+        cols.push(mk(&p("circularity"), &l("Circularity")));
+        for &ch in channels {
+            cols.push(mk(&p(&format!("ch{ch}_min_bit")), &l(&format!("Ch{ch} Min (bit)"))));
+            cols.push(mk(&p(&format!("ch{ch}_max_bit")), &l(&format!("Ch{ch} Max (bit)"))));
+            cols.push(mk(&p(&format!("ch{ch}_avg_bit")), &l(&format!("Ch{ch} Avg (bit)"))));
+        }
+    }
+    cols
+}
+
+/// Flattens `source_rois` into one [`DisplayRow`] per (source ROI, colocalized partner) pair.
+/// Source ROIs with no partners produce a single row with all partner columns empty.
+/// Each row fills only the column group that matches its active partner class; all
+/// other partner class groups are left empty — matching the structure of the
+/// normal table's per-class coloc columns.
+///
+/// `partner_lookup` should be a *superset* of `source_rois` that includes all ROIs that
+/// may appear as coloc partners (i.e. loaded without class/coloc filter). When a partner
+/// UUID is not found in `partner_lookup` its property columns are left empty.
+pub fn flatten_coloc_rows(
+    source_rois: &[RoiRow],
+    partner_lookup: &[RoiRow],
+    specs: &[ColumnSpec],
+) -> Vec<DisplayRow> {
+    use std::collections::HashMap;
+    // Normalize UUIDs to lowercase so case mismatches between coloc_json and
+    // object_id storage do not silently drop partners.
+    let roi_map: HashMap<String, &RoiRow> =
+        partner_lookup.iter().map(|r| (r.object_id.to_lowercase(), r)).collect();
+
+    let mut out = Vec::new();
+    let mut idx = 0usize;
+
+    for src in source_rois {
+        let partners = parse_coloc_partners(&src.coloc_json);
+        if partners.is_empty() {
+            out.push(DisplayRow {
+                roi_id: (idx + 1) as i32,
+                values: coloc_detail_values(src, None, None, specs),
+            });
+            idx += 1;
+        } else {
+            for (cls, ids) in &partners {
+                for id in ids {
+                    let partner = roi_map.get(&id.to_lowercase()).copied();
+                    out.push(DisplayRow {
+                        roi_id: (idx + 1) as i32,
+                        values: coloc_detail_values(src, Some(cls.as_str()), partner, specs),
+                    });
+                    idx += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Builds one row's values for the coloc detail flat table.
+/// `active_partner_class` identifies which partner class this row represents;
+/// only the column group for that class is filled — all others are empty.
+fn coloc_detail_values(
+    src: &RoiRow,
+    active_partner_class: Option<&str>,
+    partner: Option<&RoiRow>,
+    specs: &[ColumnSpec],
+) -> Vec<String> {
+    let needs_src_int = specs
+        .iter()
+        .any(|c| c.visible && c.id.starts_with("ch") && !c.id.starts_with("coloc_detail__"));
+    let src_int = if needs_src_int {
+        parse_intensities(&src.intensities_json)
+    } else {
+        BTreeMap::new()
+    };
+    // Parse partner intensities lazily — only if there is a partner for this row.
+    let par_int: BTreeMap<i32, (f64, f64, f64)> = partner
+        .map(|p| parse_intensities(&p.intensities_json))
+        .unwrap_or_default();
+
+    let src_class = compute_class(src);
+
+    specs
+        .iter()
+        .map(|col| {
+            if !col.visible {
+                return String::new();
+            }
+            match col.id.as_str() {
+                // --- source ROI fixed columns ---
+                "roi_id" => src.object_id.clone(),
+                "image" => src.image_name.clone(),
+                "class" => src_class.clone(),
+                "area_px" => src.area_px.to_string(),
+                "area_nm2" => format!("{:.2}", src.area_nm2),
+                "circularity" => format!("{:.3}", src.circularity),
+                // --- source ROI channel columns ---
+                id if id.starts_with("ch") => channel_value(id, &src_int),
+                // --- per-class partner columns: coloc_detail__{cls}__{field} ---
+                id if id.starts_with("coloc_detail__") => {
+                    let rest = id.strip_prefix("coloc_detail__").unwrap();
+                    // rsplit_once so class names containing "__" round-trip correctly.
+                    let Some((col_cls, field)) = rest.rsplit_once("__") else {
+                        return String::new();
+                    };
+                    // Only fill the column group for the active partner class.
+                    if Some(col_cls) != active_partner_class {
+                        return String::new();
+                    }
+                    match field {
+                        "roi_id" => {
+                            partner.map(|p| p.object_id.clone()).unwrap_or_default()
+                        }
+                        "area_px" => {
+                            partner.map(|p| p.area_px.to_string()).unwrap_or_default()
+                        }
+                        "area_nm2" => {
+                            partner.map(|p| format!("{:.2}", p.area_nm2)).unwrap_or_default()
+                        }
+                        "circularity" => {
+                            partner.map(|p| format!("{:.3}", p.circularity)).unwrap_or_default()
+                        }
+                        ch_id => channel_value(ch_id, &par_int),
+                    }
+                }
+                _ => String::new(),
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Database filter and loader
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct DatabaseFilter {
     /// `None` = no image filter; `Some([])` = nothing passes; `Some([..])` = restrict to these.
     pub image_filter: Option<Vec<String>>,
