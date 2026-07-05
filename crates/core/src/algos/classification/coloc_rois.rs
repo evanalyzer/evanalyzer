@@ -285,7 +285,16 @@ impl ImageAlgorithm for Colocalization {
         }
 
         // --- PHASE 3: Write Back Results ---
-        for (roi_id, found_matches) in overlap_matches {
+        // A ROI carrying more than one of `classes_to_coloc` is anchored once per
+        // class it belongs to (see PHASE 2), so the same partner id can be
+        // recomputed and `.extend()`-ed into `found_matches` more than once for a
+        // given target class. Dedup per class before writing back, mirroring
+        // `Roi::add_colocalizing_object`.
+        for (roi_id, mut found_matches) in overlap_matches {
+            for ids in found_matches.values_mut() {
+                ids.sort();
+                ids.dedup();
+            }
             if let Some(roi) = cache.roi_cache.get_mut(&roi_id) {
                 roi.colocalized_with.extend(found_matches);
             }
@@ -848,6 +857,59 @@ mod tests {
         assert!(
             c.colocalized_with.is_empty(),
             "C doesn't overlap A → must not be colocalized"
+        );
+    }
+
+    #[test]
+    fn multi_class_anchor_does_not_duplicate_partner_ids() {
+        // X carries both CLASS_A and CLASS_B, so it is anchored twice (once
+        // per bucket it belongs to). Both passes independently re-derive a
+        // match against CLASS_C (via Y), which used to get `.extend()`-ed
+        // into X's CLASS_C partner list twice — see the bug this guards
+        // against, where the coloc-detail flat table showed an extra row for
+        // the same ROI/partner pair.
+        let coloc = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
+            filter_classes: vec![],
+            exclude_classes: vec![],
+            class_for_overlapping_areas: ObjectClass::Unset,
+            allow_multi_object_coloc: true,
+            min_coloc_area: 0.0,
+            size_unit: SizeUnits::Pixels,
+        };
+        let mut cache = PipelineCache::default();
+
+        const ID_X: u128 = 400_000;
+        const ID_W: u128 = 500_000;
+        const ID_Z: u128 = 600_000;
+        const ID_Y: u128 = 700_000;
+
+        // X belongs to both A and B.
+        let mut x = make_filled_roi(ID_X, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
+        x.add_object_class(CLASS_B);
+        // W (class A) and Z (class B) each overlap X, so both of X's anchor
+        // passes (as an A member and as a B member) find a partner for the
+        // *other* target class and pass the "must overlap every other class"
+        // check.
+        let w = make_filled_roi(ID_W, [3, 3, 8, 8], ImagePlane::default(), CLASS_A);
+        let z = make_filled_roi(ID_Z, [0, 0, 2, 2], ImagePlane::default(), CLASS_B);
+        // Y (class C) overlaps X — this is the partner that both of X's
+        // anchor passes independently rediscover for CLASS_C.
+        let y = make_filled_roi(ID_Y, [4, 4, 9, 9], ImagePlane::default(), CLASS_C);
+
+        cache.roi_cache.insert(x.id.clone(), x);
+        cache.roi_cache.insert(w.id.clone(), w);
+        cache.roi_cache.insert(z.id.clone(), z);
+        cache.roi_cache.insert(y.id.clone(), y);
+
+        run(&coloc, &mut cache);
+
+        let x = cache.roi_cache.get(&ObjectId(ID_X)).unwrap();
+        assert!(x.colocalized_with.contains_key(&CLASS_C), "X must coloc with C");
+        assert_eq!(
+            x.colocalized_with[&CLASS_C],
+            vec![ObjectId(ID_Y)],
+            "Y must be recorded exactly once under CLASS_C, not duplicated"
         );
     }
 

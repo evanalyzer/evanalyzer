@@ -24,8 +24,12 @@ pub mod result {
     pub use crate::results::results_exporter::ResultsExporter;
     pub use crate::results::results_loader::{
         AggFunc, ColumnSpec, DatabaseFilter, DisplayRow, GroupBy, GroupConfig, ResultsLoader,
-        RoiRow, aggregate_rows, build_coloc_detail_column_specs, build_column_specs,
-        coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with, discover_channels,
-        flatten_coloc_rows, sort_display_rows, to_display_row,
+        RoiRow, aggregate_rois_sql, aggregate_rows, build_coloc_detail_column_specs,
+        build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
+        coloc_filter_label_with, coloc_partner_ids, discover_channels,
+        discover_coloc_detail_columns, flatten_coloc_rows, sort_display_rows, to_display_row,
+    };
+    pub use crate::results::results_window::{
+        EvictEdge, PageRowCounts, RowWindow, DEFAULT_WINDOW_PAGES,
     };
 }

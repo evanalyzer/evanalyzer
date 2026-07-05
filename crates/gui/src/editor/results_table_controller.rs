@@ -4,13 +4,16 @@ use crate::{
     ResultsState, ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
-    aggregate_rows, build_coloc_detail_column_specs, build_column_specs, coloc_filter_label_any,
-    coloc_filter_label_no, coloc_filter_label_with, compute_heatmap, compute_histogram,
-    compute_scatter, discover_channels, flatten_coloc_rows, plottable_columns, render_heatmap,
+    aggregate_rois_sql, build_coloc_detail_column_specs, build_column_specs,
+    coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with, coloc_partner_ids,
+    compute_heatmap, compute_histogram, compute_scatter, discover_channels,
+    discover_coloc_detail_columns, flatten_coloc_rows, plottable_columns, render_heatmap,
     render_histogram, render_scatter, save_rendered_chart_png, sort_display_rows, to_display_row,
-    AggFunc, ColorBy, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, HeatmapMetric,
-    RenderedChart, ResultsExporter, ResultsLoader, RoiRow,
+    AggFunc, ColorBy, ColumnSpec, DatabaseFilter, EvictEdge, GroupBy, GroupConfig, HeatmapMetric,
+    PageRowCounts, RenderedChart, ResultsExporter, ResultsLoader, RoiRow, RowWindow,
+    DEFAULT_WINDOW_PAGES,
 };
+use evanalyzer_cfg::core_types::InternalErrors;
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
 use std::collections::{BTreeMap, HashMap};
@@ -63,10 +66,13 @@ pub struct ResultsTableController {
     pub(crate) app_state: Arc<UiState>,
     pub(crate) image_list_controller: Arc<ImagesListController>,
     pub(crate) path: Arc<Mutex<Option<PathBuf>>>,
-    /// The per-ROI rows currently shown in the table, in display order. Indexed
-    /// by `ResultsRow.roi_id - 1` to map a selected row back to its source ROI
-    /// (image + bounding box). Empty while a grouped/aggregated view is active.
-    pub(crate) displayed_rois: Arc<Mutex<Vec<RoiRow>>>,
+    /// The window of currently-loaded per-ROI pages, used to map a selected
+    /// row back to its source ROI (image + bounding box) by `object_id` —
+    /// bounded to `DEFAULT_WINDOW_PAGES` pages, evicting the oldest page from
+    /// the opposite scroll edge as new pages load, so scrolling through a huge
+    /// file doesn't hold it all in memory. Empty while a grouped/aggregated or
+    /// coloc-detail view is active (neither supports row selection).
+    pub(crate) displayed_rois: Arc<Mutex<RowWindow>>,
     pub(crate) channels: Arc<Mutex<Vec<i32>>>,
     pub(crate) column_specs: Arc<Mutex<Vec<ColumnSpec>>>,
     /// User-resized column widths (logical px), keyed by column id. Pure presentation
@@ -100,6 +106,19 @@ pub struct ResultsTableController {
     /// True while the colocalization detail flat table is the active view.
     /// Cleared whenever `group_apply` fires (switching back to normal view).
     pub(crate) coloc_detail_mode: Arc<Mutex<bool>>,
+    /// Column specs for the coloc-detail flat table — mirrors `column_specs`'
+    /// role but for the `coloc_detail__*` column set built by
+    /// `build_coloc_detail_column_specs`. Empty until the view is entered for
+    /// the first time; from then on it persists visibility choices across
+    /// re-entries into coloc-detail mode (see `bg_reload_coloc_detail`).
+    pub(crate) coloc_detail_column_specs: Arc<Mutex<Vec<ColumnSpec>>>,
+    /// Bounds the coloc-detail flat table's memory the same way `displayed_rois`
+    /// bounds the normal table's, evicting the oldest source page's flattened
+    /// rows once the window exceeds `DEFAULT_WINDOW_PAGES`. Lighter than
+    /// `RowWindow` since this view never supports row selection — nothing
+    /// ever needs to look a row up by id, only how many displayed rows each
+    /// loaded source page produced.
+    pub(crate) coloc_detail_page_rows: Arc<Mutex<PageRowCounts>>,
 }
 
 impl ResultsTableController {
@@ -113,7 +132,7 @@ impl ResultsTableController {
             app_state,
             image_list_controller,
             path: Arc::new(Mutex::new(None)),
-            displayed_rois: Arc::new(Mutex::new(Vec::new())),
+            displayed_rois: Arc::new(Mutex::new(RowWindow::new(DEFAULT_WINDOW_PAGES))),
             channels: Arc::new(Mutex::new(Vec::new())),
             column_specs: Arc::new(Mutex::new(Vec::new())),
             column_widths: Arc::new(Mutex::new(HashMap::new())),
@@ -133,6 +152,8 @@ impl ResultsTableController {
             column_search: Mutex::new(String::new()),
             last_chart: Arc::new(Mutex::new(None)),
             coloc_detail_mode: Arc::new(Mutex::new(false)),
+            coloc_detail_column_specs: Arc::new(Mutex::new(Vec::new())),
+            coloc_detail_page_rows: Arc::new(Mutex::new(PageRowCounts::new(DEFAULT_WINDOW_PAGES))),
         }
     }
 
@@ -185,7 +206,7 @@ impl ResultsTableController {
         state.on_t_stack_changed(cb!(on_t_stack_changed, i32, bool));
         state.on_z_stack_changed(cb!(on_z_stack_changed, i32, bool));
 
-        state.on_roi_row_selected(cb!(on_roi_row_selected, i32));
+        state.on_roi_row_selected(cb!(on_roi_row_selected, SharedString));
 
         // --- chart_render_requested: read picks on the UI thread, render in --
         // the background (mirrors group_apply's read-then-spawn split).
@@ -337,8 +358,9 @@ impl ResultsTableController {
             let this = Arc::clone(self);
             state.on_coloc_detail_requested(move || {
                 *this.coloc_detail_mode.lock().unwrap() = true;
+                *this.current_page.lock().unwrap() = 0;
                 let this = Arc::clone(&this);
-                std::thread::spawn(move || Self::bg_reload_coloc_detail(this));
+                std::thread::spawn(move || Self::bg_reload_coloc_detail_page0(this));
             });
         }
 
@@ -457,7 +479,29 @@ impl ResultsTableController {
                     return;
                 }
                 let arc = Arc::clone(&this);
-                std::thread::spawn(move || Self::bg_load_more(arc));
+                let is_coloc_detail = *arc.coloc_detail_mode.lock().unwrap();
+                std::thread::spawn(move || {
+                    if is_coloc_detail {
+                        Self::bg_load_more_coloc_detail(arc);
+                    } else {
+                        Self::bg_load_more(arc);
+                    }
+                });
+            });
+        }
+
+        // --- load_previous_rows: backfill a page evicted by scrolling forward -
+        {
+            let this = Arc::clone(self);
+            state.on_load_previous_rows(move || {
+                // Coloc-detail rows never populate `displayed_rois`/windowing
+                // (no row selection in that view), so there's nothing to
+                // backfill there yet.
+                if *this.coloc_detail_mode.lock().unwrap() {
+                    return;
+                }
+                let arc = Arc::clone(&this);
+                std::thread::spawn(move || Self::bg_load_previous(arc));
             });
         }
 
@@ -623,7 +667,10 @@ impl ResultsTableController {
         *self.image_search.lock().unwrap() = String::new();
         *self.class_search.lock().unwrap() = String::new();
         *self.coloc_search.lock().unwrap() = String::new();
-        self.displayed_rois.lock().unwrap().clear();
+        *self.coloc_detail_mode.lock().unwrap() = false;
+        self.coloc_detail_column_specs.lock().unwrap().clear();
+        self.coloc_detail_page_rows.lock().unwrap().reset();
+        self.displayed_rois.lock().unwrap().reset();
 
         let ui = self.ui.clone();
         let app_ui = self.app_state.ui_handle.clone();
@@ -657,7 +704,11 @@ impl ResultsTableController {
                     *channels_arc.lock().unwrap() = channels;
                     *all_loaded_arc.lock().unwrap() = all_loaded;
                     *column_specs_arc.lock().unwrap() = specs.clone();
-                    *displayed_rois_arc.lock().unwrap() = rois.clone();
+                    {
+                        let mut window = displayed_rois_arc.lock().unwrap();
+                        window.reset();
+                        window.note_appended(0, &rois);
+                    }
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(app_ui) = app_ui.upgrade() {
@@ -805,14 +856,21 @@ impl ResultsTableController {
     // Reload dispatch: grouped (aggregated) vs. paginated per-ROI view
     // -------------------------------------------------------------------------
 
-    /// Spawns the appropriate background reload based on the active grouping.
+    /// Spawns the appropriate background reload based on the active view:
+    /// coloc-detail flat table, grouped/aggregated, or plain paginated per-ROI.
+    /// Checking `coloc_detail_mode` first means row filters (image/class/coloc)
+    /// applied while the coloc-detail view is active reload *that* view instead
+    /// of silently falling back to the normal table.
     fn spawn_reload(this: Arc<Self>) {
+        let coloc_detail = *this.coloc_detail_mode.lock().unwrap();
         let grouped = !matches!(
             this.group_config.lock().unwrap().group_by,
             GroupBy::None
         );
         std::thread::spawn(move || {
-            if grouped {
+            if coloc_detail {
+                Self::bg_reload_coloc_detail_page0(this);
+            } else if grouped {
                 Self::bg_reload_grouped(this);
             } else {
                 Self::bg_reload_page0(this);
@@ -852,21 +910,27 @@ impl ResultsTableController {
         let sort_ascending = *this.sort_ascending.lock().unwrap();
 
         let loader = ResultsLoader::new(&path);
-        // Aggregation needs every matching row, so fetch all (page_size 0).
-        match loader.get_rois(DatabaseFilter {
-            image_filter,
-            class_filter,
-            coloc_filter,
-            t_stack_filter,
-            z_stack_filter,
-            page_size: 0,
-            page: 0,
-            needs_intensities: true,
-            sort_column: None,
-            sort_ascending: true,
-        }) {
-            Ok(rois) => {
-                let (specs, mut display_rows) = aggregate_rows(&rois, &config, &base_specs);
+        // Aggregation is computed directly in DuckDB (see `aggregate_rois_sql`)
+        // instead of fetching every matching row into Rust first.
+        match aggregate_rois_sql(
+            &loader,
+            DatabaseFilter {
+                object_id_filter: None,
+                image_filter,
+                class_filter,
+                coloc_filter,
+                t_stack_filter,
+                z_stack_filter,
+                page_size: 0,
+                page: 0,
+                needs_intensities: true,
+                sort_column: None,
+                sort_ascending: true,
+            },
+            &config,
+            &base_specs,
+        ) {
+            Ok((specs, mut display_rows)) => {
                 // The grouped view is fully materialized in memory (unlike the
                 // paginated per-ROI view), so sorting it is a plain in-memory
                 // sort rather than another DB round-trip.
@@ -877,7 +941,7 @@ impl ResultsTableController {
                 *this.all_loaded.lock().unwrap() = true;
                 // Grouped rows aggregate many ROIs, so there is no single source
                 // ROI to open/highlight when one is selected.
-                this.displayed_rois.lock().unwrap().clear();
+                this.displayed_rois.lock().unwrap().reset();
                 let widths = this.column_widths.lock().unwrap().clone();
 
                 let _ = slint::invoke_from_event_loop(move || {
@@ -900,6 +964,7 @@ impl ResultsTableController {
                         state.set_columns_total_width(total_width);
                         state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
                         state.set_all_rows_loaded(true);
+                        state.set_at_top_loaded(true);
                         state.set_loading_more(false);
                         state.set_group_active(true);
                     }
@@ -916,7 +981,12 @@ impl ResultsTableController {
     // Background: colocalization detail flat table (one row per source × partner)
     // -------------------------------------------------------------------------
 
-    fn bg_reload_coloc_detail(this: Arc<Self>) {
+    /// Loads page 0 of the colocalization detail flat table. Unlike the old
+    /// single-shot implementation, this never loads more than one page of
+    /// source ROIs, nor more partner ROIs than that page actually references
+    /// (via `DatabaseFilter::object_id_filter` — see `coloc_partner_ids`),
+    /// instead of every ROI in the image regardless of relevance.
+    fn bg_reload_coloc_detail_page0(this: Arc<Self>) {
         let ui = this.ui.clone();
         let finish = |ui: slint::Weak<ResultsWindow>| {
             let _ = slint::invoke_from_event_loop(move || {
@@ -941,51 +1011,83 @@ impl ResultsTableController {
         let widths = this.column_widths.lock().unwrap().clone();
 
         let loader = ResultsLoader::new(&path);
-        let coloc_partner_classes = loader.get_coloc_partner_class_names().unwrap_or_default();
-
-        // Load all ROIs in the same image/time-frame for partner property lookup.
-        // Class and coloc filters are intentionally omitted so that partner ROIs from
-        // any class are always available for the detail columns.
-        let partner_lookup = match loader.get_rois(DatabaseFilter {
-            image_filter: image_filter.clone(),
-            class_filter: None,
-            coloc_filter: None,
-            t_stack_filter,
-            z_stack_filter,
-            page_size: 0,
-            page: 0,
-            needs_intensities: true,
-            sort_column: None,
-            sort_ascending: true,
-        }) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("bg_reload_coloc_detail (partner lookup) failed: {:?}", e);
-                finish(ui);
-                return;
-            }
-        };
-
-        match loader.get_rois(DatabaseFilter {
+        let base_filter = DatabaseFilter {
             image_filter,
             class_filter,
             coloc_filter,
             t_stack_filter,
             z_stack_filter,
-            page_size: 0,
+            ..Default::default()
+        };
+        let (channels, coloc_partner_classes) =
+            match discover_coloc_detail_columns(&loader, &base_filter) {
+                Ok(cols) => cols,
+                Err(e) => {
+                    warn!("bg_reload_coloc_detail_page0 (column discovery) failed: {:?}", e);
+                    finish(ui);
+                    return;
+                }
+            };
+
+        let mut specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
+        // Carry over the visibility the user already chose: on the very
+        // first entry into coloc-detail mode this session, inherit from
+        // the normal per-ROI column filter (columns like roi_id/area_px/
+        // circularity/ch* share the same ids in both specs); after that,
+        // prefer whatever was chosen while already in coloc-detail mode
+        // (e.g. via `column_filter_apply`), so a filter set here isn't
+        // silently discarded on the next reload.
+        {
+            let prev = this.coloc_detail_column_specs.lock().unwrap();
+            if prev.is_empty() {
+                let base = this.column_specs.lock().unwrap();
+                carry_over_visibility(&mut specs, &base);
+            } else {
+                carry_over_visibility(&mut specs, &prev);
+            }
+        }
+        *this.coloc_detail_column_specs.lock().unwrap() = specs.clone();
+
+        match loader.get_rois(DatabaseFilter {
+            page_size: PAGE_SIZE,
             page: 0,
             needs_intensities: true,
-            sort_column: None,
-            sort_ascending: true,
+            ..base_filter.clone()
         }) {
-            Ok(source_rois) => {
-                let channels = discover_channels(&partner_lookup);
-                let specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
-                let display_rows = flatten_coloc_rows(&source_rois, &partner_lookup, &specs);
+            Ok(source_page) => {
+                let partner_page = match Self::fetch_coloc_partners(&loader, &source_page) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("bg_reload_coloc_detail_page0 (partner fetch) failed: {:?}", e);
+                        finish(ui);
+                        return;
+                    }
+                };
+
+                let all_loaded = source_page.len() < PAGE_SIZE;
+                let display_rows = flatten_coloc_rows(&source_page, &partner_page, &specs);
 
                 // Row selection doesn't apply to the flat coloc view.
-                this.displayed_rois.lock().unwrap().clear();
-                *this.all_loaded.lock().unwrap() = true;
+                this.displayed_rois.lock().unwrap().reset();
+                *this.all_loaded.lock().unwrap() = all_loaded;
+                {
+                    let mut page_rows = this.coloc_detail_page_rows.lock().unwrap();
+                    page_rows.reset();
+                    page_rows.note_appended(0, display_rows.len());
+                }
+
+                let column_items: Vec<FilterItem> = mark_group_headers(
+                    specs
+                        .iter()
+                        .map(|c| FilterItem {
+                            label: c.label.as_str().into(),
+                            checked: c.visible,
+                            group: column_group(&c.id).into(),
+                            group_header: false,
+                            group_all_checked: false,
+                        })
+                        .collect(),
+                );
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
@@ -993,7 +1095,7 @@ impl ResultsTableController {
                         let slint_rows: Vec<ResultsRow> =
                             display_rows.into_iter().map(to_slint_row).collect();
                         let slint_cols = specs_to_slint_cols(&specs, &widths);
-                        let visible_count = specs.len() as i32;
+                        let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
                         let total_width: f32 =
                             slint_cols.iter().filter(|c| c.visible).map(|c| c.width).sum();
 
@@ -1001,7 +1103,15 @@ impl ResultsTableController {
                         state.set_visible_column_count(visible_count);
                         state.set_columns_total_width(total_width);
                         state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
-                        state.set_all_rows_loaded(true);
+                        state.set_column_popup_all_checked(all_checked(&column_items));
+                        state.set_column_items(slint::ModelRc::new(slint::VecModel::from(
+                            column_items.clone(),
+                        )));
+                        state.set_column_popup(slint::ModelRc::new(slint::VecModel::from(
+                            column_items,
+                        )));
+                        state.set_all_rows_loaded(all_loaded);
+                        state.set_at_top_loaded(true);
                         state.set_loading_more(false);
                         state.set_group_computing(false);
                         state.set_group_active(false);
@@ -1009,8 +1119,145 @@ impl ResultsTableController {
                 });
             }
             Err(e) => {
-                warn!("bg_reload_coloc_detail failed: {:?}", e);
+                warn!("bg_reload_coloc_detail_page0 failed: {:?}", e);
                 finish(ui);
+            }
+        }
+    }
+
+    /// Fetches exactly the colocalization partner ROIs referenced by
+    /// `source_page`'s `coloc_json`, instead of every ROI in the image —
+    /// `object_id_filter` alone, with no other filter fields, since an
+    /// explicit id list is already unambiguous (adding the source-side
+    /// image/class/coloc filters back on top would risk incorrectly
+    /// excluding a partner that doesn't itself match those filters).
+    fn fetch_coloc_partners(
+        loader: &ResultsLoader,
+        source_page: &[RoiRow],
+    ) -> Result<Vec<RoiRow>, InternalErrors> {
+        let ids = coloc_partner_ids(source_page);
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        loader.get_rois(DatabaseFilter {
+            object_id_filter: Some(ids),
+            page_size: 0,
+            needs_intensities: true,
+            ..Default::default()
+        })
+    }
+
+    /// Appends the next page of the colocalization detail flat table.
+    fn bg_load_more_coloc_detail(this: Arc<Self>) {
+        let Some(path) = this.path.lock().unwrap().clone() else {
+            return;
+        };
+
+        let next_page = {
+            let mut p = this.current_page.lock().unwrap();
+            *p += 1;
+            *p
+        };
+
+        let image_filter = this.image_filter.lock().unwrap().clone();
+        let class_filter = this.class_filter.lock().unwrap().clone();
+        let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+        let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+        let z_stack_filter = *this.z_stack_filter.lock().unwrap();
+        // Column set was already fixed by page 0 — reused as-is so columns
+        // never shift under the user while they scroll/load more.
+        let specs = this.coloc_detail_column_specs.lock().unwrap().clone();
+        let ui = this.ui.clone();
+
+        let _ = slint::invoke_from_event_loop({
+            let ui = ui.clone();
+            move || {
+                if let Some(w) = ui.upgrade() {
+                    w.global::<ResultsState>().set_loading_more(true);
+                }
+            }
+        });
+
+        let loader = ResultsLoader::new(&path);
+        match loader.get_rois(DatabaseFilter {
+            image_filter,
+            class_filter,
+            coloc_filter,
+            object_id_filter: None,
+            t_stack_filter,
+            z_stack_filter,
+            page_size: PAGE_SIZE,
+            page: next_page,
+            needs_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
+        }) {
+            Ok(source_page) => {
+                let partner_page = match Self::fetch_coloc_partners(&loader, &source_page) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("bg_load_more_coloc_detail (partner fetch) failed: {:?}", e);
+                        let mut p = this.current_page.lock().unwrap();
+                        if *p > 0 {
+                            *p -= 1;
+                        }
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = ui.upgrade() {
+                                w.global::<ResultsState>().set_loading_more(false);
+                            }
+                        });
+                        return;
+                    }
+                };
+
+                let all_loaded = source_page.len() < PAGE_SIZE;
+                let display_rows = flatten_coloc_rows(&source_page, &partner_page, &specs);
+                *this.all_loaded.lock().unwrap() = all_loaded;
+                let evict = this
+                    .coloc_detail_page_rows
+                    .lock()
+                    .unwrap()
+                    .note_appended(next_page, display_rows.len());
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = ui.upgrade() {
+                        let state = window.global::<ResultsState>();
+                        let model = state.get_rows();
+                        if let Some(vec_model) =
+                            model.as_any().downcast_ref::<slint::VecModel<ResultsRow>>()
+                        {
+                            // Offset each flattened row's positional id past the
+                            // rows already loaded, so ids stay unique across
+                            // pages (flatten_coloc_rows numbers each page from 1).
+                            let base = vec_model.row_count() as i32;
+                            for mut row in display_rows {
+                                row.roi_id += base;
+                                vec_model.push(to_slint_row(row));
+                            }
+                            if let Some(EvictEdge { from_front: true, row_count }) = evict {
+                                for _ in 0..row_count {
+                                    vec_model.remove(0);
+                                }
+                                state.set_at_top_loaded(false);
+                                state.set_front_row_delta(row_count as i32);
+                            }
+                        }
+                        state.set_all_rows_loaded(all_loaded);
+                        state.set_loading_more(false);
+                    }
+                });
+            }
+            Err(e) => {
+                warn!("bg_load_more_coloc_detail failed: {:?}", e);
+                let mut p = this.current_page.lock().unwrap();
+                if *p > 0 {
+                    *p -= 1;
+                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = ui.upgrade() {
+                        w.global::<ResultsState>().set_loading_more(false);
+                    }
+                });
             }
         }
     }
@@ -1045,6 +1292,7 @@ impl ResultsTableController {
             image_filter,
             class_filter,
             coloc_filter,
+            object_id_filter: None,
             t_stack_filter,
             z_stack_filter,
             page_size: PAGE_SIZE,
@@ -1056,7 +1304,11 @@ impl ResultsTableController {
             Ok(rois) => {
                 let all_loaded = rois.len() < PAGE_SIZE;
                 *this.all_loaded.lock().unwrap() = all_loaded;
-                *this.displayed_rois.lock().unwrap() = rois.clone();
+                {
+                    let mut window = this.displayed_rois.lock().unwrap();
+                    window.reset();
+                    window.note_appended(0, &rois);
+                }
                 let widths = this.column_widths.lock().unwrap().clone();
 
                 let _ = slint::invoke_from_event_loop(move || {
@@ -1067,6 +1319,8 @@ impl ResultsTableController {
                             .map(|(i, r)| to_slint_row(to_display_row(i, r, &specs)))
                             .collect();
                         let state = window.global::<ResultsState>();
+                        // A full reload always starts fresh at the top.
+                        state.set_at_top_loaded(true);
                         // Restore the per-ROI columns (grouped mode may have replaced them).
                         let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
                         let slint_cols = specs_to_slint_cols(&specs, &widths);
@@ -1136,6 +1390,7 @@ impl ResultsTableController {
             image_filter,
             class_filter,
             coloc_filter,
+            object_id_filter: None,
             t_stack_filter,
             z_stack_filter,
             page_size: PAGE_SIZE,
@@ -1147,12 +1402,11 @@ impl ResultsTableController {
             Ok(new_rois) => {
                 let all_loaded = new_rois.len() < PAGE_SIZE;
                 *this.all_loaded.lock().unwrap() = all_loaded;
-                // Mirror the table append so display indices stay aligned with
-                // `displayed_rois` (the next page is pushed after existing rows).
-                this.displayed_rois
-                    .lock()
-                    .unwrap()
-                    .extend(new_rois.iter().cloned());
+                // Position is derived from the page number, not the model's
+                // current length — required so ids stay unique/stable once
+                // eviction can remove rows from the front (see `RowWindow`).
+                let base = next_page * PAGE_SIZE;
+                let evict = this.displayed_rois.lock().unwrap().note_appended(next_page, &new_rois);
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
@@ -1161,9 +1415,18 @@ impl ResultsTableController {
                         if let Some(vec_model) =
                             model.as_any().downcast_ref::<slint::VecModel<ResultsRow>>()
                         {
-                            let base = vec_model.row_count();
+                            // Append first, then evict — the model never
+                            // observes rows disappearing before they
+                            // conceptually existed.
                             for (i, roi) in new_rois.iter().enumerate() {
                                 vec_model.push(to_slint_row(to_display_row(base + i, roi, &specs)));
+                            }
+                            if let Some(EvictEdge { from_front: true, row_count }) = evict {
+                                for _ in 0..row_count {
+                                    vec_model.remove(0);
+                                }
+                                state.set_at_top_loaded(false);
+                                state.set_front_row_delta(row_count as i32);
                             }
                         }
                         state.set_all_rows_loaded(all_loaded);
@@ -1177,6 +1440,113 @@ impl ResultsTableController {
                 if *p > 0 {
                     *p -= 1;
                 }
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = ui.upgrade() {
+                        w.global::<ResultsState>().set_loading_more(false);
+                    }
+                });
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Background: prepend the page before the currently-loaded window
+    // -------------------------------------------------------------------------
+
+    /// Mirrors `bg_load_more`, for the opposite (top) scroll edge: fetches the
+    /// page immediately before the loaded window's oldest page (backfilling
+    /// one that scrolling forward previously evicted) and prepends it.
+    fn bg_load_previous(this: Arc<Self>) {
+        let Some(path) = this.path.lock().unwrap().clone() else {
+            return;
+        };
+
+        let Some(oldest) = this.displayed_rois.lock().unwrap().oldest_loaded_page() else {
+            return;
+        };
+        if oldest == 0 {
+            // Nothing earlier to backfill — the window already reaches page 0.
+            let ui = this.ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = ui.upgrade() {
+                    w.global::<ResultsState>().set_at_top_loaded(true);
+                }
+            });
+            return;
+        }
+        let prev_page = oldest - 1;
+
+        let image_filter = this.image_filter.lock().unwrap().clone();
+        let class_filter = this.class_filter.lock().unwrap().clone();
+        let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+        let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+        let z_stack_filter = *this.z_stack_filter.lock().unwrap();
+        let specs = this.column_specs.lock().unwrap().clone();
+        let needs_intensities = specs.iter().any(|c| c.visible && c.id.starts_with("ch"));
+        let sort_column = this.sort_column.lock().unwrap().clone();
+        let sort_ascending = *this.sort_ascending.lock().unwrap();
+        let ui = this.ui.clone();
+
+        let _ = slint::invoke_from_event_loop({
+            let ui = ui.clone();
+            move || {
+                if let Some(w) = ui.upgrade() {
+                    w.global::<ResultsState>().set_loading_more(true);
+                }
+            }
+        });
+
+        let loader = ResultsLoader::new(&path);
+        match loader.get_rois(DatabaseFilter {
+            image_filter,
+            class_filter,
+            coloc_filter,
+            object_id_filter: None,
+            t_stack_filter,
+            z_stack_filter,
+            page_size: PAGE_SIZE,
+            page: prev_page,
+            needs_intensities,
+            sort_column,
+            sort_ascending,
+        }) {
+            Ok(prev_rois) => {
+                let base = prev_page * PAGE_SIZE;
+                let (evict, at_top) = {
+                    let mut window = this.displayed_rois.lock().unwrap();
+                    let evict = window.note_prepended(prev_page, &prev_rois);
+                    (evict, window.oldest_loaded_page() == Some(0))
+                };
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = ui.upgrade() {
+                        let state = window.global::<ResultsState>();
+                        let model = state.get_rows();
+                        if let Some(vec_model) =
+                            model.as_any().downcast_ref::<slint::VecModel<ResultsRow>>()
+                        {
+                            // Insert in reverse so the final order is correct.
+                            for (i, roi) in prev_rois.iter().enumerate().rev() {
+                                vec_model
+                                    .insert(0, to_slint_row(to_display_row(base + i, roi, &specs)));
+                            }
+                            if let Some(EvictEdge { from_front: false, row_count }) = evict {
+                                // Tail eviction needs no scroll compensation —
+                                // removing from the end doesn't shift anything
+                                // above the current viewport.
+                                for _ in 0..row_count {
+                                    vec_model.remove(vec_model.row_count() - 1);
+                                }
+                            }
+                        }
+                        state.set_front_row_delta(-(prev_rois.len() as i32));
+                        state.set_at_top_loaded(at_top);
+                        state.set_loading_more(false);
+                    }
+                });
+            }
+            Err(e) => {
+                warn!("bg_load_previous failed: {:?}", e);
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = ui.upgrade() {
                         w.global::<ResultsState>().set_loading_more(false);
@@ -1232,17 +1602,19 @@ impl ResultsTableController {
     // Row selection: open the ROI's image and highlight its bounding box
     // -------------------------------------------------------------------------
 
-    /// A per-ROI row was selected. Maps the display id back to the stored
-    /// [`RoiRow`], then opens its source image in the editor and paints the
-    /// ROI's bounding box. Grouped/aggregated rows have no source ROI, so the
-    /// lookup misses and the selection is ignored.
-    fn on_roi_row_selected(&self, roi_id: i32) {
-        if roi_id < 1 {
+    /// A per-ROI row was selected. Looks the source ROI up by its stable
+    /// `object_id` (not a positional array index — the loaded window can
+    /// evict pages, so a position would silently go stale), then opens its
+    /// source image in the editor and paints the ROI's bounding box.
+    /// Grouped/aggregated/coloc-detail rows have no source ROI (`object_id`
+    /// is `""`), so the lookup misses and the selection is ignored.
+    fn on_roi_row_selected(&self, object_id: SharedString) {
+        if object_id.is_empty() {
             return;
         }
         let roi = {
-            let rois = self.displayed_rois.lock().unwrap();
-            match rois.get((roi_id - 1) as usize) {
+            let window = self.displayed_rois.lock().unwrap();
+            match window.get(object_id.as_str()) {
                 Some(roi) => roi.clone(),
                 None => return,
             }
@@ -1485,9 +1857,14 @@ impl ResultsTableController {
     }
 
     /// Applies column-visibility selection: updates the stored `column_specs`
-    /// and refreshes the view. In grouped mode this re-aggregates (so only the
-    /// visible metrics appear as grouped columns); otherwise it updates
-    /// `ResultsState.columns` / `visible_column_count` directly.
+    /// (or, while the coloc-detail view is active, `coloc_detail_column_specs`)
+    /// and refreshes the view. In grouped or coloc-detail mode this reloads
+    /// from the database (grouped re-aggregates so only visible metrics appear
+    /// as grouped columns; coloc-detail re-flattens so the header/row mismatch
+    /// bug — where a column-filter change silently reverted the view back to
+    /// the normal table — can't happen, since the reload itself stays on the
+    /// coloc-detail path). Otherwise it updates `ResultsState.columns` /
+    /// `visible_column_count` directly.
     fn column_filter_apply(self: &Arc<Self>) {
         let Some(window) = self.ui.upgrade() else { return };
         let state = window.global::<ResultsState>();
@@ -1499,15 +1876,30 @@ impl ResultsTableController {
             .map(|i| (i.label.to_string(), i.checked))
             .collect();
 
+        let coloc_detail = *self.coloc_detail_mode.lock().unwrap();
+
         // Update the stored column specs (used by the next reload and to decide
         // which channel data to fetch).
+        let target = if coloc_detail {
+            &self.coloc_detail_column_specs
+        } else {
+            &self.column_specs
+        };
         {
-            let mut specs = self.column_specs.lock().unwrap();
+            let mut specs = target.lock().unwrap();
             for spec in specs.iter_mut() {
                 if let Some(&visible) = visibility.get(&spec.label) {
                     spec.visible = visible;
                 }
             }
+        }
+
+        if coloc_detail {
+            // Re-flatten so the coloc-detail rows/columns reload together and
+            // stay in sync — the view never falls back to the normal table.
+            state.set_loading_more(true);
+            Self::spawn_reload(Arc::clone(self));
+            return;
         }
 
         let specs = self.column_specs.lock().unwrap().clone();
@@ -1641,6 +2033,7 @@ impl ResultsTableController {
             image_filter,
             class_filter,
             coloc_filter,
+            object_id_filter: None,
             t_stack_filter,
             z_stack_filter,
             page_size: 0,
@@ -1824,6 +2217,7 @@ fn to_slint_row(row: evanalyzer_app::result::DisplayRow) -> ResultsRow {
     let values: Vec<SharedString> = row.values.into_iter().map(SharedString::from).collect();
     ResultsRow {
         roi_id: row.roi_id,
+        object_id: row.object_id.into(),
         values: slint::ModelRc::new(slint::VecModel::from(values)),
     }
 }
@@ -1935,6 +2329,19 @@ fn set_all_checked(items: &[FilterItem], checked: bool) -> Vec<FilterItem> {
         .collect()
 }
 
+/// Copies visibility flags from `prev` onto `fresh` wherever both share a
+/// column id. Ids present only in `fresh` (e.g. a newly appeared coloc
+/// partner class) are left at their built-in default (visible).
+fn carry_over_visibility(fresh: &mut [ColumnSpec], prev: &[ColumnSpec]) {
+    let prev_visibility: HashMap<&str, bool> =
+        prev.iter().map(|c| (c.id.as_str(), c.visible)).collect();
+    for spec in fresh.iter_mut() {
+        if let Some(&visible) = prev_visibility.get(spec.id.as_str()) {
+            spec.visible = visible;
+        }
+    }
+}
+
 fn any_unchecked(items: &[FilterItem]) -> bool {
     items.iter().any(|i| !i.checked)
 }
@@ -1960,7 +2367,9 @@ fn names_to_filter_items(names: &[String]) -> Vec<FilterItem> {
 /// switched on/off as one group instead of one column at a time), or `""` for
 /// columns that don't belong to a section.
 fn column_group(col_id: &str) -> &'static str {
-    if col_id.starts_with("ch") {
+    if col_id.starts_with("coloc_detail__") {
+        "Colocalization"
+    } else if col_id.starts_with("ch") {
         "Intensity"
     } else if col_id.starts_with("coloc_partner__") {
         "Colocalization"

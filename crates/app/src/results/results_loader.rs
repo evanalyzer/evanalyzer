@@ -1,7 +1,7 @@
 use evanalyzer_cfg::core_types::InternalErrors;
 pub use evanalyzer_core::RoiRow;
 pub use evanalyzer_core::{coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with};
-use evanalyzer_core::{DuckDbReader, RoiFilter};
+use evanalyzer_core::{AggregateSpec, DuckDbReader, GroupKeyMode, RoiFilter};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -25,7 +25,16 @@ pub struct ColumnSpec {
 /// One display-ready row: `values[i]` corresponds to `ColumnSpec[i]`.
 #[derive(Debug, Clone)]
 pub struct DisplayRow {
+    /// Positional display id (`row_idx + 1`) — only meaningful as a stable
+    /// sort/highlight key *within a single reload*, never as a lookup key
+    /// across pages: it resets per page/reload and is not a database id. Row
+    /// selection uses `object_id` instead (see `ResultsRow`/`RowWindow` in
+    /// `crates/gui/src/editor/results_table_controller.rs`).
     pub roi_id: i32,
+    /// The source ROI's stable database id (`RoiRow::object_id`), or `""` for
+    /// rows with no single source ROI (grouped/aggregated rows) or where
+    /// selection is intentionally disabled (the coloc-detail flat table).
+    pub object_id: String,
     /// Pre-formatted string values, one per `ColumnSpec` (in the same order).
     /// Hidden columns have an empty string here.
     pub values: Vec<String>,
@@ -200,6 +209,7 @@ pub fn to_display_row(row_idx: usize, roi: &RoiRow, columns: &[ColumnSpec]) -> D
 
     DisplayRow {
         roi_id: (row_idx + 1) as i32,
+        object_id: roi.object_id.clone(),
         values,
     }
 }
@@ -309,15 +319,36 @@ pub(crate) fn parse_coloc_partners(json: &str) -> BTreeMap<String, Vec<String>> 
     };
     for (class, ids) in obj {
         let Some(ids) = ids.as_array() else { continue };
-        let ids: Vec<String> = ids
+        // Dedup: older result files may carry a repeated partner id for a class
+        // (a multi-class source ROI could be recomputed against the same partner
+        // more than once) — collapse those before flattening/counting, so a
+        // single overlap never shows up as more than one row/unit.
+        let mut ids: Vec<String> = ids
             .iter()
             .filter_map(|v| v.as_str().map(str::to_string))
             .collect();
+        ids.sort();
+        ids.dedup();
         if !ids.is_empty() {
             result.insert(class.clone(), ids);
         }
     }
     result
+}
+
+/// Every partner-ROI object id referenced by any of `source_rois`'
+/// `coloc_json`, deduplicated. Used to fetch only the colocalization partner
+/// ROIs actually needed for one page of source rows (via
+/// `DatabaseFilter::object_id_filter`), instead of loading every ROI in the
+/// image.
+pub fn coloc_partner_ids(source_rois: &[RoiRow]) -> Vec<String> {
+    let mut ids = std::collections::BTreeSet::new();
+    for roi in source_rois {
+        for partner_ids in parse_coloc_partners(&roi.coloc_json).into_values() {
+            ids.extend(partner_ids);
+        }
+    }
+    ids.into_iter().collect()
 }
 
 /// Extracts a formatted value for `coloc_partner__{class}__count` /
@@ -388,11 +419,16 @@ pub fn build_coloc_detail_column_specs(
     cols
 }
 
-/// Flattens `source_rois` into one [`DisplayRow`] per (source ROI, colocalized partner) pair.
+/// Flattens `source_rois` into one [`DisplayRow`] per (source ROI, colocalized partner)
+/// **ROI** — i.e. exactly one row per distinct partner object, no matter how many
+/// classes it's recorded under. `coloc_json` is keyed by partner *class label*, so a
+/// partner ROI that itself carries more than one coloc-target class can legitimately
+/// appear under two different class keys for the same source; naively iterating
+/// `(class, id)` pairs would then emit two rows for what is really one colocalization.
 /// Source ROIs with no partners produce a single row with all partner columns empty.
-/// Each row fills only the column group that matches its active partner class; all
-/// other partner class groups are left empty — matching the structure of the
-/// normal table's per-class coloc columns.
+/// Each row fills the column group(s) matching every class the partner is recorded
+/// under; all other partner class groups are left empty — matching the structure of
+/// the normal table's per-class coloc columns.
 ///
 /// `partner_lookup` should be a *superset* of `source_rois` that includes all ROIs that
 /// may appear as coloc partners (i.e. loaded without class/coloc filter). When a partner
@@ -416,19 +452,28 @@ pub fn flatten_coloc_rows(
         if partners.is_empty() {
             out.push(DisplayRow {
                 roi_id: (idx + 1) as i32,
-                values: coloc_detail_values(src, None, None, specs),
+                object_id: String::new(), // no row selection in the coloc-detail view
+                values: coloc_detail_values(src, &[], None, specs),
             });
             idx += 1;
         } else {
+            // Group by unique partner id first, collecting every class label it's
+            // recorded under, so one physical partner never produces more than
+            // one row.
+            let mut per_partner: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
             for (cls, ids) in &partners {
                 for id in ids {
-                    let partner = roi_map.get(&id.to_lowercase()).copied();
-                    out.push(DisplayRow {
-                        roi_id: (idx + 1) as i32,
-                        values: coloc_detail_values(src, Some(cls.as_str()), partner, specs),
-                    });
-                    idx += 1;
+                    per_partner.entry(id.as_str()).or_default().push(cls.as_str());
                 }
+            }
+            for (id, classes) in &per_partner {
+                let partner = roi_map.get(&id.to_lowercase()).copied();
+                out.push(DisplayRow {
+                    roi_id: (idx + 1) as i32,
+                    object_id: String::new(), // no row selection in the coloc-detail view
+                    values: coloc_detail_values(src, classes, partner, specs),
+                });
+                idx += 1;
             }
         }
     }
@@ -436,11 +481,12 @@ pub fn flatten_coloc_rows(
 }
 
 /// Builds one row's values for the coloc detail flat table.
-/// `active_partner_class` identifies which partner class this row represents;
-/// only the column group for that class is filled — all others are empty.
+/// `active_partner_classes` lists every class label the partner in this row is
+/// recorded under; only column groups matching one of those classes are filled —
+/// all others are empty.
 fn coloc_detail_values(
     src: &RoiRow,
-    active_partner_class: Option<&str>,
+    active_partner_classes: &[&str],
     partner: Option<&RoiRow>,
     specs: &[ColumnSpec],
 ) -> Vec<String> {
@@ -482,8 +528,9 @@ fn coloc_detail_values(
                     let Some((col_cls, field)) = rest.rsplit_once("__") else {
                         return String::new();
                     };
-                    // Only fill the column group for the active partner class.
-                    if Some(col_cls) != active_partner_class {
+                    // Only fill column groups for classes the partner is actually
+                    // recorded under.
+                    if !active_partner_classes.contains(&col_cls) {
                         return String::new();
                     }
                     match field {
@@ -521,6 +568,11 @@ pub struct DatabaseFilter {
     /// `None` = no coloc filter; `Some([])` = nothing passes; `Some([..])` = restrict to
     /// rows whose colocalization status ("Yes"/"No") is in this set.
     pub coloc_filter: Option<Vec<String>>,
+    /// Restricts to rows whose `object_id` is in this set. Typically used *alone*
+    /// (no image/class/coloc filter set alongside it) to fetch an exact, known
+    /// set of ROIs — e.g. the colocalization partners referenced by one page of
+    /// source ROIs — without re-deriving or re-checking the source-side filters.
+    pub object_id_filter: Option<Vec<String>>,
     /// Restricts to ROIs from this single time-frame index, or `None` for every frame.
     pub t_stack_filter: Option<i32>,
     /// Restricts to ROIs from this single Z-depth index, or `None` for every depth.
@@ -541,6 +593,7 @@ impl Default for DatabaseFilter {
             image_filter: None,
             class_filter: None,
             coloc_filter: None,
+            object_id_filter: None,
             t_stack_filter: None,
             z_stack_filter: None,
             page_size: 500,
@@ -607,6 +660,22 @@ impl AggFunc {
             "sum" => AggFunc::Sum,
             _ => return None,
         })
+    }
+
+    /// The DuckDB aggregate function name computing the same thing as
+    /// [`apply_agg`] — `STDDEV_SAMP` for `Stdev` since `apply_agg`'s formula is
+    /// the sample (n-1) standard deviation, and DuckDB's `MEDIAN` uses the same
+    /// linear interpolation between the two middle values for an even-length
+    /// input that `apply_agg`'s `Median` branch does. Used by `aggregate_rois_sql`.
+    pub(crate) fn sql_fn(self) -> &'static str {
+        match self {
+            AggFunc::Min => "MIN",
+            AggFunc::Max => "MAX",
+            AggFunc::Avg => "AVG",
+            AggFunc::Median => "MEDIAN",
+            AggFunc::Stdev => "STDDEV_SAMP",
+            AggFunc::Sum => "SUM",
+        }
     }
 }
 
@@ -789,20 +858,21 @@ fn apply_agg(values: &[f64], agg: AggFunc) -> f64 {
     }
 }
 
-/// Groups `rois` according to `config` and produces one aggregated
-/// [`DisplayRow`] per group, alongside the matching column specs.
+/// Builds the grouped column specs for `config` over `base_specs`, alongside
+/// the visible numeric metrics (in their original column order) that
+/// contributed to them. Shared by [`aggregate_rows`] (the in-memory Rust
+/// implementation) and `aggregate_rois_sql` (the SQL-pushdown implementation
+/// in `evanalyzer_core`'s `DuckDbReader::aggregate_rois`) so the two can never
+/// drift on column ids/labels/order — whichever computes the actual values,
+/// both describe the same columns.
 ///
-/// `base_specs` are the per-ROI column specs (as used by [`to_display_row`]);
-/// only the **visible** numeric metrics among them become grouped columns, so
-/// the column-visibility filter applies in grouped mode too. Each such metric
-/// gets one column per entry in `config.aggs` (label/id carry the aggregate,
-/// e.g. `area_px__median` / `Area (px²) [median]`). Groups are returned in key
-/// order, always preceded by the group-key and ROI-count columns.
-pub fn aggregate_rows(
-    rois: &[RoiRow],
+/// Columns: key, (optionally) class, (optionally) colocalized split, count,
+/// then each visible numeric metric × each entry in `config.aggs` (id/label
+/// carry the aggregate, e.g. `area_px__median` / `Area (px²) [median]`).
+pub(crate) fn build_group_specs<'a>(
     config: &GroupConfig,
-    base_specs: &[ColumnSpec],
-) -> (Vec<ColumnSpec>, Vec<DisplayRow>) {
+    base_specs: &'a [ColumnSpec],
+) -> (Vec<ColumnSpec>, Vec<&'a ColumnSpec>) {
     let group_label = match config.group_by {
         GroupBy::Folder => "Folder",
         GroupBy::Regex => "Group",
@@ -855,6 +925,25 @@ pub fn aggregate_rows(
             });
         }
     }
+
+    (specs, metrics)
+}
+
+/// Groups `rois` according to `config` and produces one aggregated
+/// [`DisplayRow`] per group, alongside the matching column specs.
+///
+/// `base_specs` are the per-ROI column specs (as used by [`to_display_row`]);
+/// only the **visible** numeric metrics among them become grouped columns, so
+/// the column-visibility filter applies in grouped mode too. Each such metric
+/// gets one column per entry in `config.aggs` (label/id carry the aggregate,
+/// e.g. `area_px__median` / `Area (px²) [median]`). Groups are returned in key
+/// order, always preceded by the group-key and ROI-count columns.
+pub fn aggregate_rows(
+    rois: &[RoiRow],
+    config: &GroupConfig,
+    base_specs: &[ColumnSpec],
+) -> (Vec<ColumnSpec>, Vec<DisplayRow>) {
+    let (specs, metrics) = build_group_specs(config, base_specs);
 
     let regex = if config.group_by == GroupBy::Regex {
         regex::Regex::new(&config.regex).ok()
@@ -933,12 +1022,127 @@ pub fn aggregate_rows(
                 .collect();
             DisplayRow {
                 roi_id: (idx + 1) as i32,
+                object_id: String::new(), // aggregated row has no single source ROI
                 values,
             }
         })
         .collect();
 
     (specs, rows)
+}
+
+/// Computes grouped/aggregated results directly in DuckDB (via
+/// `evanalyzer_core::DuckDbReader::aggregate_rois`), instead of pulling every
+/// matching row into Rust first — the SQL-pushdown counterpart to
+/// [`aggregate_rows`], which stays as the parity ground-truth these two are
+/// tested against each other for. Produces the exact same columns
+/// ([`build_group_specs`] is the single source of truth both use) and the
+/// same row order (group key, then class, then colocalized flag, all
+/// ascending — matching `SELECT ... ORDER BY` in `aggregate_rois`, which
+/// mirrors the `BTreeMap` iteration order `aggregate_rows` relies on).
+///
+/// `filter`'s `page_size`/`page`/`sort_column` are ignored — the aggregated
+/// result set is always small and unpaginated, same as `aggregate_rows`.
+pub fn aggregate_rois_sql(
+    loader: &ResultsLoader,
+    filter: DatabaseFilter,
+    config: &GroupConfig,
+    base_specs: &[ColumnSpec],
+) -> Result<(Vec<ColumnSpec>, Vec<DisplayRow>), InternalErrors> {
+    let (specs, metrics) = build_group_specs(config, base_specs);
+
+    let roi_filter = RoiFilter {
+        image_filter: filter.image_filter,
+        class_filter: filter.class_filter,
+        coloc_filter: filter.coloc_filter,
+        object_id_filter: filter.object_id_filter,
+        t_stack_filter: filter.t_stack_filter,
+        z_stack_filter: filter.z_stack_filter,
+        page_size: 0,
+        page: 0,
+        fetch_intensities: true,
+        sort_column: None,
+        sort_ascending: true,
+    };
+
+    let reader = DuckDbReader::open(&loader.path)?;
+
+    let key_mode = match config.group_by {
+        GroupBy::None | GroupBy::Image => GroupKeyMode::Image,
+        GroupBy::Folder => {
+            // Directory-splitting stays in Rust (`folder_of`, matching
+            // `Path::parent()`'s exact semantics incl. the "(root)" fallback);
+            // only the resulting small `rel_path -> key` lookup is pushed into
+            // the query, via `get_distinct_images` (cheap: proportional to
+            // distinct image count, not ROI count).
+            let images = reader.get_distinct_images(&roi_filter)?;
+            let map: std::collections::HashMap<String, String> = images
+                .into_iter()
+                .map(|(rel_path, _name)| {
+                    let key = folder_of(&rel_path);
+                    (rel_path, key)
+                })
+                .collect();
+            GroupKeyMode::ImageRelPathMap(map)
+        }
+        GroupBy::Regex => {
+            let Ok(re) = regex::Regex::new(&config.regex) else {
+                // Invalid pattern -> every row's group_key is `None` in the
+                // Rust path (`group_key`'s `let re = regex?;`), i.e. zero
+                // groups. Match that without touching the DB at all.
+                return Ok((specs, vec![]));
+            };
+            GroupKeyMode::Regex {
+                pattern: config.regex.clone(),
+                has_capture_group: re.captures_len() > 1,
+            }
+        }
+    };
+
+    let agg_spec = AggregateSpec {
+        key_mode,
+        group_by_class: config.group_by_class,
+        split_colocalized: config.split_colocalized,
+        metric_ids: metrics.iter().map(|m| m.id.clone()).collect(),
+        agg_fns: config.aggs.iter().map(|a| a.sql_fn()).collect(),
+    };
+
+    let agg_rows = reader.aggregate_rois(&roi_filter, &agg_spec)?;
+
+    let rows = agg_rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, agg_row)| {
+            let mut metric_idx = 0usize;
+            let values = specs
+                .iter()
+                .map(|col| match col.id.as_str() {
+                    "group" => agg_row.group_key.clone(),
+                    "group_class" => agg_row.group_class.clone().unwrap_or_default(),
+                    "colocalized" => coloc_label(agg_row.colocalized.unwrap_or(false)),
+                    "count" => agg_row.count.to_string(),
+                    id => {
+                        // id is "<base_id>__<agg>" (base_id itself may contain
+                        // "__", see `metric_precision`'s callers) — only the
+                        // base id is needed here, `agg_row.metric_values` is
+                        // already positional.
+                        let Some((base_id, _agg_label)) = id.rsplit_once("__") else {
+                            return String::new();
+                        };
+                        let value = agg_row.metric_values.get(metric_idx).copied().flatten();
+                        metric_idx += 1;
+                        match value {
+                            Some(v) => format!("{:.*}", metric_precision(base_id), v),
+                            None => String::new(),
+                        }
+                    }
+                })
+                .collect();
+            DisplayRow { roi_id: (idx + 1) as i32, object_id: String::new(), values }
+        })
+        .collect();
+
+    Ok((specs, rows))
 }
 
 /// Sorts `rows` in place by the current value of `column_id` (looked up via
@@ -980,6 +1184,7 @@ impl ResultsLoader {
             image_filter: filter.image_filter,
             class_filter: filter.class_filter,
             coloc_filter: filter.coloc_filter,
+            object_id_filter: filter.object_id_filter,
             t_stack_filter: filter.t_stack_filter,
             z_stack_filter: filter.z_stack_filter,
             page_size: filter.page_size,
@@ -1013,6 +1218,35 @@ impl ResultsLoader {
     pub fn get_coloc_partner_class_names(&self) -> Result<Vec<String>, InternalErrors> {
         DuckDbReader::open(&self.path)?.get_coloc_partner_class_names()
     }
+}
+
+/// Bounded-sample column discovery for the colocalization detail flat table:
+/// the partner classes (a cheap `DISTINCT`-over-JSON-keys query) plus channels
+/// discovered from a capped sample of ROIs in scope, instead of scanning every
+/// ROI in the image. Called once when coloc-detail mode is entered (or on a
+/// filter/sort change that resets to page 0), not per page, so the column set
+/// stays fixed while the user scrolls/loads more pages.
+const COLOC_DETAIL_COLUMN_DISCOVERY_SAMPLE: usize = 2000;
+
+pub fn discover_coloc_detail_columns(
+    loader: &ResultsLoader,
+    filter: &DatabaseFilter,
+) -> Result<(Vec<i32>, Vec<String>), InternalErrors> {
+    let coloc_partner_classes = loader.get_coloc_partner_class_names()?;
+    let sample = loader.get_rois(DatabaseFilter {
+        image_filter: filter.image_filter.clone(),
+        class_filter: None,
+        coloc_filter: None,
+        object_id_filter: None,
+        t_stack_filter: filter.t_stack_filter,
+        z_stack_filter: filter.z_stack_filter,
+        page_size: COLOC_DETAIL_COLUMN_DISCOVERY_SAMPLE,
+        page: 0,
+        needs_intensities: true,
+        sort_column: None,
+        sort_ascending: true,
+    })?;
+    Ok((discover_channels(&sample), coloc_partner_classes))
 }
 
 #[cfg(test)]
@@ -1447,6 +1681,157 @@ mod tests {
     }
 
     #[test]
+    fn parse_coloc_partners_dedups_repeated_id_in_same_class() {
+        // A multi-class source ROI can be re-anchored against the same partner
+        // more than once (see coloc_rois.rs), leaving a repeated id in an
+        // older result file's coloc_json. The loader should collapse it so a
+        // single overlap is never counted/displayed as two.
+        let json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002","00000000-0000-0000-0000-000000000002"]}"#;
+        let partners = parse_coloc_partners(json);
+        assert_eq!(
+            partners.get("ClassA").map(Vec::as_slice),
+            Some(["00000000-0000-0000-0000-000000000002".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn coloc_partner_ids_dedups_across_rows_and_classes() {
+        let mut a = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        a.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002","00000000-0000-0000-0000-000000000003"]}"#.into();
+        let mut b = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        // Shares one id with `a` (under a different class) and contributes one new id.
+        b.coloc_json = r#"{"ClassB":["00000000-0000-0000-0000-000000000002","00000000-0000-0000-0000-000000000004"]}"#.into();
+        let no_partners = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+
+        let ids = coloc_partner_ids(&[a, b, no_partners]);
+        assert_eq!(
+            ids,
+            vec![
+                "00000000-0000-0000-0000-000000000002".to_string(),
+                "00000000-0000-0000-0000-000000000003".to_string(),
+                "00000000-0000-0000-0000-000000000004".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn coloc_partner_ids_empty_for_no_partners() {
+        let roi = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        assert!(coloc_partner_ids(&[roi]).is_empty());
+        assert!(coloc_partner_ids(&[]).is_empty());
+    }
+
+    #[test]
+    fn flatten_coloc_rows_does_not_duplicate_row_for_repeated_partner_id() {
+        let mut src = make_roi("img.tif", vec!["Source".into()], None, 0, 0.0, 0.0, "{}");
+        src.object_id = "00000000-0000-0000-0000-000000000001".into();
+        src.coloc_json =
+            r#"{"ClassA":["00000000-0000-0000-0000-000000000002","00000000-0000-0000-0000-000000000002"]}"#
+                .into();
+
+        let mut partner = make_roi("img.tif", vec!["ClassA".into()], None, 0, 0.0, 0.0, "{}");
+        partner.object_id = "00000000-0000-0000-0000-000000000002".into();
+
+        let specs = build_coloc_detail_column_specs(&[], &["ClassA".to_string()]);
+        let rows = flatten_coloc_rows(&[src], &[partner], &specs);
+
+        assert_eq!(rows.len(), 1, "a repeated partner id must not produce an extra row");
+    }
+
+    #[test]
+    fn flatten_coloc_rows_one_row_per_distinct_partner_even_if_it_matches_two_classes() {
+        // The partner ROI itself carries two coloc-target classes, so the
+        // Colocalization algorithm legitimately records it under two class
+        // keys in the source's coloc_json. That's still a single physical
+        // colocalization — the flat table must show exactly one row for it
+        // (with both class column groups filled), not one row per class key.
+        let mut src = make_roi("img.tif", vec!["Source".into()], None, 0, 0.0, 0.0, "{}");
+        src.object_id = "00000000-0000-0000-0000-000000000001".into();
+        src.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002"],"ClassB":["00000000-0000-0000-0000-000000000002"]}"#.into();
+
+        let mut partner = make_roi(
+            "img.tif",
+            vec!["ClassA".into(), "ClassB".into()],
+            None,
+            0,
+            0.0,
+            0.0,
+            "{}",
+        );
+        partner.object_id = "00000000-0000-0000-0000-000000000002".into();
+
+        let specs = build_coloc_detail_column_specs(&[], &["ClassA".to_string(), "ClassB".to_string()]);
+        let rows = flatten_coloc_rows(&[src], &[partner], &specs);
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "one physical partner ROI must produce exactly one row, even under two class keys"
+        );
+
+        let col = |id: &str| specs.iter().position(|c| c.id == id).unwrap();
+        assert_eq!(
+            rows[0].values[col("coloc_detail__ClassA__roi_id")],
+            "00000000-0000-0000-0000-000000000002"
+        );
+        assert_eq!(
+            rows[0].values[col("coloc_detail__ClassB__roi_id")],
+            "00000000-0000-0000-0000-000000000002",
+            "both matching class groups should be filled in the single row"
+        );
+    }
+
+    #[test]
+    fn flatten_coloc_rows_paginated_matches_single_shot() {
+        // Simulates what bg_reload_coloc_detail_page0/bg_load_more_coloc_detail do:
+        // flatten one page of source ROIs at a time, resolving only that page's
+        // referenced partner ids (as `coloc_partner_ids` + an object_id_filter
+        // query would), instead of flattening every source ROI against every
+        // partner in one shot. The two must produce the same set of row values.
+        let mut src1 = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        src1.object_id = "00000000-0000-0000-0000-000000000001".into();
+        src1.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000010"]}"#.into();
+        let mut src2 = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        src2.object_id = "00000000-0000-0000-0000-000000000002".into();
+        src2.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000010","00000000-0000-0000-0000-000000000011"]}"#.into();
+        let mut src3 = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        src3.object_id = "00000000-0000-0000-0000-000000000003".into();
+        // No partners at all — exercises the "no partners" branch too.
+
+        let mut p10 = make_roi("img", vec!["ClassA".into()], None, 0, 0.0, 0.0, "{}");
+        p10.object_id = "00000000-0000-0000-0000-000000000010".into();
+        let mut p11 = make_roi("img", vec!["ClassA".into()], None, 0, 0.0, 0.0, "{}");
+        p11.object_id = "00000000-0000-0000-0000-000000000011".into();
+
+        let source_rois = vec![src1, src2, src3];
+        let all_partners = vec![p10, p11];
+        let specs = build_coloc_detail_column_specs(&[], &["ClassA".to_string()]);
+
+        let single_shot = flatten_coloc_rows(&source_rois, &all_partners, &specs);
+
+        // Paginate source_rois into pages of 2, resolving each page's referenced
+        // partner ids against `all_partners` (mirroring an object_id_filter query).
+        const PAGE: usize = 2;
+        let mut paginated = Vec::new();
+        for page in source_rois.chunks(PAGE) {
+            let ids = coloc_partner_ids(page);
+            let page_partners: Vec<RoiRow> = all_partners
+                .iter()
+                .filter(|p| ids.iter().any(|id| id.eq_ignore_ascii_case(&p.object_id)))
+                .cloned()
+                .collect();
+            paginated.extend(flatten_coloc_rows(page, &page_partners, &specs));
+        }
+
+        let single_shot_values: Vec<&Vec<String>> = single_shot.iter().map(|r| &r.values).collect();
+        let paginated_values: Vec<&Vec<String>> = paginated.iter().map(|r| &r.values).collect();
+        assert_eq!(
+            single_shot_values, paginated_values,
+            "paging must not change the flattened output, only how it's fetched"
+        );
+    }
+
+    #[test]
     fn aggregate_rows_coloc_partner_count_is_aggregatable_metric() {
         let mut roi1 = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
         roi1.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002"]}"#.into();
@@ -1538,9 +1923,9 @@ mod tests {
             visible: true,
         }];
         let mut rows = vec![
-            DisplayRow { roi_id: 1, values: vec!["300".into()] },
-            DisplayRow { roi_id: 2, values: vec!["100".into()] },
-            DisplayRow { roi_id: 3, values: vec!["200".into()] },
+            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["300".into()] },
+            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["100".into()] },
+            DisplayRow { roi_id: 3, object_id: String::new(), values: vec!["200".into()] },
         ];
 
         sort_display_rows(&mut rows, &specs, "area_px", true);
@@ -1559,8 +1944,8 @@ mod tests {
             visible: true,
         }];
         let mut rows = vec![
-            DisplayRow { roi_id: 1, values: vec!["banana".into()] },
-            DisplayRow { roi_id: 2, values: vec!["apple".into()] },
+            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["banana".into()] },
+            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["apple".into()] },
         ];
         sort_display_rows(&mut rows, &specs, "group", true);
         assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![2, 1]);
@@ -1575,8 +1960,8 @@ mod tests {
             visible: true,
         }];
         let mut rows = vec![
-            DisplayRow { roi_id: 1, values: vec!["300".into()] },
-            DisplayRow { roi_id: 2, values: vec!["100".into()] },
+            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["300".into()] },
+            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["100".into()] },
         ];
         sort_display_rows(&mut rows, &specs, "does_not_exist", true);
         assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![1, 2]);

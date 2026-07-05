@@ -14,6 +14,11 @@ export struct ResultsColumnDef {
 
 export struct ResultsRow {
     roi_id: int,
+    // The source ROI's stable database id, or "" for rows with no single
+    // source ROI (grouped rows) or where selection is disabled (coloc-detail
+    // rows). Used for row-selection lookups instead of `roi_id`, which is
+    // only a positional display index and isn't stable across page reloads.
+    object_id: string,
     values: [string],
 }
 
@@ -53,10 +58,10 @@ export global ResultsState {
     ];
 
     in property <[ResultsRow]> rows: [
-        { roi_id: 1, values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"] },
-        { roi_id: 2, values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"] },
-        { roi_id: 3, values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"] },
-        { roi_id: 4, values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"] },
+        { roi_id: 1, object_id: "", values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"] },
+        { roi_id: 2, object_id: "", values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"] },
+        { roi_id: 3, object_id: "", values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"] },
+        { roi_id: 4, object_id: "", values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"] },
     ];
 
     in-out property <int> selected_roi_id:     0;
@@ -84,7 +89,7 @@ export global ResultsState {
     in-out property <bool> filter_coloc_active: false;
     in-out property <bool> filter_coloc_all_popup_checked: true;
 
-    callback roi_row_selected(int);
+    callback roi_row_selected(string);
     callback sort_requested(string, bool);
     callback export_csv();
     callback export_xlsx();
@@ -94,9 +99,23 @@ export global ResultsState {
     callback clear_all_filters();
     callback filter_apply();
     callback load_more_rows();
+    // Mirrors `load_more_rows()` for the opposite (top) scroll edge: fired
+    // when scrolled near the top and an earlier page was evicted from memory
+    // (bounded scroll-memory window — see `RowWindow` in the Rust app crate),
+    // so Rust can transparently re-fetch and prepend it.
+    callback load_previous_rows();
 
     in-out property <bool> loading_more:    false;
     in-out property <bool> all_rows_loaded: false;
+    // Mirrors `all_rows_loaded` for the top edge: false once the window's
+    // oldest loaded page is no longer page 0 (i.e. an earlier page has been
+    // evicted and could be backfilled by scrolling up).
+    in-out property <bool> at_top_loaded: true;
+    // Rust sets this to ±N immediately after editing the front of `rows` to
+    // evict/prepend N rows, so the view can compensate the scroll position by
+    // the same N row-heights and the edit is invisible to the user. Consumed
+    // once by `changed front_row_delta` below, then reset to 0.
+    in-out property <int> front_row_delta: 0;
     // True while a group_apply() is being processed by Rust. Set by the Slint UI
     // immediately on any group action; cleared when rows arrive or preset state
     // settles. Keeps the spinner visible across the gap where loading_more has
@@ -864,6 +883,20 @@ export component ResultsTable inherits Rectangle {
                 }
             }
 
+            // Rust sets `ResultsState.front_row_delta` right after editing the
+            // front of `rows` (evicting rows scrolled past, or prepending a
+            // backfilled page) — this compensates the scroll position by the
+            // same number of row-heights so the edit is invisible to the user,
+            // the same "scroll anchoring" technique `scroll_trigger` above uses
+            // for jump-to-row.
+            property <int> front_row_delta_trigger: ResultsState.front_row_delta;
+            changed front_row_delta_trigger => {
+                if (ResultsState.front_row_delta != 0) {
+                    table-scroll.viewport-y += ResultsState.front_row_delta * 32px;
+                    ResultsState.front_row_delta = 0;
+                }
+            }
+
             // ListView virtualizes rows — only visible rows are rendered.
             // No viewport-width set here: preserves Slint's virtualization.
             // Horizontal scrolling is handled by clip+translate in each row.
@@ -876,6 +909,9 @@ export component ResultsTable inherits Rectangle {
                     if (!ResultsState.all_rows_loaded && !ResultsState.loading_more && table-scroll.viewport-height + table-scroll.viewport-y - table-scroll.height < 3 * 32px) {
                         ResultsState.load_more_rows();
                     }
+                    if (!ResultsState.at_top_loaded && !ResultsState.loading_more && table-scroll.viewport-y > -3 * 32px) {
+                        ResultsState.load_previous_rows();
+                    }
                 }
 
                 for data in ResultsState.rows: ResultsDataRow {
@@ -885,7 +921,7 @@ export component ResultsTable inherits Rectangle {
                     content-width: root.content-width;
                     row-clicked => {
                         ResultsState.selected_roi_id = data.roi_id;
-                        ResultsState.roi_row_selected(data.roi_id);
+                        ResultsState.roi_row_selected(data.object_id);
                     }
                 }
             }

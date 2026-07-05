@@ -1,10 +1,16 @@
 use crate::results::results_loader::{
-    aggregate_rows, build_coloc_detail_column_specs, discover_channels, flatten_coloc_rows,
-    to_display_row, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, ResultsLoader,
+    aggregate_rois_sql, build_coloc_detail_column_specs, coloc_partner_ids,
+    discover_coloc_detail_columns, flatten_coloc_rows, to_display_row, ColumnSpec, DatabaseFilter,
+    GroupBy, GroupConfig, ResultsLoader,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use rust_xlsxwriter::{Format, Workbook};
 use std::{path::Path, sync::Arc};
+
+/// Rows per DB round-trip while exporting. Larger than the GUI's page size
+/// (`PAGE_SIZE = 500`) since export has no competing memory pressure from a
+/// live UI — fewer, bigger round-trips is a pure win here.
+const EXPORT_PAGE_SIZE: usize = 5_000;
 
 pub struct ResultsExporter {
     results_loader: Arc<ResultsLoader>,
@@ -25,24 +31,14 @@ impl ResultsExporter {
         base_specs: &[ColumnSpec],
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
-        let (headers, rows) = self.prepare_data(filter, group, base_specs)?;
-
         let mut writer = csv::Writer::from_path(export_path)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
-        writer
-            .write_record(&headers)
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        self.export_rows(filter, group, base_specs, |row| {
+            writer.write_record(row).map_err(|e| InternalErrors::Io(e.to_string()))
+        })?;
 
-        for row in &rows {
-            writer
-                .write_record(row)
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        }
-
-        writer
-            .flush()
-            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        writer.flush().map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
     }
 
@@ -56,37 +52,13 @@ impl ResultsExporter {
         base_specs: &[ColumnSpec],
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
-        let (headers, rows) = self.prepare_data(filter, group, base_specs)?;
         let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
-
         let mut workbook = Workbook::new();
         let sheet = workbook.add_worksheet();
         sheet.set_name("Results").map_err(err)?;
         sheet.set_freeze_panes(1, 0).map_err(err)?;
 
-        let bold = Format::new().set_bold();
-
-        for (col, label) in headers.iter().enumerate() {
-            sheet
-                .write_with_format(0, col as u16, label.as_str(), &bold)
-                .map_err(err)?;
-        }
-
-        for (row_idx, row) in rows.iter().enumerate() {
-            let xlsx_row = (row_idx + 1) as u32;
-            for (col, value) in row.iter().enumerate() {
-                let xlsx_col = col as u16;
-                if value.is_empty() {
-                    continue;
-                }
-                // Write numeric strings as actual numbers so Excel can sort/filter them.
-                if let Ok(n) = value.parse::<f64>() {
-                    sheet.write_number(xlsx_row, xlsx_col, n).map_err(err)?;
-                } else {
-                    sheet.write_string(xlsx_row, xlsx_col, value).map_err(err)?;
-                }
-            }
-        }
+        self.export_rows(filter, group, base_specs, xlsx_row_writer(sheet))?;
 
         workbook.save(export_path).map_err(err)?;
         Ok(())
@@ -99,13 +71,11 @@ impl ResultsExporter {
         filter: DatabaseFilter,
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
-        let (headers, rows) = self.prepare_coloc_detail_data(filter)?;
         let mut writer = csv::Writer::from_path(export_path)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        writer.write_record(&headers).map_err(|e| InternalErrors::Io(e.to_string()))?;
-        for row in &rows {
-            writer.write_record(row).map_err(|e| InternalErrors::Io(e.to_string()))?;
-        }
+        self.export_coloc_detail_rows(filter, |row| {
+            writer.write_record(row).map_err(|e| InternalErrors::Io(e.to_string()))
+        })?;
         writer.flush().map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
     }
@@ -117,113 +87,169 @@ impl ResultsExporter {
         filter: DatabaseFilter,
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
-        let (headers, rows) = self.prepare_coloc_detail_data(filter)?;
         let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
-
         let mut workbook = Workbook::new();
         let sheet = workbook.add_worksheet();
         sheet.set_name("Coloc Detail").map_err(err)?;
         sheet.set_freeze_panes(1, 0).map_err(err)?;
 
-        let bold = Format::new().set_bold();
-        for (col, label) in headers.iter().enumerate() {
-            sheet.write_with_format(0, col as u16, label.as_str(), &bold).map_err(err)?;
-        }
-        for (row_idx, row) in rows.iter().enumerate() {
-            let xlsx_row = (row_idx + 1) as u32;
-            for (col, value) in row.iter().enumerate() {
-                if value.is_empty() {
-                    continue;
-                }
-                if let Ok(n) = value.parse::<f64>() {
-                    sheet.write_number(xlsx_row, col as u16, n).map_err(err)?;
-                } else {
-                    sheet.write_string(xlsx_row, col as u16, value).map_err(err)?;
-                }
-            }
-        }
+        self.export_coloc_detail_rows(filter, xlsx_row_writer(sheet))?;
+
         workbook.save(export_path).map_err(err)?;
         Ok(())
     }
 
     // -------------------------------------------------------------------------
 
-    /// Loads all matching rows and returns (header labels, rows-of-strings).
+    /// Streams the rows matching `filter` (or grouped/aggregated rows, when
+    /// `group.group_by != GroupBy::None`) to `emit_row` — the header labels
+    /// first, then each data row, one page at a time — instead of
+    /// materializing the whole matching result set as one `Vec` in memory.
     ///
     /// `base_specs` are the per-ROI column specs from the table (carrying the
     /// current visibility selection), so the export mirrors what is shown:
-    /// - grouped → one aggregated row per group over the visible metrics;
-    /// - otherwise → per-ROI rows for the visible columns only.
-    fn prepare_data(
+    /// - grouped → one aggregated row per group over the visible metrics
+    ///   (always a single, small pass — the aggregated result set is never
+    ///   large regardless of how many ROIs it summarizes);
+    /// - otherwise → per-ROI rows for the visible columns only, paged.
+    fn export_rows(
         &self,
         filter: DatabaseFilter,
         group: &GroupConfig,
         base_specs: &[ColumnSpec],
-    ) -> Result<(Vec<String>, Vec<Vec<String>>), InternalErrors> {
-        let rois = self.results_loader.get_rois(DatabaseFilter {
-            page_size: 0, // fetch all rows
-            needs_intensities: true,
-            ..filter
-        })?;
-
-        // Grouped export: one aggregated row per group (over visible metrics).
+        mut emit_row: impl FnMut(&[String]) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
         if group.group_by != GroupBy::None {
-            let (specs, display_rows) = aggregate_rows(&rois, group, base_specs);
-            let headers = specs.iter().map(|c| c.label.clone()).collect();
-            let rows = display_rows.into_iter().map(|d| d.values).collect();
-            return Ok((headers, rows));
+            // Aggregation is computed directly in DuckDB (see
+            // `aggregate_rois_sql`) instead of fetching every matching row.
+            let (specs, display_rows) = aggregate_rois_sql(&self.results_loader, filter, group, base_specs)?;
+            let headers: Vec<String> = specs.iter().map(|c| c.label.clone()).collect();
+            emit_row(&headers)?;
+            for row in &display_rows {
+                emit_row(&row.values)?;
+            }
+            return Ok(());
         }
 
-        let headers: Vec<String> = base_specs
-            .iter()
-            .filter(|c| c.visible)
-            .map(|c| c.label.clone())
-            .collect();
+        let headers: Vec<String> =
+            base_specs.iter().filter(|c| c.visible).map(|c| c.label.clone()).collect();
+        emit_row(&headers)?;
 
-        let rows: Vec<Vec<String>> = rois
-            .iter()
-            .enumerate()
-            .map(|(i, roi)| {
-                let display = to_display_row(i, roi, base_specs);
-                base_specs
+        let mut page = 0;
+        loop {
+            let rois_page = self.results_loader.get_rois(DatabaseFilter {
+                page_size: EXPORT_PAGE_SIZE,
+                page,
+                needs_intensities: true,
+                ..filter.clone()
+            })?;
+            if rois_page.is_empty() {
+                break;
+            }
+            let done = rois_page.len() < EXPORT_PAGE_SIZE;
+            for (i, roi) in rois_page.iter().enumerate() {
+                let display = to_display_row(page * EXPORT_PAGE_SIZE + i, roi, base_specs);
+                let values: Vec<String> = base_specs
                     .iter()
                     .zip(display.values.iter())
                     .filter(|(col, _)| col.visible)
                     .map(|(_, v)| v.clone())
-                    .collect()
-            })
-            .collect();
+                    .collect();
+                emit_row(&values)?;
+            }
+            if done {
+                break;
+            }
+            page += 1;
+        }
 
-        Ok((headers, rows))
+        Ok(())
     }
 
-    fn prepare_coloc_detail_data(
+    /// Streams the colocalization detail flat table to `emit_row` — the header
+    /// labels first, then each flattened row — one page of source ROIs at a
+    /// time, fetching only the colocalization partner ROIs that page's
+    /// `coloc_json` actually references (via
+    /// `DatabaseFilter::object_id_filter`), instead of every ROI in the image.
+    fn export_coloc_detail_rows(
         &self,
         filter: DatabaseFilter,
-    ) -> Result<(Vec<String>, Vec<Vec<String>>), InternalErrors> {
-        // Load all ROIs in the same image scope for partner property lookup.
-        // Class and coloc filters are intentionally omitted.
-        let partner_lookup = self.results_loader.get_rois(DatabaseFilter {
-            image_filter: filter.image_filter.clone(),
-            class_filter: None,
-            coloc_filter: None,
-            t_stack_filter: filter.t_stack_filter,
-            z_stack_filter: filter.z_stack_filter,
-            page_size: 0,
-            needs_intensities: true,
-            ..DatabaseFilter::default()
-        })?;
-        let source_rois = self.results_loader.get_rois(DatabaseFilter {
-            page_size: 0,
-            needs_intensities: true,
-            ..filter
-        })?;
-        let channels = discover_channels(&partner_lookup);
-        let coloc_partner_classes = self.results_loader.get_coloc_partner_class_names()?;
+        mut emit_row: impl FnMut(&[String]) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
+        let (channels, coloc_partner_classes) =
+            discover_coloc_detail_columns(&self.results_loader, &filter)?;
         let specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
-        let display_rows = flatten_coloc_rows(&source_rois, &partner_lookup, &specs);
-        let headers = specs.iter().map(|c| c.label.clone()).collect();
-        let rows = display_rows.into_iter().map(|d| d.values).collect();
-        Ok((headers, rows))
+        let headers: Vec<String> = specs.iter().map(|c| c.label.clone()).collect();
+        emit_row(&headers)?;
+
+        let mut page = 0;
+        loop {
+            let source_page = self.results_loader.get_rois(DatabaseFilter {
+                page_size: EXPORT_PAGE_SIZE,
+                page,
+                needs_intensities: true,
+                ..filter.clone()
+            })?;
+            if source_page.is_empty() {
+                break;
+            }
+            let done = source_page.len() < EXPORT_PAGE_SIZE;
+
+            let ids = coloc_partner_ids(&source_page);
+            let partner_page = if ids.is_empty() {
+                vec![]
+            } else {
+                self.results_loader.get_rois(DatabaseFilter {
+                    object_id_filter: Some(ids),
+                    page_size: 0,
+                    needs_intensities: true,
+                    ..Default::default()
+                })?
+            };
+
+            for row in flatten_coloc_rows(&source_page, &partner_page, &specs) {
+                emit_row(&row.values)?;
+            }
+            if done {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(())
+    }
+}
+
+/// Builds an `emit_row` closure that writes each row into `sheet` in turn —
+/// the first call (the header row) bold and at row 0, every later call as a
+/// data row at the next row index. Numeric-looking strings are written as
+/// actual Excel numbers (so they can be sorted/filtered); empty cells are
+/// skipped entirely rather than writing an empty string.
+fn xlsx_row_writer(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+) -> impl FnMut(&[String]) -> Result<(), InternalErrors> + '_ {
+    let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
+    let bold = Format::new().set_bold();
+    let mut next_row: u32 = 0;
+    move |row: &[String]| -> Result<(), InternalErrors> {
+        let xlsx_row = next_row;
+        next_row += 1;
+        for (col, value) in row.iter().enumerate() {
+            if value.is_empty() {
+                continue;
+            }
+            let xlsx_col = col as u16;
+            if xlsx_row == 0 {
+                sheet.write_with_format(xlsx_row, xlsx_col, value, &bold).map_err(err)?;
+                continue;
+            }
+            // Write numeric strings as actual numbers so Excel can sort/filter them.
+            if let Ok(n) = value.parse::<f64>() {
+                sheet.write_number(xlsx_row, xlsx_col, n).map_err(err)?;
+            } else {
+                sheet.write_string(xlsx_row, xlsx_col, value).map_err(err)?;
+            }
+        }
+        Ok(())
     }
 }

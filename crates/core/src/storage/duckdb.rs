@@ -491,6 +491,12 @@ pub struct RoiFilter {
     pub class_filter: Option<Vec<String>>,
     /// Restricts to rows whose colocalization status label ("Yes"/"No") is in this set.
     pub coloc_filter: Option<Vec<String>>,
+    /// Restricts to rows whose `object_id` is in this set. Unlike the other
+    /// filters this is typically used *alone* (no image/class/coloc filter set
+    /// alongside it) to fetch an exact, known set of ROIs — e.g. the specific
+    /// colocalization partners referenced by one page of source ROIs — without
+    /// re-deriving or re-checking the source-side filters.
+    pub object_id_filter: Option<Vec<String>>,
     /// Restricts to ROIs from this single time-frame index, or `None` for
     /// every frame (today's default behavior).
     pub t_stack_filter: Option<i32>,
@@ -516,6 +522,7 @@ impl Default for RoiFilter {
             image_filter: None,
             class_filter: None,
             coloc_filter: None,
+            object_id_filter: None,
             t_stack_filter: None,
             z_stack_filter: None,
             page_size: 500,
@@ -527,6 +534,78 @@ impl Default for RoiFilter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Grouped/aggregated queries (see `DuckDbReader::aggregate_rois`)
+// ---------------------------------------------------------------------------
+
+/// How to compute each ROI's grouping key in [`DuckDbReader::aggregate_rois`].
+/// Kept free of `evanalyzer_app` types (`GroupBy`/`GroupConfig`) so the core
+/// crate doesn't depend on the app crate — the app-side orchestration
+/// (`aggregate_rois_sql` in `results_loader.rs`) translates `GroupBy` into one
+/// of these.
+pub enum GroupKeyMode {
+    /// Group by `image_name` directly (covers both `GroupBy::None` and
+    /// `GroupBy::Image` — grouping by image is meaningless when there's no
+    /// grouping at all, but `aggregate_rois` is only ever called when
+    /// `group_by != GroupBy::None`).
+    Image,
+    /// Group by a precomputed `image_rel_path -> key` mapping (`GroupBy::Folder`).
+    /// The caller builds this via [`DuckDbReader::get_distinct_images`] plus
+    /// Rust's own `folder_of()` — `std::path::Path::parent()`'s exact semantics
+    /// (including its `"(root)"` fallback) have no faithful single SQL
+    /// expression, so the directory-splitting logic itself stays in Rust; only
+    /// the resulting small lookup table is pushed into the query as a `CASE`.
+    ImageRelPathMap(HashMap<String, String>),
+    /// Group by a regex applied to `image_name` (`GroupBy::Regex`). `pattern`
+    /// must already be a syntactically valid RE2 pattern (validated by the
+    /// caller via the `regex` crate before calling `aggregate_rois` — DuckDB
+    /// uses RE2 internally too, so a pattern Rust's `regex` crate accepts
+    /// should also be accepted here). `has_capture_group` selects whether the
+    /// grouping key is capture group 1 or the whole match (group 0) — mirrors
+    /// `results_loader.rs`'s `group_key`, which prefers the first capture
+    /// group and falls back to the whole match when the pattern has none.
+    /// Rows whose `image_name` doesn't match `pattern` are dropped entirely.
+    Regex { pattern: String, has_capture_group: bool },
+}
+
+/// Describes one grouped/aggregated query for [`DuckDbReader::aggregate_rois`].
+pub struct AggregateSpec {
+    pub key_mode: GroupKeyMode,
+    /// Fans each ROI out into one bucket per class it carries (mirrors
+    /// `results_loader.rs`'s `roi_classes`/`GroupConfig::group_by_class`).
+    pub group_by_class: bool,
+    /// Additionally splits each group into a colocalizing and a
+    /// non-colocalizing bucket (mirrors `GroupConfig::split_colocalized`).
+    pub split_colocalized: bool,
+    /// Results-table column ids to aggregate — every id here must be one
+    /// [`column_order_expr`] maps to a scalar SQL expression (callers filter
+    /// via `results_loader.rs`'s `is_numeric_metric` first, which only ever
+    /// admits such ids).
+    pub metric_ids: Vec<String>,
+    /// SQL aggregate function names applied to every metric, e.g. `"MIN"`,
+    /// `"AVG"`, `"MEDIAN"`, `"STDDEV_SAMP"`. One output column per
+    /// `(metric_id, agg_fn)` pair, in that nested order (metric-major).
+    pub agg_fns: Vec<&'static str>,
+}
+
+/// One grouped/aggregated result row from [`DuckDbReader::aggregate_rois`].
+pub struct AggregatedRow {
+    pub group_key: String,
+    /// `Some(_)` iff `AggregateSpec::group_by_class` was set.
+    pub group_class: Option<String>,
+    /// `Some(_)` iff `AggregateSpec::split_colocalized` was set.
+    pub colocalized: Option<bool>,
+    pub count: i64,
+    /// One entry per `(metric_id, agg_fn)` pair in
+    /// `AggregateSpec::metric_ids` × `AggregateSpec::agg_fns` order
+    /// (metric-major). `None` means every contributing ROI was NULL for that
+    /// metric (e.g. a channel column no ROI in the bucket has intensity data
+    /// for) — SQL aggregate functions skip NULL inputs the same way
+    /// `results_loader.rs`'s `apply_agg` only ever collects `Some` values, so
+    /// an all-NULL bucket and an all-absent bucket mean the same thing.
+    pub metric_values: Vec<Option<f64>>,
+}
+
 /// SQL expression computing the same display class string used throughout the
 /// results table/filters/export: the joined `object_class_name` list, falling
 /// back to `seg_class_name` when a ROI carries no object classes.
@@ -536,10 +615,35 @@ fn class_case_expr() -> &'static str {
      ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END"
 }
 
+/// SQL expression producing the per-ROI list of classes to fan out over for
+/// `AggregateSpec::group_by_class` — mirrors `class_case_expr`'s fallback to
+/// `seg_class_name`, but as a one-or-more-element array (via `UNNEST` in the
+/// `FROM` clause) instead of a single comma-joined string, so a multi-class
+/// ROI contributes to each of its classes' group buckets separately (matching
+/// `results_loader.rs`'s `roi_classes`). Always yields at least one element,
+/// even when a ROI carries no object classes, so the `UNNEST` cross join
+/// never silently drops a row.
+fn class_fanout_expr() -> &'static str {
+    "CASE WHEN json_array_length(object_class_name) = 0 \
+     THEN [COALESCE(seg_class_name, '')] \
+     ELSE CAST(object_class_name AS VARCHAR[]) END"
+}
+
 /// SQL expression for one of `RoiRow`'s scaled per-channel intensity stats
 /// (`min_scaled` / `max_scaled` / `mean_scaled`, see `intensities_to_json`).
+///
+/// Uses the scalar-path form of `json_extract` (a single string path), not
+/// the bracket/list form (`json_extract(col, ['{ch}'])`) — the list form
+/// returns a JSON array of results (one per requested path) rather than a
+/// scalar, and extracting a field from that array via `->>` throws a
+/// "Malformed JSON" error the moment any row's `intensities_json` is missing
+/// the requested channel key (e.g. a ROI with no measured intensities at all,
+/// whose `intensities_json` is `"{}"`) — a real crash on sort-by-channel-column
+/// today for any file where even one ROI lacks that channel's data. The
+/// scalar form instead yields SQL NULL for a missing key, matching how
+/// `parse_intensities`/`metric_value` already treat "channel absent" in Rust.
 fn channel_stat_expr(ch: i32, stat: &str) -> String {
-    format!("CAST(json_extract(intensities_json, ['{ch}']) ->> '{stat}' AS DOUBLE)")
+    format!("CAST(json_extract(intensities_json, '{ch}') ->> '{stat}' AS DOUBLE)")
 }
 
 /// SQL expression for the number of `class`-colocalizing partners a ROI has —
@@ -660,6 +764,77 @@ fn coloc_filter_condition(label: &str) -> String {
     }
 }
 
+/// True if any of `filter`'s `Option<Vec<_>>` fields is `Some(&[])` — an active
+/// filter with nothing selected, which always means zero matching rows. Shared
+/// by [`DuckDbReader::get_rois`] and [`DuckDbReader::aggregate_rois`] so both
+/// short-circuit identically instead of hitting the database for a query that
+/// can never return anything.
+fn filter_has_empty_selection(filter: &RoiFilter) -> bool {
+    filter.image_filter.as_deref().is_some_and(|v| v.is_empty())
+        || filter.class_filter.as_deref().is_some_and(|v| v.is_empty())
+        || filter.coloc_filter.as_deref().is_some_and(|v| v.is_empty())
+        || filter.object_id_filter.as_deref().is_some_and(|v| v.is_empty())
+}
+
+/// Builds the list of SQL boolean conditions `filter` implies (unjoined).
+/// Shared by [`DuckDbReader::get_rois`] and [`DuckDbReader::aggregate_rois`]
+/// so the two queries can never drift on what a given filter means;
+/// `aggregate_rois` also appends its own `regexp_matches` condition on top of
+/// this list before joining, for `GroupKeyMode::Regex`.
+fn filter_conditions(filter: &RoiFilter) -> Vec<String> {
+    let mut conditions: Vec<String> = Vec::new();
+
+    if let Some(images) = &filter.image_filter {
+        conditions.push(format!("image_name IN ({})", sql_in_list(images)));
+    }
+    if let Some(classes) = &filter.class_filter {
+        conditions.push(format!(
+            "{} IN ({})",
+            class_case_expr(),
+            sql_in_list(classes)
+        ));
+    }
+    if let Some(labels) = &filter.coloc_filter {
+        // Every entry `Colocalization` ever writes into `colocalized_with` has a non-empty
+        // ID list (see coloc_rois.rs), so `coloc_json` is exactly "{}" / empty iff the ROI
+        // has no colocalization partner — no need to parse the object to check.
+        let fragments: Vec<String> = labels.iter().map(|l| coloc_filter_condition(l)).collect();
+        conditions.push(format!("({})", fragments.join(" OR ")));
+    }
+    if let Some(ids) = &filter.object_id_filter {
+        // Cast the column rather than the literals, so this reuses `sql_in_list`
+        // unchanged and doesn't depend on DuckDB's UUID-literal coercion rules.
+        conditions.push(format!(
+            "CAST(object_id AS VARCHAR) IN ({})",
+            sql_in_list(ids)
+        ));
+    }
+    if let Some(t) = filter.t_stack_filter {
+        conditions.push(format!("t_stack = {t}"));
+    }
+    if let Some(z) = filter.z_stack_filter {
+        conditions.push(format!("z_stack = {z}"));
+    }
+
+    conditions
+}
+
+/// Builds the `WHERE ...` clause (or `""` if `conditions` is empty) by
+/// joining an already-built condition list with `AND`.
+fn where_clause_from(conditions: &[String]) -> String {
+    if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    }
+}
+
+/// Builds the `WHERE ...` clause (or `""` if `filter` has no active
+/// conditions) for `filter`.
+fn build_where_clause(filter: &RoiFilter) -> String {
+    where_clause_from(&filter_conditions(filter))
+}
+
 /// Opens a result file written by [`DuckDbExporter`] for reading.
 pub struct DuckDbReader {
     conn: Connection,
@@ -700,60 +875,11 @@ impl DuckDbReader {
     pub fn get_rois(&self, filter: &RoiFilter) -> Result<Vec<RoiRow>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
 
-        // Active filter with empty selection → nothing passes.
-        if filter
-            .image_filter
-            .as_deref()
-            .map_or(false, |v| v.is_empty())
-        {
-            return Ok(vec![]);
-        }
-        if filter
-            .class_filter
-            .as_deref()
-            .map_or(false, |v| v.is_empty())
-        {
-            return Ok(vec![]);
-        }
-        if filter
-            .coloc_filter
-            .as_deref()
-            .map_or(false, |v| v.is_empty())
-        {
+        if filter_has_empty_selection(filter) {
             return Ok(vec![]);
         }
 
-        let mut conditions: Vec<String> = Vec::new();
-
-        if let Some(images) = &filter.image_filter {
-            conditions.push(format!("image_name IN ({})", sql_in_list(images)));
-        }
-        if let Some(classes) = &filter.class_filter {
-            conditions.push(format!(
-                "{} IN ({})",
-                class_case_expr(),
-                sql_in_list(classes)
-            ));
-        }
-        if let Some(labels) = &filter.coloc_filter {
-            // Every entry `Colocalization` ever writes into `colocalized_with` has a non-empty
-            // ID list (see coloc_rois.rs), so `coloc_json` is exactly "{}" / empty iff the ROI
-            // has no colocalization partner — no need to parse the object to check.
-            let fragments: Vec<String> = labels.iter().map(|l| coloc_filter_condition(l)).collect();
-            conditions.push(format!("({})", fragments.join(" OR ")));
-        }
-        if let Some(t) = filter.t_stack_filter {
-            conditions.push(format!("t_stack = {t}"));
-        }
-        if let Some(z) = filter.z_stack_filter {
-            conditions.push(format!("z_stack = {z}"));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let where_clause = build_where_clause(filter);
 
         let pagination = if filter.page_size > 0 {
             format!(
@@ -790,6 +916,197 @@ impl DuckDbReader {
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)
+    }
+
+    /// Returns distinct `(image_rel_path, image_name)` pairs matching `filter`'s
+    /// image/class/coloc/object_id/t/z restrictions (`page_size`/`page`/
+    /// `sort_column` are ignored — this is never paginated). Cheap: proportional
+    /// to the number of distinct images, not the number of ROIs. Used to
+    /// precompute a `GroupKeyMode::ImageRelPathMap` for [`Self::aggregate_rois`]
+    /// (`GroupBy::Folder`'s directory-splitting logic stays in Rust — see
+    /// `folder_of` in `results_loader.rs` — since `std::path::Path::parent()`'s
+    /// semantics have no faithful single SQL expression).
+    pub fn get_distinct_images(
+        &self,
+        filter: &RoiFilter,
+    ) -> Result<Vec<(String, String)>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+
+        if filter_has_empty_selection(filter) {
+            return Ok(vec![]);
+        }
+
+        let where_clause = build_where_clause(filter);
+        let sql = format!(
+            "SELECT DISTINCT image_rel_path, image_name FROM rois {where_clause} \
+             ORDER BY image_rel_path"
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(err)?;
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)
+    }
+
+    /// Computes grouped/aggregated results directly in DuckDB via `GROUP BY`,
+    /// instead of pulling every matching row into Rust first (see
+    /// `evanalyzer_app::results_loader::aggregate_rows`, the in-memory Rust
+    /// implementation this mirrors and is tested against for parity).
+    ///
+    /// Returns one [`AggregatedRow`] per group, in the same order
+    /// `aggregate_rows` would (group key, then class, then colocalized flag,
+    /// all ascending) — callers rely on this order matching exactly.
+    pub fn aggregate_rois(
+        &self,
+        filter: &RoiFilter,
+        spec: &AggregateSpec,
+    ) -> Result<Vec<AggregatedRow>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+
+        if filter_has_empty_selection(filter) {
+            return Ok(vec![]);
+        }
+
+        let esc = |s: &str| s.replace('\'', "''");
+
+        let mut conditions = filter_conditions(filter);
+        let group_key_expr = match &spec.key_mode {
+            GroupKeyMode::Image => "image_name".to_string(),
+            GroupKeyMode::ImageRelPathMap(map) => {
+                if map.is_empty() {
+                    // No images match `filter` — nothing will be selected anyway,
+                    // but keep the expression syntactically valid.
+                    "NULL".to_string()
+                } else {
+                    let cases: Vec<String> = map
+                        .iter()
+                        .map(|(path, key)| format!("WHEN '{}' THEN '{}'", esc(path), esc(key)))
+                        .collect();
+                    format!("CASE image_rel_path {} ELSE '(root)' END", cases.join(" "))
+                }
+            }
+            GroupKeyMode::Regex { pattern, has_capture_group } => {
+                // Rows that don't match are dropped entirely (not grouped under
+                // an empty/NULL key) — `regexp_extract` alone can't distinguish
+                // "matched, captured empty string" from "no match", so that's
+                // enforced by the separate `regexp_matches` condition below.
+                conditions.push(format!("regexp_matches(image_name, '{}')", esc(pattern)));
+                let group_idx = if *has_capture_group { 1 } else { 0 };
+                format!("regexp_extract(image_name, '{}', {group_idx})", esc(pattern))
+            }
+        };
+
+        // `FROM rois[, UNNEST(...) AS u(group_class)]` — UNNEST is only valid
+        // here as a lateral cross join in the FROM clause, not in the SELECT
+        // list combined with GROUP BY (DuckDB rejects that form outright).
+        let from_clause = if spec.group_by_class {
+            format!(
+                "rois, UNNEST({}) AS u(group_class)",
+                class_fanout_expr()
+            )
+        } else {
+            "rois".to_string()
+        };
+
+        let mut select_cols = vec![format!("{group_key_expr} AS group_key")];
+        let mut group_by_cols = vec!["group_key".to_string()];
+        if spec.group_by_class {
+            select_cols.push("u.group_class AS group_class".to_string());
+            group_by_cols.push("group_class".to_string());
+        }
+        if spec.split_colocalized {
+            // Reuses the exact boolean expression `column_order_expr("colocalized")`
+            // already uses for sorting, so the two can never define "colocalized"
+            // differently.
+            let expr = column_order_expr("colocalized").expect("colocalized is always mapped");
+            select_cols.push(format!("{expr} AS colocalized"));
+            group_by_cols.push("colocalized".to_string());
+        }
+        select_cols.push("COUNT(*) AS cnt".to_string());
+
+        for metric_id in &spec.metric_ids {
+            let Some(metric_expr) = column_order_expr(metric_id) else {
+                // Every id here should already be one `column_order_expr` maps
+                // (callers only ever pass ids `is_numeric_metric` accepted, a
+                // strict subset) — skip defensively rather than panic if not.
+                continue;
+            };
+            for agg_fn in &spec.agg_fns {
+                let agg_expr = if *agg_fn == "STDDEV_SAMP" {
+                    // `results_loader.rs`'s `apply_agg` is only ever called on a
+                    // non-empty value list (`aggregate_rows` renders "" directly
+                    // for an empty one without calling it), and its `Stdev`
+                    // branch treats a single-value input as `0.0` (sample stdev
+                    // is undefined for n=1, but the Rust ground-truth still
+                    // reports a number there, not a blank cell) — whereas SQL
+                    // `STDDEV_SAMP` returns NULL for both n=0 and n=1. Recover
+                    // the n=1 case specifically: if `STDDEV_SAMP` is NULL but at
+                    // least one row contributed a non-null value, use `0.0`.
+                    format!(
+                        "COALESCE(STDDEV_SAMP({metric_expr}), \
+                         CASE WHEN COUNT({metric_expr}) >= 1 THEN 0.0 END)"
+                    )
+                } else {
+                    format!("{agg_fn}({metric_expr})")
+                };
+                select_cols.push(format!("{agg_expr} AS \"{metric_id}__{agg_fn}\""));
+            }
+        }
+
+        let where_clause = where_clause_from(&conditions);
+        let order_by = format!("ORDER BY {}", group_by_cols.join(", "));
+        let sql = format!(
+            "SELECT {} FROM {from_clause} {where_clause} GROUP BY {} {order_by}",
+            select_cols.join(", "),
+            group_by_cols.join(", "),
+        );
+
+        let mut stmt = self.conn.prepare(&sql).map_err(err)?;
+        let metric_count: usize = spec
+            .metric_ids
+            .iter()
+            .filter(|id| column_order_expr(id).is_some())
+            .count()
+            * spec.agg_fns.len();
+        let group_by_class = spec.group_by_class;
+        let split_colocalized = spec.split_colocalized;
+        stmt.query_map([], move |row| {
+            let mut idx = 0usize;
+            let group_key: String = row.get(idx)?;
+            idx += 1;
+            let group_class: Option<String> = if group_by_class {
+                let v = row.get(idx)?;
+                idx += 1;
+                v
+            } else {
+                None
+            };
+            let colocalized: Option<bool> = if split_colocalized {
+                let v: bool = row.get(idx)?;
+                idx += 1;
+                Some(v)
+            } else {
+                None
+            };
+            let count: i64 = row.get(idx)?;
+            idx += 1;
+            let mut metric_values = Vec::with_capacity(metric_count);
+            for _ in 0..metric_count {
+                let v: Option<f64> = row.get(idx)?;
+                metric_values.push(v);
+                idx += 1;
+            }
+            Ok(AggregatedRow {
+                group_key,
+                group_class,
+                colocalized,
+                count,
+                metric_values,
+            })
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)
     }
 
     /// Returns all distinct computed class strings present in the file, sorted alphabetically.
@@ -964,6 +1281,169 @@ mod tests {
         (dir, reader)
     }
 
+    /// Like `export_and_open`, but each `(image_rel_path, rois)` pair is
+    /// exported as its own image (mirroring real usage — `PipelineCache`
+    /// carries one `image_rel_path` per `export()` call), so the fixture can
+    /// span more than one distinct image. Needed for `aggregate_rois` tests
+    /// (`GroupBy::Image`/`Folder`/`Regex` are meaningless with only one image).
+    fn export_multi_image_and_open(images: Vec<(&str, Vec<Roi>)>) -> (TempDir, DuckDbReader) {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+        for (image_rel_path, rois) in images {
+            let mut cache = PipelineCache {
+                image_rel_path: image_rel_path.into(),
+                ..Default::default()
+            };
+            for roi in rois {
+                cache.roi_cache.insert(roi.id.clone(), roi);
+            }
+            exporter.export(&cache).expect("export failed");
+        }
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        (dir, reader)
+    }
+
+    #[test]
+    fn aggregate_rois_groups_by_image_and_averages() {
+        let a1 = make_filled_roi(1, [0, 0, 9, 9]); // area_px = 100
+        let a2 = make_filled_roi(2, [0, 0, 19, 9]); // area_px = 200
+        let b1 = make_filled_roi(3, [0, 0, 29, 9]); // area_px = 300
+
+        let (_dir, reader) = export_multi_image_and_open(vec![
+            ("img_a.tif", vec![a1, a2]),
+            ("img_b.tif", vec![b1]),
+        ]);
+
+        let spec = AggregateSpec {
+            key_mode: GroupKeyMode::Image,
+            group_by_class: false,
+            split_colocalized: false,
+            metric_ids: vec!["area_px".to_string()],
+            agg_fns: vec!["AVG"],
+        };
+        let rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+
+        assert_eq!(rows.len(), 2, "one row per image");
+        assert_eq!(rows[0].group_key, "img_a.tif");
+        assert_eq!(rows[0].count, 2);
+        assert_eq!(rows[0].metric_values, vec![Some(150.0)]);
+        assert_eq!(rows[1].group_key, "img_b.tif");
+        assert_eq!(rows[1].count, 1);
+        assert_eq!(rows[1].metric_values, vec![Some(300.0)]);
+    }
+
+    #[test]
+    fn aggregate_rois_group_by_class_fans_out_multi_class_roi() {
+        const CLASS_A: ObjectClass = ObjectClass::Valid(1);
+        const CLASS_B: ObjectClass = ObjectClass::Valid(2);
+
+        let mut multi = make_filled_roi(1, [0, 0, 9, 9]);
+        multi.add_object_class(CLASS_A);
+        multi.add_object_class(CLASS_B);
+
+        let (_dir, reader) = export_multi_image_and_open(vec![("img.tif", vec![multi])]);
+
+        let spec = AggregateSpec {
+            key_mode: GroupKeyMode::Image,
+            group_by_class: true,
+            split_colocalized: false,
+            metric_ids: vec![],
+            agg_fns: vec![],
+        };
+        let mut rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+        rows.sort_by(|a, b| a.group_class.cmp(&b.group_class));
+
+        assert_eq!(rows.len(), 2, "a ROI carrying two classes contributes to both buckets");
+        assert_eq!(rows[0].group_class.as_deref(), Some("class_1"));
+        assert_eq!(rows[0].count, 1);
+        assert_eq!(rows[1].group_class.as_deref(), Some("class_2"));
+        assert_eq!(rows[1].count, 1);
+    }
+
+    #[test]
+    fn aggregate_rois_split_colocalized_produces_two_buckets() {
+        let mut coloc = make_filled_roi(1, [0, 0, 9, 9]);
+        coloc.add_colocalizing_object(ObjectClass::Valid(9), ObjectId(99));
+        let not_coloc = make_filled_roi(2, [0, 0, 9, 9]);
+
+        let (_dir, reader) =
+            export_multi_image_and_open(vec![("img.tif", vec![coloc, not_coloc])]);
+
+        let spec = AggregateSpec {
+            key_mode: GroupKeyMode::Image,
+            group_by_class: false,
+            split_colocalized: true,
+            metric_ids: vec![],
+            agg_fns: vec![],
+        };
+        let rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+
+        assert_eq!(rows.len(), 2, "one colocalizing + one non-colocalizing bucket");
+        // false < true, matching Rust's Option<bool> BTreeMap ordering.
+        assert_eq!(rows[0].colocalized, Some(false));
+        assert_eq!(rows[0].count, 1);
+        assert_eq!(rows[1].colocalized, Some(true));
+        assert_eq!(rows[1].count, 1);
+    }
+
+    #[test]
+    fn aggregate_rois_regex_groups_by_capture_and_drops_non_matching() {
+        let a1 = make_filled_roi(1, [0, 0, 9, 9]);
+        let a2 = make_filled_roi(2, [0, 0, 9, 9]);
+        let control = make_filled_roi(3, [0, 0, 9, 9]);
+
+        let (_dir, reader) = export_multi_image_and_open(vec![
+            ("A1_01.tif", vec![a1]),
+            ("A1_02.tif", vec![a2]),
+            ("control.tif", vec![control]),
+        ]);
+
+        let spec = AggregateSpec {
+            key_mode: GroupKeyMode::Regex {
+                pattern: r"^([A-Z]\d+)_".to_string(),
+                has_capture_group: true,
+            },
+            group_by_class: false,
+            split_colocalized: false,
+            metric_ids: vec![],
+            agg_fns: vec![],
+        };
+        let rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+
+        assert_eq!(rows.len(), 1, "non-matching 'control.tif' must be dropped, not its own group");
+        assert_eq!(rows[0].group_key, "A1");
+        assert_eq!(rows[0].count, 2);
+    }
+
+    #[test]
+    fn aggregate_rois_all_null_metric_bucket_is_none() {
+        // Neither ROI has any intensities_json, so any channel metric is NULL
+        // for every contributing row in the bucket.
+        let a1 = make_filled_roi(1, [0, 0, 9, 9]);
+        let a2 = make_filled_roi(2, [0, 0, 9, 9]);
+        let (_dir, reader) = export_multi_image_and_open(vec![("img.tif", vec![a1, a2])]);
+
+        let spec = AggregateSpec {
+            key_mode: GroupKeyMode::Image,
+            group_by_class: false,
+            split_colocalized: false,
+            metric_ids: vec!["ch0_min_bit".to_string()],
+            agg_fns: vec!["AVG"],
+        };
+        let rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].metric_values,
+            vec![None],
+            "an all-NULL metric bucket must be None, matching apply_agg's empty-vec -> blank-cell behavior"
+        );
+    }
+
     #[test]
     fn coloc_filter_restricts_to_matching_status() {
         const ID_COLOC: u128 = 1;
@@ -1009,6 +1489,61 @@ mod tests {
             none_selected.is_empty(),
             "active filter with nothing selected → 0 rows"
         );
+    }
+
+    #[test]
+    fn object_id_filter_restricts_to_exact_ids_and_matches_display_format() {
+        const ID_A: u128 = 1;
+        const ID_B: u128 = 2;
+        let id_a = ObjectId(ID_A).to_string();
+        let id_b = ObjectId(ID_B).to_string();
+
+        let roi_a = make_filled_roi(ID_A, [0, 0, 1, 1]);
+        let roi_b = make_filled_roi(ID_B, [5, 5, 6, 6]);
+        let (_dir, reader) = export_and_open(vec![roi_a, roi_b]);
+
+        // Single id: exact match, and the round-tripped `object_id` string is
+        // byte-identical to `ObjectId::to_string()` — confirms `CAST(object_id
+        // AS VARCHAR)` produces the same lowercase-dashed format written at
+        // export time, not just "a filter that happens to work".
+        let single = reader
+            .get_rois(&RoiFilter {
+                object_id_filter: Some(vec![id_a.clone()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].object_id, id_a);
+
+        // Two ids: both returned, in the default object_id order.
+        let both = reader
+            .get_rois(&RoiFilter {
+                object_id_filter: Some(vec![id_b.clone(), id_a.clone()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(both.len(), 2);
+        assert_eq!(both[0].object_id, id_a);
+        assert_eq!(both[1].object_id, id_b);
+
+        // Unknown id: no rows.
+        let unknown = reader
+            .get_rois(&RoiFilter {
+                object_id_filter: Some(vec![ObjectId(999).to_string()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(unknown.is_empty());
+
+        // Active filter with nothing selected → 0 rows, same convention as the
+        // other filters.
+        let none_selected = reader
+            .get_rois(&RoiFilter {
+                object_id_filter: Some(vec![]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(none_selected.is_empty());
     }
 
     #[test]
@@ -1074,6 +1609,51 @@ mod tests {
         assert_eq!(
             desc.iter().map(|r| r.object_id.clone()).collect::<Vec<_>>(),
             vec![large_id, small_id]
+        );
+    }
+
+    #[test]
+    fn get_rois_sorts_by_channel_column_when_some_rois_have_no_intensities() {
+        // Regression test for a latent bug in `channel_stat_expr`: sorting by a
+        // channel column used to throw "Malformed JSON" the moment any row's
+        // `intensities_json` was `"{}"` (no measured intensities at all), because
+        // the old bracket-form `json_extract(col, ['0'])` returns a JSON array
+        // wrapping a NULL rather than a scalar NULL, which `->>` can't handle.
+        use crate::roi::Intensity;
+        use indexmap::IndexMap;
+
+        const ID_NO_INTENSITY: u128 = 1;
+        const ID_HAS_INTENSITY: u128 = 2;
+        let no_intensity_id = ObjectId(ID_NO_INTENSITY).to_string();
+        let has_intensity_id = ObjectId(ID_HAS_INTENSITY).to_string();
+
+        let no_intensity = make_filled_roi(ID_NO_INTENSITY, [0, 0, 1, 1]);
+        let mut has_intensity = make_filled_roi(ID_HAS_INTENSITY, [0, 0, 1, 1]);
+        has_intensity.intensities = IndexMap::from([(
+            0,
+            Intensity {
+                sum_intensity: 5.0,
+                min_intensity: 5.0,
+                max_intensity: 5.0,
+                avg_intensity: 5.0,
+                pixel_values: vec![],
+            },
+        )]);
+
+        let (_dir, reader) = export_and_open(vec![no_intensity, has_intensity]);
+
+        let asc = reader
+            .get_rois(&RoiFilter {
+                sort_column: Some("ch0_min_bit".into()),
+                sort_ascending: true,
+                ..Default::default()
+            })
+            .unwrap();
+        // The row with no intensities sorts as NULL (DuckDB's default: NULLs
+        // last in ASC order), so the row with data comes first.
+        assert_eq!(
+            asc.iter().map(|r| r.object_id.clone()).collect::<Vec<_>>(),
+            vec![has_intensity_id, no_intensity_id]
         );
     }
 
@@ -1150,3 +1730,4 @@ mod tests {
         assert_eq!(both_unset.len(), 2, "no t/z filter set -> every frame returned");
     }
 }
+
