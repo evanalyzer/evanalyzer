@@ -20,6 +20,11 @@ export struct ResultsRow {
     // only a positional display index and isn't stable across page reloads.
     object_id: string,
     values: [string],
+    // Alternating zebra-stripe flag, computed in Rust: toggles every row in
+    // the normal/grouped views, and toggles once per *source* ROI (not per
+    // flattened row) in the coloc-detail view, so all of one source ROI's
+    // colocalizing-partner rows read as a single band.
+    stripe: bool,
 }
 
 export struct FilterItem {
@@ -36,6 +41,29 @@ export struct FilterItem {
     // sharing this `group` is currently checked, for the header's own
     // checkbox visual.
     group_all_checked: bool,
+}
+
+// One queued file in the export dialog's "combinations to export" list: a
+// class subset (empty = every class) plus the format to write it in.
+export struct ExportBatchItem {
+    name: string,
+    // Class labels to include; empty means "every class" (no filter applied).
+    classes: [string],
+    // Precomputed display string for the list row, e.g. "ClassA, ClassB" or
+    // "All classes" — computed once in Rust when the batch is added so the
+    // dialog doesn't need to join arrays itself.
+    classes_label: string,
+    // "csv" or "xlsx".
+    format: string,
+    // Image names in scope. Unlike `classes`, this is never empty for a
+    // valid batch — even "every image" is stored as the concrete full list,
+    // since `each_image` needs real names to iterate over.
+    images: [string],
+    // Precomputed display string, e.g. "image_01.tif, image_02.tif" or "All images".
+    images_label: string,
+    // When true, one output file is written per image in `images` (its name
+    // folded into the output filename) instead of one file covering all of them.
+    each_image: bool,
 }
 
 export enum ResultsViewMode { table, chart, coloc_table }
@@ -58,10 +86,10 @@ export global ResultsState {
     ];
 
     in property <[ResultsRow]> rows: [
-        { roi_id: 1, object_id: "", values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"] },
-        { roi_id: 2, object_id: "", values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"] },
-        { roi_id: 3, object_id: "", values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"] },
-        { roi_id: 4, object_id: "", values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"] },
+        { roi_id: 1, object_id: "", values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"], stripe: true },
+        { roi_id: 2, object_id: "", values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"], stripe: false },
+        { roi_id: 3, object_id: "", values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"], stripe: true },
+        { roi_id: 4, object_id: "", values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"], stripe: false },
     ];
 
     in-out property <int> selected_roi_id:     0;
@@ -91,8 +119,6 @@ export global ResultsState {
 
     callback roi_row_selected(string);
     callback sort_requested(string, bool);
-    callback export_csv();
-    callback export_xlsx();
     callback copy_to_clipboard();
     callback filter_clicked();
     callback column_visibility_toggled(string, bool);
@@ -202,6 +228,10 @@ export global ResultsState {
     in-out property <string> chart_heatmap_metric: "";
     // Raster cell size, in image pixels (square cells).
     in-out property <int> chart_cell_size_px:      20;
+    // Color scheme labels the heatmap gradient picker can choose from
+    // (e.g. "Viridis", "Magma", "Plasma", "Grayscale").
+    in property <[string]> chart_heatmap_color_scheme_options: [];
+    in-out property <string> chart_heatmap_color_scheme: "Viridis";
     // Rendered chart bitmap, built by the controller via the `plotters` crate.
     in property <image> chart_image;
     // Empty while a chart is shown; otherwise an explanatory/placeholder
@@ -239,6 +269,53 @@ export global ResultsState {
     in-out property <int> selected_z_stack: 0;
     in-out property <bool> z_stack_show_all: true;
     callback z_stack_changed(int, bool);
+
+    // -- Export dialog --------------------------------------------------------
+    // One toolbar button opens this dialog; all format/class-subset choices
+    // live here instead of on the toolbar.
+    in-out property <bool> export_dialog_active: false;
+    // Per-dialog-session class checklist — independent of the table's own
+    // Class column filter, seeded fresh (all checked) each time the dialog
+    // opens (see `export_dialog_open`).
+    in-out property <[FilterItem]> export_class_items: [];
+    in-out property <bool> export_class_all_checked: true;
+    // Per-dialog-session image checklist — independent of the table's own
+    // Image column filter, seeded fresh (all checked) each time the dialog
+    // opens. Scopes the export to the checked images; combined with
+    // `export_each_image` below, also drives per-image file fan-out.
+    in-out property <[FilterItem]> export_image_items: [];
+    in-out property <bool> export_image_all_checked: true;
+    // When true, "Add" queues a batch that writes one output file per
+    // checked image (its name folded into the filename) instead of one
+    // file covering all of them together.
+    in-out property <bool> export_each_image: false;
+    // Name + format for the combination currently being assembled from the
+    // checklists above; "Add" appends a snapshot of these to `export_batches`.
+    in-out property <string> export_combo_name: "";
+    // "csv" or "xlsx".
+    in-out property <string> export_format: "csv";
+    // Queued combinations; each produces one output file when "Export All"
+    // runs. May be empty — in that case Export All uses the checklist/name/
+    // format above directly, as a single one-off export.
+    in-out property <[ExportBatchItem]> export_batches: [];
+    in-out property <bool> export_running: false;
+    // Progress/result/validation message shown at the bottom of the dialog.
+    in-out property <string> export_status: "";
+
+    callback export_dialog_open();
+    callback export_dialog_close();
+    callback export_class_item_toggled(string);
+    callback export_class_select_all();
+    callback export_class_clear_all();
+    callback export_image_item_toggled(string);
+    callback export_image_select_all();
+    callback export_image_clear_all();
+    // Queues the current checklist/name/format as one combination to export.
+    callback export_add_batch();
+    callback export_remove_batch(int);
+    // Picks an output folder, then writes one file per queued combination
+    // (or the checklist directly, if none are queued).
+    callback export_run_all();
 }
 
 // -- Shared checkbox item used inside filter popups ----------------------------
@@ -728,7 +805,7 @@ component ResultsDataRow inherits Rectangle {
         }
     }
 
-    background: root.selected ? Theme.list-select-row-bg : (ta.has-hover ? Theme.raised : transparent);
+    background: root.selected ? Theme.list-select-row-bg : (ta.has-hover ? Theme.raised : (root.data.stripe ? transparent : Theme.list-row-alt-bg));
 
     if root.selected: Rectangle {
         x: 0px;

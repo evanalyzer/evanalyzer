@@ -10,6 +10,9 @@ export global Theme {
     out property <color> panel:       dark-mode ? #16181D : #FFFFFF;
     out property <color> raised:      dark-mode ? #1C1F25 : #EBEBED;
     out property <color> rail:        dark-mode ? #0B0C0F : #E0E0E2;
+    // Subtle zebra-striping for the results table's alternate rows — close to
+    // `panel` so it reads as a faint tint, not a strong band.
+    out property <color> list-row-alt-bg: dark-mode ? #1A1C22 : #F7F8FA;
 
     // -- Strokes / dividers ---------------------------------------------------
     out property <color> border:      dark-mode ? #23262C : #D0D2D8;

@@ -38,6 +38,14 @@ pub struct DisplayRow {
     /// Pre-formatted string values, one per `ColumnSpec` (in the same order).
     /// Hidden columns have an empty string here.
     pub values: Vec<String>,
+    /// Alternating zebra-stripe flag: toggles once per "logical row group".
+    /// For the per-ROI and aggregated views a logical group is just the row
+    /// itself, so this alternates every row. For the coloc-detail flat table,
+    /// every flattened row sharing one source ROI gets the same value (it
+    /// toggles when moving to the next source ROI instead), so the rows
+    /// belonging to one source ROI read as a single visual band regardless of
+    /// how many colocalizing partners it has.
+    pub stripe: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +219,7 @@ pub fn to_display_row(row_idx: usize, roi: &RoiRow, columns: &[ColumnSpec]) -> D
         roi_id: (row_idx + 1) as i32,
         object_id: roi.object_id.clone(),
         values,
+        stripe: row_idx % 2 == 0,
     }
 }
 
@@ -452,13 +461,19 @@ pub fn flatten_coloc_rows(
     let mut out = Vec::new();
     let mut idx = 0usize;
 
-    for src in source_rois {
+    for (src_idx, src) in source_rois.iter().enumerate() {
+        // Every row flattened from this source ROI shares one stripe value —
+        // it's the *source*'s position that toggles the zebra stripe, not the
+        // flattened row's, so a source with many colocalizing partners still
+        // reads as a single visual band rather than flickering per partner.
+        let stripe = src_idx % 2 == 0;
         let partners = parse_coloc_partners(&src.coloc_json);
         if partners.is_empty() {
             out.push(DisplayRow {
                 roi_id: (idx + 1) as i32,
                 object_id: String::new(), // no row selection in the coloc-detail view
                 values: coloc_detail_values(src, &[], None, specs),
+                stripe,
             });
             idx += 1;
         } else {
@@ -477,6 +492,7 @@ pub fn flatten_coloc_rows(
                     roi_id: (idx + 1) as i32,
                     object_id: String::new(), // no row selection in the coloc-detail view
                     values: coloc_detail_values(src, classes, partner, specs),
+                    stripe,
                 });
                 idx += 1;
             }
@@ -1040,6 +1056,7 @@ pub fn aggregate_rows(
                 roi_id: (idx + 1) as i32,
                 object_id: String::new(), // aggregated row has no single source ROI
                 values,
+                stripe: idx % 2 == 0,
             }
         })
         .collect();
@@ -1154,7 +1171,7 @@ pub fn aggregate_rois_sql(
                     }
                 })
                 .collect();
-            DisplayRow { roi_id: (idx + 1) as i32, object_id: String::new(), values }
+            DisplayRow { roi_id: (idx + 1) as i32, object_id: String::new(), values, stripe: idx % 2 == 0 }
         })
         .collect();
 
@@ -1811,6 +1828,28 @@ mod tests {
     }
 
     #[test]
+    fn flatten_coloc_rows_stripe_groups_by_source_roi_not_flattened_row() {
+        // src1 colocalizes with two partners -> two flattened rows, both from
+        // the SAME source ROI, so both must share one stripe value. src2 has
+        // no partners -> one row. The stripe must toggle between src1's group
+        // and src2's row, not on every flattened row.
+        let mut src1 = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        src1.object_id = "00000000-0000-0000-0000-000000000001".into();
+        src1.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000010","00000000-0000-0000-0000-000000000011"]}"#.into();
+        let src2 = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+
+        let p10 = make_roi("img", vec!["ClassA".into()], None, 0, 0.0, 0.0, "{}");
+        let p11 = make_roi("img", vec!["ClassA".into()], None, 0, 0.0, 0.0, "{}");
+        let specs = build_coloc_detail_column_specs(&[], &["ClassA".to_string()]);
+
+        let rows = flatten_coloc_rows(&[src1, src2], &[p10, p11], &specs);
+
+        assert_eq!(rows.len(), 3, "2 rows for src1's partners + 1 row for src2");
+        assert_eq!(rows[0].stripe, rows[1].stripe, "both of src1's rows share one stripe");
+        assert_ne!(rows[1].stripe, rows[2].stripe, "stripe toggles moving to src2");
+    }
+
+    #[test]
     fn flatten_coloc_rows_paginated_matches_single_shot() {
         // Simulates what bg_reload_coloc_detail_page0/bg_load_more_coloc_detail do:
         // flatten one page of source ROIs at a time, resolving only that page's
@@ -1952,9 +1991,9 @@ mod tests {
             visible: true,
         }];
         let mut rows = vec![
-            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["300".into()] },
-            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["100".into()] },
-            DisplayRow { roi_id: 3, object_id: String::new(), values: vec!["200".into()] },
+            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["300".into()], stripe: true },
+            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["100".into()], stripe: false },
+            DisplayRow { roi_id: 3, object_id: String::new(), values: vec!["200".into()], stripe: true },
         ];
 
         sort_display_rows(&mut rows, &specs, "area_px", true);
@@ -1973,8 +2012,8 @@ mod tests {
             visible: true,
         }];
         let mut rows = vec![
-            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["banana".into()] },
-            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["apple".into()] },
+            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["banana".into()], stripe: true },
+            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["apple".into()], stripe: false },
         ];
         sort_display_rows(&mut rows, &specs, "group", true);
         assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![2, 1]);
@@ -1989,8 +2028,8 @@ mod tests {
             visible: true,
         }];
         let mut rows = vec![
-            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["300".into()] },
-            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["100".into()] },
+            DisplayRow { roi_id: 1, object_id: String::new(), values: vec!["300".into()], stripe: true },
+            DisplayRow { roi_id: 2, object_id: String::new(), values: vec!["100".into()], stripe: false },
         ];
         sort_display_rows(&mut rows, &specs, "does_not_exist", true);
         assert_eq!(rows.iter().map(|r| r.roi_id).collect::<Vec<_>>(), vec![1, 2]);

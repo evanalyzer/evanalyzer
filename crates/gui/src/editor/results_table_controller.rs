@@ -1,7 +1,7 @@
 use crate::editor::images_list_controller::ImagesListController;
 use crate::{
-    FilterItem, ResultsChartKind, ResultsColumnDef, ResultsGroupBy, ResultsListState, ResultsRow,
-    ResultsState, ResultsWindow, UiState,
+    ExportBatchItem, FilterItem, ResultsChartKind, ResultsColumnDef, ResultsGroupBy,
+    ResultsListState, ResultsRow, ResultsState, ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
     aggregate_rois_sql, build_coloc_detail_column_specs, build_column_specs,
@@ -9,9 +9,9 @@ use evanalyzer_app::result::{
     compute_heatmap, compute_histogram, compute_scatter, discover_channels,
     discover_coloc_detail_columns, flatten_coloc_rows, plottable_columns, render_heatmap,
     render_histogram, render_scatter, save_rendered_chart_png, sort_display_rows, to_display_row,
-    AggFunc, ColorBy, ColumnSpec, DatabaseFilter, EvictEdge, GroupBy, GroupConfig, HeatmapMetric,
-    PageRowCounts, RenderedChart, ResultsExporter, ResultsLoader, RoiRow, RowWindow,
-    DEFAULT_WINDOW_PAGES,
+    AggFunc, ColorBy, ColumnSpec, DatabaseFilter, EvictEdge, GroupBy, GroupConfig,
+    HeatmapColorScheme, HeatmapMetric, PageRowCounts, RenderedChart, ResultsExporter,
+    ResultsLoader, RoiRow, RowWindow, DEFAULT_WINDOW_PAGES,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use log::warn;
@@ -45,6 +45,7 @@ struct ChartRenderConfig {
     /// `HEATMAP_METRIC_COUNT_LABEL` or a column label to average.
     heatmap_metric: String,
     cell_size_px: f64,
+    heatmap_color_scheme: HeatmapColorScheme,
     /// The chart area's current on-screen pixel size (a one-shot read of the
     /// window's size at the moment Plot was clicked — see
     /// `on_chart_render_requested`), so rendering matches the actual display
@@ -251,6 +252,9 @@ impl ResultsTableController {
                     log_scale: state.get_chart_log_scale(),
                     heatmap_metric: state.get_chart_heatmap_metric().to_string(),
                     cell_size_px: state.get_chart_cell_size_px().max(1) as f64,
+                    heatmap_color_scheme: HeatmapColorScheme::from_label(
+                        &state.get_chart_heatmap_color_scheme(),
+                    ),
                     render_width,
                     render_height,
                 };
@@ -553,58 +557,297 @@ impl ResultsTableController {
             });
         }
 
-        // --- export_csv -------------------------------------------------------
+        // --- export_dialog_open -------------------------------------------------
         {
             let this = Arc::clone(self);
-            state.on_export_csv(move || {
-                let Some(path) = this.path.lock().unwrap().clone() else { return };
-                let image_filter = this.image_filter.lock().unwrap().clone();
-                let class_filter = this.class_filter.lock().unwrap().clone();
-                let coloc_filter = this.coloc_filter.lock().unwrap().clone();
-                let t_stack_filter = *this.t_stack_filter.lock().unwrap();
-                let z_stack_filter = *this.z_stack_filter.lock().unwrap();
-                let group = this.group_config.lock().unwrap().clone();
-                let base_specs = this.column_specs.lock().unwrap().clone();
-                let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
+            state.on_export_dialog_open(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
 
-                let Some(export_path) = rfd::FileDialog::new()
-                    .add_filter("CSV", &["csv"])
-                    .set_file_name(if is_coloc_detail { "coloc_detail.csv" } else { "results.csv" })
-                    .save_file()
-                else {
-                    return;
-                };
+                // Seed the dialog's checklist fresh from the known class
+                // labels (same source as the table's own Class column
+                // filter), all checked by default so exporting everything
+                // needs no clicks.
+                let labels = model_to_vec(&state.get_filter_class_items());
+                let items: Vec<FilterItem> = labels
+                    .into_iter()
+                    .map(|i| FilterItem {
+                        label: i.label,
+                        checked: true,
+                        group: SharedString::new(),
+                        group_header: false,
+                        group_all_checked: false,
+                    })
+                    .collect();
+                state.set_export_class_items(to_model(items));
+                state.set_export_class_all_checked(true);
 
-                std::thread::spawn(move || {
-                    let loader = Arc::new(ResultsLoader::new(&path));
-                    let exporter = ResultsExporter::new(loader);
-                    let filter = DatabaseFilter {
-                        image_filter,
-                        class_filter,
-                        coloc_filter,
-                        t_stack_filter,
-                        z_stack_filter,
-                        ..Default::default()
-                    };
-                    let result = if is_coloc_detail {
-                        exporter.export_coloc_detail_to_csv(filter, &export_path)
-                    } else {
-                        exporter.export_to_csv(filter, &group, &base_specs, &export_path)
-                    };
-                    if let Err(e) = result {
-                        warn!("CSV export failed: {:?}", e);
-                    }
-                });
+                // Same seeding for the image checklist, from the table's own
+                // Image column filter labels.
+                let image_labels = model_to_vec(&state.get_filter_image_items());
+                let image_items: Vec<FilterItem> = image_labels
+                    .into_iter()
+                    .map(|i| FilterItem {
+                        label: i.label,
+                        checked: true,
+                        group: SharedString::new(),
+                        group_header: false,
+                        group_all_checked: false,
+                    })
+                    .collect();
+                state.set_export_image_items(to_model(image_items));
+                state.set_export_image_all_checked(true);
+                state.set_export_each_image(false);
+
+                state.set_export_combo_name(SharedString::new());
+                state.set_export_format("csv".into());
+                state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(
+                    Vec::<ExportBatchItem>::new(),
+                )));
+                state.set_export_status(SharedString::new());
+                state.set_export_running(false);
+                state.set_export_dialog_active(true);
             });
         }
 
-        // --- export_xlsx ------------------------------------------------------
+        // --- export_dialog_close ------------------------------------------------
         {
             let this = Arc::clone(self);
-            state.on_export_xlsx(move || {
+            state.on_export_dialog_close(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                window.global::<ResultsState>().set_export_dialog_active(false);
+            });
+        }
+
+        // --- export_class_item_toggled -------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_class_item_toggled(move |label: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = toggle_item_by_label(&model_to_vec(&state.get_export_class_items()), &label);
+                let all_checked = items.iter().all(|i| i.checked);
+                state.set_export_class_all_checked(all_checked);
+                state.set_export_class_items(to_model(items));
+            });
+        }
+
+        // --- export_class_select_all / export_class_clear_all --------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_class_select_all(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = set_all_checked(&model_to_vec(&state.get_export_class_items()), true);
+                state.set_export_class_all_checked(true);
+                state.set_export_class_items(to_model(items));
+            });
+        }
+        {
+            let this = Arc::clone(self);
+            state.on_export_class_clear_all(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = set_all_checked(&model_to_vec(&state.get_export_class_items()), false);
+                state.set_export_class_all_checked(false);
+                state.set_export_class_items(to_model(items));
+            });
+        }
+
+        // --- export_image_item_toggled -------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_image_item_toggled(move |label: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = toggle_item_by_label(&model_to_vec(&state.get_export_image_items()), &label);
+                let all_checked = items.iter().all(|i| i.checked);
+                state.set_export_image_all_checked(all_checked);
+                state.set_export_image_items(to_model(items));
+            });
+        }
+
+        // --- export_image_select_all / export_image_clear_all --------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_image_select_all(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = set_all_checked(&model_to_vec(&state.get_export_image_items()), true);
+                state.set_export_image_all_checked(true);
+                state.set_export_image_items(to_model(items));
+            });
+        }
+        {
+            let this = Arc::clone(self);
+            state.on_export_image_clear_all(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = set_all_checked(&model_to_vec(&state.get_export_image_items()), false);
+                state.set_export_image_all_checked(false);
+                state.set_export_image_items(to_model(items));
+            });
+        }
+
+        // --- export_add_batch ----------------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_add_batch(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+
+                let items = model_to_vec(&state.get_export_class_items());
+                let selected: Vec<String> =
+                    items.iter().filter(|i| i.checked).map(|i| i.label.to_string()).collect();
+                if selected.is_empty() {
+                    state.set_export_status("Pick at least one class before adding.".into());
+                    return;
+                }
+                let all_selected = selected.len() == items.len();
+                let classes_label =
+                    if all_selected { "All classes".to_string() } else { selected.join(", ") };
+                let classes: Vec<SharedString> =
+                    if all_selected { Vec::new() } else { selected.iter().map(SharedString::from).collect() };
+
+                let image_items = model_to_vec(&state.get_export_image_items());
+                let selected_images: Vec<String> = image_items
+                    .iter()
+                    .filter(|i| i.checked)
+                    .map(|i| i.label.to_string())
+                    .collect();
+                if selected_images.is_empty() {
+                    state.set_export_status("Pick at least one image before adding.".into());
+                    return;
+                }
+                let all_images_selected = selected_images.len() == image_items.len();
+                let images_label = if all_images_selected {
+                    "All images".to_string()
+                } else {
+                    selected_images.join(", ")
+                };
+
+                let name = {
+                    let n = state.get_export_combo_name().to_string();
+                    let n = n.trim();
+                    if !n.is_empty() {
+                        n.to_string()
+                    } else if all_selected {
+                        "All".to_string()
+                    } else {
+                        selected.join("_")
+                    }
+                };
+
+                let mut batches = export_batches_to_vec(&state.get_export_batches());
+                batches.push(ExportBatchItem {
+                    name: name.into(),
+                    classes: slint::ModelRc::new(slint::VecModel::from(classes)),
+                    classes_label: classes_label.into(),
+                    format: state.get_export_format(),
+                    images: slint::ModelRc::new(slint::VecModel::from(
+                        selected_images.iter().map(SharedString::from).collect::<Vec<_>>(),
+                    )),
+                    images_label: images_label.into(),
+                    each_image: state.get_export_each_image(),
+                });
+                state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(batches)));
+                state.set_export_combo_name(SharedString::new());
+                state.set_export_status(SharedString::new());
+            });
+        }
+
+        // --- export_remove_batch --------------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_remove_batch(move |idx: i32| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let mut batches = export_batches_to_vec(&state.get_export_batches());
+                if idx >= 0 && (idx as usize) < batches.len() {
+                    batches.remove(idx as usize);
+                }
+                state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(batches)));
+            });
+        }
+
+        // --- export_run_all ---------------------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_run_all(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+
+                let mut batches = export_batches_to_vec(&state.get_export_batches());
+                if batches.is_empty() {
+                    // Nothing queued — treat the checklist/name/format as one
+                    // one-off export so a single export doesn't need the
+                    // extra "Add" step.
+                    let items = model_to_vec(&state.get_export_class_items());
+                    let selected: Vec<String> =
+                        items.iter().filter(|i| i.checked).map(|i| i.label.to_string()).collect();
+                    if selected.is_empty() {
+                        state.set_export_status("Pick at least one class to export.".into());
+                        return;
+                    }
+                    let all_selected = selected.len() == items.len();
+                    let classes: Vec<SharedString> = if all_selected {
+                        Vec::new()
+                    } else {
+                        selected.iter().map(SharedString::from).collect()
+                    };
+
+                    let image_items = model_to_vec(&state.get_export_image_items());
+                    let selected_images: Vec<String> = image_items
+                        .iter()
+                        .filter(|i| i.checked)
+                        .map(|i| i.label.to_string())
+                        .collect();
+                    if selected_images.is_empty() {
+                        state.set_export_status("Pick at least one image to export.".into());
+                        return;
+                    }
+
+                    let name = {
+                        let n = state.get_export_combo_name().to_string();
+                        let n = n.trim().to_string();
+                        if n.is_empty() { "results".to_string() } else { n }
+                    };
+                    batches.push(ExportBatchItem {
+                        name: name.into(),
+                        classes: slint::ModelRc::new(slint::VecModel::from(classes)),
+                        classes_label: SharedString::new(),
+                        format: state.get_export_format(),
+                        images: slint::ModelRc::new(slint::VecModel::from(
+                            selected_images.iter().map(SharedString::from).collect::<Vec<_>>(),
+                        )),
+                        images_label: SharedString::new(),
+                        each_image: state.get_export_each_image(),
+                    });
+                }
+
+                let Some(folder) = rfd::FileDialog::new().pick_folder() else { return };
+
+                // `ExportBatchItem`'s array fields are Slint `ModelRc`s, which
+                // aren't `Send` — read them out into a plain, thread-safe
+                // struct here on the UI thread before handing off.
+                let batches: Vec<PlannedExport> = batches
+                    .into_iter()
+                    .map(|batch| PlannedExport {
+                        name: batch.name.to_string(),
+                        classes: (0..batch.classes.row_count())
+                            .filter_map(|i| batch.classes.row_data(i))
+                            .map(|s| s.to_string())
+                            .collect(),
+                        images: (0..batch.images.row_count())
+                            .filter_map(|i| batch.images.row_data(i))
+                            .map(|s| s.to_string())
+                            .collect(),
+                        each_image: batch.each_image,
+                        is_xlsx: batch.format.as_str() == "xlsx",
+                    })
+                    .collect();
+
                 let Some(path) = this.path.lock().unwrap().clone() else { return };
-                let image_filter = this.image_filter.lock().unwrap().clone();
-                let class_filter = this.class_filter.lock().unwrap().clone();
                 let coloc_filter = this.coloc_filter.lock().unwrap().clone();
                 let t_stack_filter = *this.t_stack_filter.lock().unwrap();
                 let z_stack_filter = *this.z_stack_filter.lock().unwrap();
@@ -612,33 +855,90 @@ impl ResultsTableController {
                 let base_specs = this.column_specs.lock().unwrap().clone();
                 let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
 
-                let Some(export_path) = rfd::FileDialog::new()
-                    .add_filter("Excel", &["xlsx"])
-                    .set_file_name(if is_coloc_detail { "coloc_detail.xlsx" } else { "results.xlsx" })
-                    .save_file()
-                else {
-                    return;
-                };
+                let total_files: usize = batches
+                    .iter()
+                    .map(|b| if b.each_image { b.images.len().max(1) } else { 1 })
+                    .sum();
+                state.set_export_running(true);
+                state.set_export_status(format!("Exporting {total_files} file(s)...").into());
 
+                let this = Arc::clone(&this);
                 std::thread::spawn(move || {
                     let loader = Arc::new(ResultsLoader::new(&path));
                     let exporter = ResultsExporter::new(loader);
-                    let filter = DatabaseFilter {
-                        image_filter,
-                        class_filter,
-                        coloc_filter,
-                        t_stack_filter,
-                        z_stack_filter,
-                        ..Default::default()
-                    };
-                    let result = if is_coloc_detail {
-                        exporter.export_coloc_detail_to_xlsx(filter, &export_path)
-                    } else {
-                        exporter.export_to_xlsx(filter, &group, &base_specs, &export_path)
-                    };
-                    if let Err(e) = result {
-                        warn!("XLSX export failed: {:?}", e);
+                    let mut used_paths = std::collections::HashSet::new();
+                    let mut written = 0usize;
+                    let mut failures = Vec::new();
+
+                    for batch in &batches {
+                        let class_filter =
+                            if batch.classes.is_empty() { None } else { Some(batch.classes.clone()) };
+                        let is_xlsx = batch.is_xlsx;
+                        let ext = if is_xlsx { "xlsx" } else { "csv" };
+
+                        // One file per checked image (its name folded into
+                        // the filename) when `each_image`, otherwise one file
+                        // covering every image in `batch.images` together.
+                        let per_file: Vec<(String, Option<Vec<String>>)> = if batch.each_image {
+                            batch
+                                .images
+                                .iter()
+                                .map(|img| {
+                                    (format!("{}_{}", batch.name, image_stem(img)), Some(vec![img.clone()]))
+                                })
+                                .collect()
+                        } else {
+                            vec![(batch.name.clone(), Some(batch.images.clone()))]
+                        };
+
+                        for (file_label, image_filter) in per_file {
+                            let out_path = unique_export_path(&folder, &file_label, ext, &mut used_paths);
+
+                            let filter = DatabaseFilter {
+                                image_filter,
+                                class_filter: class_filter.clone(),
+                                coloc_filter: coloc_filter.clone(),
+                                t_stack_filter,
+                                z_stack_filter,
+                                ..Default::default()
+                            };
+
+                            let result = match (is_coloc_detail, is_xlsx) {
+                                (true, true) => exporter.export_coloc_detail_to_xlsx(filter, &out_path),
+                                (true, false) => exporter.export_coloc_detail_to_csv(filter, &out_path),
+                                (false, true) => {
+                                    exporter.export_to_xlsx(filter, &group, &base_specs, &out_path)
+                                }
+                                (false, false) => {
+                                    exporter.export_to_csv(filter, &group, &base_specs, &out_path)
+                                }
+                            };
+                            match result {
+                                Ok(()) => written += 1,
+                                Err(e) => {
+                                    warn!("Export of '{file_label}' failed: {:?}", e);
+                                    failures.push(file_label);
+                                }
+                            }
+                        }
                     }
+
+                    let status = if failures.is_empty() {
+                        format!("Exported {written} file(s) to {}", folder.display())
+                    } else {
+                        format!(
+                            "Exported {written} of {total_files} file(s) — failed: {}",
+                            failures.join(", ")
+                        )
+                    };
+
+                    let ui = this.ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(window) = ui.upgrade() else { return };
+                        let state = window.global::<ResultsState>();
+                        state.set_export_running(false);
+                        state.set_export_status(status.into());
+                    });
                 });
             });
         }
@@ -815,11 +1115,15 @@ impl ResultsTableController {
                             state.set_chart_log_scale(false);
                             state.set_chart_heatmap_metric(slint::SharedString::new());
                             state.set_chart_cell_size_px(20);
+                            state.set_chart_heatmap_color_scheme("Viridis".into());
                             state.set_chart_plottable_columns(slint::ModelRc::new(
                                 slint::VecModel::from(plottable_column_labels(&specs)),
                             ));
                             state.set_chart_heatmap_metric_options(slint::ModelRc::new(
                                 slint::VecModel::from(heatmap_metric_options(&specs)),
+                            ));
+                            state.set_chart_heatmap_color_scheme_options(slint::ModelRc::new(
+                                slint::VecModel::from(heatmap_color_scheme_options()),
                             ));
                             state.set_t_stack_active(t_range.is_some());
                             state.set_t_stack_min(t_range.map_or(0, |(min, _)| min));
@@ -2067,6 +2371,7 @@ impl ResultsTableController {
                     &specs,
                     config.bucket_count.max(1),
                     config.log_scale,
+                    config.color_by,
                 ) else {
                     report("No numeric data for this column.".into(), None);
                     return;
@@ -2156,7 +2461,12 @@ impl ResultsTableController {
                     report("No data to bin into a heatmap.".into(), None);
                     return;
                 };
-                match render_heatmap(&data, config.render_width, config.render_height) {
+                match render_heatmap(
+                    &data,
+                    config.heatmap_color_scheme,
+                    config.render_width,
+                    config.render_height,
+                ) {
                     Ok(chart) => {
                         this.cache_last_chart(&chart, config.kind);
                         report(String::new(), Some(chart));
@@ -2219,6 +2529,7 @@ fn to_slint_row(row: evanalyzer_app::result::DisplayRow) -> ResultsRow {
         roi_id: row.roi_id,
         object_id: row.object_id.into(),
         values: slint::ModelRc::new(slint::VecModel::from(values)),
+        stripe: row.stripe,
     }
 }
 
@@ -2238,6 +2549,11 @@ fn heatmap_metric_options(specs: &[ColumnSpec]) -> Vec<SharedString> {
     let mut options = vec![SharedString::from(HEATMAP_METRIC_COUNT_LABEL)];
     options.extend(plottable_column_labels(specs));
     options
+}
+
+/// Labels for the heatmap's "Colors" scheme picker, in `HeatmapColorScheme::all()` order.
+fn heatmap_color_scheme_options() -> Vec<SharedString> {
+    HeatmapColorScheme::all().iter().map(|s| SharedString::from(s.label())).collect()
 }
 
 fn specs_to_slint_cols(specs: &[ColumnSpec], widths: &HashMap<String, f32>) -> Vec<ResultsColumnDef> {
@@ -2327,6 +2643,79 @@ fn set_all_checked(items: &[FilterItem], checked: bool) -> Vec<FilterItem> {
             item
         })
         .collect()
+}
+
+fn export_batches_to_vec(model: &slint::ModelRc<ExportBatchItem>) -> Vec<ExportBatchItem> {
+    (0..model.row_count()).filter_map(|i| model.row_data(i)).collect()
+}
+
+/// Plain, `Send`able copy of one queued `ExportBatchItem` — the Slint struct
+/// itself holds a `ModelRc` (an `Rc`) in its `classes` field and so can't be
+/// moved into the background export thread directly.
+struct PlannedExport {
+    name: String,
+    /// Empty means "every class" (no filter applied).
+    classes: Vec<String>,
+    /// Image names in scope — always concrete (never "empty means all"),
+    /// since `each_image` needs real names to iterate over.
+    images: Vec<String>,
+    /// When true, one output file is written per entry in `images` instead
+    /// of one file covering all of them together.
+    each_image: bool,
+    is_xlsx: bool,
+}
+
+/// An image's display name with its own file extension stripped (e.g.
+/// "image_01.tif" -> "image_01"), so per-image export filenames don't end up
+/// with two extensions back to back. Falls back to the full name if it has
+/// no extension to strip.
+fn image_stem(image_name: &str) -> String {
+    std::path::Path::new(image_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| image_name.to_string())
+}
+
+/// Replaces characters that are illegal (or awkward) in a filename with `_`.
+/// Falls back to `"export"` if nothing usable is left, so a combination named
+/// e.g. "///" still produces a valid path.
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    // A name made up entirely of characters we just replaced (e.g. "///")
+    // is as "nothing usable" as an empty one — fall back rather than
+    // writing a file literally named "___".
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '_') {
+        "export".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Builds `<folder>/<name>.<ext>`, appending " (2)", " (3)", ... if that path
+/// is already in `used` (e.g. two combinations given the same name), and
+/// records whichever path it returns into `used` so later calls don't
+/// collide with it either.
+fn unique_export_path(
+    folder: &std::path::Path,
+    name: &str,
+    ext: &str,
+    used: &mut std::collections::HashSet<PathBuf>,
+) -> PathBuf {
+    let base = sanitize_filename(name);
+    let mut candidate = folder.join(format!("{base}.{ext}"));
+    let mut n = 2;
+    while used.contains(&candidate) {
+        candidate = folder.join(format!("{base} ({n}).{ext}"));
+        n += 1;
+    }
+    used.insert(candidate.clone());
+    candidate
 }
 
 /// Copies visibility flags from `prev` onto `fresh` wherever both share a
@@ -2443,4 +2832,158 @@ fn set_group_checked_for_search(
             item
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Simulates the exact chain `column_filter_apply` + `bg_reload_coloc_detail_page0`
+    /// run through in the live app, without any Slint/GUI machinery: build the
+    /// coloc-detail specs, hide one partner-class column by *label* (matching
+    /// `column_filter_apply`'s own key), rebuild fresh specs (as a reload
+    /// would, since `discover_coloc_detail_columns` re-runs every time) and
+    /// carry the visibility choice over by *id* (matching
+    /// `bg_reload_coloc_detail_page0`'s own key), then confirm the hidden
+    /// column is still hidden and its flattened value is blank.
+    #[test]
+    fn column_filter_visibility_survives_a_coloc_detail_reload_round_trip() {
+        let coloc_partner_classes = vec!["ClassA".to_string(), "ClassB".to_string()];
+        let channels = vec![0];
+
+        // 1. Initial build (mirrors the first `bg_reload_coloc_detail_page0`
+        //    call): every column starts visible.
+        let mut specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
+        assert!(
+            specs.iter().all(|c| c.visible),
+            "sanity: every column starts visible"
+        );
+
+        // 2. Simulate `column_filter_apply`: the user unchecks ClassA's "ROI ID"
+        //    column in the Columns popup. This mutation matches by *label*.
+        let visibility: BTreeMap<String, bool> =
+            [("Coloc ClassA ROI ID".to_string(), false)].into_iter().collect();
+        for spec in specs.iter_mut() {
+            if let Some(&visible) = visibility.get(&spec.label) {
+                spec.visible = visible;
+            }
+        }
+        assert!(
+            !specs.iter().find(|c| c.id == "coloc_detail__ClassA__roi_id").unwrap().visible,
+            "sanity: the mutation actually hid the column"
+        );
+
+        // 3. Simulate the next `bg_reload_coloc_detail_page0` call: it always
+        //    rebuilds a *fresh* spec list (channels/classes are re-discovered
+        //    every reload) and carries the previous visibility over by *id*.
+        let mut fresh = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
+        carry_over_visibility(&mut fresh, &specs);
+
+        let carried = fresh.iter().find(|c| c.id == "coloc_detail__ClassA__roi_id").unwrap();
+        assert!(
+            !carried.visible,
+            "the hidden column must stay hidden across a reload, not reset to visible"
+        );
+        // An unrelated column (ClassB's ROI ID) must be unaffected.
+        let unrelated = fresh.iter().find(|c| c.id == "coloc_detail__ClassB__roi_id").unwrap();
+        assert!(unrelated.visible);
+
+        // 4. Confirm the value itself renders blank for the hidden column,
+        //    using the real flatten/format path.
+        let mut src = evanalyzer_app::result::RoiRow {
+            image_name: "img.tif".into(),
+            image_rel_path: String::new(),
+            c_stack: None,
+            z_stack: None,
+            t_stack: None,
+            object_id: "00000000-0000-0000-0000-000000000001".into(),
+            seg_class_name: None,
+            seg_class_id: None,
+            object_class_name: vec![],
+            object_class_id: vec![],
+            parent_id: None,
+            children: vec![],
+            track_id: 0,
+            centroid_x_px: 0.0,
+            centroid_y_px: 0.0,
+            centroid_x_nm: 0.0,
+            centroid_y_nm: 0.0,
+            area_px: 0,
+            area_nm2: 0.0,
+            perimeter_px: 0.0,
+            perimeter_nm: 0.0,
+            circularity: 0.0,
+            solidity: 0.0,
+            aspect_ratio: 0.0,
+            roundness: 0.0,
+            compactness: 0.0,
+            major_axis_px: 0.0,
+            minor_axis_px: 0.0,
+            touches_edge: false,
+            intensities_json: String::new(),
+            coloc_json: String::new(),
+            bbox_px: [0, 0, 0, 0],
+        };
+        src.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002"]}"#.into();
+        let mut partner = src.clone();
+        partner.object_id = "00000000-0000-0000-0000-000000000002".into();
+
+        let rows = flatten_coloc_rows(&[src], &[partner], &fresh);
+        assert_eq!(rows.len(), 1);
+        let col_idx = fresh.iter().position(|c| c.id == "coloc_detail__ClassA__roi_id").unwrap();
+        assert_eq!(
+            rows[0].values[col_idx], "",
+            "hidden column's value must render blank, not the partner's actual roi_id"
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_replaces_illegal_characters() {
+        assert_eq!(sanitize_filename("Group A/B:C"), "Group A_B_C");
+        assert_eq!(sanitize_filename("  padded  "), "padded");
+    }
+
+    #[test]
+    fn sanitize_filename_falls_back_when_nothing_usable_remains() {
+        assert_eq!(sanitize_filename("///"), "export");
+        assert_eq!(sanitize_filename("   "), "export");
+    }
+
+    #[test]
+    fn unique_export_path_appends_a_counter_on_collision() {
+        let folder = std::path::Path::new("/tmp/exports");
+        let mut used = std::collections::HashSet::new();
+
+        let first = unique_export_path(folder, "GroupABC", "csv", &mut used);
+        let second = unique_export_path(folder, "GroupABC", "csv", &mut used);
+        let third = unique_export_path(folder, "GroupABC", "csv", &mut used);
+
+        assert_eq!(first, folder.join("GroupABC.csv"));
+        assert_eq!(second, folder.join("GroupABC (2).csv"));
+        assert_eq!(third, folder.join("GroupABC (3).csv"));
+    }
+
+    #[test]
+    fn unique_export_path_does_not_collide_across_different_formats() {
+        let folder = std::path::Path::new("/tmp/exports");
+        let mut used = std::collections::HashSet::new();
+
+        let csv = unique_export_path(folder, "GroupABC", "csv", &mut used);
+        let xlsx = unique_export_path(folder, "GroupABC", "xlsx", &mut used);
+
+        assert_eq!(csv, folder.join("GroupABC.csv"));
+        assert_eq!(xlsx, folder.join("GroupABC.xlsx"), "different extensions never collide");
+    }
+
+    #[test]
+    fn image_stem_strips_the_images_own_extension() {
+        assert_eq!(image_stem("image_01.tif"), "image_01");
+        assert_eq!(image_stem("scan.ome.tiff"), "scan.ome");
+    }
+
+    #[test]
+    fn image_stem_falls_back_to_the_full_name_when_there_is_no_extension() {
+        assert_eq!(image_stem("image_01"), "image_01");
+        assert_eq!(image_stem(".hidden"), ".hidden");
+    }
 }

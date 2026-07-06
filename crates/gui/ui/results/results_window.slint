@@ -14,6 +14,7 @@ import {
 } from "results_table.slint";
 import { ResultsChart } from "results_chart.slint";
 import { FrameStepper } from "frame_stepper.slint";
+import { ExportDialog } from "export_dialog.slint";
 export {
     ResultsState,
     ResultsViewMode,
@@ -22,6 +23,7 @@ export {
     ResultsColumnDef,
     ResultsRow,
     FilterItem,
+    ExportBatchItem,
 }from "results_table.slint";
 
 
@@ -1484,16 +1486,9 @@ component ResultsToolbar inherits Rectangle {
         }
 
         ToolToggleButton {
-            icon: @image-url("../icons/regular-black/file-csv.svg");
+            icon: @image-url("../icons/regular-black/export.svg");
             clicked => {
-                ResultsState.export_csv();
-            }
-        }
-
-        ToolToggleButton {
-            icon: @image-url("../icons/regular-black/file-xls.svg");
-            clicked => {
-                ResultsState.export_xlsx();
+                ResultsState.export_dialog_open();
             }
         }
     }
@@ -1625,5 +1620,10 @@ export component ResultsWindow inherits Window {
         }
 
         ResultsStatusBar { }
+    }
+
+    if ResultsState.export_dialog_active: ExportDialog {
+        width: 100%;
+        height: 100%;
     }
 }

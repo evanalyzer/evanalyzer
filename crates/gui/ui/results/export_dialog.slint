@@ -1,0 +1,468 @@
+import { ScrollView, ComboBox, LineEdit } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ResultsState, FilterCheckbox, FilterItem } from "results_table.slint";
+
+// Scrollable checklist with a "(Select All)" row on top — shared shape for
+// both the Classes and Images sections below.
+component ChecklistBox inherits Rectangle {
+    in property <[FilterItem]> items: [];
+    in property <bool> all_checked: true;
+    callback item_toggled(string);
+    callback select_all();
+    callback clear_all();
+
+    height: 78px;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+    border-radius: Theme.radius-sm;
+    clip: true;
+
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+
+            sel-all-ta := TouchArea {
+                height: 24px;
+                mouse-cursor: pointer;
+                clicked => {
+                    if (root.all_checked) {
+                        root.clear_all();
+                    } else {
+                        root.select_all();
+                    }
+                }
+
+                Rectangle {
+                    background: sel-all-ta.has-hover ? Theme.hover.with-alpha(0.3) : transparent;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 6px;
+                        spacing: 7px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 13px;
+                            height: 13px;
+                            border-radius: 2px;
+                            border-width: 1.5px;
+                            border-color: root.all_checked ? Theme.accent : Theme.border;
+                            background: root.all_checked ? Theme.accent : transparent;
+
+                            if root.all_checked: Image {
+                                source: @image-url("../icons/regular-black/check.svg");
+                                width: 9px;
+                                height: 9px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: white;
+                            }
+                        }
+
+                        Text {
+                            text: "(Select All)";
+                            font-size: 11px;
+                            font-family: Theme.font-mono;
+                            font-weight: 600;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            for item in root.items: FilterCheckbox {
+                label: item.label;
+                checked: item.checked;
+                toggled => {
+                    root.item_toggled(item.label);
+                }
+            }
+        }
+    }
+}
+
+component DialogButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    width: 96px;
+    height: 30px;
+    border-radius: Theme.radius-sm;
+    background: !root.enabled ? Theme.raised : (root.primary ? (ta.has-hover ? Theme.accent.darker(15%) : Theme.accent) : (ta.has-hover ? Theme.hover : Theme.raised));
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+
+    Text {
+        text: root.label;
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        font-weight: 600;
+        color: root.primary ? white : (root.enabled ? Theme.text-dim : Theme.text-faint);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component ExportDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 600px;
+        height: 660px;
+        background: Theme.panel;
+        border-radius: Theme.radius-lg;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        clip: true;
+
+        VerticalLayout {
+            spacing: 0;
+
+            // -- Header ---------------------------------------------------------
+            Rectangle {
+                height: 52px;
+                background: Theme.panel;
+
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+
+                    Text {
+                        text: "Export results";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-family: Theme.font-sans;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: Theme.radius-sm;
+                        background: close-ta.has-hover ? Theme.raised : transparent;
+
+                        Text {
+                            text: "x";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-ta := TouchArea {
+                            clicked => {
+                                ResultsState.export_dialog_close();
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
+            // -- Body -------------------------------------------------------------
+            Rectangle {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 8px;
+
+                    Text {
+                        text: "Classes to include:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        font-weight: 600;
+                        color: Theme.text-dim;
+                    }
+
+                    ChecklistBox {
+                        items: ResultsState.export_class_items;
+                        all_checked: ResultsState.export_class_all_checked;
+                        item_toggled(label) => { ResultsState.export_class_item_toggled(label); }
+                        select_all => { ResultsState.export_class_select_all(); }
+                        clear_all => { ResultsState.export_class_clear_all(); }
+                    }
+
+                    Text {
+                        text: "Images to export:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        font-weight: 600;
+                        color: Theme.text-dim;
+                    }
+
+                    ChecklistBox {
+                        items: ResultsState.export_image_items;
+                        all_checked: ResultsState.export_image_all_checked;
+                        item_toggled(label) => { ResultsState.export_image_item_toggled(label); }
+                        select_all => { ResultsState.export_image_select_all(); }
+                        clear_all => { ResultsState.export_image_clear_all(); }
+                    }
+
+                    each-image-ta := TouchArea {
+                        height: 22px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            ResultsState.export_each_image = !ResultsState.export_each_image;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 2px;
+                            spacing: 7px;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 13px;
+                                height: 13px;
+                                border-radius: 2px;
+                                border-width: 1.5px;
+                                border-color: ResultsState.export_each_image ? Theme.accent : Theme.border;
+                                background: ResultsState.export_each_image ? Theme.accent : transparent;
+
+                                if ResultsState.export_each_image: Image {
+                                    source: @image-url("../icons/regular-black/check.svg");
+                                    width: 9px;
+                                    height: 9px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: white;
+                                }
+                            }
+
+                            Text {
+                                text: "Export each checked image as its own file (filename gets the image name)";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // -- Combination builder -------------------------------------
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            text: "Name:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "e.g. GroupABC";
+                            text <=> ResultsState.export_combo_name;
+                        }
+
+                        Text {
+                            text: "Format:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 90px;
+                            model: ["CSV", "XLSX"];
+                            current-value: ResultsState.export_format == "xlsx" ? "XLSX" : "CSV";
+                            selected(v) => {
+                                ResultsState.export_format = v == "XLSX" ? "xlsx" : "csv";
+                            }
+                        }
+
+                        DialogButton {
+                            label: "+ Add";
+                            clicked => {
+                                ResultsState.export_add_batch();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border-soft;
+                    }
+
+                    Text {
+                        text: "Combinations to export:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        font-weight: 600;
+                        color: Theme.text-dim;
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-width: 1px;
+                        border-color: Theme.border-soft;
+                        border-radius: Theme.radius-sm;
+                        clip: true;
+
+                        if ResultsState.export_batches.length == 0: Text {
+                            x: 8px;
+                            y: 6px;
+                            width: parent.width - 16px;
+                            text: "No combinations queued — Export All will use the classes checked above.";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-faint;
+                            wrap: word-wrap;
+                        }
+
+                        if ResultsState.export_batches.length > 0: ScrollView {
+                            VerticalLayout {
+                                alignment: start;
+
+                                for batch[idx] in ResultsState.export_batches: Rectangle {
+                                    height: 28px;
+                                    background: row-ta.has-hover ? Theme.hover.with-alpha(0.3) : transparent;
+
+                                    row-ta := TouchArea { }
+
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 6px;
+                                        spacing: 8px;
+
+                                        Text {
+                                            text: batch.name;
+                                            font-size: 11px;
+                                            font-family: Theme.font-mono;
+                                            font-weight: 600;
+                                            color: Theme.text-dim;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: batch.classes_label;
+                                            font-size: 11px;
+                                            font-family: Theme.font-mono;
+                                            color: Theme.text-mute;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: batch.each_image ? "each image: " + batch.images_label : batch.images_label;
+                                            font-size: 11px;
+                                            font-family: Theme.font-mono;
+                                            color: batch.each_image ? Theme.accent : Theme.text-mute;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: batch.format == "xlsx" ? "XLSX" : "CSV";
+                                            font-size: 10px;
+                                            font-family: Theme.font-mono;
+                                            font-weight: 600;
+                                            color: Theme.accent;
+                                            vertical-alignment: center;
+                                        }
+
+                                        remove-ta := TouchArea {
+                                            width: 18px;
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                ResultsState.export_remove_batch(idx);
+                                            }
+
+                                            Text {
+                                                text: "x";
+                                                font-size: 12px;
+                                                color: remove-ta.has-hover ? Theme.err : Theme.text-mute;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if ResultsState.export_status != "": Text {
+                        text: ResultsState.export_status;
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            // -- Footer -----------------------------------------------------------
+            Rectangle {
+                height: 56px;
+                background: Theme.bg;
+
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: end;
+
+                    DialogButton {
+                        label: "Cancel";
+                        clicked => {
+                            ResultsState.export_dialog_close();
+                        }
+                    }
+
+                    DialogButton {
+                        label: ResultsState.export_running ? "Exporting…" : "Export All";
+                        primary: true;
+                        enabled: !ResultsState.export_running;
+                        clicked => {
+                            ResultsState.export_run_all();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
