@@ -389,10 +389,15 @@ pub fn build_coloc_detail_column_specs(
         filterable: false,
         visible: true,
     };
+    // `image`/`class` are filterable here too, matching `build_column_specs` —
+    // without this, the per-column filter icon (and its image/class checkbox
+    // popup) never renders on those headers while the coloc-detail view is
+    // active, since the header only shows a filter affordance when the
+    // column's own spec says it's filterable.
     let mut cols = vec![
         mk("roi_id", "ROI ID"),
-        mk("image", "Image"),
-        mk("class", "Class"),
+        ColumnSpec { id: "image".into(), label: "Image".into(), filterable: true, visible: true },
+        ColumnSpec { id: "class".into(), label: "Class".into(), filterable: true, visible: true },
         mk("area_px", "Area (px\u{00B2})"),
         mk("area_nm2", "Area (nm\u{00B2})"),
         mk("circularity", "Circularity"),
@@ -887,17 +892,28 @@ pub(crate) fn build_group_specs<'a>(
 
     // Grouped columns: key, (optionally) class, (optionally) colocalized
     // split, count, then each metric × each selected aggregate.
+    //
+    // `group`/`group_class`/`colocalized` are marked filterable here — even
+    // though a grouped row has no single image/class/coloc status of its own
+    // — because the filter restricts which *source* ROIs are included before
+    // aggregation, not any single grouped row's own data. Grouping replaces
+    // the per-ROI table's "Image"/"Class" columns with these, so without this
+    // the image/class/coloc filter's popup (only ever shown on a filterable
+    // column's header) would have no column left to hang off of, and the
+    // filter would become inaccessible the moment grouping is turned on (see
+    // `results_table.slint`'s header, which routes `group`/`group_class` to
+    // the same image/class filter popups as `image`/`class`).
     let mut specs = vec![ColumnSpec {
         id: "group".into(),
         label: group_label.into(),
-        filterable: false,
+        filterable: true,
         visible: true,
     }];
     if config.group_by_class {
         specs.push(ColumnSpec {
             id: "group_class".into(),
             label: "Class".into(),
-            filterable: false,
+            filterable: true,
             visible: true,
         });
     }
@@ -905,7 +921,7 @@ pub(crate) fn build_group_specs<'a>(
         specs.push(ColumnSpec {
             id: "colocalized".into(),
             label: "Colocalized".into(),
-            filterable: false,
+            filterable: true,
             visible: true,
         });
     }
@@ -1360,6 +1376,19 @@ mod tests {
         assert_eq!(specs[5].id, "circularity");
         assert_eq!(specs[6].id, "colocalized");
         assert!(specs.iter().all(|c| c.visible));
+    }
+
+    #[test]
+    fn build_coloc_detail_column_specs_image_and_class_are_filterable() {
+        // Without this, the Coloc Details view's "Image"/"Class" column
+        // headers never show a filter icon at all, since the GUI only draws
+        // one when the column's own spec says it's filterable — matching
+        // `build_column_specs`, which marks these two filterable too.
+        let specs = build_coloc_detail_column_specs(&[], &[]);
+        let image = specs.iter().find(|c| c.id == "image").unwrap();
+        let class = specs.iter().find(|c| c.id == "class").unwrap();
+        assert!(image.filterable, "Image column must be filterable in Coloc Details");
+        assert!(class.filterable, "Class column must be filterable in Coloc Details");
     }
 
     #[test]

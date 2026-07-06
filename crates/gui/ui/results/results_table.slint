@@ -796,10 +796,18 @@ export component ResultsTable inherits Rectangle {
                     col-id: col.id;
                     sorted: ResultsState.sort_column_id == col.id;
                     sort-asc: ResultsState.sort_ascending;
+                    // `group`/`group_class` are the grouped view's stand-ins for
+                    // `image`/`class` (grouping replaces those columns, but the
+                    // filter still restricts which *source* ROIs are grouped —
+                    // see `build_group_specs`), so they share the same image/
+                    // class filter popups rather than losing filter access
+                    // entirely the moment grouping is turned on.
+                    property <bool> is-image-col: col.id == "image" || col.id == "group";
+                    property <bool> is-class-col: col.id == "class" || col.id == "group_class";
                     filterable: col.filterable;
-                    filter-active: col.id == "image" ? ResultsState.filter_image_active : (col.id == "class" ? ResultsState.filter_class_active : ResultsState.filter_coloc_active);
-                    popup-items: col.filterable ? (col.id == "image" ? ResultsState.filter_image_popup : (col.id == "class" ? ResultsState.filter_class_popup : ResultsState.filter_coloc_popup)) : [];
-                    all-popup-checked: col.id == "image" ? ResultsState.filter_image_all_popup_checked : (col.id == "class" ? ResultsState.filter_class_all_popup_checked : ResultsState.filter_coloc_all_popup_checked);
+                    filter-active: is-image-col ? ResultsState.filter_image_active : (is-class-col ? ResultsState.filter_class_active : ResultsState.filter_coloc_active);
+                    popup-items: col.filterable ? (is-image-col ? ResultsState.filter_image_popup : (is-class-col ? ResultsState.filter_class_popup : ResultsState.filter_coloc_popup)) : [];
+                    all-popup-checked: is-image-col ? ResultsState.filter_image_all_popup_checked : (is-class-col ? ResultsState.filter_class_all_popup_checked : ResultsState.filter_coloc_all_popup_checked);
 
                     clicked => {
                         if (ResultsState.sort_column_id == col.id) {
@@ -811,10 +819,10 @@ export component ResultsTable inherits Rectangle {
                         ResultsState.sort_requested(col.id, ResultsState.sort_ascending);
                     }
                     filter-label-toggled(lbl) => {
-                        if (col.id == "image") {
+                        if (is-image-col) {
                             ResultsState.image_filter_label_toggled(lbl);
                         }
-                        if (col.id == "class") {
+                        if (is-class-col) {
                             ResultsState.class_filter_label_toggled(lbl);
                         }
                         if (col.id == "colocalized") {
@@ -822,10 +830,10 @@ export component ResultsTable inherits Rectangle {
                         }
                     }
                     filter-search-changed(txt) => {
-                        if (col.id == "image") {
+                        if (is-image-col) {
                             ResultsState.image_filter_search_changed(txt);
                         }
-                        if (col.id == "class") {
+                        if (is-class-col) {
                             ResultsState.class_filter_search_changed(txt);
                         }
                         if (col.id == "colocalized") {
@@ -833,10 +841,10 @@ export component ResultsTable inherits Rectangle {
                         }
                     }
                     filter-select-all => {
-                        if (col.id == "image") {
+                        if (is-image-col) {
                             ResultsState.image_select_all();
                         }
-                        if (col.id == "class") {
+                        if (is-class-col) {
                             ResultsState.class_select_all();
                         }
                         if (col.id == "colocalized") {
@@ -844,10 +852,10 @@ export component ResultsTable inherits Rectangle {
                         }
                     }
                     filter-clear-all => {
-                        if (col.id == "image") {
+                        if (is-image-col) {
                             ResultsState.image_clear_all();
                         }
-                        if (col.id == "class") {
+                        if (is-class-col) {
                             ResultsState.class_clear_all();
                         }
                         if (col.id == "colocalized") {
