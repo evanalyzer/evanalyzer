@@ -93,7 +93,7 @@ fn coloc_detail_csv_export_resolves_bounded_partner_fetch() {
 
     let exporter = ResultsExporter::new(Arc::new(loader));
     exporter
-        .export_coloc_detail_to_csv(DatabaseFilter::default(), &csv_path)
+        .export_coloc_detail_to_csv(DatabaseFilter::default(), None, &csv_path)
         .expect("coloc detail csv export failed");
 
     let content = std::fs::read_to_string(&csv_path).unwrap();
@@ -110,4 +110,38 @@ fn coloc_detail_csv_export_resolves_bounded_partner_fetch() {
     let partner_id = ObjectId(2).to_string();
     assert!(data_line.contains(&source_id), "source ROI id missing from row");
     assert!(data_line.contains(&partner_id), "partner ROI id missing from row — bounded partner fetch failed to resolve it");
+}
+
+#[test]
+fn coloc_detail_csv_export_visible_labels_restricts_columns() {
+    const CLASS_SOURCE: ObjectClass = ObjectClass::Valid(1);
+    const CLASS_PARTNER: ObjectClass = ObjectClass::Valid(2);
+
+    let mut source = make_filled_roi(1, [0, 0, 1, 1], CLASS_SOURCE);
+    source.add_colocalizing_object(CLASS_PARTNER, ObjectId(2));
+    let partner = make_filled_roi(2, [5, 5, 6, 6], CLASS_PARTNER);
+
+    let (_db_dir, loader) = export_fixture(vec![source, partner]);
+
+    let out_dir = tempfile::TempDir::new().unwrap();
+    let csv_path = out_dir.path().join("coloc_detail_filtered.csv");
+
+    let visible: std::collections::HashSet<String> =
+        ["ROI ID", "Image", "Class"].into_iter().map(String::from).collect();
+
+    let exporter = ResultsExporter::new(Arc::new(loader));
+    exporter
+        .export_coloc_detail_to_csv(DatabaseFilter::default(), Some(&visible), &csv_path)
+        .expect("coloc detail csv export failed");
+
+    let content = std::fs::read_to_string(&csv_path).unwrap();
+    let header = content.lines().next().expect("csv must have a header line");
+    assert_eq!(
+        header, "ROI ID,Image,Class",
+        "only the requested columns should be written, in spec order"
+    );
+    assert!(
+        !header.contains("Coloc class_2"),
+        "partner columns not in visible_labels must be dropped"
+    );
 }

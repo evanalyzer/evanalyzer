@@ -16,8 +16,9 @@ use evanalyzer_app::result::{
 use evanalyzer_cfg::core_types::InternalErrors;
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 const PAGE_SIZE: usize = 500;
@@ -120,6 +121,10 @@ pub struct ResultsTableController {
     /// ever needs to look a row up by id, only how many displayed rows each
     /// loaded source page produced.
     pub(crate) coloc_detail_page_rows: Arc<Mutex<PageRowCounts>>,
+    /// Set while a background export is running; `export_cancel` flips it so
+    /// the export loop can stop after its current file instead of a hard
+    /// abort mid-write. `None` when no export is in flight.
+    pub(crate) export_cancel_flag: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 }
 
 impl ResultsTableController {
@@ -155,6 +160,7 @@ impl ResultsTableController {
             coloc_detail_mode: Arc::new(Mutex::new(false)),
             coloc_detail_column_specs: Arc::new(Mutex::new(Vec::new())),
             coloc_detail_page_rows: Arc::new(Mutex::new(PageRowCounts::new(DEFAULT_WINDOW_PAGES))),
+            export_cancel_flag: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -599,6 +605,16 @@ impl ResultsTableController {
                 state.set_export_image_all_checked(true);
                 state.set_export_each_image(false);
 
+                // Default to the normal table's own columns; switching to
+                // "Coloc details" re-seeds this from the coloc-detail specs.
+                state.set_export_style("table".into());
+                let specs = this.column_specs.lock().unwrap().clone();
+                let all_visible = specs.iter().all(|c| c.visible);
+                state.set_export_column_items(to_model(column_items_from_specs(&specs)));
+                state.set_export_column_all_checked(all_visible);
+                state.set_export_group_by("none".into());
+                state.set_export_group_regex(SharedString::new());
+
                 state.set_export_combo_name(SharedString::new());
                 state.set_export_format("csv".into());
                 state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(
@@ -606,6 +622,9 @@ impl ResultsTableController {
                 )));
                 state.set_export_status(SharedString::new());
                 state.set_export_running(false);
+                state.set_export_progress_current(0);
+                state.set_export_progress_total(0);
+                state.set_export_progress_fraction(0.0);
                 state.set_export_dialog_active(true);
             });
         }
@@ -686,6 +705,123 @@ impl ResultsTableController {
                 let items = set_all_checked(&model_to_vec(&state.get_export_image_items()), false);
                 state.set_export_image_all_checked(false);
                 state.set_export_image_items(to_model(items));
+            });
+        }
+
+        // --- export_style_selected ------------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_style_selected(move |style: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                state.set_export_style(style.clone());
+
+                if style.as_str() != "coloc_detail" {
+                    let specs = this.column_specs.lock().unwrap().clone();
+                    let all_visible = specs.iter().all(|c| c.visible);
+                    state.set_export_column_items(to_model(column_items_from_specs(&specs)));
+                    state.set_export_column_all_checked(all_visible);
+                    return;
+                }
+
+                // Coloc-detail's columns depend on which partner classes and
+                // channels actually exist in the data, discovered via a DB
+                // query — unlike the table's own columns, they can't just be
+                // read off already-loaded state, and `coloc_detail_column_specs`
+                // is only populated once the user has actually visited the
+                // live Coloc Details table view (may still be empty here).
+                // Seed from that cache if present (avoids a blank flash),
+                // then always refresh from a fresh discovery in the
+                // background so column selection works even if the user
+                // never opened that view this session.
+                let cached = this.coloc_detail_column_specs.lock().unwrap().clone();
+                if !cached.is_empty() {
+                    let all_visible = cached.iter().all(|c| c.visible);
+                    state.set_export_column_items(to_model(column_items_from_specs(&cached)));
+                    state.set_export_column_all_checked(all_visible);
+                } else {
+                    state.set_export_column_items(slint::ModelRc::new(slint::VecModel::from(
+                        Vec::<FilterItem>::new(),
+                    )));
+                    state.set_export_column_all_checked(true);
+                }
+                state.set_export_status("Loading coloc-detail columns...".into());
+
+                let Some(path) = this.path.lock().unwrap().clone() else { return };
+                let image_filter = this.image_filter.lock().unwrap().clone();
+                let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+                let z_stack_filter = *this.z_stack_filter.lock().unwrap();
+
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || {
+                    let loader = ResultsLoader::new(&path);
+                    let filter = DatabaseFilter {
+                        image_filter,
+                        t_stack_filter,
+                        z_stack_filter,
+                        ..Default::default()
+                    };
+                    let specs = match discover_coloc_detail_columns(&loader, &filter) {
+                        Ok((channels, coloc_partner_classes)) => {
+                            build_coloc_detail_column_specs(&channels, &coloc_partner_classes)
+                        }
+                        Err(e) => {
+                            warn!("coloc-detail column discovery failed: {:?}", e);
+                            Vec::new()
+                        }
+                    };
+
+                    let ui = this.ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(window) = ui.upgrade() else { return };
+                        let state = window.global::<ResultsState>();
+                        // The user may have switched back to "table" while
+                        // this discovery was running.
+                        if state.get_export_style().as_str() != "coloc_detail" {
+                            return;
+                        }
+                        let all_visible = specs.iter().all(|c| c.visible);
+                        state.set_export_column_items(to_model(column_items_from_specs(&specs)));
+                        state.set_export_column_all_checked(all_visible);
+                        state.set_export_status(SharedString::new());
+                    });
+                });
+            });
+        }
+
+        // --- export_column_item_toggled -------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_column_item_toggled(move |label: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items =
+                    toggle_item_by_label(&model_to_vec(&state.get_export_column_items()), &label);
+                let all_checked = items.iter().all(|i| i.checked);
+                state.set_export_column_all_checked(all_checked);
+                state.set_export_column_items(to_model(items));
+            });
+        }
+
+        // --- export_column_select_all / export_column_clear_all -------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_column_select_all(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = set_all_checked(&model_to_vec(&state.get_export_column_items()), true);
+                state.set_export_column_all_checked(true);
+                state.set_export_column_items(to_model(items));
+            });
+        }
+        {
+            let this = Arc::clone(self);
+            state.on_export_column_clear_all(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = set_all_checked(&model_to_vec(&state.get_export_column_items()), false);
+                state.set_export_column_all_checked(false);
+                state.set_export_column_items(to_model(items));
             });
         }
 
@@ -851,16 +987,52 @@ impl ResultsTableController {
                 let coloc_filter = this.coloc_filter.lock().unwrap().clone();
                 let t_stack_filter = *this.t_stack_filter.lock().unwrap();
                 let z_stack_filter = *this.z_stack_filter.lock().unwrap();
-                let group = this.group_config.lock().unwrap().clone();
-                let base_specs = this.column_specs.lock().unwrap().clone();
-                let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
+                let group = group_config_from_dialog(
+                    state.get_export_group_by().as_str(),
+                    state.get_export_group_regex().to_string(),
+                );
+                let is_coloc_detail = state.get_export_style().as_str() == "coloc_detail";
+                let mut base_specs = if is_coloc_detail {
+                    this.coloc_detail_column_specs.lock().unwrap().clone()
+                } else {
+                    this.column_specs.lock().unwrap().clone()
+                };
+
+                // Empty means the checklist was never seeded for this style
+                // (e.g. Coloc Details was picked but never actually visited
+                // yet, so there are no cached specs to check against) —
+                // treat that as "no column filter" rather than hiding
+                // everything.
+                let column_items = model_to_vec(&state.get_export_column_items());
+                let visible_labels: Option<HashSet<String>> = if column_items.is_empty() {
+                    None
+                } else {
+                    Some(
+                        column_items
+                            .iter()
+                            .filter(|i| i.checked)
+                            .map(|i| i.label.to_string())
+                            .collect(),
+                    )
+                };
+                if let Some(labels) = &visible_labels {
+                    for spec in base_specs.iter_mut() {
+                        spec.visible = labels.contains(&spec.label);
+                    }
+                }
 
                 let total_files: usize = batches
                     .iter()
                     .map(|b| if b.each_image { b.images.len().max(1) } else { 1 })
                     .sum();
                 state.set_export_running(true);
+                state.set_export_progress_current(0);
+                state.set_export_progress_total(total_files as i32);
+                state.set_export_progress_fraction(0.0);
                 state.set_export_status(format!("Exporting {total_files} file(s)...").into());
+
+                let cancel_flag = Arc::new(AtomicBool::new(false));
+                *this.export_cancel_flag.lock().unwrap() = Some(Arc::clone(&cancel_flag));
 
                 let this = Arc::clone(&this);
                 std::thread::spawn(move || {
@@ -868,9 +1040,11 @@ impl ResultsTableController {
                     let exporter = ResultsExporter::new(loader);
                     let mut used_paths = std::collections::HashSet::new();
                     let mut written = 0usize;
+                    let mut completed = 0usize;
                     let mut failures = Vec::new();
+                    let mut cancelled = false;
 
-                    for batch in &batches {
+                    'outer: for batch in &batches {
                         let class_filter =
                             if batch.classes.is_empty() { None } else { Some(batch.classes.clone()) };
                         let is_xlsx = batch.is_xlsx;
@@ -892,6 +1066,11 @@ impl ResultsTableController {
                         };
 
                         for (file_label, image_filter) in per_file {
+                            if cancel_flag.load(Ordering::Relaxed) {
+                                cancelled = true;
+                                break 'outer;
+                            }
+
                             let out_path = unique_export_path(&folder, &file_label, ext, &mut used_paths);
 
                             let filter = DatabaseFilter {
@@ -904,8 +1083,16 @@ impl ResultsTableController {
                             };
 
                             let result = match (is_coloc_detail, is_xlsx) {
-                                (true, true) => exporter.export_coloc_detail_to_xlsx(filter, &out_path),
-                                (true, false) => exporter.export_coloc_detail_to_csv(filter, &out_path),
+                                (true, true) => exporter.export_coloc_detail_to_xlsx(
+                                    filter,
+                                    visible_labels.as_ref(),
+                                    &out_path,
+                                ),
+                                (true, false) => exporter.export_coloc_detail_to_csv(
+                                    filter,
+                                    visible_labels.as_ref(),
+                                    &out_path,
+                                ),
                                 (false, true) => {
                                     exporter.export_to_xlsx(filter, &group, &base_specs, &out_path)
                                 }
@@ -917,13 +1104,33 @@ impl ResultsTableController {
                                 Ok(()) => written += 1,
                                 Err(e) => {
                                     warn!("Export of '{file_label}' failed: {:?}", e);
-                                    failures.push(file_label);
+                                    failures.push(file_label.clone());
                                 }
                             }
+
+                            completed += 1;
+                            let ui = this.ui.clone();
+                            let progress_label = file_label.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                let Some(window) = ui.upgrade() else { return };
+                                let state = window.global::<ResultsState>();
+                                state.set_export_progress_current(completed as i32);
+                                state.set_export_progress_fraction(
+                                    completed as f32 / total_files.max(1) as f32,
+                                );
+                                state.set_export_status(
+                                    format!("Exporting {completed} of {total_files}: {progress_label}...")
+                                        .into(),
+                                );
+                            });
                         }
                     }
 
-                    let status = if failures.is_empty() {
+                    *this.export_cancel_flag.lock().unwrap() = None;
+
+                    let status = if cancelled {
+                        format!("Cancelled after {written} of {total_files} file(s).")
+                    } else if failures.is_empty() {
                         format!("Exported {written} file(s) to {}", folder.display())
                     } else {
                         format!(
@@ -940,6 +1147,18 @@ impl ResultsTableController {
                         state.set_export_status(status.into());
                     });
                 });
+            });
+        }
+
+        // --- export_cancel -----------------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_cancel(move || {
+                if let Some(flag) = this.export_cancel_flag.lock().unwrap().as_ref() {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                let Some(window) = this.ui.upgrade() else { return };
+                window.global::<ResultsState>().set_export_status("Cancelling...".into());
             });
         }
     }
@@ -2556,6 +2775,47 @@ fn heatmap_color_scheme_options() -> Vec<SharedString> {
     HeatmapColorScheme::all().iter().map(|s| SharedString::from(s.label())).collect()
 }
 
+/// Seeds the export dialog's "Columns to export" checklist from a column
+/// spec list — checked state mirrors each spec's current table visibility,
+/// so by default the export matches what's shown, with room to adjust.
+fn column_items_from_specs(specs: &[ColumnSpec]) -> Vec<FilterItem> {
+    specs
+        .iter()
+        .map(|c| FilterItem {
+            label: c.label.as_str().into(),
+            checked: c.visible,
+            group: SharedString::new(),
+            group_header: false,
+            group_all_checked: false,
+        })
+        .collect()
+}
+
+/// Builds the `GroupConfig` for an export run from the dialog's own "Group
+/// by" choice — mirrors the aggregate/split presets the main table's own
+/// quick Group-by-Image / Group-by-Regex buttons use (avg + sum, split by
+/// class), rather than exposing every aggregate-function checkbox in the
+/// dialog too.
+fn group_config_from_dialog(group_by: &str, regex: String) -> GroupConfig {
+    match group_by {
+        "image" => GroupConfig {
+            group_by: GroupBy::Image,
+            regex: String::new(),
+            aggs: vec![AggFunc::Avg, AggFunc::Sum],
+            split_colocalized: false,
+            group_by_class: true,
+        },
+        "regex" => GroupConfig {
+            group_by: GroupBy::Regex,
+            regex,
+            aggs: vec![AggFunc::Avg, AggFunc::Sum],
+            split_colocalized: false,
+            group_by_class: true,
+        },
+        _ => GroupConfig::default(),
+    }
+}
+
 fn specs_to_slint_cols(specs: &[ColumnSpec], widths: &HashMap<String, f32>) -> Vec<ResultsColumnDef> {
     specs
         .iter()
@@ -2985,5 +3245,46 @@ mod tests {
     fn image_stem_falls_back_to_the_full_name_when_there_is_no_extension() {
         assert_eq!(image_stem("image_01"), "image_01");
         assert_eq!(image_stem(".hidden"), ".hidden");
+    }
+
+    #[test]
+    fn column_items_from_specs_checked_state_mirrors_visibility() {
+        let specs = vec![
+            ColumnSpec { id: "roi_id".into(), label: "ROI ID".into(), filterable: false, visible: true },
+            ColumnSpec { id: "area_px".into(), label: "Area (px²)".into(), filterable: false, visible: false },
+        ];
+        let items = column_items_from_specs(&specs);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].label, SharedString::from("ROI ID"));
+        assert!(items[0].checked);
+        assert_eq!(items[1].label, SharedString::from("Area (px²)"));
+        assert!(!items[1].checked, "hidden columns must start unchecked in the export dialog");
+    }
+
+    #[test]
+    fn group_config_from_dialog_none_is_default_ungrouped() {
+        let group = group_config_from_dialog("none", String::new());
+        assert_eq!(group.group_by, GroupBy::None);
+        assert_eq!(group.aggs, vec![AggFunc::Avg]);
+        assert!(!group.group_by_class);
+        assert!(!group.split_colocalized);
+    }
+
+    #[test]
+    fn group_config_from_dialog_image_matches_the_table_quick_preset() {
+        let group = group_config_from_dialog("image", String::new());
+        assert_eq!(group.group_by, GroupBy::Image);
+        assert_eq!(group.aggs, vec![AggFunc::Avg, AggFunc::Sum]);
+        assert!(group.group_by_class);
+        assert!(!group.split_colocalized);
+    }
+
+    #[test]
+    fn group_config_from_dialog_regex_carries_the_pattern_through() {
+        let group = group_config_from_dialog("regex", "(.*)_ch\\d+".to_string());
+        assert_eq!(group.group_by, GroupBy::Regex);
+        assert_eq!(group.regex, "(.*)_ch\\d+");
+        assert_eq!(group.aggs, vec![AggFunc::Avg, AggFunc::Sum]);
+        assert!(group.group_by_class);
     }
 }

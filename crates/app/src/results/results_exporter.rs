@@ -5,7 +5,7 @@ use crate::results::results_loader::{
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use rust_xlsxwriter::{Format, Workbook};
-use std::{path::Path, sync::Arc};
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 /// Rows per DB round-trip while exporting. Larger than the GUI's page size
 /// (`PAGE_SIZE = 500`) since export has no competing memory pressure from a
@@ -66,14 +66,21 @@ impl ResultsExporter {
 
     /// Exports the colocalization detail flat table to CSV:
     /// one row per (source ROI, colocalized partner) pair.
+    ///
+    /// `visible_labels`, when given, restricts the exported columns to just
+    /// those labels (columns are discovered fresh from `filter` regardless,
+    /// since coloc-detail columns depend on which partner classes/channels
+    /// are actually present — this only trims which of the discovered
+    /// columns get written out). `None` exports every discovered column.
     pub fn export_coloc_detail_to_csv(
         &self,
         filter: DatabaseFilter,
+        visible_labels: Option<&HashSet<String>>,
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
         let mut writer = csv::Writer::from_path(export_path)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
-        self.export_coloc_detail_rows(filter, |row| {
+        self.export_coloc_detail_rows(filter, visible_labels, |row| {
             writer.write_record(row).map_err(|e| InternalErrors::Io(e.to_string()))
         })?;
         writer.flush().map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -82,9 +89,11 @@ impl ResultsExporter {
 
     /// Exports the colocalization detail flat table to XLSX:
     /// one row per (source ROI, colocalized partner) pair.
+    /// See `export_coloc_detail_to_csv` for `visible_labels`.
     pub fn export_coloc_detail_to_xlsx(
         &self,
         filter: DatabaseFilter,
+        visible_labels: Option<&HashSet<String>>,
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
         let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
@@ -93,7 +102,7 @@ impl ResultsExporter {
         sheet.set_name("Coloc Detail").map_err(err)?;
         sheet.set_freeze_panes(1, 0).map_err(err)?;
 
-        self.export_coloc_detail_rows(filter, xlsx_row_writer(sheet))?;
+        self.export_coloc_detail_rows(filter, visible_labels, xlsx_row_writer(sheet))?;
 
         workbook.save(export_path).map_err(err)?;
         Ok(())
@@ -174,12 +183,19 @@ impl ResultsExporter {
     fn export_coloc_detail_rows(
         &self,
         filter: DatabaseFilter,
+        visible_labels: Option<&HashSet<String>>,
         mut emit_row: impl FnMut(&[String]) -> Result<(), InternalErrors>,
     ) -> Result<(), InternalErrors> {
         let (channels, coloc_partner_classes) =
             discover_coloc_detail_columns(&self.results_loader, &filter)?;
-        let specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
-        let headers: Vec<String> = specs.iter().map(|c| c.label.clone()).collect();
+        let mut specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
+        if let Some(labels) = visible_labels {
+            for spec in specs.iter_mut() {
+                spec.visible = labels.contains(&spec.label);
+            }
+        }
+        let headers: Vec<String> =
+            specs.iter().filter(|c| c.visible).map(|c| c.label.clone()).collect();
         emit_row(&headers)?;
 
         let mut page = 0;
@@ -208,7 +224,13 @@ impl ResultsExporter {
             };
 
             for row in flatten_coloc_rows(&source_page, &partner_page, &specs) {
-                emit_row(&row.values)?;
+                let values: Vec<String> = specs
+                    .iter()
+                    .zip(row.values.iter())
+                    .filter(|(col, _)| col.visible)
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                emit_row(&values)?;
             }
             if done {
                 break;

@@ -289,6 +289,22 @@ export global ResultsState {
     // checked image (its name folded into the filename) instead of one
     // file covering all of them together.
     in-out property <bool> export_each_image: false;
+    // "table" (per-ROI / grouped, mirrors the normal table view) or
+    // "coloc_detail" (flattened source × partner rows, mirrors Coloc
+    // Details). Switching this re-seeds `export_column_items` from the
+    // matching column set.
+    in-out property <string> export_style: "table";
+    // "none" | "image" | "regex" — overrides whatever grouping is active in
+    // the main table for the purposes of this export. Only meaningful when
+    // `export_style` is "table"; Coloc Details export is always flat.
+    in-out property <string> export_group_by: "none";
+    // Regex pattern, only used when `export_group_by == "regex"`.
+    in-out property <string> export_group_regex: "";
+    // Per-dialog-session column checklist — which columns of the chosen
+    // `export_style` end up in the file. Re-seeded (all checked) whenever
+    // the dialog opens or `export_style` changes.
+    in-out property <[FilterItem]> export_column_items: [];
+    in-out property <bool> export_column_all_checked: true;
     // Name + format for the combination currently being assembled from the
     // checklists above; "Add" appends a snapshot of these to `export_batches`.
     in-out property <string> export_combo_name: "";
@@ -301,6 +317,14 @@ export global ResultsState {
     in-out property <bool> export_running: false;
     // Progress/result/validation message shown at the bottom of the dialog.
     in-out property <string> export_status: "";
+    // How many of `export_progress_total` output files have been attempted
+    // so far (updated live while `export_running` is true).
+    in-out property <int> export_progress_current: 0;
+    in-out property <int> export_progress_total: 0;
+    // Same information as a 0..1 fraction, precomputed in Rust (avoids
+    // integer-division/divide-by-zero edge cases in the .slint binding) for
+    // the progress bar's `progress` property.
+    in-out property <float> export_progress_fraction: 0.0;
 
     callback export_dialog_open();
     callback export_dialog_close();
@@ -310,12 +334,18 @@ export global ResultsState {
     callback export_image_item_toggled(string);
     callback export_image_select_all();
     callback export_image_clear_all();
+    callback export_style_selected(string);
+    callback export_column_item_toggled(string);
+    callback export_column_select_all();
+    callback export_column_clear_all();
     // Queues the current checklist/name/format as one combination to export.
     callback export_add_batch();
     callback export_remove_batch(int);
     // Picks an output folder, then writes one file per queued combination
     // (or the checklist directly, if none are queued).
     callback export_run_all();
+    // Requests the in-progress export stop after its current file finishes.
+    callback export_cancel();
 }
 
 // -- Shared checkbox item used inside filter popups ----------------------------
@@ -344,21 +374,25 @@ export component FilterCheckbox inherits Rectangle {
         spacing: 7px;
         alignment: start;
 
-        Rectangle {
-            width: 13px;
-            height: 13px;
-            border-radius: 2px;
-            border-width: 1.5px;
-            border-color: root.checked ? Theme.accent : Theme.border;
-            background: root.checked ? Theme.accent : transparent;
+        VerticalLayout {
+            alignment: center;
 
-            if root.checked: Image {
-                source: @image-url("../icons/regular-black/check.svg");
-                width: 9px;
-                height: 9px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: white;
+            Rectangle {
+                width: 13px;
+                height: 13px;
+                border-radius: 2px;
+                border-width: 1.5px;
+                border-color: root.checked ? Theme.accent : Theme.border;
+                background: root.checked ? Theme.accent : transparent;
+
+                if root.checked: Image {
+                    source: @image-url("../icons/regular-black/check.svg");
+                    width: 9px;
+                    height: 9px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: white;
+                }
             }
         }
 

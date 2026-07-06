@@ -1,6 +1,35 @@
-import { ScrollView, ComboBox, LineEdit } from "std-widgets.slint";
+import { ScrollView, ComboBox, LineEdit, ProgressIndicator } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ResultsState, FilterCheckbox, FilterItem } from "results_table.slint";
+
+// Two-way toggle for the export style ("Table" vs "Coloc details") — same
+// visual shape as ChartKindButton in results_chart.slint.
+component StyleToggleButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+
+    width: 100px;
+    height: 26px;
+    border-radius: Theme.radius-sm;
+    background: selected ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.raised);
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        font-weight: 600;
+        color: root.selected ? white : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
 
 // Scrollable checklist with a "(Select All)" row on top — shared shape for
 // both the Classes and Images sections below.
@@ -11,7 +40,7 @@ component ChecklistBox inherits Rectangle {
     callback select_all();
     callback clear_all();
 
-    height: 78px;
+    height: 190px;
     border-width: 1px;
     border-color: Theme.border-soft;
     border-radius: Theme.radius-sm;
@@ -41,21 +70,25 @@ component ChecklistBox inherits Rectangle {
                         spacing: 7px;
                         alignment: start;
 
-                        Rectangle {
-                            width: 13px;
-                            height: 13px;
-                            border-radius: 2px;
-                            border-width: 1.5px;
-                            border-color: root.all_checked ? Theme.accent : Theme.border;
-                            background: root.all_checked ? Theme.accent : transparent;
+                        VerticalLayout {
+                            alignment: center;
 
-                            if root.all_checked: Image {
-                                source: @image-url("../icons/regular-black/check.svg");
-                                width: 9px;
-                                height: 9px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                colorize: white;
+                            Rectangle {
+                                width: 13px;
+                                height: 13px;
+                                border-radius: 2px;
+                                border-width: 1.5px;
+                                border-color: root.all_checked ? Theme.accent : Theme.border;
+                                background: root.all_checked ? Theme.accent : transparent;
+
+                                if root.all_checked: Image {
+                                    source: @image-url("../icons/regular-black/check.svg");
+                                    width: 9px;
+                                    height: 9px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: white;
+                                }
                             }
                         }
 
@@ -120,8 +153,8 @@ export component ExportDialog inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 600px;
-        height: 660px;
+        width: min(620px, parent.width - 40px);
+        height: min(780px, parent.height - 40px);
         background: Theme.panel;
         border-radius: Theme.radius-lg;
         border-width: 1px;
@@ -189,43 +222,133 @@ export component ExportDialog inherits Rectangle {
             }
 
             // -- Body -------------------------------------------------------------
-            Rectangle {
+            // Scrollable so the dialog degrades gracefully (rather than
+            // silently clipping the footer) if the window is short enough
+            // that the fixed-size sections below don't all fit at once.
+            body-scroll := ScrollView {
                 vertical-stretch: 1;
 
                 VerticalLayout {
                     padding: 14px;
                     spacing: 8px;
 
-                    Text {
-                        text: "Classes to include:";
-                        font-size: 11px;
-                        font-family: Theme.font-sans;
-                        font-weight: 600;
-                        color: Theme.text-dim;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "Export style:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        StyleToggleButton {
+                            label: "Table";
+                            selected: ResultsState.export_style == "table";
+                            clicked => { ResultsState.export_style_selected("table"); }
+                        }
+
+                        StyleToggleButton {
+                            label: "Coloc details";
+                            selected: ResultsState.export_style == "coloc_detail";
+                            clicked => { ResultsState.export_style_selected("coloc_detail"); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
                     }
 
-                    ChecklistBox {
-                        items: ResultsState.export_class_items;
-                        all_checked: ResultsState.export_class_all_checked;
-                        item_toggled(label) => { ResultsState.export_class_item_toggled(label); }
-                        select_all => { ResultsState.export_class_select_all(); }
-                        clear_all => { ResultsState.export_class_clear_all(); }
+                    if ResultsState.export_style == "table": HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "Group by:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        StyleToggleButton {
+                            label: "No Grouping";
+                            selected: ResultsState.export_group_by == "none";
+                            clicked => { ResultsState.export_group_by = "none"; }
+                        }
+
+                        StyleToggleButton {
+                            label: "Image";
+                            selected: ResultsState.export_group_by == "image";
+                            clicked => { ResultsState.export_group_by = "image"; }
+                        }
+
+                        StyleToggleButton {
+                            label: "Regex";
+                            selected: ResultsState.export_group_by == "regex";
+                            clicked => { ResultsState.export_group_by = "regex"; }
+                        }
+
+                        if ResultsState.export_group_by == "regex": LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "e.g. (.*)_ch\\d+";
+                            text <=> ResultsState.export_group_regex;
+                        }
+
+                        if ResultsState.export_group_by != "regex": Rectangle {
+                            horizontal-stretch: 1;
+                        }
                     }
 
-                    Text {
-                        text: "Images to export:";
-                        font-size: 11px;
-                        font-family: Theme.font-sans;
-                        font-weight: 600;
-                        color: Theme.text-dim;
-                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        vertical-stretch: 0;
 
-                    ChecklistBox {
-                        items: ResultsState.export_image_items;
-                        all_checked: ResultsState.export_image_all_checked;
-                        item_toggled(label) => { ResultsState.export_image_item_toggled(label); }
-                        select_all => { ResultsState.export_image_select_all(); }
-                        clear_all => { ResultsState.export_image_clear_all(); }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 4px;
+                            alignment: start;
+
+                            Text {
+                                text: "Classes to include:";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                font-weight: 600;
+                                color: Theme.text-dim;
+                            }
+
+                            ChecklistBox {
+                                items: ResultsState.export_class_items;
+                                all_checked: ResultsState.export_class_all_checked;
+                                item_toggled(label) => { ResultsState.export_class_item_toggled(label); }
+                                select_all => { ResultsState.export_class_select_all(); }
+                                clear_all => { ResultsState.export_class_clear_all(); }
+                            }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 4px;
+                            alignment: start;
+
+                            Text {
+                                text: "Images to export:";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                font-weight: 600;
+                                color: Theme.text-dim;
+                            }
+
+                            ChecklistBox {
+                                items: ResultsState.export_image_items;
+                                all_checked: ResultsState.export_image_all_checked;
+                                item_toggled(label) => { ResultsState.export_image_item_toggled(label); }
+                                select_all => { ResultsState.export_image_select_all(); }
+                                clear_all => { ResultsState.export_image_clear_all(); }
+                            }
+                        }
                     }
 
                     each-image-ta := TouchArea {
@@ -240,21 +363,25 @@ export component ExportDialog inherits Rectangle {
                             spacing: 7px;
                             alignment: start;
 
-                            Rectangle {
-                                width: 13px;
-                                height: 13px;
-                                border-radius: 2px;
-                                border-width: 1.5px;
-                                border-color: ResultsState.export_each_image ? Theme.accent : Theme.border;
-                                background: ResultsState.export_each_image ? Theme.accent : transparent;
+                            VerticalLayout {
+                                alignment: center;
 
-                                if ResultsState.export_each_image: Image {
-                                    source: @image-url("../icons/regular-black/check.svg");
-                                    width: 9px;
-                                    height: 9px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: white;
+                                Rectangle {
+                                    width: 13px;
+                                    height: 13px;
+                                    border-radius: 2px;
+                                    border-width: 1.5px;
+                                    border-color: ResultsState.export_each_image ? Theme.accent : Theme.border;
+                                    background: ResultsState.export_each_image ? Theme.accent : transparent;
+
+                                    if ResultsState.export_each_image: Image {
+                                        source: @image-url("../icons/regular-black/check.svg");
+                                        width: 9px;
+                                        height: 9px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: white;
+                                    }
                                 }
                             }
 
@@ -266,6 +393,23 @@ export component ExportDialog inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
+                    }
+
+                    Text {
+                        text: "Columns to export:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        font-weight: 600;
+                        color: Theme.text-dim;
+                    }
+
+                    ChecklistBox {
+                        height: 110px;
+                        items: ResultsState.export_column_items;
+                        all_checked: ResultsState.export_column_all_checked;
+                        item_toggled(label) => { ResultsState.export_column_item_toggled(label); }
+                        select_all => { ResultsState.export_column_select_all(); }
+                        clear_all => { ResultsState.export_column_clear_all(); }
                     }
 
                     // -- Combination builder -------------------------------------
@@ -325,7 +469,7 @@ export component ExportDialog inherits Rectangle {
                     }
 
                     Rectangle {
-                        vertical-stretch: 1;
+                        height: 140px;
                         border-width: 1px;
                         border-color: Theme.border-soft;
                         border-radius: Theme.radius-sm;
@@ -429,7 +573,7 @@ export component ExportDialog inherits Rectangle {
 
             // -- Footer -----------------------------------------------------------
             Rectangle {
-                height: 56px;
+                height: ResultsState.export_running ? 64px : 56px;
                 background: Theme.bg;
 
                 Rectangle {
@@ -440,25 +584,51 @@ export component ExportDialog inherits Rectangle {
                     background: Theme.border-soft;
                 }
 
-                HorizontalLayout {
+                VerticalLayout {
                     padding-left: 20px;
                     padding-right: 16px;
-                    spacing: 12px;
-                    alignment: end;
+                    spacing: 4px;
+                    alignment: center;
 
-                    DialogButton {
-                        label: "Cancel";
-                        clicked => {
-                            ResultsState.export_dialog_close();
+                    if ResultsState.export_running: VerticalLayout {
+                        spacing: 2px;
+
+                        ProgressIndicator {
+                            progress: ResultsState.export_progress_fraction;
+                        }
+
+                        Text {
+                            text: ResultsState.export_progress_total > 0
+                                ? "File " + ResultsState.export_progress_current + " of " + ResultsState.export_progress_total
+                                : "";
+                            font-size: 10px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-faint;
                         }
                     }
 
-                    DialogButton {
-                        label: ResultsState.export_running ? "Exporting…" : "Export All";
-                        primary: true;
-                        enabled: !ResultsState.export_running;
-                        clicked => {
-                            ResultsState.export_run_all();
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: end;
+
+                        DialogButton {
+                            label: "Cancel";
+                            clicked => {
+                                if (ResultsState.export_running) {
+                                    ResultsState.export_cancel();
+                                } else {
+                                    ResultsState.export_dialog_close();
+                                }
+                            }
+                        }
+
+                        DialogButton {
+                            label: ResultsState.export_running ? "Exporting…" : "Export All";
+                            primary: true;
+                            enabled: !ResultsState.export_running;
+                            clicked => {
+                                ResultsState.export_run_all();
+                            }
                         }
                     }
                 }
