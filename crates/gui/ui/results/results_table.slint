@@ -305,6 +305,10 @@ export global ResultsState {
     // the dialog opens or `export_style` changes.
     in-out property <[FilterItem]> export_column_items: [];
     in-out property <bool> export_column_all_checked: true;
+    // Whether `export_column_items` currently has any "Intensity"-grouped
+    // column — gates showing the Intensity quick-pick buttons (None / Avg+Sum
+    // / All), which would otherwise be a no-op for a file with no channels.
+    in-out property <bool> export_has_intensity: false;
     // Name + format for the combination currently being assembled from the
     // checklists above; "Add" appends a snapshot of these to `export_batches`.
     in-out property <string> export_combo_name: "";
@@ -338,6 +342,9 @@ export global ResultsState {
     callback export_column_item_toggled(string);
     callback export_column_select_all();
     callback export_column_clear_all();
+    callback export_column_group_toggle(string);
+    // "none" | "avg_sum" | "all" — quick picks scoped to the Intensity section only.
+    callback export_column_intensity_preset(string);
     // Queues the current checklist/name/format as one combination to export.
     callback export_add_batch();
     callback export_remove_batch(int);

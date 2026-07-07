@@ -630,7 +630,7 @@ fn class_fanout_expr() -> &'static str {
 }
 
 /// SQL expression for one of `RoiRow`'s scaled per-channel intensity stats
-/// (`min_scaled` / `max_scaled` / `mean_scaled`, see `intensities_to_json`).
+/// (`min_scaled` / `max_scaled` / `mean_scaled` / `sum_scaled`, see `intensities_to_json`).
 ///
 /// Uses the scalar-path form of `json_extract` (a single string path), not
 /// the bracket/list form (`json_extract(col, ['{ch}'])`) — the list form
@@ -681,6 +681,7 @@ fn column_order_expr(col_id: &str) -> Option<String> {
                 "min_bit" => "min_scaled",
                 "max_bit" => "max_scaled",
                 "avg_bit" => "mean_scaled",
+                "sum_bit" => "sum_scaled",
                 _ => return None,
             };
             Some(channel_stat_expr(ch, stat))

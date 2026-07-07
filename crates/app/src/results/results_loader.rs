@@ -148,6 +148,12 @@ pub fn build_column_specs(channels: &[i32], coloc_partner_classes: &[String]) ->
             filterable: false,
             visible: true,
         });
+        cols.push(ColumnSpec {
+            id: format!("ch{ch}_sum_bit"),
+            label: format!("Ch{ch} Sum (bit)"),
+            filterable: false,
+            visible: true,
+        });
     }
     for class in coloc_partner_classes {
         cols.push(ColumnSpec {
@@ -180,7 +186,7 @@ pub fn to_display_row(row_idx: usize, roi: &RoiRow, columns: &[ColumnSpec]) -> D
         .iter()
         .any(|c| c.visible && c.id.starts_with("coloc_partner__"));
 
-    let intensities: BTreeMap<i32, (f64, f64, f64)> = if needs_intensities {
+    let intensities: BTreeMap<i32, (f64, f64, f64, f64)> = if needs_intensities {
         parse_intensities(&roi.intensities_json)
     } else {
         BTreeMap::new()
@@ -251,8 +257,8 @@ pub(crate) fn coloc_label(colocalized: bool) -> String {
     if colocalized { "Yes" } else { "No" }.to_string()
 }
 
-/// Parses `intensities_json` into a map of channel → (min_scaled, max_scaled, mean_scaled).
-pub(crate) fn parse_intensities(json: &str) -> BTreeMap<i32, (f64, f64, f64)> {
+/// Parses `intensities_json` into a map of channel → (min_scaled, max_scaled, mean_scaled, sum_scaled).
+pub(crate) fn parse_intensities(json: &str) -> BTreeMap<i32, (f64, f64, f64, f64)> {
     let mut result = BTreeMap::new();
     if json.is_empty() || json == "{}" {
         return result;
@@ -273,6 +279,7 @@ pub(crate) fn parse_intensities(json: &str) -> BTreeMap<i32, (f64, f64, f64)> {
                 stats["min_scaled"].as_f64().unwrap_or(0.0),
                 stats["max_scaled"].as_f64().unwrap_or(0.0),
                 stats["mean_scaled"].as_f64().unwrap_or(0.0),
+                stats["sum_scaled"].as_f64().unwrap_or(0.0),
             ),
         );
     }
@@ -280,7 +287,7 @@ pub(crate) fn parse_intensities(json: &str) -> BTreeMap<i32, (f64, f64, f64)> {
 }
 
 /// Extracts a formatted value for channel-intensity columns (e.g. `ch0_min_bit`).
-fn channel_value(col_id: &str, intensities: &BTreeMap<i32, (f64, f64, f64)>) -> String {
+fn channel_value(col_id: &str, intensities: &BTreeMap<i32, (f64, f64, f64, f64)>) -> String {
     let rest = match col_id.strip_prefix("ch") {
         Some(r) => r,
         None => return String::new(),
@@ -294,13 +301,14 @@ fn channel_value(col_id: &str, intensities: &BTreeMap<i32, (f64, f64, f64)>) -> 
         Err(_) => return String::new(),
     };
     let stat = &rest[under + 1..];
-    let Some(&(min, max, avg)) = intensities.get(&ch) else {
+    let Some(&(min, max, avg, sum)) = intensities.get(&ch) else {
         return String::new();
     };
     match stat {
         "min_bit" => format!("{:.0}", min),
         "max_bit" => format!("{:.0}", max),
         "avg_bit" => format!("{:.1}", avg),
+        "sum_bit" => format!("{:.0}", sum),
         _ => String::new(),
     }
 }
@@ -415,6 +423,7 @@ pub fn build_coloc_detail_column_specs(
         cols.push(mk(&format!("ch{ch}_min_bit"), &format!("Ch{ch} Min (bit)")));
         cols.push(mk(&format!("ch{ch}_max_bit"), &format!("Ch{ch} Max (bit)")));
         cols.push(mk(&format!("ch{ch}_avg_bit"), &format!("Ch{ch} Avg (bit)")));
+        cols.push(mk(&format!("ch{ch}_sum_bit"), &format!("Ch{ch} Sum (bit)")));
     }
     // One property group per partner class — mirrors the normal table's per-class columns.
     for cls in coloc_partner_classes {
@@ -428,6 +437,7 @@ pub fn build_coloc_detail_column_specs(
             cols.push(mk(&p(&format!("ch{ch}_min_bit")), &l(&format!("Ch{ch} Min (bit)"))));
             cols.push(mk(&p(&format!("ch{ch}_max_bit")), &l(&format!("Ch{ch} Max (bit)"))));
             cols.push(mk(&p(&format!("ch{ch}_avg_bit")), &l(&format!("Ch{ch} Avg (bit)"))));
+            cols.push(mk(&p(&format!("ch{ch}_sum_bit")), &l(&format!("Ch{ch} Sum (bit)"))));
         }
     }
     cols
@@ -520,7 +530,7 @@ fn coloc_detail_values(
         BTreeMap::new()
     };
     // Parse partner intensities lazily — only if there is a partner for this row.
-    let par_int: BTreeMap<i32, (f64, f64, f64)> = partner
+    let par_int: BTreeMap<i32, (f64, f64, f64, f64)> = partner
         .map(|p| parse_intensities(&p.intensities_json))
         .unwrap_or_default();
 
@@ -798,7 +808,7 @@ fn metric_precision(id: &str) -> usize {
 pub(crate) fn metric_value(
     id: &str,
     roi: &RoiRow,
-    intensities: &BTreeMap<i32, (f64, f64, f64)>,
+    intensities: &BTreeMap<i32, (f64, f64, f64, f64)>,
     coloc_partners: &BTreeMap<String, Vec<String>>,
 ) -> Option<f64> {
     match id {
@@ -816,11 +826,12 @@ pub(crate) fn metric_value(
             let rest = id.strip_prefix("ch")?;
             let under = rest.find('_')?;
             let ch: i32 = rest[..under].parse().ok()?;
-            let &(min, max, avg) = intensities.get(&ch)?;
+            let &(min, max, avg, sum) = intensities.get(&ch)?;
             match &rest[under + 1..] {
                 "min_bit" => Some(min),
                 "max_bit" => Some(max),
                 "avg_bit" => Some(avg),
+                "sum_bit" => Some(sum),
                 _ => None,
             }
         }
@@ -1409,9 +1420,9 @@ mod tests {
     }
 
     #[test]
-    fn build_column_specs_with_channels_adds_three_cols_per_channel() {
+    fn build_column_specs_with_channels_adds_four_cols_per_channel() {
         let specs = build_column_specs(&[0, 1], &[]);
-        assert_eq!(specs.len(), 7 + 3 * 2);
+        assert_eq!(specs.len(), 7 + 4 * 2);
         let ch_ids: Vec<&str> = specs[7..].iter().map(|c| c.id.as_str()).collect();
         assert_eq!(
             ch_ids,
@@ -1419,9 +1430,11 @@ mod tests {
                 "ch0_min_bit",
                 "ch0_max_bit",
                 "ch0_avg_bit",
+                "ch0_sum_bit",
                 "ch1_min_bit",
                 "ch1_max_bit",
-                "ch1_avg_bit"
+                "ch1_avg_bit",
+                "ch1_sum_bit",
             ]
         );
     }
@@ -1603,8 +1616,8 @@ mod tests {
             group_by_class: false,
         };
         let (specs, rows) = aggregate_rows(&rois, &config, &build_column_specs(&[0], &[]));
-        // group, count, area_px, area_nm2, circularity, ch0_min, ch0_max, ch0_avg
-        assert_eq!(specs.len(), 8);
+        // group, count, area_px, area_nm2, circularity, ch0_min, ch0_max, ch0_avg, ch0_sum
+        assert_eq!(specs.len(), 9);
         assert_eq!(rows.len(), 1);
         // Min of the per-ROI min_scaled values (10, 30) -> 10
         assert_eq!(rows[0].values[5], "10.0");

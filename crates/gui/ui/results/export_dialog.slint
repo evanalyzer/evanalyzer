@@ -39,6 +39,10 @@ component ChecklistBox inherits Rectangle {
     callback item_toggled(string);
     callback select_all();
     callback clear_all();
+    // Fired when a section header (e.g. "Intensity", "Coloc ClassA") is
+    // clicked, to toggle every item in that section at once. No-op (never
+    // fired) when `items` isn't grouped.
+    callback group_toggled(string);
 
     height: 190px;
     border-width: 1px;
@@ -104,11 +108,70 @@ component ChecklistBox inherits Rectangle {
                 }
             }
 
-            for item in root.items: FilterCheckbox {
-                label: item.label;
-                checked: item.checked;
-                toggled => {
-                    root.item_toggled(item.label);
+            for item in root.items: VerticalLayout {
+                spacing: 0px;
+
+                // -- Section header (e.g. "Intensity") — click toggles every
+                // column in this section at once, mirroring the main
+                // toolbar's own Columns filter popup.
+                if item.group_header: group-header-ta := TouchArea {
+                    height: 22px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.group_toggled(item.group);
+                    }
+
+                    Rectangle {
+                        background: group-header-ta.has-hover ? Theme.raised : Theme.bg;
+                        animate background { duration: 80ms; }
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 6px;
+                            spacing: 7px;
+                            alignment: start;
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                Rectangle {
+                                    width: 13px;
+                                    height: 13px;
+                                    border-radius: 2px;
+                                    border-width: 1.5px;
+                                    border-color: item.group_all_checked ? Theme.accent : Theme.border;
+                                    background: item.group_all_checked ? Theme.accent : transparent;
+
+                                    if item.group_all_checked: Image {
+                                        source: @image-url("../icons/regular-black/check.svg");
+                                        width: 9px;
+                                        height: 9px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: white;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: item.group;
+                                font-size: 10px;
+                                font-family: Theme.font-sans;
+                                font-weight: 700;
+                                color: Theme.text-mute;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
+                }
+
+                FilterCheckbox {
+                    label: item.label;
+                    checked: item.checked;
+                    toggled => {
+                        root.item_toggled(item.label);
+                    }
                 }
             }
         }
@@ -154,7 +217,7 @@ export component ExportDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: min(620px, parent.width - 40px);
-        height: min(780px, parent.height - 40px);
+        height: min(860px, parent.height - 40px);
         background: Theme.panel;
         border-radius: Theme.radius-lg;
         border-width: 1px;
@@ -395,21 +458,61 @@ export component ExportDialog inherits Rectangle {
                         }
                     }
 
-                    Text {
-                        text: "Columns to export:";
-                        font-size: 11px;
-                        font-family: Theme.font-sans;
-                        font-weight: 600;
-                        color: Theme.text-dim;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "Columns to export:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            font-weight: 600;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        if ResultsState.export_has_intensity: Text {
+                            text: "Intensity:";
+                            font-size: 10px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-faint;
+                            vertical-alignment: center;
+                        }
+
+                        if ResultsState.export_has_intensity: DialogButton {
+                            width: 60px;
+                            height: 22px;
+                            label: "None";
+                            clicked => { ResultsState.export_column_intensity_preset("none"); }
+                        }
+
+                        if ResultsState.export_has_intensity: DialogButton {
+                            width: 76px;
+                            height: 22px;
+                            label: "Avg+Sum";
+                            clicked => { ResultsState.export_column_intensity_preset("avg_sum"); }
+                        }
+
+                        if ResultsState.export_has_intensity: DialogButton {
+                            width: 60px;
+                            height: 22px;
+                            label: "All";
+                            clicked => { ResultsState.export_column_intensity_preset("all"); }
+                        }
                     }
 
                     ChecklistBox {
-                        height: 110px;
+                        height: 220px;
                         items: ResultsState.export_column_items;
                         all_checked: ResultsState.export_column_all_checked;
                         item_toggled(label) => { ResultsState.export_column_item_toggled(label); }
                         select_all => { ResultsState.export_column_select_all(); }
                         clear_all => { ResultsState.export_column_clear_all(); }
+                        group_toggled(group) => { ResultsState.export_column_group_toggle(group); }
                     }
 
                     // -- Combination builder -------------------------------------

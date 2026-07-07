@@ -612,6 +612,7 @@ impl ResultsTableController {
                 let all_visible = specs.iter().all(|c| c.visible);
                 state.set_export_column_items(to_model(column_items_from_specs(&specs)));
                 state.set_export_column_all_checked(all_visible);
+                state.set_export_has_intensity(has_intensity_columns(&specs));
                 state.set_export_group_by("none".into());
                 state.set_export_group_regex(SharedString::new());
 
@@ -721,6 +722,7 @@ impl ResultsTableController {
                     let all_visible = specs.iter().all(|c| c.visible);
                     state.set_export_column_items(to_model(column_items_from_specs(&specs)));
                     state.set_export_column_all_checked(all_visible);
+                    state.set_export_has_intensity(has_intensity_columns(&specs));
                     return;
                 }
 
@@ -739,11 +741,13 @@ impl ResultsTableController {
                     let all_visible = cached.iter().all(|c| c.visible);
                     state.set_export_column_items(to_model(column_items_from_specs(&cached)));
                     state.set_export_column_all_checked(all_visible);
+                    state.set_export_has_intensity(has_intensity_columns(&cached));
                 } else {
                     state.set_export_column_items(slint::ModelRc::new(slint::VecModel::from(
                         Vec::<FilterItem>::new(),
                     )));
                     state.set_export_column_all_checked(true);
+                    state.set_export_has_intensity(false);
                 }
                 state.set_export_status("Loading coloc-detail columns...".into());
 
@@ -783,6 +787,7 @@ impl ResultsTableController {
                         let all_visible = specs.iter().all(|c| c.visible);
                         state.set_export_column_items(to_model(column_items_from_specs(&specs)));
                         state.set_export_column_all_checked(all_visible);
+                        state.set_export_has_intensity(has_intensity_columns(&specs));
                         state.set_export_status(SharedString::new());
                     });
                 });
@@ -799,7 +804,7 @@ impl ResultsTableController {
                     toggle_item_by_label(&model_to_vec(&state.get_export_column_items()), &label);
                 let all_checked = items.iter().all(|i| i.checked);
                 state.set_export_column_all_checked(all_checked);
-                state.set_export_column_items(to_model(items));
+                state.set_export_column_items(to_model(mark_group_headers(items)));
             });
         }
 
@@ -811,7 +816,7 @@ impl ResultsTableController {
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_column_items()), true);
                 state.set_export_column_all_checked(true);
-                state.set_export_column_items(to_model(items));
+                state.set_export_column_items(to_model(mark_group_headers(items)));
             });
         }
         {
@@ -821,7 +826,43 @@ impl ResultsTableController {
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_column_items()), false);
                 state.set_export_column_all_checked(false);
-                state.set_export_column_items(to_model(items));
+                state.set_export_column_items(to_model(mark_group_headers(items)));
+            });
+        }
+
+        // --- export_column_group_toggle -------------------------------------------
+        // Toggles every column in one section (e.g. "Intensity", "Coloc ClassA") at
+        // once, mirroring the main toolbar's own Columns filter popup.
+        {
+            let this = Arc::clone(self);
+            state.on_export_column_group_toggle(move |group: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let current = model_to_vec(&state.get_export_column_items());
+                let currently_all_checked = group_all_checked_for_search(&current, group.as_str(), "");
+                let items =
+                    set_group_checked_for_search(&current, group.as_str(), "", !currently_all_checked);
+                let all_checked = items.iter().all(|i| i.checked);
+                state.set_export_column_all_checked(all_checked);
+                state.set_export_column_items(to_model(mark_group_headers(items)));
+            });
+        }
+
+        // --- export_column_intensity_preset ---------------------------------------
+        // Quick picks for the "Intensity" section specifically: clear it, keep only
+        // Avg+Sum (the two stats most exports actually want), or select every stat.
+        {
+            let this = Arc::clone(self);
+            state.on_export_column_intensity_preset(move |preset: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = apply_intensity_preset(
+                    model_to_vec(&state.get_export_column_items()),
+                    preset.as_str(),
+                );
+                let all_checked = items.iter().all(|i| i.checked);
+                state.set_export_column_all_checked(all_checked);
+                state.set_export_column_items(to_model(mark_group_headers(items)));
             });
         }
 
@@ -2778,15 +2819,66 @@ fn heatmap_color_scheme_options() -> Vec<SharedString> {
 /// Seeds the export dialog's "Columns to export" checklist from a column
 /// spec list — checked state mirrors each spec's current table visibility,
 /// so by default the export matches what's shown, with room to adjust.
+/// Grouped (via `export_column_group`/`mark_group_headers`) the same way the
+/// main toolbar's own Columns filter popup groups channel/coloc columns, so
+/// e.g. every "Coloc ClassA" or "Intensity" column can be toggled as one
+/// section instead of one at a time.
+fn has_intensity_columns(specs: &[ColumnSpec]) -> bool {
+    specs.iter().any(|c| c.id.starts_with("ch"))
+}
+
 fn column_items_from_specs(specs: &[ColumnSpec]) -> Vec<FilterItem> {
-    specs
+    let items: Vec<FilterItem> = specs
         .iter()
         .map(|c| FilterItem {
             label: c.label.as_str().into(),
             checked: c.visible,
-            group: SharedString::new(),
+            group: export_column_group(&c.id).into(),
             group_header: false,
             group_all_checked: false,
+        })
+        .collect();
+    mark_group_headers(items)
+}
+
+/// Section a column belongs to in the export dialog's "Columns to export"
+/// checklist, or `""` for columns that don't belong to a section.
+///
+/// Unlike the main toolbar's `column_group` (which lumps every coloc-partner
+/// column together under one "Colocalization" header), each partner class
+/// gets its own group here — e.g. "Coloc ClassA", "Coloc ClassB" — since the
+/// export dialog can show many partner classes at once and the user wants to
+/// pick columns per class, not just colocalization-columns-as-a-whole.
+fn export_column_group(col_id: &str) -> String {
+    if let Some(rest) = col_id.strip_prefix("coloc_partner__") {
+        return rest.rsplit_once("__").map_or(String::new(), |(class, _)| format!("Coloc {class}"));
+    }
+    if let Some(rest) = col_id.strip_prefix("coloc_detail__") {
+        return rest.rsplit_once("__").map_or(String::new(), |(class, _)| format!("Coloc {class}"));
+    }
+    if col_id.starts_with("ch") {
+        return "Intensity".to_string();
+    }
+    String::new()
+}
+
+/// Applies one of the Intensity section's quick-pick presets: `"none"`
+/// unchecks every Intensity column, `"avg_sum"` checks only the Avg/Sum
+/// stats (Min/Max off), anything else (`"all"`) checks every Intensity
+/// column. Columns outside the Intensity group are left untouched.
+fn apply_intensity_preset(items: Vec<FilterItem>, preset: &str) -> Vec<FilterItem> {
+    items
+        .into_iter()
+        .map(|mut item| {
+            if item.group.as_str() != "Intensity" {
+                return item;
+            }
+            item.checked = match preset {
+                "none" => false,
+                "avg_sum" => item.label.ends_with("Avg (bit)") || item.label.ends_with("Sum (bit)"),
+                _ => true,
+            };
+            item
         })
         .collect()
 }
@@ -3259,6 +3351,97 @@ mod tests {
         assert!(items[0].checked);
         assert_eq!(items[1].label, SharedString::from("Area (px²)"));
         assert!(!items[1].checked, "hidden columns must start unchecked in the export dialog");
+    }
+
+    #[test]
+    fn export_column_group_buckets_intensity_and_per_partner_class_coloc_columns() {
+        assert_eq!(export_column_group("ch0_min_bit"), "Intensity");
+        assert_eq!(export_column_group("ch12_sum_bit"), "Intensity");
+        assert_eq!(export_column_group("coloc_partner__ClassA__count"), "Coloc ClassA");
+        assert_eq!(export_column_group("coloc_partner__ClassB__ids"), "Coloc ClassB");
+        assert_eq!(export_column_group("coloc_detail__ClassA__ch0_avg_bit"), "Coloc ClassA");
+        assert_eq!(export_column_group("coloc_detail__ClassA__roi_id"), "Coloc ClassA");
+        assert_eq!(export_column_group("roi_id"), "");
+        assert_eq!(export_column_group("area_px"), "");
+    }
+
+    #[test]
+    fn column_items_from_specs_marks_group_headers_for_intensity_and_coloc_columns() {
+        let specs = vec![
+            ColumnSpec { id: "roi_id".into(), label: "ROI ID".into(), filterable: false, visible: true },
+            ColumnSpec { id: "ch0_min_bit".into(), label: "Ch0 Min (bit)".into(), filterable: false, visible: true },
+            ColumnSpec { id: "ch0_max_bit".into(), label: "Ch0 Max (bit)".into(), filterable: false, visible: true },
+            ColumnSpec {
+                id: "coloc_partner__ClassA__count".into(),
+                label: "Coloc w/ ClassA (#)".into(),
+                filterable: false,
+                visible: true,
+            },
+        ];
+        let items = column_items_from_specs(&specs);
+
+        assert_eq!(items[0].group, SharedString::new(), "ungrouped column has no header");
+        assert!(!items[0].group_header);
+
+        assert_eq!(items[1].group, SharedString::from("Intensity"));
+        assert!(items[1].group_header, "first item of a group run is the header");
+        assert!(items[1].group_all_checked);
+
+        assert_eq!(items[2].group, SharedString::from("Intensity"));
+        assert!(!items[2].group_header, "second item of the same group is not a header");
+
+        assert_eq!(items[3].group, SharedString::from("Coloc ClassA"));
+        assert!(items[3].group_header, "a new group starts a new header");
+    }
+
+    fn intensity_items() -> Vec<FilterItem> {
+        let labels = ["Ch0 Min (bit)", "Ch0 Max (bit)", "Ch0 Avg (bit)", "Ch0 Sum (bit)"];
+        labels
+            .iter()
+            .map(|l| FilterItem {
+                label: SharedString::from(*l),
+                checked: true,
+                group: "Intensity".into(),
+                group_header: false,
+                group_all_checked: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn apply_intensity_preset_none_unchecks_every_intensity_column() {
+        let items = apply_intensity_preset(intensity_items(), "none");
+        assert!(items.iter().all(|i| !i.checked));
+    }
+
+    #[test]
+    fn apply_intensity_preset_avg_sum_checks_only_avg_and_sum() {
+        let items = apply_intensity_preset(intensity_items(), "avg_sum");
+        let checked: Vec<&str> =
+            items.iter().filter(|i| i.checked).map(|i| i.label.as_str()).collect();
+        assert_eq!(checked, ["Ch0 Avg (bit)", "Ch0 Sum (bit)"]);
+    }
+
+    #[test]
+    fn apply_intensity_preset_all_checks_every_intensity_column() {
+        let mut items = intensity_items();
+        items[0].checked = false;
+        let items = apply_intensity_preset(items, "all");
+        assert!(items.iter().all(|i| i.checked));
+    }
+
+    #[test]
+    fn apply_intensity_preset_leaves_other_groups_untouched() {
+        let mut items = intensity_items();
+        items.push(FilterItem {
+            label: "Coloc w/ ClassA (#)".into(),
+            checked: true,
+            group: "Coloc ClassA".into(),
+            group_header: false,
+            group_all_checked: false,
+        });
+        let items = apply_intensity_preset(items, "none");
+        assert!(items.last().unwrap().checked, "non-Intensity columns must be unaffected");
     }
 
     #[test]
