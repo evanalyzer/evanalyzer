@@ -866,6 +866,22 @@ impl ResultsTableController {
             });
         }
 
+        // --- export_column_apply_group_to_all -------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_column_apply_group_to_all(move |group: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = apply_coloc_group_template(
+                    model_to_vec(&state.get_export_column_items()),
+                    group.as_str(),
+                );
+                let all_checked = items.iter().all(|i| i.checked);
+                state.set_export_column_all_checked(all_checked);
+                state.set_export_column_items(to_model(mark_group_headers(items)));
+            });
+        }
+
         // --- export_add_batch ----------------------------------------------------
         {
             let this = Arc::clone(self);
@@ -915,6 +931,30 @@ impl ResultsTableController {
                     }
                 };
 
+                // Captured now (not read live at export time) so this batch's
+                // columns stay correct even if the user later flips
+                // style/columns to configure a different combination.
+                let column_items = model_to_vec(&state.get_export_column_items());
+                let selected_columns: Vec<String> = column_items
+                    .iter()
+                    .filter(|i| i.checked)
+                    .map(|i| i.label.to_string())
+                    .collect();
+                if !column_items.is_empty() && selected_columns.is_empty() {
+                    state.set_export_status("Pick at least one column before adding.".into());
+                    return;
+                }
+                let all_columns_selected = selected_columns.len() == column_items.len();
+                let columns: Vec<SharedString> = if all_columns_selected {
+                    Vec::new()
+                } else {
+                    selected_columns.iter().map(SharedString::from).collect()
+                };
+
+                let style = state.get_export_style().to_string();
+                let group_by = state.get_export_group_by().to_string();
+                let group_regex = state.get_export_group_regex().to_string();
+
                 let mut batches = export_batches_to_vec(&state.get_export_batches());
                 batches.push(ExportBatchItem {
                     name: name.into(),
@@ -926,6 +966,11 @@ impl ResultsTableController {
                     )),
                     images_label: images_label.into(),
                     each_image: state.get_export_each_image(),
+                    style_label: export_style_label(&style, &group_by).into(),
+                    style: style.into(),
+                    group_by: group_by.into(),
+                    group_regex: group_regex.into(),
+                    columns: slint::ModelRc::new(slint::VecModel::from(columns)),
                 });
                 state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(batches)));
                 state.set_export_combo_name(SharedString::new());
@@ -989,6 +1034,27 @@ impl ResultsTableController {
                         let n = n.trim().to_string();
                         if n.is_empty() { "results".to_string() } else { n }
                     };
+                    let style = state.get_export_style().to_string();
+                    let group_by = state.get_export_group_by().to_string();
+                    let group_regex = state.get_export_group_regex().to_string();
+
+                    let column_items = model_to_vec(&state.get_export_column_items());
+                    let selected_columns: Vec<String> = column_items
+                        .iter()
+                        .filter(|i| i.checked)
+                        .map(|i| i.label.to_string())
+                        .collect();
+                    if !column_items.is_empty() && selected_columns.is_empty() {
+                        state.set_export_status("Pick at least one column to export.".into());
+                        return;
+                    }
+                    let all_columns_selected = selected_columns.len() == column_items.len();
+                    let columns: Vec<SharedString> = if all_columns_selected {
+                        Vec::new()
+                    } else {
+                        selected_columns.iter().map(SharedString::from).collect()
+                    };
+
                     batches.push(ExportBatchItem {
                         name: name.into(),
                         classes: slint::ModelRc::new(slint::VecModel::from(classes)),
@@ -999,6 +1065,11 @@ impl ResultsTableController {
                         )),
                         images_label: SharedString::new(),
                         each_image: state.get_export_each_image(),
+                        style_label: SharedString::new(),
+                        style: style.into(),
+                        group_by: group_by.into(),
+                        group_regex: group_regex.into(),
+                        columns: slint::ModelRc::new(slint::VecModel::from(columns)),
                     });
                 }
 
@@ -1021,6 +1092,13 @@ impl ResultsTableController {
                             .collect(),
                         each_image: batch.each_image,
                         is_xlsx: batch.format.as_str() == "xlsx",
+                        is_coloc_detail: batch.style.as_str() == "coloc_detail",
+                        group_by: batch.group_by.to_string(),
+                        group_regex: batch.group_regex.to_string(),
+                        columns: (0..batch.columns.row_count())
+                            .filter_map(|i| batch.columns.row_data(i))
+                            .map(|s| s.to_string())
+                            .collect(),
                     })
                     .collect();
 
@@ -1028,39 +1106,12 @@ impl ResultsTableController {
                 let coloc_filter = this.coloc_filter.lock().unwrap().clone();
                 let t_stack_filter = *this.t_stack_filter.lock().unwrap();
                 let z_stack_filter = *this.z_stack_filter.lock().unwrap();
-                let group = group_config_from_dialog(
-                    state.get_export_group_by().as_str(),
-                    state.get_export_group_regex().to_string(),
-                );
-                let is_coloc_detail = state.get_export_style().as_str() == "coloc_detail";
-                let mut base_specs = if is_coloc_detail {
-                    this.coloc_detail_column_specs.lock().unwrap().clone()
-                } else {
-                    this.column_specs.lock().unwrap().clone()
-                };
-
-                // Empty means the checklist was never seeded for this style
-                // (e.g. Coloc Details was picked but never actually visited
-                // yet, so there are no cached specs to check against) —
-                // treat that as "no column filter" rather than hiding
-                // everything.
-                let column_items = model_to_vec(&state.get_export_column_items());
-                let visible_labels: Option<HashSet<String>> = if column_items.is_empty() {
-                    None
-                } else {
-                    Some(
-                        column_items
-                            .iter()
-                            .filter(|i| i.checked)
-                            .map(|i| i.label.to_string())
-                            .collect(),
-                    )
-                };
-                if let Some(labels) = &visible_labels {
-                    for spec in base_specs.iter_mut() {
-                        spec.visible = labels.contains(&spec.label);
-                    }
-                }
+                // The table-style column specs, reused as the template for
+                // every "table" batch below (each batch clones it and applies
+                // its own captured column selection on top). Coloc Details
+                // batches don't need this — that exporter discovers its own
+                // columns and only consults each batch's `columns` labels.
+                let table_specs = this.column_specs.lock().unwrap().clone();
 
                 let total_files: usize = batches
                     .iter()
@@ -1090,6 +1141,23 @@ impl ResultsTableController {
                             if batch.classes.is_empty() { None } else { Some(batch.classes.clone()) };
                         let is_xlsx = batch.is_xlsx;
                         let ext = if is_xlsx { "xlsx" } else { "csv" };
+
+                        // Empty `columns` means "every column" (either the
+                        // checklist was never seeded for this batch's style,
+                        // or the user left every column checked) — treat
+                        // that as "no filter" rather than hiding everything.
+                        let visible_labels: Option<HashSet<String>> = if batch.columns.is_empty() {
+                            None
+                        } else {
+                            Some(batch.columns.iter().cloned().collect())
+                        };
+                        let group = group_config_from_dialog(&batch.group_by, batch.group_regex.clone());
+                        let mut base_specs = table_specs.clone();
+                        if let Some(labels) = &visible_labels {
+                            for spec in base_specs.iter_mut() {
+                                spec.visible = labels.contains(&spec.label);
+                            }
+                        }
 
                         // One file per checked image (its name folded into
                         // the filename) when `each_image`, otherwise one file
@@ -1123,7 +1191,7 @@ impl ResultsTableController {
                                 ..Default::default()
                             };
 
-                            let result = match (is_coloc_detail, is_xlsx) {
+                            let result = match (batch.is_coloc_detail, is_xlsx) {
                                 (true, true) => exporter.export_coloc_detail_to_xlsx(
                                     filter,
                                     visible_labels.as_ref(),
@@ -2883,6 +2951,52 @@ fn apply_intensity_preset(items: Vec<FilterItem>, preset: &str) -> Vec<FilterIte
         .collect()
 }
 
+/// Copies `source_group`'s checked pattern onto every "Coloc *" group,
+/// matching by field *position* within each group rather than by label
+/// (labels differ per class, e.g. "Coloc ClassA ROI ID" vs "Coloc ClassB ROI
+/// ID", but every class shares the same field layout/order by construction —
+/// see `build_column_specs`/`build_coloc_detail_column_specs`). A no-op for
+/// any group outside the "Coloc " family (e.g. "Intensity", which is always
+/// a singleton section with nothing else to copy to).
+fn apply_coloc_group_template(items: Vec<FilterItem>, source_group: &str) -> Vec<FilterItem> {
+    if !source_group.starts_with("Coloc ") {
+        return items;
+    }
+    let template: Vec<bool> =
+        items.iter().filter(|i| i.group.as_str() == source_group).map(|i| i.checked).collect();
+    if template.is_empty() {
+        return items;
+    }
+
+    let mut group_positions: HashMap<String, usize> = HashMap::new();
+    items
+        .into_iter()
+        .map(|mut item| {
+            if item.group.as_str().starts_with("Coloc ") {
+                let pos = group_positions.entry(item.group.to_string()).or_insert(0);
+                if let Some(&checked) = template.get(*pos) {
+                    item.checked = checked;
+                }
+                *pos += 1;
+            }
+            item
+        })
+        .collect()
+}
+
+/// Display label for a queued combination's captured style/grouping, e.g.
+/// "Table", "Table · Image", "Table · Regex", "Coloc Details".
+fn export_style_label(style: &str, group_by: &str) -> String {
+    if style == "coloc_detail" {
+        return "Coloc Details".to_string();
+    }
+    match group_by {
+        "image" => "Table · Image".to_string(),
+        "regex" => "Table · Regex".to_string(),
+        _ => "Table".to_string(),
+    }
+}
+
 /// Builds the `GroupConfig` for an export run from the dialog's own "Group
 /// by" choice — mirrors the aggregate/split presets the main table's own
 /// quick Group-by-Image / Group-by-Regex buttons use (avg + sum, split by
@@ -3015,6 +3129,12 @@ struct PlannedExport {
     /// of one file covering all of them together.
     each_image: bool,
     is_xlsx: bool,
+    is_coloc_detail: bool,
+    /// "none" | "image" | "regex"; ignored when `is_coloc_detail`.
+    group_by: String,
+    group_regex: String,
+    /// Column labels to include; empty means "every column" (no filter applied).
+    columns: Vec<String>,
 }
 
 /// An image's display name with its own file extension stripped (e.g.
@@ -3442,6 +3562,68 @@ mod tests {
         });
         let items = apply_intensity_preset(items, "none");
         assert!(items.last().unwrap().checked, "non-Intensity columns must be unaffected");
+    }
+
+    fn coloc_item(label: &str, group: &str, checked: bool) -> FilterItem {
+        FilterItem {
+            label: SharedString::from(label),
+            checked,
+            group: SharedString::from(group),
+            group_header: false,
+            group_all_checked: false,
+        }
+    }
+
+    #[test]
+    fn apply_coloc_group_template_copies_checked_pattern_by_position_across_classes() {
+        let items = vec![
+            coloc_item("Coloc ClassA ROI ID", "Coloc ClassA", true),
+            coloc_item("Coloc ClassA Area (px²)", "Coloc ClassA", false),
+            coloc_item("Coloc ClassA Circularity", "Coloc ClassA", true),
+            coloc_item("Coloc ClassB ROI ID", "Coloc ClassB", true),
+            coloc_item("Coloc ClassB Area (px²)", "Coloc ClassB", true),
+            coloc_item("Coloc ClassB Circularity", "Coloc ClassB", true),
+        ];
+        let items = apply_coloc_group_template(items, "Coloc ClassA");
+        let class_b: Vec<bool> =
+            items.iter().filter(|i| i.group.as_str() == "Coloc ClassB").map(|i| i.checked).collect();
+        assert_eq!(class_b, vec![true, false, true], "ClassB must mirror ClassA field-by-field");
+    }
+
+    #[test]
+    fn apply_coloc_group_template_is_a_noop_for_non_coloc_groups() {
+        let items = intensity_items();
+        let after = apply_coloc_group_template(items.clone(), "Intensity");
+        let before: Vec<bool> = items.iter().map(|i| i.checked).collect();
+        let after: Vec<bool> = after.iter().map(|i| i.checked).collect();
+        assert_eq!(before, after, "Intensity is a singleton section — nothing to propagate to");
+    }
+
+    #[test]
+    fn apply_coloc_group_template_leaves_other_sections_untouched() {
+        let mut items = vec![
+            coloc_item("Coloc ClassA ROI ID", "Coloc ClassA", false),
+            coloc_item("Coloc ClassB ROI ID", "Coloc ClassB", true),
+        ];
+        items.extend(intensity_items());
+        let items = apply_coloc_group_template(items, "Coloc ClassA");
+        assert!(
+            items.iter().filter(|i| i.group.as_str() == "Intensity").all(|i| i.checked),
+            "Intensity columns must be unaffected by a Coloc-group propagate"
+        );
+    }
+
+    #[test]
+    fn export_style_label_covers_every_combination() {
+        assert_eq!(export_style_label("table", "none"), "Table");
+        assert_eq!(export_style_label("table", "image"), "Table · Image");
+        assert_eq!(export_style_label("table", "regex"), "Table · Regex");
+        assert_eq!(export_style_label("coloc_detail", "none"), "Coloc Details");
+        assert_eq!(
+            export_style_label("coloc_detail", "image"),
+            "Coloc Details",
+            "grouping is ignored for Coloc Details, which is always flat"
+        );
     }
 
     #[test]

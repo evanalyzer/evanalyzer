@@ -64,6 +64,24 @@ export struct ExportBatchItem {
     // When true, one output file is written per image in `images` (its name
     // folded into the output filename) instead of one file covering all of them.
     each_image: bool,
+    // "table" or "coloc_detail" — captured at "Add" time, so a batch of
+    // queued combinations can mix both export styles (and grouped/ungrouped
+    // table exports) in one "Export All" run instead of sharing one style.
+    style: string,
+    // "none" | "image" | "regex" — grouping captured at "Add" time; only
+    // meaningful when `style == "table"`.
+    group_by: string,
+    // Regex pattern, only meaningful when `group_by == "regex"`.
+    group_regex: string,
+    // Precomputed display string for the list row, e.g. "Table", "Table ·
+    // Image", "Table · Regex", or "Coloc Details".
+    style_label: string,
+    // Column labels to include, captured from whichever column set matched
+    // `style` at "Add" time; empty means "every column" (no filter). Captured
+    // per-batch (not read live at export time) so a queued "Coloc Details"
+    // combination doesn't end up filtered by a "Table"-style column
+    // selection the user made afterwards, or vice versa.
+    columns: [string],
 }
 
 export enum ResultsViewMode { table, chart, coloc_table }
@@ -345,6 +363,11 @@ export global ResultsState {
     callback export_column_group_toggle(string);
     // "none" | "avg_sum" | "all" — quick picks scoped to the Intensity section only.
     callback export_column_intensity_preset(string);
+    // Copies one "Coloc {Class}" section's checked pattern onto every other
+    // Coloc class section (by field position), so configuring columns for
+    // one partner class can be stamped onto the rest instead of repeating
+    // the same clicks per class.
+    callback export_column_apply_group_to_all(string);
     // Queues the current checklist/name/format as one combination to export.
     callback export_add_batch();
     callback export_remove_batch(int);

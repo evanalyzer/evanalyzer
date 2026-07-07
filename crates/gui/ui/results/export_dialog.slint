@@ -43,6 +43,8 @@ component ChecklistBox inherits Rectangle {
     // clicked, to toggle every item in that section at once. No-op (never
     // fired) when `items` isn't grouped.
     callback group_toggled(string);
+    // Fired when a Coloc class section's "copy to all" icon is clicked.
+    callback group_apply_to_all(string);
 
     height: 190px;
     border-width: 1px;
@@ -161,6 +163,34 @@ component ChecklistBox inherits Rectangle {
                                 color: Theme.text-mute;
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
+                            }
+
+                            // Stamps this Coloc class's checked pattern onto every
+                            // other Coloc class section — configure one class, then
+                            // copy it instead of repeating the clicks per class.
+                            // Only shown for Coloc sections (Intensity is always a
+                            // singleton section, so there'd be nothing to copy to).
+                            if item.group != "Intensity": apply-all-ta := TouchArea {
+                                width: 20px;
+                                height: 20px;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.group_apply_to_all(item.group);
+                                }
+
+                                Rectangle {
+                                    border-radius: Theme.radius-sm;
+                                    background: apply-all-ta.has-hover ? Theme.hover : transparent;
+
+                                    Image {
+                                        source: @image-url("../icons/regular-black/copy-simple.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Theme.text-mute;
+                                    }
+                                }
                             }
                         }
                     }
@@ -513,6 +543,7 @@ export component ExportDialog inherits Rectangle {
                         select_all => { ResultsState.export_column_select_all(); }
                         clear_all => { ResultsState.export_column_clear_all(); }
                         group_toggled(group) => { ResultsState.export_column_group_toggle(group); }
+                        group_apply_to_all(group) => { ResultsState.export_column_apply_group_to_all(group); }
                     }
 
                     // -- Combination builder -------------------------------------
@@ -631,6 +662,17 @@ export component ExportDialog inherits Rectangle {
                                             color: batch.each_image ? Theme.accent : Theme.text-mute;
                                             vertical-alignment: center;
                                             horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: batch.style_label;
+                                            width: 80px;
+                                            font-size: 10px;
+                                            font-family: Theme.font-mono;
+                                            font-weight: 600;
+                                            color: Theme.text-dim;
+                                            vertical-alignment: center;
                                             overflow: elide;
                                         }
 
