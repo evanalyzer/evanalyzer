@@ -331,6 +331,7 @@ export component ExportDialog inherits Rectangle {
 
                         Text {
                             text: "Export style:";
+                            width: 74px;
                             font-size: 11px;
                             font-family: Theme.font-sans;
                             color: Theme.text-dim;
@@ -360,6 +361,7 @@ export component ExportDialog inherits Rectangle {
 
                         Text {
                             text: "Group by:";
+                            width: 74px;
                             font-size: 11px;
                             font-family: Theme.font-sans;
                             color: Theme.text-dim;
@@ -587,6 +589,14 @@ export component ExportDialog inherits Rectangle {
                                 ResultsState.export_add_batch();
                             }
                         }
+
+                        DialogButton {
+                            width: 118px;
+                            label: "Add from table";
+                            clicked => {
+                                ResultsState.export_add_batch_from_table();
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -754,7 +764,19 @@ export component ExportDialog inherits Rectangle {
 
                     HorizontalLayout {
                         spacing: 12px;
-                        alignment: end;
+
+                        DialogButton {
+                            width: 140px;
+                            label: "Export as Displayed";
+                            enabled: !ResultsState.export_running;
+                            clicked => {
+                                ResultsState.export_as_displayed();
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
 
                         DialogButton {
                             label: "Cancel";

@@ -511,6 +511,13 @@ pub fn flatten_coloc_rows(
     out
 }
 
+/// Shown in a coloc-detail row's partner "ROI ID" column when the source's
+/// `coloc_json` references a partner id that doesn't match any ROI actually
+/// present in the file (e.g. a stale colocalization result left over from an
+/// object that was later removed) — distinguishes "referenced but missing"
+/// from "no partner recorded at all" (which renders as a plain empty cell).
+const UNRESOLVED_PARTNER_MARKER: &str = "(missing)";
+
 /// Builds one row's values for the coloc detail flat table.
 /// `active_partner_classes` lists every class label the partner in this row is
 /// recorded under; only column groups matching one of those classes are filled —
@@ -565,9 +572,15 @@ fn coloc_detail_values(
                         return String::new();
                     }
                     match field {
-                        "roi_id" => {
-                            partner.map(|p| p.object_id.clone()).unwrap_or_default()
-                        }
+                        // A class this row is legitimately active for (checked
+                        // above) but with no resolved `partner` means the id
+                        // referenced in the source's `coloc_json` doesn't match
+                        // any ROI in this file (e.g. a stale reference to an
+                        // object that no longer exists) — flag it rather than
+                        // rendering a blank cell that looks like "no partner".
+                        "roi_id" => partner
+                            .map(|p| p.object_id.clone())
+                            .unwrap_or_else(|| UNRESOLVED_PARTNER_MARKER.to_string()),
                         "area_px" => {
                             partner.map(|p| p.area_px.to_string()).unwrap_or_default()
                         }
@@ -1860,6 +1873,38 @@ mod tests {
         assert_eq!(rows.len(), 3, "2 rows for src1's partners + 1 row for src2");
         assert_eq!(rows[0].stripe, rows[1].stripe, "both of src1's rows share one stripe");
         assert_ne!(rows[1].stripe, rows[2].stripe, "stripe toggles moving to src2");
+    }
+
+    #[test]
+    fn flatten_coloc_rows_flags_a_partner_reference_that_does_not_resolve() {
+        // src's coloc_json references three distinct partner ids, but only
+        // two of them (C and D) actually exist in partner_lookup — the third
+        // (a stale/orphaned reference) must still produce its own row rather
+        // than being silently merged into the "no partner" case, and its ROI
+        // ID column must be visibly flagged rather than blank.
+        let mut src = make_roi("img", vec![], None, 0, 0.0, 0.0, "{}");
+        src.object_id = "00000000-0000-0000-0000-000000000001".into();
+        src.coloc_json = r#"{"ClassA":["00000000-0000-0000-0000-000000000002","00000000-0000-0000-0000-000000000003","00000000-0000-0000-0000-000000000099"]}"#.into();
+
+        let mut c = make_roi("img", vec!["ClassA".into()], None, 0, 0.0, 0.0, "{}");
+        c.object_id = "00000000-0000-0000-0000-000000000002".into();
+        let mut d = make_roi("img", vec!["ClassA".into()], None, 0, 0.0, 0.0, "{}");
+        d.object_id = "00000000-0000-0000-0000-000000000003".into();
+        // Note: id "...099" is intentionally absent from partner_lookup.
+
+        let specs = build_coloc_detail_column_specs(&[], &["ClassA".to_string()]);
+        let rows = flatten_coloc_rows(&[src], &[c, d], &specs);
+
+        assert_eq!(rows.len(), 3, "one row per referenced partner id, including the unresolved one");
+
+        let col = specs.iter().position(|c| c.id == "coloc_detail__ClassA__roi_id").unwrap();
+        let roi_ids: Vec<&str> = rows.iter().map(|r| r.values[col].as_str()).collect();
+        assert!(roi_ids.contains(&"00000000-0000-0000-0000-000000000002"));
+        assert!(roi_ids.contains(&"00000000-0000-0000-0000-000000000003"));
+        assert!(
+            roi_ids.contains(&"(missing)"),
+            "the unresolved reference must be flagged, not rendered as a blank cell: {roi_ids:?}"
+        );
     }
 
     #[test]

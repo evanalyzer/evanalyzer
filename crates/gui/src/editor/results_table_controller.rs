@@ -1270,6 +1270,167 @@ impl ResultsTableController {
                 window.global::<ResultsState>().set_export_status("Cancelling...".into());
             });
         }
+
+        // --- export_as_displayed -----------------------------------------------
+        // Immediate one-shot export matching the results table's own current
+        // filters/style/grouping/columns — bypasses the batch queue.
+        {
+            let this = Arc::clone(self);
+            state.on_export_as_displayed(move || {
+                let Some(path) = this.path.lock().unwrap().clone() else { return };
+                let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
+
+                let default_name = if is_coloc_detail { "coloc_detail.csv" } else { "results.csv" };
+                let Some(export_path) = rfd::FileDialog::new()
+                    .add_filter("CSV", &["csv"])
+                    .add_filter("Excel", &["xlsx"])
+                    .set_file_name(default_name)
+                    .save_file()
+                else {
+                    return;
+                };
+                let is_xlsx = export_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("xlsx"));
+
+                let image_filter = this.image_filter.lock().unwrap().clone();
+                let class_filter = this.class_filter.lock().unwrap().clone();
+                let coloc_filter = this.coloc_filter.lock().unwrap().clone();
+                let t_stack_filter = *this.t_stack_filter.lock().unwrap();
+                let z_stack_filter = *this.z_stack_filter.lock().unwrap();
+                let group = this.group_config.lock().unwrap().clone();
+                let base_specs = this.column_specs.lock().unwrap().clone();
+
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                state.set_export_status("Exporting...".into());
+
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || {
+                    let loader = Arc::new(ResultsLoader::new(&path));
+                    let exporter = ResultsExporter::new(loader);
+                    let filter = DatabaseFilter {
+                        image_filter,
+                        class_filter,
+                        coloc_filter,
+                        t_stack_filter,
+                        z_stack_filter,
+                        ..Default::default()
+                    };
+                    let result = match (is_coloc_detail, is_xlsx) {
+                        (true, true) => {
+                            exporter.export_coloc_detail_to_xlsx(filter, None, &export_path)
+                        }
+                        (true, false) => {
+                            exporter.export_coloc_detail_to_csv(filter, None, &export_path)
+                        }
+                        (false, true) => {
+                            exporter.export_to_xlsx(filter, &group, &base_specs, &export_path)
+                        }
+                        (false, false) => {
+                            exporter.export_to_csv(filter, &group, &base_specs, &export_path)
+                        }
+                    };
+                    let status = match result {
+                        Ok(()) => format!("Exported to {}", export_path.display()),
+                        Err(e) => {
+                            warn!("export_as_displayed failed: {:?}", e);
+                            "Export failed — see logs.".to_string()
+                        }
+                    };
+                    let ui = this.ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(window) = ui.upgrade() else { return };
+                        window.global::<ResultsState>().set_export_status(status.into());
+                    });
+                });
+            });
+        }
+
+        // --- export_add_batch_from_table ----------------------------------------
+        // Queues a combination captured from the results table's own current
+        // filters/style/grouping/columns, reusing the Name/Format fields
+        // (the same ones "+ Add" reads) since those aren't part of "the
+        // table's own state" the way filters/grouping/columns are.
+        {
+            let this = Arc::clone(self);
+            state.on_export_add_batch_from_table(move || {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+
+                let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
+                let group_cfg = this.group_config.lock().unwrap().clone();
+                let (group_by, group_regex) = match live_group_by_for_batch(is_coloc_detail, &group_cfg) {
+                    Ok(pair) => pair,
+                    Err(msg) => {
+                        state.set_export_status(msg.into());
+                        return;
+                    }
+                };
+                let style = if is_coloc_detail { "coloc_detail" } else { "table" };
+
+                let class_filter = this.class_filter.lock().unwrap().clone();
+                let classes: Vec<SharedString> = class_filter
+                    .unwrap_or_default()
+                    .iter()
+                    .map(SharedString::from)
+                    .collect();
+                let classes_label =
+                    if classes.is_empty() { "As displayed".to_string() } else { classes.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ") };
+
+                // Unlike `classes`, `images` must always be a concrete list
+                // (never empty) — if the live table has no image filter set,
+                // fall back to every known image name.
+                let image_filter = this.image_filter.lock().unwrap().clone();
+                let all_known_images: Vec<String> = model_to_vec(&state.get_filter_image_items())
+                    .iter()
+                    .map(|i| i.label.to_string())
+                    .collect();
+                let images: Vec<SharedString> = images_from_live_filter(image_filter, &all_known_images)
+                    .iter()
+                    .map(SharedString::from)
+                    .collect();
+                let images_label = "As displayed".to_string();
+
+                let specs = if is_coloc_detail {
+                    this.coloc_detail_column_specs.lock().unwrap().clone()
+                } else {
+                    this.column_specs.lock().unwrap().clone()
+                };
+                let all_visible = specs.iter().all(|c| c.visible);
+                let columns: Vec<SharedString> = if all_visible {
+                    Vec::new()
+                } else {
+                    specs.iter().filter(|c| c.visible).map(|c| SharedString::from(c.label.as_str())).collect()
+                };
+
+                let name = {
+                    let n = state.get_export_combo_name().to_string();
+                    let n = n.trim();
+                    if !n.is_empty() { n.to_string() } else { "AsDisplayed".to_string() }
+                };
+
+                let mut batches = export_batches_to_vec(&state.get_export_batches());
+                batches.push(ExportBatchItem {
+                    name: name.into(),
+                    classes: slint::ModelRc::new(slint::VecModel::from(classes)),
+                    classes_label: classes_label.into(),
+                    format: state.get_export_format(),
+                    images: slint::ModelRc::new(slint::VecModel::from(images)),
+                    images_label: images_label.into(),
+                    each_image: false,
+                    style_label: export_style_label(style, &group_by).into(),
+                    style: style.into(),
+                    group_by: group_by.into(),
+                    group_regex: group_regex.into(),
+                    columns: slint::ModelRc::new(slint::VecModel::from(columns)),
+                });
+                state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(batches)));
+                state.set_export_combo_name(SharedString::new());
+                state.set_export_status(SharedString::new());
+            });
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -2984,6 +3145,37 @@ fn apply_coloc_group_template(items: Vec<FilterItem>, source_group: &str) -> Vec
         .collect()
 }
 
+/// Maps the results table's own live `GroupConfig` onto the export batch's
+/// simplified "none" | "image" | "regex" representation, for "Add from
+/// table"/"Export as Displayed". Coloc Details ignores grouping entirely
+/// (that view is always flat). Returns `Err` with a user-facing message if
+/// the live grouping can't be represented (`GroupBy::Folder` isn't exposed
+/// by the export dialog's own Group-by picker).
+fn live_group_by_for_batch(
+    is_coloc_detail: bool,
+    group_cfg: &GroupConfig,
+) -> Result<(String, String), &'static str> {
+    if is_coloc_detail {
+        return Ok(("none".to_string(), String::new()));
+    }
+    match group_cfg.group_by {
+        GroupBy::None => Ok(("none".to_string(), String::new())),
+        GroupBy::Image => Ok(("image".to_string(), String::new())),
+        GroupBy::Regex => Ok(("regex".to_string(), group_cfg.regex.clone())),
+        GroupBy::Folder => Err(
+            "Folder grouping isn't supported in the batch queue yet — use \"Export as Displayed\" instead.",
+        ),
+    }
+}
+
+/// Resolves the concrete image list an "Add from table"/live-capture batch
+/// should carry: the live filter's own list if one is set, otherwise every
+/// known image name (since a batch's `images` field is never empty — see
+/// `ExportBatchItem::images`).
+fn images_from_live_filter(image_filter: Option<Vec<String>>, all_known: &[String]) -> Vec<String> {
+    image_filter.unwrap_or_else(|| all_known.to_vec())
+}
+
 /// Display label for a queued combination's captured style/grouping, e.g.
 /// "Table", "Table · Image", "Table · Regex", "Coloc Details".
 fn export_style_label(style: &str, group_by: &str) -> String {
@@ -3624,6 +3816,65 @@ mod tests {
             "Coloc Details",
             "grouping is ignored for Coloc Details, which is always flat"
         );
+    }
+
+    #[test]
+    fn live_group_by_for_batch_coloc_detail_ignores_grouping() {
+        let group_cfg = GroupConfig {
+            group_by: GroupBy::Image,
+            regex: String::new(),
+            aggs: vec![AggFunc::Avg],
+            split_colocalized: false,
+            group_by_class: false,
+        };
+        assert_eq!(
+            live_group_by_for_batch(true, &group_cfg).unwrap(),
+            ("none".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn live_group_by_for_batch_maps_none_image_regex() {
+        let none_cfg = GroupConfig::default();
+        assert_eq!(
+            live_group_by_for_batch(false, &none_cfg).unwrap(),
+            ("none".to_string(), String::new())
+        );
+
+        let image_cfg = GroupConfig { group_by: GroupBy::Image, ..GroupConfig::default() };
+        assert_eq!(
+            live_group_by_for_batch(false, &image_cfg).unwrap(),
+            ("image".to_string(), String::new())
+        );
+
+        let regex_cfg = GroupConfig {
+            group_by: GroupBy::Regex,
+            regex: "(.*)_ch\\d+".to_string(),
+            ..GroupConfig::default()
+        };
+        assert_eq!(
+            live_group_by_for_batch(false, &regex_cfg).unwrap(),
+            ("regex".to_string(), "(.*)_ch\\d+".to_string())
+        );
+    }
+
+    #[test]
+    fn live_group_by_for_batch_rejects_folder_grouping() {
+        let folder_cfg = GroupConfig { group_by: GroupBy::Folder, ..GroupConfig::default() };
+        assert!(live_group_by_for_batch(false, &folder_cfg).is_err());
+    }
+
+    #[test]
+    fn images_from_live_filter_falls_back_to_every_known_image_when_unset() {
+        let known = vec!["image_01.tif".to_string(), "image_02.tif".to_string()];
+        assert_eq!(images_from_live_filter(None, &known), known);
+    }
+
+    #[test]
+    fn images_from_live_filter_uses_the_live_filter_when_set() {
+        let known = vec!["image_01.tif".to_string(), "image_02.tif".to_string()];
+        let filtered = vec!["image_01.tif".to_string()];
+        assert_eq!(images_from_live_filter(Some(filtered.clone()), &known), filtered);
     }
 
     #[test]

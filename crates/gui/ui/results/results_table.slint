@@ -370,12 +370,21 @@ export global ResultsState {
     callback export_column_apply_group_to_all(string);
     // Queues the current checklist/name/format as one combination to export.
     callback export_add_batch();
+    // Queues a combination captured from the results table's own current
+    // filters/style/grouping/columns (not the dialog's checklists), using
+    // the current Name/Format fields — for stamping "whatever the table is
+    // showing right now" into the batch alongside other configured combos.
+    callback export_add_batch_from_table();
     callback export_remove_batch(int);
     // Picks an output folder, then writes one file per queued combination
     // (or the checklist directly, if none are queued).
     callback export_run_all();
     // Requests the in-progress export stop after its current file finishes.
     callback export_cancel();
+    // Immediately exports a single file matching the results table's own
+    // current filters/style/grouping/columns — bypasses the batch queue
+    // entirely, for a quick "just export what I'm looking at" action.
+    callback export_as_displayed();
 }
 
 // -- Shared checkbox item used inside filter popups ----------------------------
