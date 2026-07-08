@@ -648,6 +648,12 @@ fn channel_stat_expr(ch: i32, stat: &str) -> String {
 
 /// SQL expression for the number of `class`-colocalizing partners a ROI has —
 /// the same value the `coloc_partner__{class}__count` results-table column shows.
+///
+/// `coloc_json` is stored as a native DuckDB `JSON` column, and the `->`
+/// extraction operator always receives a value the column type already
+/// guarantees is well-formed JSON — no guard needed here (unlike comparing
+/// `coloc_json` to a string literal, which is the actual crash risk; see
+/// `coloc_filter_condition`/`get_coloc_partner_class_names`).
 fn coloc_partner_count_expr(class: &str) -> String {
     format!(
         "COALESCE(json_array_length(coloc_json -> '{}'), 0)",
@@ -666,9 +672,7 @@ fn column_order_expr(col_id: &str) -> Option<String> {
         "area_px" => Some("area_px".to_string()),
         "area_nm2" => Some("area_nm2".to_string()),
         "circularity" => Some("circularity".to_string()),
-        "colocalized" => {
-            Some("(coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}')".to_string())
-        }
+        "colocalized" => Some(coloc_is_colocalized_expr().to_string()),
         id if id.starts_with("coloc_partner__") => {
             let (class, suffix) = id.strip_prefix("coloc_partner__")?.rsplit_once("__")?;
             (suffix == "count").then(|| coloc_partner_count_expr(class))
@@ -747,12 +751,29 @@ fn parse_coloc_filter_with(label: &str) -> Option<&str> {
     label.strip_prefix("Colocalizes with ")
 }
 
+/// SQL boolean expression for "this ROI has at least one recorded
+/// colocalization partner".
+///
+/// `coloc_json` is a native DuckDB `JSON` column. Comparing it directly to a
+/// string literal (`coloc_json != ''`) makes DuckDB implicitly cast the
+/// *literal* to JSON to perform the comparison — and casting `''` to JSON is
+/// itself a parse error ("Malformed JSON ... input length is 0"), thrown for
+/// *every row scanned* regardless of that row's own value. This crashed
+/// loading results on Windows (observed there; apparently tolerated by
+/// whatever DuckDB build/version this project used to run on Linux) even
+/// though every stored `coloc_json` value is always well-formed JSON, since
+/// the column type guarantees that at write time. Casting the column to
+/// VARCHAR first forces the safe (JSON → string) cast direction instead.
+fn coloc_is_colocalized_expr() -> &'static str {
+    "(coloc_json IS NOT NULL AND CAST(coloc_json AS VARCHAR) != '' AND CAST(coloc_json AS VARCHAR) != '{}')"
+}
+
 /// Builds the SQL boolean expression for a single selected coloc-filter label.
 fn coloc_filter_condition(label: &str) -> String {
     if label == coloc_filter_label_no() {
-        "(coloc_json IS NULL OR coloc_json = '' OR coloc_json = '{}')".to_string()
+        "(coloc_json IS NULL OR CAST(coloc_json AS VARCHAR) = '' OR CAST(coloc_json AS VARCHAR) = '{}')".to_string()
     } else if label == coloc_filter_label_any() {
-        "(coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}')".to_string()
+        coloc_is_colocalized_expr().to_string()
     } else if let Some(class) = parse_coloc_filter_with(label) {
         format!(
             "COALESCE(json_array_length(coloc_json -> '{}'), 0) > 0",
@@ -1156,15 +1177,19 @@ impl DuckDbReader {
     /// with <class>" entries of the coloc filter popup.
     pub fn get_coloc_partner_class_names(&self) -> Result<Vec<String>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        // Filter in a subquery first: UNNEST in the outer SELECT list is evaluated
-        // against every scanned row before the WHERE predicate is applied, so
-        // `json_keys('')` would otherwise be hit for rows with no colocalization.
-        let sql = "SELECT DISTINCT UNNEST(json_keys(t.cj)) AS k FROM ( \
-                       SELECT coloc_json AS cj FROM rois \
-                       WHERE coloc_json IS NOT NULL AND coloc_json != '' AND coloc_json != '{}' \
-                   ) AS t \
-                   ORDER BY k";
-        let mut stmt = self.conn.prepare(sql).map_err(err)?;
+        // `coloc_json` is a native JSON column, always well-formed by
+        // construction — `json_keys(coloc_json)` itself needs no guard. The
+        // WHERE clause below casts to VARCHAR before comparing against the
+        // `''`/`'{}'` literals (see `coloc_is_colocalized_expr`) — comparing
+        // the JSON column to those literals directly crashes on Windows
+        // ("Malformed JSON ... input length is 0"), since DuckDB casts the
+        // *literal* to JSON to perform the comparison rather than the other
+        // way around.
+        let sql = format!(
+            "SELECT DISTINCT UNNEST(json_keys(coloc_json)) AS k FROM rois WHERE {} ORDER BY k",
+            coloc_is_colocalized_expr()
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(err)?;
         stmt.query_map([], |row| row.get(0))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
@@ -1551,6 +1576,7 @@ mod tests {
     fn coloc_partner_class_names_and_filter() {
         const ID_WITH_B: u128 = 1;
         const ID_WITH_C: u128 = 2;
+        const ID_NO_COLOC: u128 = 3;
         const PARTNER_B: ObjectClass = ObjectClass::Valid(2);
         const PARTNER_C: ObjectClass = ObjectClass::Valid(3);
         let id_with_b = ObjectId(ID_WITH_B).to_string();
@@ -1559,8 +1585,17 @@ mod tests {
         roi_with_b.add_colocalizing_object(PARTNER_B, ObjectId(99));
         let mut roi_with_c = make_filled_roi(ID_WITH_C, [5, 5, 6, 6]);
         roi_with_c.add_colocalizing_object(PARTNER_C, ObjectId(98));
+        // A ROI with no colocalization at all (`coloc_json` = "{}") sitting
+        // alongside colocalizing ones — regression coverage for a real bug
+        // where `coloc_json` (a native DuckDB JSON column) compared directly
+        // to a string literal like `''`/`'{}'` made DuckDB try to parse the
+        // *literal* as JSON to perform the comparison, crashing on every row
+        // scanned regardless of that row's own value (reproduced on Windows,
+        // and reproducible here too once exercised — see
+        // `coloc_is_colocalized_expr`'s doc comment for the full story).
+        let roi_no_coloc = make_filled_roi(ID_NO_COLOC, [10, 10, 11, 11]);
 
-        let (_dir, reader) = export_and_open(vec![roi_with_b, roi_with_c]);
+        let (_dir, reader) = export_and_open(vec![roi_with_b, roi_with_c, roi_no_coloc]);
 
         // class_label() falls back to "class_{n}" when no name map is provided.
         let partner_classes = reader.get_coloc_partner_class_names().unwrap();
