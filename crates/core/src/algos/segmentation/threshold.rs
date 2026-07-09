@@ -112,6 +112,32 @@ impl ImageAlgorithm for Threshold {
         let nr_of_bits = ctx.image_meta.nr_of_bits;
         let (input_data, segmentation_map) = ctx.get_f32_gray_and_segmentation_mask_mut()?;
 
+        // Build a 256-bin histogram once if any entry needs it, rescaled to the
+        // image's *actual observed* min/max (mirroring the C++ reference's
+        // `cv::minMaxLoc` + linear rescale in docs/threshold/threshold.hpp).
+        //
+        // Real images rarely use the full theoretical bit-depth range (e.g. a
+        // 12-bit sensor stored in a 16-bit container), so binning directly off
+        // the bit-depth-normalized relative values collapses nearly all pixels
+        // into a handful of low bins - degenerate input for methods like Li,
+        // whose log-mean formula breaks down once the background mean lands
+        // exactly on bin 0.
+        let needs_hist = self
+            .thresholds
+            .iter()
+            .any(|s| !matches!(s.method, ThresholdMethod::None | ThresholdMethod::Manual));
+        let hist_ctx = needs_hist.then(|| {
+            let data = input_data.as_slice();
+            let mut dmin = f32::MAX;
+            let mut dmax = f32::MIN;
+            for &v in data {
+                dmin = dmin.min(v);
+                dmax = dmax.max(v);
+            }
+            let hist = build_histogram(data, dmin, dmax);
+            (hist, dmin, dmax)
+        });
+
         // Pre-resolve each entry's [min, max] range in relative (0.0–1.0) space.
         let normalized: Vec<(f32, f32, u32)> = self
             .thresholds
@@ -122,14 +148,14 @@ impl ImageAlgorithm for Threshold {
                 let min = match &s.method {
                     ThresholdMethod::None | ThresholdMethod::Manual => floor,
                     method => {
-                        // Build a 256-bin histogram once if any entry needs it.
-                        let needs_hist = self.thresholds.iter().any(|s| {
-                            !matches!(s.method, ThresholdMethod::None | ThresholdMethod::Manual)
-                        });
-                        let hist = needs_hist.then(|| build_histogram(input_data.as_slice()));
-
-                        let bin = compute_auto_threshold(method, hist.as_ref().unwrap());
-                        (bin as f32 / 255.0).clamp(floor, ceiling)
+                        let (hist, dmin, dmax) = hist_ctx.as_ref().unwrap();
+                        let bin = compute_auto_threshold(method, hist);
+                        let relative = if *dmax > *dmin {
+                            dmin + (bin as f32 / 255.0) * (dmax - dmin)
+                        } else {
+                            *dmin
+                        };
+                        relative.clamp(floor, ceiling)
                     }
                 };
                 (min, ceiling, s.object_class_id.as_u32())
@@ -155,11 +181,21 @@ impl ImageAlgorithm for Threshold {
 
 // ── Histogram ────────────────────────────────────────────────────────────────
 
-/// Builds a 256-bin histogram from relative (0.0–1.0) f32 pixel data.
-fn build_histogram(data: &[f32]) -> [f32; 256] {
+/// Builds a 256-bin histogram from f32 pixel data, rescaled so that `min`
+/// maps to bin 0 and `max` maps to bin 255. This matches the C++ reference's
+/// per-image `cv::minMaxLoc` contrast stretch, giving auto-threshold
+/// algorithms full bin resolution regardless of how much of the theoretical
+/// bit-depth range the image actually uses.
+fn build_histogram(data: &[f32], min: f32, max: f32) -> [f32; 256] {
     let mut hist = [0.0f32; 256];
+    let range = max - min;
     for &v in data {
-        let bin = ((v.clamp(0.0, 1.0) * 255.0) as usize).min(255);
+        let normalized = if range > 0.0 {
+            ((v - min) / range).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let bin = ((normalized * 255.0) as usize).min(255);
         hist[bin] += 1.0;
     }
     hist
@@ -508,15 +544,19 @@ fn thresh_intermodes(hist: &[f32; 256]) -> usize {
 
     let mut iters = 0u32;
     while !bimodal_test(&h) {
-        let prev_h0 = h[0];
-        for i in 0..length.saturating_sub(1) {
+        // 3-point running mean over the *previous pass's* values, with
+        // implicit zero-padding at both ends - matches the C++ reference's
+        // previous/current/next rolling window. Must read entirely from `h`
+        // and write into a separate buffer: writing into `h` in place would
+        // make later iterations of this same pass read already-smoothed
+        // neighbors instead of the pre-pass values.
+        let mut smoothed = vec![0.0f64; length];
+        for i in 0..length {
             let prev = if i == 0 { 0.0 } else { h[i - 1] };
-            let next = h[i + 1];
-            h[i] = (prev + h[i] + next) / 3.0;
+            let next = if i + 1 < length { h[i + 1] } else { 0.0 };
+            smoothed[i] = (prev + h[i] + next) / 3.0;
         }
-        if length > 1 {
-            h[length - 1] = (prev_h0 + h[length - 1]) / 3.0; // Note: prev_h0 approximates C++ "current" at last step
-        }
+        h = smoothed;
         iters += 1;
         if iters > 10_000 {
             return 0;
@@ -976,5 +1016,294 @@ mod tests {
         ] {
             assert!(bin < 256, "{name}: bin {bin} out of range");
         }
+    }
+
+    #[test]
+    fn test_build_histogram_rescales_to_observed_range() {
+        // Narrow-range data (as from a 16-bit image that doesn't use its full
+        // theoretical range) must still spread across the full 0-255 bins
+        // once rescaled to its own observed min/max, instead of collapsing
+        // into bin 0 the way a bit-depth-only normalization would.
+        let data: Vec<f32> = (0..100).map(|i| 0.001 + i as f32 * 0.0001).collect();
+        let dmin = data.iter().cloned().fold(f32::MAX, f32::min);
+        let dmax = data.iter().cloned().fold(f32::MIN, f32::max);
+        let hist = build_histogram(&data, dmin, dmax);
+        assert!(hist[0] > 0.0, "min value should land in bin 0");
+        assert!(hist[255] > 0.0, "max value should land in bin 255");
+    }
+
+    #[test]
+    fn test_build_histogram_uniform_image_no_panic() {
+        // Degenerate case (min == max) must not divide by zero.
+        let data = vec![0.5f32; 10];
+        let hist = build_histogram(&data, 0.5, 0.5);
+        assert_eq!(hist[0], 10.0);
+    }
+
+    #[test]
+    fn test_li_narrow_dynamic_range_regression() -> Result<(), Box<dyn std::error::Error>> {
+        // Regression test for a real-world bug: 16-bit images rarely use
+        // their full theoretical range (e.g. a 12-bit sensor stored in a
+        // 16-bit container). Before the histogram was rescaled to the
+        // image's *observed* min/max, such narrow-range data collapsed into
+        // a couple of low bins, which broke Li's log-mean formula (the
+        // background mean landed exactly on bin 0) and made it classify
+        // almost every pixel as foreground - "it detects everything".
+        let width = 100;
+        let height = 100;
+        let size = ImageSize { width, height };
+
+        // Background cluster: relative ~80/65535, 80% of pixels.
+        // Foreground cluster: relative ~2500/65535, 20% of pixels.
+        // Both are well inside the theoretical [0, 1] range for a 16-bit image.
+        let mut seed = 12345u64;
+        let mut next_f32 = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 1_000_000) as f32 / 1_000_000.0
+        };
+        let mut input_data = vec![0.0f32; width * height];
+        for (i, px) in input_data.iter_mut().enumerate() {
+            *px = if i % 5 == 0 {
+                (2500.0 + (next_f32() - 0.5) * 600.0) / 65535.0
+            } else {
+                (80.0 + (next_f32() - 0.5) * 30.0) / 65535.0
+            };
+        }
+
+        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+        let settings = vec![ThresholdEntry {
+            method: ThresholdMethod::Li,
+            min_threshold: 0.0,
+            max_threshold: 1.0,
+            object_class_id: SegmentationClass(1),
+            unit: PixelUnits::Relative,
+        }];
+
+        let cmd = Threshold {
+            thresholds: settings,
+        };
+        let mut ctx = PipelineContext::new_from_image_test(input_img)?;
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache)?;
+
+        let result_pixels = ctx
+            .segmentation_map
+            .as_ref()
+            .expect("No labels found")
+            .as_slice();
+        let foreground_fraction = result_pixels.iter().filter(|&&v| v == 1).count() as f32
+            / result_pixels.len() as f32;
+
+        // True foreground fraction is ~20%. Before the fix this was ~100%
+        // ("detects everything"); it should now land close to the real split.
+        assert!(
+            (0.05..0.4).contains(&foreground_fraction),
+            "Li threshold classified {foreground_fraction:.3} of pixels as foreground, expected ~0.2"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_intermodes_multipass_smoothing_matches_reference() {
+        // Regression test for a real port bug: the smoothing pass used to
+        // write `h[i]` while still reading `h[i-1]` from the *same* pass,
+        // so later indices picked up already-smoothed neighbors instead of
+        // the pre-pass values (Gauss-Seidel instead of the reference's
+        // Jacobi update). This only shows up once more than one smoothing
+        // iteration is needed to reach a bimodal histogram - a noisy,
+        // multi-peak histogram like this one.
+        //
+        // Expected value cross-checked against an independent, literal
+        // translation of the C++ previous/current/next rolling-window
+        // smoothing in docs/threshold/threshold_intermodes.hpp. The old
+        // buggy implementation returned 63 here instead of 64.
+        let raw: [f32; 25] = [
+            2.0, 5.0, 9.0, 4.0, 7.0, 12.0, 6.0, 3.0, 8.0, 15.0, 20.0, 14.0, 9.0, 5.0, 3.0, 6.0,
+            10.0, 18.0, 25.0, 22.0, 16.0, 10.0, 6.0, 3.0, 1.0,
+        ];
+        let mut hist = [0.0f32; 256];
+        let offset = 50;
+        hist[offset..offset + raw.len()].copy_from_slice(&raw);
+
+        assert_eq!(thresh_intermodes(&hist), offset + 14);
+    }
+
+    #[test]
+    fn test_all_auto_methods_narrow_dynamic_range_regression() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // Same real-world scenario as test_li_narrow_dynamic_range_regression
+        // (16-bit image that only uses a narrow slice of its theoretical
+        // range), exercised across every auto-threshold method through the
+        // full pipeline. Confirms the histogram now gets rescaled to the
+        // image's observed min/max for all methods, not just Li - before
+        // that fix, every method binned almost entirely into bin 0.
+        let width = 100;
+        let height = 100;
+        let size = ImageSize { width, height };
+
+        let methods = [
+            ("Otsu", ThresholdMethod::Otsu),
+            ("MinError", ThresholdMethod::MinError),
+            ("Triangle", ThresholdMethod::Triangle),
+            ("Moments", ThresholdMethod::Moments),
+            ("Huang", ThresholdMethod::Huang),
+            ("Intermodes", ThresholdMethod::Intermodes),
+            ("IsoData", ThresholdMethod::IsoData),
+            ("MaxEntropy", ThresholdMethod::MaxEntropy),
+            ("Mean", ThresholdMethod::Mean),
+            ("Minimum", ThresholdMethod::Minimum),
+            ("Percentile", ThresholdMethod::Percentile),
+            ("RenyiEntropy", ThresholdMethod::RenyiEntropy),
+            ("Shanbhag", ThresholdMethod::Shanbhag),
+            ("Yen", ThresholdMethod::Yen),
+        ];
+
+        for (name, method) in methods {
+            let mut seed = 42u64;
+            let mut next_f32 = move || {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed % 1_000_000) as f32 / 1_000_000.0
+            };
+            let mut input_data = vec![0.0f32; width * height];
+            for (i, px) in input_data.iter_mut().enumerate() {
+                *px = if i % 5 == 0 {
+                    (2500.0 + (next_f32() - 0.5) * 600.0) / 65535.0
+                } else {
+                    (80.0 + (next_f32() - 0.5) * 30.0) / 65535.0
+                };
+            }
+
+            let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+            let settings = vec![ThresholdEntry {
+                method,
+                min_threshold: 0.0,
+                max_threshold: 1.0,
+                object_class_id: SegmentationClass(1),
+                unit: PixelUnits::Relative,
+            }];
+            let cmd = Threshold {
+                thresholds: settings,
+            };
+            let mut ctx = PipelineContext::new_from_image_test(input_img)?;
+            let mut cache = PipelineCache::default();
+            cmd.execute(&mut ctx, &mut cache)?;
+
+            let result_pixels = ctx
+                .segmentation_map
+                .as_ref()
+                .expect("No labels found")
+                .as_slice();
+            let foreground_fraction = result_pixels.iter().filter(|&&v| v == 1).count() as f32
+                / result_pixels.len() as f32;
+
+            assert!(
+                (0.0..0.9).contains(&foreground_fraction),
+                "{name}: classified {foreground_fraction:.3} of pixels as foreground on a narrow \
+                 16-bit dynamic range - looks like the histogram collapsed into bin 0 again"
+            );
+        }
+        Ok(())
+    }
+
+    /// Shared bimodal histogram used by the per-method reference tests below:
+    /// a dense, narrow cluster (bins 20-40, count 50 each) and a sparser,
+    /// wider cluster (bins 160-200, count 20 each), separated by an empty
+    /// valley. Expected values were computed with an independent, literal
+    /// Rust translation of each docs/threshold/*.hpp C++ reference (kept
+    /// out-of-tree, not sharing code with this module), so a match here
+    /// means the port is faithful, not just "returns something in range".
+    fn bimodal_reference_histogram() -> [f32; 256] {
+        let mut h = [0.0f32; 256];
+        for i in 20..=40 {
+            h[i] = 50.0;
+        }
+        for i in 160..=200 {
+            h[i] = 20.0;
+        }
+        h
+    }
+
+    #[test]
+    fn test_otsu_matches_reference() {
+        assert_eq!(thresh_otsu(&bimodal_reference_histogram()), 159);
+    }
+
+    #[test]
+    fn test_li_matches_reference() {
+        assert_eq!(thresh_li(&bimodal_reference_histogram()), 84);
+    }
+
+    #[test]
+    fn test_min_error_matches_reference() {
+        assert_eq!(thresh_min_error(&bimodal_reference_histogram()), 80);
+    }
+
+    #[test]
+    fn test_triangle_matches_reference() {
+        assert_eq!(thresh_triangle(&bimodal_reference_histogram()), 42);
+    }
+
+    #[test]
+    fn test_moments_matches_reference() {
+        assert_eq!(thresh_moments(&bimodal_reference_histogram()), 160);
+    }
+
+    #[test]
+    fn test_huang_matches_reference() {
+        assert_eq!(thresh_huang(&bimodal_reference_histogram()), 40);
+    }
+
+    #[test]
+    fn test_intermodes_matches_reference() {
+        assert_eq!(thresh_intermodes(&bimodal_reference_histogram()), 105);
+    }
+
+    #[test]
+    fn test_isodata_matches_reference() {
+        // The C++ reference truncates its background-mean accumulator via
+        // integer division; this crate intentionally uses proper float
+        // division instead (see threshold.rs review notes), so this value
+        // can drift by ~1 bin from a bit-exact C++ run on other histograms.
+        // On this histogram both agree.
+        assert_eq!(thresh_isodata(&bimodal_reference_histogram()), 105);
+    }
+
+    #[test]
+    fn test_max_entropy_matches_reference() {
+        assert_eq!(thresh_max_entropy(&bimodal_reference_histogram()), 167);
+    }
+
+    #[test]
+    fn test_mean_matches_reference() {
+        assert_eq!(thresh_mean(&bimodal_reference_histogram()), 95);
+    }
+
+    #[test]
+    fn test_minimum_matches_reference() {
+        assert_eq!(thresh_minimum(&bimodal_reference_histogram()), 61);
+    }
+
+    #[test]
+    fn test_percentile_matches_reference() {
+        assert_eq!(thresh_percentile(&bimodal_reference_histogram()), 38);
+    }
+
+    #[test]
+    fn test_renyi_entropy_matches_reference() {
+        assert_eq!(thresh_renyi_entropy(&bimodal_reference_histogram()), 165);
+    }
+
+    #[test]
+    fn test_shanbhag_matches_reference() {
+        assert_eq!(thresh_shanbhag(&bimodal_reference_histogram()), 170);
+    }
+
+    #[test]
+    fn test_yen_matches_reference() {
+        assert_eq!(thresh_yen(&bimodal_reference_histogram()), 164);
     }
 }
