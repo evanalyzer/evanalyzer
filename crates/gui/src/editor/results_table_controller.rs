@@ -570,6 +570,13 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
 
+                // Clear each checklist's filter box so a search left over
+                // from a previous session doesn't silently hide freshly
+                // seeded rows.
+                state.set_export_class_search_text(SharedString::new());
+                state.set_export_image_search_text(SharedString::new());
+                state.set_export_column_search_text(SharedString::new());
+
                 // Seed the dialog's checklist fresh from the known class
                 // labels (same source as the table's own Class column
                 // filter), all checked by default so exporting everything
@@ -585,8 +592,7 @@ impl ResultsTableController {
                         group_all_checked: false,
                     })
                     .collect();
-                state.set_export_class_items(to_model(items));
-                state.set_export_class_all_checked(true);
+                apply_export_class_checklist(&state, items, "");
 
                 // Same seeding for the image checklist, from the table's own
                 // Image column filter labels.
@@ -601,17 +607,14 @@ impl ResultsTableController {
                         group_all_checked: false,
                     })
                     .collect();
-                state.set_export_image_items(to_model(image_items));
-                state.set_export_image_all_checked(true);
+                apply_export_image_checklist(&state, image_items, "");
                 state.set_export_each_image(false);
 
                 // Default to the normal table's own columns; switching to
                 // "Coloc details" re-seeds this from the coloc-detail specs.
                 state.set_export_style("table".into());
                 let specs = this.column_specs.lock().unwrap().clone();
-                let all_visible = specs.iter().all(|c| c.visible);
-                state.set_export_column_items(to_model(column_items_from_specs(&specs)));
-                state.set_export_column_all_checked(all_visible);
+                apply_export_column_checklist(&state, column_items_from_specs(&specs), "");
                 state.set_export_has_intensity(has_intensity_columns(&specs));
                 state.set_export_group_by("none".into());
                 state.set_export_group_regex(SharedString::new());
@@ -646,9 +649,8 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 let items = toggle_item_by_label(&model_to_vec(&state.get_export_class_items()), &label);
-                let all_checked = items.iter().all(|i| i.checked);
-                state.set_export_class_all_checked(all_checked);
-                state.set_export_class_items(to_model(items));
+                let search = state.get_export_class_search_text().to_string();
+                apply_export_class_checklist(&state, items, &search);
             });
         }
 
@@ -659,8 +661,8 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_class_items()), true);
-                state.set_export_class_all_checked(true);
-                state.set_export_class_items(to_model(items));
+                let search = state.get_export_class_search_text().to_string();
+                apply_export_class_checklist(&state, items, &search);
             });
         }
         {
@@ -669,8 +671,22 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_class_items()), false);
-                state.set_export_class_all_checked(false);
-                state.set_export_class_items(to_model(items));
+                let search = state.get_export_class_search_text().to_string();
+                apply_export_class_checklist(&state, items, &search);
+            });
+        }
+
+        // --- export_class_search_changed ------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_class_search_changed(move |search: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = model_to_vec(&state.get_export_class_items());
+                state.set_export_class_displayed_items(to_model(filter_checklist_by_search(
+                    &items,
+                    search.as_str(),
+                )));
             });
         }
 
@@ -681,9 +697,8 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 let items = toggle_item_by_label(&model_to_vec(&state.get_export_image_items()), &label);
-                let all_checked = items.iter().all(|i| i.checked);
-                state.set_export_image_all_checked(all_checked);
-                state.set_export_image_items(to_model(items));
+                let search = state.get_export_image_search_text().to_string();
+                apply_export_image_checklist(&state, items, &search);
             });
         }
 
@@ -694,8 +709,8 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_image_items()), true);
-                state.set_export_image_all_checked(true);
-                state.set_export_image_items(to_model(items));
+                let search = state.get_export_image_search_text().to_string();
+                apply_export_image_checklist(&state, items, &search);
             });
         }
         {
@@ -704,8 +719,22 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_image_items()), false);
-                state.set_export_image_all_checked(false);
-                state.set_export_image_items(to_model(items));
+                let search = state.get_export_image_search_text().to_string();
+                apply_export_image_checklist(&state, items, &search);
+            });
+        }
+
+        // --- export_image_search_changed ------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_image_search_changed(move |search: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = model_to_vec(&state.get_export_image_items());
+                state.set_export_image_displayed_items(to_model(filter_checklist_by_search(
+                    &items,
+                    search.as_str(),
+                )));
             });
         }
 
@@ -716,12 +745,15 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 state.set_export_style(style.clone());
+                // The column set is about to change entirely (table vs.
+                // coloc-detail columns are unrelated) — a search typed
+                // against the old list would otherwise silently hide every
+                // freshly seeded row.
+                state.set_export_column_search_text(SharedString::new());
 
                 if style.as_str() != "coloc_detail" {
                     let specs = this.column_specs.lock().unwrap().clone();
-                    let all_visible = specs.iter().all(|c| c.visible);
-                    state.set_export_column_items(to_model(column_items_from_specs(&specs)));
-                    state.set_export_column_all_checked(all_visible);
+                    apply_export_column_checklist(&state, column_items_from_specs(&specs), "");
                     state.set_export_has_intensity(has_intensity_columns(&specs));
                     return;
                 }
@@ -738,15 +770,10 @@ impl ResultsTableController {
                 // never opened that view this session.
                 let cached = this.coloc_detail_column_specs.lock().unwrap().clone();
                 if !cached.is_empty() {
-                    let all_visible = cached.iter().all(|c| c.visible);
-                    state.set_export_column_items(to_model(column_items_from_specs(&cached)));
-                    state.set_export_column_all_checked(all_visible);
+                    apply_export_column_checklist(&state, column_items_from_specs(&cached), "");
                     state.set_export_has_intensity(has_intensity_columns(&cached));
                 } else {
-                    state.set_export_column_items(slint::ModelRc::new(slint::VecModel::from(
-                        Vec::<FilterItem>::new(),
-                    )));
-                    state.set_export_column_all_checked(true);
+                    apply_export_column_checklist(&state, Vec::new(), "");
                     state.set_export_has_intensity(false);
                 }
                 state.set_export_status("Loading coloc-detail columns...".into());
@@ -784,9 +811,8 @@ impl ResultsTableController {
                         if state.get_export_style().as_str() != "coloc_detail" {
                             return;
                         }
-                        let all_visible = specs.iter().all(|c| c.visible);
-                        state.set_export_column_items(to_model(column_items_from_specs(&specs)));
-                        state.set_export_column_all_checked(all_visible);
+                        let search = state.get_export_column_search_text().to_string();
+                        apply_export_column_checklist(&state, column_items_from_specs(&specs), &search);
                         state.set_export_has_intensity(has_intensity_columns(&specs));
                         state.set_export_status(SharedString::new());
                     });
@@ -802,9 +828,8 @@ impl ResultsTableController {
                 let state = window.global::<ResultsState>();
                 let items =
                     toggle_item_by_label(&model_to_vec(&state.get_export_column_items()), &label);
-                let all_checked = items.iter().all(|i| i.checked);
-                state.set_export_column_all_checked(all_checked);
-                state.set_export_column_items(to_model(mark_group_headers(items)));
+                let search = state.get_export_column_search_text().to_string();
+                apply_export_column_checklist(&state, items, &search);
             });
         }
 
@@ -815,8 +840,8 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_column_items()), true);
-                state.set_export_column_all_checked(true);
-                state.set_export_column_items(to_model(mark_group_headers(items)));
+                let search = state.get_export_column_search_text().to_string();
+                apply_export_column_checklist(&state, items, &search);
             });
         }
         {
@@ -825,8 +850,22 @@ impl ResultsTableController {
                 let Some(window) = this.ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_column_items()), false);
-                state.set_export_column_all_checked(false);
-                state.set_export_column_items(to_model(mark_group_headers(items)));
+                let search = state.get_export_column_search_text().to_string();
+                apply_export_column_checklist(&state, items, &search);
+            });
+        }
+
+        // --- export_column_search_changed ------------------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_column_search_changed(move |search: SharedString| {
+                let Some(window) = this.ui.upgrade() else { return };
+                let state = window.global::<ResultsState>();
+                let items = model_to_vec(&state.get_export_column_items());
+                state.set_export_column_displayed_items(to_model(filter_checklist_by_search(
+                    &items,
+                    search.as_str(),
+                )));
             });
         }
 
@@ -842,9 +881,8 @@ impl ResultsTableController {
                 let currently_all_checked = group_all_checked_for_search(&current, group.as_str(), "");
                 let items =
                     set_group_checked_for_search(&current, group.as_str(), "", !currently_all_checked);
-                let all_checked = items.iter().all(|i| i.checked);
-                state.set_export_column_all_checked(all_checked);
-                state.set_export_column_items(to_model(mark_group_headers(items)));
+                let search = state.get_export_column_search_text().to_string();
+                apply_export_column_checklist(&state, items, &search);
             });
         }
 
@@ -860,9 +898,8 @@ impl ResultsTableController {
                     model_to_vec(&state.get_export_column_items()),
                     preset.as_str(),
                 );
-                let all_checked = items.iter().all(|i| i.checked);
-                state.set_export_column_all_checked(all_checked);
-                state.set_export_column_items(to_model(mark_group_headers(items)));
+                let search = state.get_export_column_search_text().to_string();
+                apply_export_column_checklist(&state, items, &search);
             });
         }
 
@@ -876,9 +913,8 @@ impl ResultsTableController {
                     model_to_vec(&state.get_export_column_items()),
                     group.as_str(),
                 );
-                let all_checked = items.iter().all(|i| i.checked);
-                state.set_export_column_all_checked(all_checked);
-                state.set_export_column_items(to_model(mark_group_headers(items)));
+                let search = state.get_export_column_search_text().to_string();
+                apply_export_column_checklist(&state, items, &search);
             });
         }
 
@@ -3241,6 +3277,121 @@ fn model_to_vec(model: &slint::ModelRc<FilterItem>) -> Vec<FilterItem> {
         .collect()
 }
 
+/// Number of real (non-group-header) checked items — the "N" in the export
+/// dialog's ChecklistBox "N/M selected" count. Computed here because Slint's
+/// function bodies have no loop or array-reduce construct (only `.length`
+/// is a builtin array method), so this can't be computed in the component.
+fn checked_count(items: &[FilterItem]) -> i32 {
+    items.iter().filter(|i| !i.group_header && i.checked).count() as i32
+}
+
+/// The "M" counterpart to `checked_count`.
+fn total_count(items: &[FilterItem]) -> i32 {
+    items.iter().filter(|i| !i.group_header).count() as i32
+}
+
+/// Labels of up to the first `cap` checked, non-header items, in `items`
+/// order — backs the export dialog's collapsed PickerField chip row. Same
+/// "no loop/array-reduce in Slint" reasoning as `checked_count` above; a
+/// recursive `pure function` isn't a workaround either, since Slint treats a
+/// function calling itself as a binding loop and refuses to compile it.
+fn checked_labels(items: &[FilterItem], cap: usize) -> Vec<SharedString> {
+    items
+        .iter()
+        .filter(|i| !i.group_header && i.checked)
+        .take(cap)
+        .map(|i| i.label.clone())
+        .collect()
+}
+
+/// The export dialog ChecklistBox's search-filtered display list. Slint has
+/// no string `.contains()` builtin (only `is-float`/`to-float`/`is-empty`/
+/// `character-count`/`to-lowercase`/`to-uppercase`), so matching happens
+/// here rather than in the component. Group-header rows are always kept
+/// regardless of match, so a section banner never disappears while its
+/// other members are being searched for.
+fn filter_checklist_by_search(items: &[FilterItem], search: &str) -> Vec<FilterItem> {
+    if search.is_empty() {
+        return items.to_vec();
+    }
+    let lower = search.to_lowercase();
+    items
+        .iter()
+        .filter(|i| i.group_header || i.label.to_lowercase().contains(&lower))
+        .cloned()
+        .collect()
+}
+
+/// Pushes a freshly mutated `items` list out to every property the export
+/// dialog's ChecklistBox/PickerField instances read: the backing list
+/// itself, the all-checked flag, the live count, the search-filtered
+/// display list, and the collapsed field's chip labels. `search` should be
+/// the checklist's current `*_search_text` (read from `state` at each call
+/// site, since Slint owns that property).
+fn apply_export_checklist(
+    items: Vec<FilterItem>,
+    search: &str,
+    set_items: impl FnOnce(slint::ModelRc<FilterItem>),
+    set_all_checked: impl FnOnce(bool),
+    set_checked_count: impl FnOnce(i32),
+    set_total_count: impl FnOnce(i32),
+    set_displayed_items: impl FnOnce(slint::ModelRc<FilterItem>),
+    set_chip_labels: impl FnOnce(slint::ModelRc<SharedString>),
+) {
+    set_all_checked(items.iter().all(|i| i.checked));
+    set_checked_count(checked_count(&items));
+    set_total_count(total_count(&items));
+    set_displayed_items(to_model(filter_checklist_by_search(&items, search)));
+    set_chip_labels(slint::ModelRc::new(slint::VecModel::from(checked_labels(&items, 4))));
+    set_items(to_model(items));
+}
+
+fn apply_export_class_checklist(state: &ResultsState, items: Vec<FilterItem>, search: &str) {
+    apply_export_checklist(
+        items,
+        search,
+        |m| state.set_export_class_items(m),
+        |b| state.set_export_class_all_checked(b),
+        |c| state.set_export_class_checked_count(c),
+        |t| state.set_export_class_total_count(t),
+        |m| state.set_export_class_displayed_items(m),
+        |m| state.set_export_class_chip_labels(m),
+    );
+}
+
+fn apply_export_image_checklist(state: &ResultsState, items: Vec<FilterItem>, search: &str) {
+    apply_export_checklist(
+        items,
+        search,
+        |m| state.set_export_image_items(m),
+        |b| state.set_export_image_all_checked(b),
+        |c| state.set_export_image_checked_count(c),
+        |t| state.set_export_image_total_count(t),
+        |m| state.set_export_image_displayed_items(m),
+        |m| state.set_export_image_chip_labels(m),
+    );
+}
+
+/// Like the class/image wrappers, but also (re-)marks group headers first —
+/// the only one of the three export checklists that's ever grouped
+/// ("Intensity", "Coloc ClassA", ...), so `checked_count`/`total_count`/
+/// `filter_checklist_by_search`'s `group_header` exclusion only matters
+/// here. Safe to call even on already-marked items (`mark_group_headers`
+/// only reads `group`, so it's idempotent).
+fn apply_export_column_checklist(state: &ResultsState, items: Vec<FilterItem>, search: &str) {
+    let items = mark_group_headers(items);
+    apply_export_checklist(
+        items,
+        search,
+        |m| state.set_export_column_items(m),
+        |b| state.set_export_column_all_checked(b),
+        |c| state.set_export_column_checked_count(c),
+        |t| state.set_export_column_total_count(t),
+        |m| state.set_export_column_displayed_items(m),
+        |m| state.set_export_column_chip_labels(m),
+    );
+}
+
 fn toggle_item_by_label(items: &[FilterItem], label: &str) -> Vec<FilterItem> {
     items
         .iter()
@@ -3704,6 +3855,84 @@ mod tests {
 
         assert_eq!(items[3].group, SharedString::from("Coloc ClassA"));
         assert!(items[3].group_header, "a new group starts a new header");
+    }
+
+    fn plain_item(label: &str, checked: bool) -> FilterItem {
+        FilterItem {
+            label: label.into(),
+            checked,
+            group: SharedString::new(),
+            group_header: false,
+            group_all_checked: false,
+        }
+    }
+
+    #[test]
+    fn checked_count_excludes_group_headers_but_total_count_still_counts_them() {
+        // A grouped list (mirrors the Columns checklist): item[0] is a plain
+        // column, item[1] is the checked "Intensity" section header itself
+        // (mark_group_headers reuses a real item as its group's header, it
+        // doesn't insert a synthetic row), item[2] is another Intensity
+        // column that's unchecked.
+        let items = mark_group_headers(vec![
+            plain_item("ROI ID", true),
+            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Min (bit)", true) },
+            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Max (bit)", false) },
+        ]);
+        assert!(items[1].group_header, "sanity: item[1] is the group header");
+
+        // total_count excludes the header row entirely (matches the
+        // ChecklistBox's original, pre-Rust-port intent), so it's 2 here
+        // even though there are 3 real columns.
+        assert_eq!(total_count(&items), 2);
+        // checked_count then only has ROI ID (item[1] is skipped for being
+        // a header, regardless of its own checked state).
+        assert_eq!(checked_count(&items), 1);
+    }
+
+    #[test]
+    fn checked_count_and_total_count_agree_with_plain_ungrouped_lists() {
+        // Classes/Images never set `group`, so every item stays
+        // `group_header: false` and nothing gets excluded.
+        let items = vec![plain_item("A", true), plain_item("B", false), plain_item("C", true)];
+        assert_eq!(checked_count(&items), 2);
+        assert_eq!(total_count(&items), 3);
+    }
+
+    #[test]
+    fn filter_checklist_by_search_is_case_insensitive_and_keeps_group_headers() {
+        let items = mark_group_headers(vec![
+            plain_item("Area", true),
+            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Min (bit)", true) },
+            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Max (bit)", false) },
+        ]);
+        assert!(items[1].group_header, "sanity: item[1] is the group header");
+
+        // "min" matches only "Ch0 Min (bit)" by label, but the Intensity
+        // header (item[1], which happens to BE that same matching row here)
+        // stays included either way; "Area" (no match, not a header) drops.
+        let filtered = filter_checklist_by_search(&items, "min");
+        let labels: Vec<&str> = filtered.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["Ch0 Min (bit)"]);
+
+        // Empty search returns everything, unfiltered.
+        assert_eq!(filter_checklist_by_search(&items, "").len(), 3);
+    }
+
+    #[test]
+    fn filter_checklist_by_search_keeps_a_non_matching_group_header_so_the_section_still_shows() {
+        // The group header here is "Area" itself (first item of the
+        // "Misc" group) - it doesn't match "sum", but must stay so the
+        // section banner still renders above the column that does match.
+        let items = mark_group_headers(vec![
+            FilterItem { group: "Misc".into(), ..plain_item("Area", true) },
+            FilterItem { group: "Misc".into(), ..plain_item("Sum", true) },
+        ]);
+        assert!(items[0].group_header);
+
+        let filtered = filter_checklist_by_search(&items, "sum");
+        let labels: Vec<&str> = filtered.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["Area", "Sum"], "header row is kept even though its own label doesn't match");
     }
 
     fn intensity_items() -> Vec<FilterItem> {

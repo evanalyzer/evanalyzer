@@ -297,12 +297,39 @@ export global ResultsState {
     // opens (see `export_dialog_open`).
     in-out property <[FilterItem]> export_class_items: [];
     in-out property <bool> export_class_all_checked: true;
+    // Live "checked/total" counts for the checklist, computed in Rust
+    // alongside `export_class_all_checked` above (Slint's function bodies
+    // have no loop or array-reduce construct, so this can't be computed
+    // in-component).
+    in-out property <int> export_class_checked_count: 0;
+    in-out property <int> export_class_total_count: 0;
+    // Search-filtered subset of `export_class_items` actually drawn by the
+    // ChecklistBox — recomputed in Rust on every keystroke and every
+    // mutation (toggle/select-all/clear-all), since Slint has no string
+    // `.contains()` to filter with in-component.
+    in-out property <[FilterItem]> export_class_displayed_items: [];
+    // Two-way bound to the ChecklistBox's own filter LineEdit, so Rust can
+    // clear it when the dialog re-opens (see `export_dialog_open`) and read
+    // the current text at every mutation site without a separate copy.
+    in-out property <string> export_class_search_text: "";
+    // Labels of up to the first 4 checked items (in `export_class_items`
+    // order), for the collapsed PickerField's chip row. Computed in Rust
+    // alongside the counts above — Slint has neither a loop/array-reduce
+    // construct nor recursive `pure function`s (self-calls are treated as a
+    // binding loop), so walking `export_class_items` to find the first N
+    // checked entries can't be done in-component either.
+    in-out property <[string]> export_class_chip_labels: [];
     // Per-dialog-session image checklist — independent of the table's own
     // Image column filter, seeded fresh (all checked) each time the dialog
     // opens. Scopes the export to the checked images; combined with
     // `export_each_image` below, also drives per-image file fan-out.
     in-out property <[FilterItem]> export_image_items: [];
     in-out property <bool> export_image_all_checked: true;
+    in-out property <int> export_image_checked_count: 0;
+    in-out property <int> export_image_total_count: 0;
+    in-out property <[FilterItem]> export_image_displayed_items: [];
+    in-out property <string> export_image_search_text: "";
+    in-out property <[string]> export_image_chip_labels: [];
     // When true, "Add" queues a batch that writes one output file per
     // checked image (its name folded into the filename) instead of one
     // file covering all of them together.
@@ -323,6 +350,11 @@ export global ResultsState {
     // the dialog opens or `export_style` changes.
     in-out property <[FilterItem]> export_column_items: [];
     in-out property <bool> export_column_all_checked: true;
+    in-out property <int> export_column_checked_count: 0;
+    in-out property <int> export_column_total_count: 0;
+    in-out property <[FilterItem]> export_column_displayed_items: [];
+    in-out property <string> export_column_search_text: "";
+    in-out property <[string]> export_column_chip_labels: [];
     // Whether `export_column_items` currently has any "Intensity"-grouped
     // column — gates showing the Intensity quick-pick buttons (None / Avg+Sum
     // / All), which would otherwise be a no-op for a file with no channels.
@@ -353,13 +385,19 @@ export global ResultsState {
     callback export_class_item_toggled(string);
     callback export_class_select_all();
     callback export_class_clear_all();
+    // Fired on every keystroke in the Classes ChecklistBox's filter box.
+    // Slint has no string `.contains()`, so the search-filtered
+    // `export_class_displayed_items` list is computed in Rust.
+    callback export_class_search_changed(string);
     callback export_image_item_toggled(string);
     callback export_image_select_all();
     callback export_image_clear_all();
+    callback export_image_search_changed(string);
     callback export_style_selected(string);
     callback export_column_item_toggled(string);
     callback export_column_select_all();
     callback export_column_clear_all();
+    callback export_column_search_changed(string);
     callback export_column_group_toggle(string);
     // "none" | "avg_sum" | "all" — quick picks scoped to the Intensity section only.
     callback export_column_intensity_preset(string);
