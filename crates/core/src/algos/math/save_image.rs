@@ -68,7 +68,7 @@ impl ImageAlgorithm for SaveImage {
     ) -> Result<(), InternalErrors> {
         // We look at ctx.image (the current state of the pipeline)
         if self.source == ImageSource::Image {
-            match &ctx.image {
+            match ctx.image.as_ref() {
                 // Handle Grayscale (1 Channel)
                 ImageContainer::F32Gray(img) => {
                     let size = img.size();

@@ -13,6 +13,7 @@ use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
+use std::sync::Arc;
 
 /// Configuration for contrast enhancement and histogram manipulation.
 ///
@@ -73,7 +74,7 @@ impl ImageAlgorithm for EnhanceContrast {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        match &mut ctx.image {
+        match Arc::make_mut(&mut ctx.image) {
             ImageContainer::F32Gray(img) => {
                 self.process_f32_gray(img);
                 Ok(())
@@ -338,7 +339,7 @@ mod tests {
         assert!(result.is_ok());
 
         // 5. Verify
-        if let ImageContainer::F32Gray(output) = &ctx.image {
+        if let ImageContainer::F32Gray(output) = ctx.image.as_ref() {
             let pixels = output.as_slice();
 
             // The minimum value (originally 0.2) should now be ~0.0
@@ -386,7 +387,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_rgb_from_image_test(img),
+            ImageContainer::new_f32_rgb_from_image_test(img).into(),
         )
         .unwrap();
 
@@ -401,7 +402,7 @@ mod tests {
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
-        if let ImageContainer::F32Rgb(output) = &ctx.image {
+        if let ImageContainer::F32Rgb(output) = ctx.image.as_ref() {
             let pixels = output.as_slice();
             // Equalization on a flat image should generally push values
             // toward the boundaries or keep them consistent.
@@ -466,7 +467,7 @@ mod tests {
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
-        if let ImageContainer::F32Gray(output) = &ctx.image {
+        if let ImageContainer::F32Gray(output) = ctx.image.as_ref() {
             assert!(output.as_slice().iter().all(|&p| (0.0..=1.0).contains(&p) && !p.is_nan()));
         } else {
             panic!("Expected F32Gray output");
@@ -492,7 +493,7 @@ mod tests {
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
-        if let ImageContainer::F32Gray(output) = &ctx.image {
+        if let ImageContainer::F32Gray(output) = ctx.image.as_ref() {
             let pixels = output.as_slice();
             let max = pixels.iter().cloned().fold(0.0f32, f32::max);
             assert!(max > 0.99, "normalize should stretch the max back up to ~1.0, got {max}");
@@ -522,7 +523,7 @@ mod tests {
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
-        if let ImageContainer::F32Rgb(output) = &ctx.image {
+        if let ImageContainer::F32Rgb(output) = ctx.image.as_ref() {
             let pixels = output.as_slice();
             // The dim pixel's luminance was the minimum - stretched to ~0.
             assert!(pixels[0] < 0.01, "dim pixel should stretch toward black, got {}", pixels[0]);
@@ -552,7 +553,7 @@ mod tests {
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
-        if let ImageContainer::F32Rgb(output) = &ctx.image {
+        if let ImageContainer::F32Rgb(output) = ctx.image.as_ref() {
             let pixels = output.as_slice();
             let max_lum = pixels
                 .chunks_exact(3)

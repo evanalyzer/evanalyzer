@@ -3,6 +3,7 @@ use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::InternalErrors;
 use macros::CommandsMeta;
+use std::sync::Arc;
 
 /// The mathematical or logical operation to perform between two images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,7 +97,7 @@ impl ImageAlgorithm for ImageMath {
         // Handle Unary Operations (Invert)
         // This avoids the cache lookup and doesn't require a second image.
         if self.operand == Operand::Invert {
-            match (&ctx.image, &mut ctx.scratch_pad) {
+            match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
                 (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
                     self.apply_unary_math(input.as_slice(), output.as_slice_mut());
                 }
@@ -115,19 +116,26 @@ impl ImageAlgorithm for ImageMath {
         }
 
         // Handle Binary Operations
-        // Only get the secondary image if we actually need it.
+        // Only get the secondary image if we actually need it. Both branches are
+        // now a cheap Arc clone (refcount bump), not a pixel copy: when the
+        // second image *is* the scratchpad, make_mut below will see the extra
+        // strong reference this creates and correctly copy-on-write into a
+        // separate output buffer instead of aliasing `second`.
         let second = if self.second_image_address == ImageAddress::Scratchpad {
-            ctx.scratch_pad.clone()
+            Arc::clone(&ctx.scratch_pad)
         } else {
             cache
                 .image_cache
                 .images
                 .get(&self.second_image_address)
                 .ok_or_else(|| InternalErrors::Generic("Secondary image not found".to_string()))?
-                .as_ref()
                 .clone()
         };
-        match (&ctx.image, second, &mut ctx.scratch_pad) {
+        match (
+            ctx.image.as_ref(),
+            second.as_ref(),
+            Arc::make_mut(&mut ctx.scratch_pad),
+        ) {
             (
                 ImageContainer::F32Gray(in_a),
                 ImageContainer::F32Gray(in_b),
@@ -246,7 +254,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            create_test_gray(val1),
+            create_test_gray(val1).into(),
         )
         .unwrap();
         let mut cache = PipelineCache::default();
@@ -267,7 +275,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         // After swap, the result is in ctx.image
-        if let ImageContainer::F32Gray(img) = &ctx.image {
+        if let ImageContainer::F32Gray(img) = ctx.image.as_ref() {
             img.as_slice()[0]
         } else {
             panic!("Wrong output format");

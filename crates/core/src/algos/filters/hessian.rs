@@ -13,6 +13,7 @@ use crate::pipeline::pipeline_cache::PipelineCache;
 use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
+use std::sync::Arc;
 use macros::CommandsMeta;
 
 /// Specifies the feature extraction method for the Hessian matrix.
@@ -81,7 +82,7 @@ impl ImageAlgorithm for Hessian {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        match &mut ctx.image {
+        match Arc::make_mut(&mut ctx.image) {
             ImageContainer::F32Gray(img) => {
                 let result = process_f32_gray(img, self.mode)?;
                 *img = ManagedImage {
@@ -205,7 +206,7 @@ mod tests {
 
         detector.execute(&mut ctx, &mut cache).unwrap();
 
-        if let ImageContainer::F32Gray(res) = &ctx.image {
+        if let ImageContainer::F32Gray(res) = ctx.image.as_ref() {
             // Determinant should be high at the point of the blob/dot
             assert!(res.as_slice()[55] != 0.0);
         }
@@ -245,7 +246,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            crate::image::ImageContainer::new_f32_rgb_from_image_test(img),
+            crate::image::ImageContainer::new_f32_rgb_from_image_test(img).into(),
         )
         .unwrap();
         let mut cache = PipelineCache::default();
@@ -296,7 +297,7 @@ mod tests {
 
         // The center of this image is index 12.
         // It now has neighbors to calculate derivatives against.
-        let val_x = if let ImageContainer::F32Gray(res) = &ctx.image {
+        let val_x = if let ImageContainer::F32Gray(res) = ctx.image.as_ref() {
             res.as_slice()[12]
         } else {
             0.0
@@ -310,7 +311,7 @@ mod tests {
         };
         detector_y.execute(&mut ctx, &mut cache).unwrap();
 
-        let val_y = if let ImageContainer::F32Gray(res) = &ctx.image {
+        let val_y = if let ImageContainer::F32Gray(res) = ctx.image.as_ref() {
             res.as_slice()[4]
         } else {
             0.0

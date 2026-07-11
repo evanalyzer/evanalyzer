@@ -18,6 +18,7 @@ use kornia_imgproc::filter::spatial_gradient_float;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use rayon::iter::IntoParallelRefMutIterator;
+use std::sync::Arc;
 use rayon::prelude::*;
 
 /// The specific calculation to extract from the Structure Tensor.
@@ -98,7 +99,7 @@ impl ImageAlgorithm for StructureTensor {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        let (input, output) = match (&ctx.image, &mut ctx.scratch_pad) {
+        let (input, output) = match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(in_img), ImageContainer::F32Gray(out_img)) => {
                 (in_img, out_img)
             }
@@ -274,7 +275,7 @@ mod tests {
         algo.execute(&mut ctx, &mut cache)?;
 
         // 5. Verify Results
-        if let ImageContainer::F32Gray(result) = ctx.image {
+        if let ImageContainer::F32Gray(result) = ctx.image.as_ref() {
             let res_slice = result.as_slice();
 
             // At the edge (column 4 and 5), coherence should be high

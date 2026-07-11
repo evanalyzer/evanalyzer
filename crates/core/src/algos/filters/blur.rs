@@ -8,6 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use std::f32::consts::E;
+use std::sync::Arc;
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
@@ -61,7 +62,7 @@ impl ImageAlgorithm for Blur {
             return Err(InternalErrors::Internal("kernel_size must be odd".into()));
         }
 
-        match (&ctx.image, &mut ctx.scratch_pad) {
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             // Handle Grayscale (1 Channel)
             (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
                 box_blur(input, output, (self.kernel_size, self.kernel_size))
@@ -126,7 +127,7 @@ mod tests {
 
         // 3. Verify results
         // Because of ctx.swap(), the result is now in ctx.image
-        if let ImageContainer::F32Gray(result_img) = ctx.image {
+        if let ImageContainer::F32Gray(result_img) = ctx.image.as_ref() {
             let pixels = result_img.as_slice();
 
             // In a 3x3 box blur, the energy of that 1.0 pixel
@@ -187,7 +188,7 @@ mod tests {
             .expect("RGB Blur execution failed");
 
         // 3. Verify
-        if let ImageContainer::F32Rgb(result_img) = ctx.image {
+        if let ImageContainer::F32Rgb(result_img) = ctx.image.as_ref() {
             let pixels = result_img.as_slice();
             let expected_val = 1.0 / 9.0;
 
@@ -235,8 +236,8 @@ mod tests {
         // Usually PipelineContext handles this, but we can force it for the test
         let mut ctx = PipelineContext {
             output_path: None,
-            image: ImageContainer::new_f32_gray_from_image_test(gray_img),
-            scratch_pad: ImageContainer::new_f32_rgb_from_image_test(rgb_img),
+            image: ImageContainer::new_f32_gray_from_image_test(gray_img).into(),
+            scratch_pad: ImageContainer::new_f32_rgb_from_image_test(rgb_img).into(),
             instance_map: None,
             segmentation_map: None,
             image_meta: PipelineImageMeta {
@@ -332,8 +333,8 @@ mod tests {
         // 3. Manually build a broken context
         let mut ctx = PipelineContext {
             output_path: None,
-            image: ImageContainer::new_f32_gray_from_image_test(img),
-            scratch_pad: ImageContainer::new_f32_gray_from_image_test(wrong_scratch), // Mismatched size!
+            image: ImageContainer::new_f32_gray_from_image_test(img).into(),
+            scratch_pad: ImageContainer::new_f32_gray_from_image_test(wrong_scratch).into(), // Mismatched size!
             instance_map: None,
             segmentation_map: None,
             image_meta: PipelineImageMeta {

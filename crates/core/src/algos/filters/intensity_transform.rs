@@ -13,6 +13,7 @@ use crate::{
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 use evanalyzer_cfg::core_types::InternalErrors;
+use std::sync::Arc;
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
@@ -70,7 +71,7 @@ impl ImageAlgorithm for IntensityTransformation {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        match &mut ctx.image {
+        match Arc::make_mut(&mut ctx.image) {
             // These are different types, so they need separate arms
             ImageContainer::F32Gray(img) => self.process_f32_image(img),
             ImageContainer::F32Rgb(img) => self.process_f32_image(img),

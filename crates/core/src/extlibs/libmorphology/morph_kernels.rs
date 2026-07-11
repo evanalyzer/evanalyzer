@@ -69,10 +69,28 @@ pub enum KernelShape {
 /// assert_eq!(kernel.height(), 3);
 /// assert_eq!(kernel.pad(), (1, 1));
 /// ```
+/// Whether a kernel's shape decomposes into independent 1D passes, letting
+/// `dilate`/`erode` run an O(k) fast path instead of the full O(k^2) 2D scan.
+/// Set once by the constructor that built the mask, not inferred from `data`
+/// at use time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Separable {
+    /// Not decomposable; scan the full 2D kernel (e.g. Ellipse).
+    None,
+    /// A full k*1 box: `dilate(f, Box) == dilate(dilate(f, Row), Col)`, since
+    /// a box is the Minkowski sum of a row and a column segment.
+    Box,
+    /// A plus/cross shape: `dilate(f, Cross) == max(dilate(f, Row), dilate(f, Col))`
+    /// (erosion: `min` instead of `max`), since a cross is the *union* of its
+    /// row and column segments, not their Minkowski sum.
+    Cross,
+}
+
 pub struct Kernel {
     data: Vec<u8>,
     width: usize,
     height: usize,
+    separable: Separable,
 }
 
 impl Kernel {
@@ -112,6 +130,31 @@ impl Kernel {
     pub fn pad(&self) -> (usize, usize) {
         (self.height / 2, self.width / 2)
     }
+
+    /// Whether this kernel's shape supports the O(k) separable fast path.
+    pub fn separable(&self) -> Separable {
+        self.separable
+    }
+
+    /// Builds a kernel with an arbitrary mask and `Separable` tag, bypassing
+    /// the normal shape constructors. Used to cross-validate the O(k)
+    /// separable fast path against the O(k^2) naive scan: the naive path is
+    /// only reachable when `separable() == Separable::None`, so this lets a
+    /// test force it for a mask that's actually Box/Cross-shaped.
+    #[cfg(test)]
+    pub(crate) fn new_test_with_separable(
+        data: Vec<u8>,
+        width: usize,
+        height: usize,
+        separable: Separable,
+    ) -> Self {
+        Self {
+            data,
+            width,
+            height,
+            separable,
+        }
+    }
 }
 
 /// Create a box structuring element.
@@ -129,6 +172,7 @@ pub fn box_kernel(size: usize) -> Kernel {
         data,
         width: size,
         height: size,
+        separable: Separable::Box,
     }
 }
 
@@ -159,6 +203,7 @@ pub fn cross_kernel(size: usize) -> Kernel {
         data,
         width: size,
         height: size,
+        separable: Separable::Cross,
     }
 }
 
@@ -194,5 +239,6 @@ pub fn ellipse_kernel(width: usize, height: usize) -> Kernel {
         data,
         width,
         height,
+        separable: Separable::None,
     }
 }

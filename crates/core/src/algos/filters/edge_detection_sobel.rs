@@ -12,6 +12,7 @@ use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_imgproc::filter::sobel;
 use macros::CommandsMeta;
+use std::sync::Arc;
 
 /// Extracts directional boundaries by computing spatial image intensity gradients.
 ///
@@ -54,7 +55,7 @@ impl ImageAlgorithm for EdgeDetectionSobel {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        let (input, output) = match (&ctx.image, &mut ctx.scratch_pad) {
+        let (input, output) = match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(in_img), ImageContainer::F32Gray(out_img)) => {
                 (in_img, out_img)
             }
@@ -111,7 +112,7 @@ mod tests {
 
         sobel_algo.execute(&mut ctx, &mut cache).unwrap();
 
-        if let ImageContainer::F32Gray(res) = ctx.scratch_pad {
+        if let ImageContainer::F32Gray(res) = ctx.scratch_pad.as_ref() {
             let pixels = res.as_slice();
 
             // The edge is at x=5.

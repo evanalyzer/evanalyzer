@@ -15,6 +15,7 @@ use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
+use std::sync::Arc;
 
 /// Defines a range within the HSV (Hue, Saturation, Value) color space.
 ///
@@ -91,7 +92,7 @@ impl ImageAlgorithm for ColorFilterCommand {
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
         // Get the input image (must be RGB)
-        let input = match &ctx.image {
+        let input = match ctx.image.as_ref() {
             ImageContainer::F32Rgb(img) => img,
             _ => {
                 return Err(InternalErrors::FormatMismatch {
@@ -103,21 +104,21 @@ impl ImageAlgorithm for ColorFilterCommand {
 
         // Prepare the scratch pad (must be F32Gray and same size)
         // If the scratch pad is already the right size/type, this is essentially free.
-        if !matches!(ctx.scratch_pad, ImageContainer::F32Gray(_))
+        if !matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_))
             || ctx.scratch_pad.size() != input.size()
         {
-            ctx.scratch_pad = ImageContainer::F32Gray(ManagedImage {
+            ctx.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: Image::<f32, 1, CpuAllocator>::from_size_val(input.size(), 0.0, CpuAllocator)
                     .map_err(|_| {
                         InternalErrors::AllocationError("Failed to resize scratch pad".into())
                     })?,
                 tile_offset: input.tile_offset.clone(),
                 plane: input.plane.clone(),
-            });
+            }));
         }
 
         // Get a mutable reference to the underlying gray buffer
-        let output_gray = match &mut ctx.scratch_pad {
+        let output_gray = match Arc::make_mut(&mut ctx.scratch_pad) {
             ImageContainer::F32Gray(img) => img,
             _ => unreachable!(), // We just ensured it's F32Gray above
         };
@@ -255,7 +256,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_rgb_from_image_test(img),
+            ImageContainer::new_f32_rgb_from_image_test(img).into(),
         )
         .unwrap();
 
@@ -279,7 +280,7 @@ mod tests {
             .expect("Execution failed");
 
         // 4. Verify results
-        match &ctx.image {
+        match ctx.image.as_ref() {
             ImageContainer::F32Gray(out_img) => {
                 assert_eq!(out_img.width(), 2);
                 assert_eq!(out_img.height(), 1);
@@ -333,7 +334,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_rgb_from_image_test(img),
+            ImageContainer::new_f32_rgb_from_image_test(img).into(),
         )
         .unwrap();
 
@@ -353,7 +354,7 @@ mod tests {
 
         filter.execute(&mut ctx, &mut cache).unwrap();
 
-        if let ImageContainer::F32Gray(out_img) = &ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             assert!(
                 *out_img.get_pixel(0, 0, 0).unwrap() > 0.0,
                 "Red pixel should have passed wrap-around filter"
@@ -396,7 +397,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_gray_from_image_test(img),
+            ImageContainer::new_f32_gray_from_image_test(img).into(),
         )
         .unwrap();
 

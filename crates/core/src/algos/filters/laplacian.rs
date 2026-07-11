@@ -15,6 +15,7 @@ use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use ndarray::{ArrayView3, ArrayViewMut3};
+use std::sync::Arc;
 
 /// Configuration for the Laplacian edge detection filter.
 ///
@@ -61,7 +62,7 @@ impl ImageAlgorithm for Laplacian {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        match (&ctx.image, &mut ctx.scratch_pad) {
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
                 apply_laplacian(input, output, self.kernel_size)?;
                 Ok(())

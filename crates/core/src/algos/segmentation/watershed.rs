@@ -20,6 +20,7 @@ use kornia_image::Image;
 use kornia_imgproc::filter::gaussian_blur;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
+use std::sync::Arc;
 
 /// A morphological segmentation algorithm that splits touching objects using distance topography.
 #[derive(CommandsMeta)]
@@ -97,7 +98,7 @@ impl ImageAlgorithm for Watershed {
         // Reuse the scratch_pad to create the F32 input for DistanceTransform
         // This avoids the 'f32_data' Vec allocation.
         ctx.prepare_f32_gray_scratch()?;
-        if let ImageContainer::F32Gray(ref mut scratch) = ctx.scratch_pad {
+        if let ImageContainer::F32Gray(scratch) = Arc::make_mut(&mut ctx.scratch_pad) {
             let scratch_slice = scratch.as_slice_mut();
             let label_slice = seed_instances.as_slice();
 

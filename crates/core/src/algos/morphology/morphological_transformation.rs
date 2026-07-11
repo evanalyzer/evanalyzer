@@ -111,7 +111,7 @@ impl ImageAlgorithm for MorphologicalCommand {
             return Ok(());
         }
 
-        match &mut ctx.image {
+        match ctx.image.as_ref() {
             ImageContainer::F32Gray(_) => {
                 let (labels, scratch) = ctx.get_gray_img_gray_buf()?;
                 self.apply_morph_f32(labels, scratch)?;
@@ -252,7 +252,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut cache)?;
 
         // 5. Verify results
-        if let ImageContainer::F32Gray(out_img) = ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             // In a 3x3 dilation, the 1.0 at (2,2) should expand to (1,1) through (3,3)
             assert_eq!(
                 *out_img.get_pixel(1, 1, 0).unwrap(),
@@ -403,7 +403,7 @@ mod tests {
         };
         cmd_cross.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Rgb(ref out) = ctx.image {
+        if let ImageContainer::F32Rgb(out) = ctx.image.as_ref() {
             assert_eq!(*out.get_pixel(1, 0, 0).unwrap(), 1.0); // Up
             assert_eq!(*out.get_pixel(0, 1, 0).unwrap(), 1.0); // Left (Cross doesn't hit diagonals)
             assert_eq!(
@@ -423,7 +423,7 @@ mod tests {
         cmd_ellipse.execute(&mut ctx, &mut cache)?;
 
         // Ellipse with size 3 is often equivalent to Box, verify center
-        if let ImageContainer::F32Rgb(ref out) = ctx.image {
+        if let ImageContainer::F32Rgb(out) = ctx.image.as_ref() {
             assert_eq!(*out.get_pixel(1, 1, 0).unwrap(), 1.0);
         }
 
@@ -479,7 +479,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut PipelineCache::default())
             .unwrap();
 
-        let img = match ctx.image {
+        let img = match ctx.image.as_ref() {
             ImageContainer::F32Gray(managed_image) => managed_image,
             ImageContainer::F32Rgb(_) => todo!(),
             ImageContainer::U32(_) => todo!(),
@@ -499,7 +499,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut PipelineCache::default())
             .unwrap();
 
-        let img = match ctx.image {
+        let img = match ctx.image.as_ref() {
             ImageContainer::F32Gray(managed_image) => managed_image,
             ImageContainer::F32Rgb(_) => todo!(),
             ImageContainer::U32(_) => todo!(),
@@ -519,7 +519,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut PipelineCache::default())
             .unwrap();
 
-        let img = match ctx.image {
+        let img = match ctx.image.as_ref() {
             ImageContainer::F32Gray(managed_image) => managed_image,
             ImageContainer::F32Rgb(_) => todo!(),
             ImageContainer::U32(_) => todo!(),
@@ -539,7 +539,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut PipelineCache::default())
             .unwrap();
 
-        let img = match ctx.image {
+        let img = match ctx.image.as_ref() {
             ImageContainer::F32Gray(managed_image) => managed_image,
             ImageContainer::F32Rgb(_) => todo!(),
             ImageContainer::U32(_) => todo!(),

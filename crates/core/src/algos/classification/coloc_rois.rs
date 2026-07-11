@@ -359,7 +359,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::F32Gray(managed),
+            ImageContainer::F32Gray(managed).into(),
         )
         .unwrap()
     }
@@ -613,7 +613,8 @@ mod tests {
                 data: ctx_image,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
-            }),
+            })
+            .into(),
         )
         .unwrap();
 

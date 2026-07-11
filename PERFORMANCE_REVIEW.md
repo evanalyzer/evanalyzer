@@ -10,9 +10,10 @@ item you want implemented, and optionally add a note, then hand the file back.
 
 ## Top priority (highest impact)
 
-- [ ] **Pipeline deep-clones the whole image on every run** — [`crates/core/src/pipeline/pipeline.rs:106`](crates/core/src/pipeline/pipeline.rs#L106)
+- [x] **Pipeline deep-clones the whole image on every run** — [`crates/core/src/pipeline/pipeline.rs:106`](crates/core/src/pipeline/pipeline.rs#L106)
   `initial_image.as_ref().clone()` clones the pixel buffer inside the `Arc`, not just the `Arc` handle. For a 4096×4096 f32 tile that's 64MB+ copied per pipeline run, multiplied by the number of chained pipelines per tile ([`job_executor.rs:530-543`](crates/core/src/job/job_executor.rs#L530)).
   *Fix:* share via `Arc`/`Cow`, only deep-copy on first mutation.
+  *Done:* investigated first — confirmed the cache genuinely retains its own `Arc` per channel (so isolation between pipelines sharing an input is real and had to be preserved), but found only 1 of 15 image-transform commands (`rolling_ball.rs`) mutates `ctx.image` in place; 3 more turned up during implementation (`hessian.rs`, `intensity_transform.rs`, `enhance_contrast.rs`) that weren't caught by the initial grep. Everything else uses the existing scratch+swap pattern, which becomes a free `Arc` handle exchange. `PipelineContext.image`/`scratch_pad` are now `Arc<ImageContainer>`; the one true mutation path goes through `Arc::make_mut` (clones only when the cache/another pipeline still holds a reference). Read-only pipelines (segmentation + measurement, e.g. Cellpose → ExtractRois) now pay **zero** clones — measured 24.6ms → 20ns per run on a 4096×4096 tile. Two new tests directly prove the mechanism: one confirms a read-only pipeline shares the cache's `Arc` (`Arc::ptr_eq`), the other confirms a mutating pipeline clones before writing and leaves the cached copy untouched. Touched ~20 files; full suite green (277 core / 280 with `--features ai` / 78 gui).
 
 - [x] **AI models reload from disk on every call** — [`cellpose.rs:86`](crates/core/src/algos/ai_segmentation/cellpose.rs#L86), [`stardist.rs:81`](crates/core/src/algos/ai_segmentation/stardist.rs#L81), [`unet.rs:109`](crates/core/src/algos/ai_segmentation/unet.rs#L109)
   Every tile/image re-reads and re-parses the TorchScript file and re-uploads weights. Dominates wall-clock time for any batch/tiled AI job.
@@ -29,12 +30,14 @@ item you want implemented, and optionally add a note, then hand the file back.
   *Fix:* reuse one scratch buffer across the Z loop, resize once.
   *Done:* one scratch buffer per channel, reused across all Z-slices (resized once). Measured allocator-churn saving: ~30x (8.7ms→0.29ms for 20 reads of an 8MB tile), mostly from skipping the repeated memset. All Z-projection tests (max/min/avg/sum) still pass against real reference data.
 
-- [ ] **Morphology kernels are O(k²) when they could be O(k)** — [`morph_ops.rs:74-196`](crates/core/src/extlibs/libmorphology/morph_ops.rs#L74)
+- [x] **Morphology kernels are O(k²) when they could be O(k)** — [`morph_ops.rs:74-196`](crates/core/src/extlibs/libmorphology/morph_ops.rs#L74)
   Box/cross structuring elements are separable but scanned as full 2D kernels with bounds-checked `get_pixel` in the innermost loop. Likely the biggest CPU cost in the morphology path (Open/Close runs dilate+erode back to back, kernel sizes up to 27).
   *Fix:* add a separable fast path (two 1D passes) for Box/Cross; keep full scan only for Ellipse; use raw slice indexing instead of `get_pixel`.
+  *Done:* Box uses the Minkowski-sum decomposition (two chained 1D passes); Cross uses the union decomposition (two independent 1D passes + elementwise combine) — different math, same O(k) result. Ellipse still uses the full 2D scan. Cross-validated against the original O(k²) scan across 5 image sizes × 4 kernel sizes × both shapes × all 5 padding modes × dilate/erode (400+ exact-equality comparisons) plus a multichannel RGB case, all passing, before wiring it in. Measured on a 2048×2048 u8 image, Open with k=27: Box 931ms→33.7ms (27.6x), Cross 311ms→33.6ms (9.2x, lower because the naive cross mask was already sparse).
 
-- [ ] **Repeated full-image clones in math ops** — [`image_cache.rs:91`](crates/core/src/algos/math/image_cache.rs#L91), [`image_math.rs:120`](crates/core/src/algos/math/image_math.rs#L120), [`median_subtract.rs:57`](crates/core/src/algos/math/median_subtract.rs#L57)
+- [x] **Repeated full-image clones in math ops** — [`image_cache.rs:91`](crates/core/src/algos/math/image_cache.rs#L91), [`image_math.rs:120`](crates/core/src/algos/math/image_math.rs#L120), [`median_subtract.rs:57`](crates/core/src/algos/math/median_subtract.rs#L57)
   Same pattern as the pipeline clone, but in the algorithm layer — full pixel-buffer clones on every call where a borrow or buffer-swap would do (pattern already used correctly in `blur.rs` / `structure_tensor.rs`).
+  *Done:* fixed as a byproduct of the pipeline `Arc` refactor above — all three `.clone()` calls now clone an `Arc<ImageContainer>` (cheap) instead of an `ImageContainer` (deep pixel copy). Traced `median_subtract.rs`'s snapshot-then-subtract composition (RankFilter → ImageMath) by hand to confirm `Arc::make_mut`'s copy-on-write still produces the correct result when the scratchpad aliases the main image; confirmed by the passing test suite.
 
 - [ ] **Viewport cache does a linear scan on every tile miss** — [`viewport_cache.rs:341-507`](crates/gui/src/editor/viewport_cache.rs#L341)
   `find_in_cache` walks the entire cache (up to 1GB/256MB of tiles) for spatial matches. Runs on the **undebounced** low-res pan/zoom path — i.e. every mouse-drag tick.

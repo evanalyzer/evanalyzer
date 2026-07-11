@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::{
     ImagePlane,
@@ -15,10 +16,13 @@ pub struct PipelineContext {
     pub output_path: Option<PathBuf>,
     // Image meta data
     pub image_meta: PipelineImageMeta,
-    // The "main" image being processed
-    pub image: ImageContainer,
+    // The "main" image being processed. `Arc`-wrapped so a pipeline that never
+    // mutates the image (e.g. pure segmentation/measurement) shares the
+    // cache's buffer instead of copying it; `Arc::make_mut` clones lazily the
+    // moment something actually needs to write to it.
+    pub image: Arc<ImageContainer>,
     // A secondary buffer used as a workspace to avoid re-allocation
-    pub scratch_pad: ImageContainer,
+    pub scratch_pad: Arc<ImageContainer>,
     // Instance map: Every unique object gets its own unique ID
     pub instance_map: Option<Image<u32, 1, CpuAllocator>>,
     // Segmentation map: Every pixel is assigned a category label (e.g., "Background", "Cell", "Nucleus").
@@ -45,8 +49,8 @@ impl PipelineContext {
         Ok(Self {
             output_path: Some(output_path),
             image_meta,
-            image: T::create_container(size, tile_offset, plane)?,
-            scratch_pad: T::create_container(size, tile_offset, plane)?,
+            image: Arc::new(T::create_container(size, tile_offset, plane)?),
+            scratch_pad: Arc::new(T::create_container(size, tile_offset, plane)?),
             segmentation_map: Some(
                 Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
                     .map_err(InternalErrors::from_kornia)?,
@@ -58,10 +62,15 @@ impl PipelineContext {
         })
     }
 
+    /// Takes the initial image as an `Arc` and stores it as-is (no clone): a
+    /// pipeline that never mutates `image` (e.g. pure segmentation/measurement)
+    /// then never pays for a copy of it. See `Arc::make_mut` usage in
+    /// [`Self::get_f32_gray_image_mut`] for where the copy-on-write actually
+    /// happens, if it happens at all.
     pub fn new_from_image(
         output_path: PathBuf,
         image_meta: PipelineImageMeta,
-        image: ImageContainer,
+        image: Arc<ImageContainer>,
     ) -> Result<Self, InternalErrors> {
         let empty_image = image.clone_empty();
         let size = image.size();
@@ -69,8 +78,8 @@ impl PipelineContext {
         Ok(Self {
             output_path: Some(output_path),
             image_meta,
-            image: image,
-            scratch_pad: empty_image,
+            image,
+            scratch_pad: Arc::new(empty_image),
             segmentation_map: Some(
                 Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
                     .map_err(InternalErrors::from_kornia)?,
@@ -82,10 +91,12 @@ impl PipelineContext {
         })
     }
 
-    /// Swaps the scratch pad and the main image
+    /// Swaps the scratch pad and the main image. Since both are `Arc`-wrapped,
+    /// this only exchanges two handles - it never touches (or clones) the
+    /// underlying pixel data.
     pub fn swap(&mut self) -> Result<(), InternalErrors> {
         // Rule: The scratch_pad cannot become the 'image' if it's U32
-        if let ImageContainer::U32(_) = self.scratch_pad {
+        if matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_)) {
             return Err(InternalErrors::FormatMismatch {
                 expected: "F32Gray or F32rgb expected".into(),
                 found: format!("Input: {:?}", self.scratch_pad),
@@ -105,8 +116,10 @@ impl PipelineContext {
                 "Cannot swap: Segmentation buffer not initialized".into(),
             ))?;
 
-        // 2. Destructure the scratch_pad to get the other image
-        if let ImageContainer::U32(ref mut scratch_img) = self.scratch_pad {
+        // 2. Destructure the scratch_pad to get the other image. scratch_pad is
+        // always freshly/uniquely allocated by this point, so make_mut never
+        // actually clones here - it's just the API to get a &mut through the Arc.
+        if let ImageContainer::U32(scratch_img) = Arc::make_mut(&mut self.scratch_pad) {
             // 3. Now the types match: &mut Image and &mut Image
             std::mem::swap(segmentation_map, scratch_img);
             Ok(())
@@ -119,7 +132,7 @@ impl PipelineContext {
     }
 
     pub fn get_f32_gray_image(&self) -> Result<&ManagedImage<f32, 1>, InternalErrors> {
-        match &self.image {
+        match self.image.as_ref() {
             ImageContainer::F32Gray(img) => Ok(img),
             _ => Err(InternalErrors::FormatMismatch {
                 expected: "F32Gray".into(),
@@ -128,11 +141,16 @@ impl PipelineContext {
         }
     }
 
+    /// Mutable access to the main image. This is the copy-on-write boundary:
+    /// `Arc::make_mut` clones the pixel buffer only if something else (the
+    /// cache, a sibling pipeline, a mid-pipeline snapshot) still holds a
+    /// reference to it: a pipeline that never calls this keeps sharing the
+    /// original buffer for free.
     pub fn get_f32_gray_image_mut(
         &mut self,
     ) -> Result<&mut Image<f32, 1, CpuAllocator>, InternalErrors> {
         // Use a guard pattern to check if the variant is wrong
-        if !matches!(self.image, ImageContainer::F32Gray(_)) {
+        if !matches!(self.image.as_ref(), ImageContainer::F32Gray(_)) {
             // Here, the immutable borrow for the 'if' is finished,
             // so we can safely borrow it again for the error message.
             return Err(InternalErrors::FormatMismatch {
@@ -142,7 +160,7 @@ impl PipelineContext {
         }
 
         // Now we know it's the right variant, perform the mutable match
-        match &mut self.image {
+        match Arc::make_mut(&mut self.image) {
             ImageContainer::F32Gray(img) => Ok(img),
             _ => unreachable!(), // We checked this above, so this is safe
         }
@@ -163,10 +181,10 @@ impl PipelineContext {
 
         // Modify scratch_pad if needed
         if let Some(new_buffer) = self.prepare_scratch::<M>(size, img.tile_offset, plane)? {
-            self.scratch_pad = M::wrap(new_buffer);
+            self.scratch_pad = Arc::new(M::wrap(new_buffer));
         }
 
-        let input = match &self.image {
+        let input = match self.image.as_ref() {
             ImageContainer::F32Gray(img) => Ok(img),
             _ => Err(InternalErrors::FormatMismatch {
                 expected: "F32Gray".into(),
@@ -174,95 +192,95 @@ impl PipelineContext {
             }),
         };
 
-        let scratch = M::get_ref_mut(&mut self.scratch_pad)
+        let scratch = M::get_ref_mut(Arc::make_mut(&mut self.scratch_pad))
             .ok_or_else(|| InternalErrors::Generic("Type mismatch in scratchpad".to_string()))?;
 
         Ok((input?, scratch))
     }
 
     pub fn get_scratch_as_f32_gray(&mut self) -> &mut Image<f32, 1, CpuAllocator> {
-        if !matches!(self.scratch_pad, ImageContainer::F32Gray(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_)) {
             let size = self.image.size();
-            self.scratch_pad = ImageContainer::F32Gray(ManagedImage {
+            self.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: Image::new(size, vec![0.0; size.width * size.height], CpuAllocator).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
-            });
+            }));
         }
 
-        match &mut self.scratch_pad {
+        match Arc::make_mut(&mut self.scratch_pad) {
             ImageContainer::F32Gray(img) => img,
             _ => unreachable!(),
         }
     }
 
     pub fn get_scratch_as_f32_rgb(&mut self) -> &mut Image<f32, 3, CpuAllocator> {
-        if !matches!(self.scratch_pad, ImageContainer::F32Rgb(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)) {
             let size = self.image.size();
-            self.scratch_pad = ImageContainer::F32Rgb(ManagedImage {
+            self.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
                 data: Image::new(size, vec![0.0; size.width * size.height], CpuAllocator).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
-            });
+            }));
         }
 
-        match &mut self.scratch_pad {
+        match Arc::make_mut(&mut self.scratch_pad) {
             ImageContainer::F32Rgb(img) => img,
             _ => unreachable!(),
         }
     }
 
     pub fn get_scratch_as_u32(&mut self) -> &mut Image<u32, 1, CpuAllocator> {
-        if !matches!(self.scratch_pad, ImageContainer::U32(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_)) {
             let size = self.image.size();
-            self.scratch_pad = ImageContainer::U32(ManagedImage {
+            self.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
                 data: Image::new(size, vec![0u32; size.width * size.height], CpuAllocator).unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
-            });
+            }));
         }
 
-        match &mut self.scratch_pad {
+        match Arc::make_mut(&mut self.scratch_pad) {
             ImageContainer::U32(img) => img,
             _ => unreachable!(),
         }
     }
 
     fn prepare_u32_scratch(&mut self) -> Result<(), InternalErrors> {
-        if !matches!(self.scratch_pad, ImageContainer::U32(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::U32(_)) {
             let size = self.image.size();
-            self.scratch_pad = ImageContainer::U32(ManagedImage {
+            self.scratch_pad = Arc::new(ImageContainer::U32(ManagedImage {
                 data: Image::new(size, vec![0u32; size.width * size.height], CpuAllocator)
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
-            });
+            }));
         }
         Ok(())
     }
 
     pub fn prepare_f32_gray_scratch(&mut self) -> Result<(), InternalErrors> {
-        if !matches!(self.scratch_pad, ImageContainer::F32Gray(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Gray(_)) {
             let size = self.image.size();
-            self.scratch_pad = ImageContainer::F32Gray(ManagedImage {
+            self.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: Image::new(size, vec![0f32; size.width * size.height], CpuAllocator)
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
-            });
+            }));
         }
         Ok(())
     }
 
     fn prepare_f32_rgb_scratch(&mut self) -> Result<(), InternalErrors> {
-        if !matches!(self.scratch_pad, ImageContainer::F32Rgb(_)) {
+        if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)) {
             let size = self.image.size();
-            self.scratch_pad = ImageContainer::F32Rgb(ManagedImage {
+            self.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
                 data: Image::new(size, vec![0f32; size.width * size.height], CpuAllocator)
                     .map_err(InternalErrors::from_kornia)?,
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
-            });
+            }));
         }
         Ok(())
     }
@@ -278,7 +296,7 @@ impl PipelineContext {
     > {
         self.prepare_segmentation_map()?;
         self.prepare_u32_scratch()?;
-        if let ImageContainer::U32(ref mut scratch_img) = self.scratch_pad {
+        if let ImageContainer::U32(scratch_img) = Arc::make_mut(&mut self.scratch_pad) {
             let segmentation_ref = self.segmentation_map.as_ref().unwrap(); // We just created it this should never happen
             Ok((segmentation_ref, scratch_img))
         } else {
@@ -313,7 +331,7 @@ impl PipelineContext {
     > {
         self.prepare_f32_gray_scratch()?;
 
-        match (&self.image, &mut self.scratch_pad) {
+        match (self.image.as_ref(), Arc::make_mut(&mut self.scratch_pad)) {
             (ImageContainer::F32Gray(img), ImageContainer::F32Gray(scratch)) => Ok((img, scratch)),
             (img_cont, _) if !matches!(img_cont, ImageContainer::F32Gray(_)) => {
                 Err(InternalErrors::FormatMismatch {
@@ -338,7 +356,7 @@ impl PipelineContext {
     > {
         self.prepare_f32_rgb_scratch()?;
 
-        match (&self.image, &mut self.scratch_pad) {
+        match (self.image.as_ref(), Arc::make_mut(&mut self.scratch_pad)) {
             (ImageContainer::F32Rgb(img), ImageContainer::F32Rgb(scratch)) => Ok((img, scratch)),
             (img_cont, _) if !matches!(img_cont, ImageContainer::F32Rgb(_)) => {
                 Err(InternalErrors::FormatMismatch {
@@ -360,7 +378,7 @@ impl PipelineContext {
     ) -> Result<Option<M::ImageRef>, InternalErrors> {
         //  Check if current buffer is usable (same type AND same size)
         let is_compatible =
-            M::matches_container(&self.scratch_pad) && self.scratch_pad.size() == size;
+            M::matches_container(self.scratch_pad.as_ref()) && self.scratch_pad.size() == size;
         if is_compatible {
             // Current scratchpad is fine, return None (no new buffer needed)
             Ok(None)
@@ -390,7 +408,7 @@ impl PipelineContext {
         ),
         InternalErrors,
     > {
-        let image = match &self.image {
+        let image = match self.image.as_ref() {
             ImageContainer::F32Gray(img) => Ok(img),
             _ => Err(InternalErrors::FormatMismatch {
                 expected: "F32Gray".into(),
@@ -429,7 +447,7 @@ impl PipelineContext {
         ),
         InternalErrors,
     > {
-        let image = match &self.image {
+        let image = match self.image.as_ref() {
             ImageContainer::F32Gray(img) => Ok(img),
             _ => Err(InternalErrors::FormatMismatch {
                 expected: "F32Gray".into(),
@@ -532,7 +550,7 @@ impl PipelineContext {
     }
 
     pub fn get_image_size(&self) -> ImageSize {
-        match &self.image {
+        match self.image.as_ref() {
             ImageContainer::F32Gray(image) => image.size(),
             ImageContainer::F32Rgb(image) => image.size(),
             ImageContainer::U32(image) => image.size(),
@@ -540,7 +558,7 @@ impl PipelineContext {
     }
 
     pub fn get_image_tile_offset(&self) -> Point2d {
-        match &self.image {
+        match self.image.as_ref() {
             ImageContainer::F32Gray(image) => image.tile_offset,
             ImageContainer::F32Rgb(image) => image.tile_offset,
             ImageContainer::U32(image) => image.tile_offset,
@@ -548,7 +566,7 @@ impl PipelineContext {
     }
 
     pub fn get_image_plane(&self) -> Option<ImagePlane> {
-        match &self.image {
+        match self.image.as_ref() {
             ImageContainer::F32Gray(image) => image.plane,
             ImageContainer::F32Rgb(image) => image.plane,
             ImageContainer::U32(image) => image.plane,
@@ -580,8 +598,8 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: None,
-                image: image,
-                scratch_pad: empty_image,
+                image: Arc::new(image),
+                scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
                     Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
                         .map_err(InternalErrors::from_kornia)?,
@@ -626,8 +644,8 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: None,
-                image: image,
-                scratch_pad: empty_image,
+                image: Arc::new(image),
+                scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
                     Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
                         .map_err(InternalErrors::from_kornia)?,
@@ -672,8 +690,8 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: None,
-                image: image,
-                scratch_pad: empty_image,
+                image: Arc::new(image),
+                scratch_pad: Arc::new(empty_image),
                 segmentation_map: Some(
                     Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
                         .map_err(InternalErrors::from_kornia)?,
@@ -710,16 +728,16 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: Some(PathBuf::default()),
-                image: T::create_container(
+                image: Arc::new(T::create_container(
                     size,
                     Point2d { x: 0, y: 0 },
                     ImagePlane { z: 0, c: 0, t: 0 },
-                )?,
-                scratch_pad: T::create_container(
+                )?),
+                scratch_pad: Arc::new(T::create_container(
                     size,
                     Point2d { x: 0, y: 0 },
                     ImagePlane { z: 0, c: 0, t: 0 },
-                )?,
+                )?),
                 segmentation_map: Some(
                     Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
                         .map_err(InternalErrors::from_kornia)?,
@@ -758,8 +776,12 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: Some(PathBuf::default()),
-                image: T::create_container(size, offset, ImagePlane { z: 0, c: 0, t: 0 })?,
-                scratch_pad: T::create_container(size, offset, ImagePlane { z: 0, c: 0, t: 0 })?,
+                image: Arc::new(T::create_container(size, offset, ImagePlane { z: 0, c: 0, t: 0 })?),
+                scratch_pad: Arc::new(T::create_container(
+                    size,
+                    offset,
+                    ImagePlane { z: 0, c: 0, t: 0 },
+                )?),
                 segmentation_map: Some(
                     Image::<u32, 1, CpuAllocator>::new(size, vec![0u32; pixel_count], CpuAllocator)
                         .map_err(InternalErrors::from_kornia)?,
