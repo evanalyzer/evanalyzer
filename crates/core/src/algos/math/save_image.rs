@@ -424,6 +424,72 @@ mod tests {
     }
 
     #[test]
+    fn test_save_instance_map_command_execution() {
+        // `new_from_image_test` already seeds `ctx.instance_map`, so the
+        // `ImageSource::InstanceMap` branch (untested before this) can reuse
+        // the same fixture as the `ImageSource::Image` tests above.
+        let input_img = Image::<f32, 1, _>::from_size_slice(
+            ImageSize { width: 2, height: 2 },
+            &[0.0f32, 0.5, 0.5, 1.0],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        ctx.output_path = Some(PathBuf::default());
+        let mut cache = PipelineCache::default();
+        let test_path = PathBuf::from("test_output_instance_map_deleteme.png");
+
+        let saver = SaveImage {
+            name: "test_output_instance_map_deleteme".into(),
+            source: ImageSource::InstanceMap,
+        };
+        let result = saver.execute(&mut ctx, &mut cache);
+
+        assert!(result.is_ok(), "Save command failed: {:?}", result.err());
+        assert!(test_path.exists(), "File was not actually created on disk");
+        let _ = fs::remove_file(test_path);
+    }
+
+    #[test]
+    fn test_save_segmentation_mask_command_execution() {
+        let input_img = Image::<f32, 1, _>::from_size_slice(
+            ImageSize { width: 2, height: 2 },
+            &[0.0f32, 0.5, 0.5, 1.0],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        ctx.output_path = Some(PathBuf::default());
+        let mut cache = PipelineCache::default();
+        let test_path = PathBuf::from("test_output_seg_mask_deleteme.png");
+
+        let saver = SaveImage {
+            name: "test_output_seg_mask_deleteme".into(),
+            source: ImageSource::SegmentationMask,
+        };
+        let result = saver.execute(&mut ctx, &mut cache);
+
+        assert!(result.is_ok(), "Save command failed: {:?}", result.err());
+        assert!(test_path.exists(), "File was not actually created on disk");
+        let _ = fs::remove_file(test_path);
+    }
+
+    #[test]
+    fn get_color_is_stable_for_the_reserved_ids_and_hashes_higher_ones() {
+        assert_eq!(get_color(0), [0, 0, 0]);
+        assert_eq!(get_color(1), [255, 0, 0]);
+        assert_eq!(get_color(2), [0, 255, 0]);
+        assert_eq!(get_color(3), [0, 0, 255]);
+        // Ids above the reserved range go through the hash path - just check
+        // it's deterministic and every channel respects the `.max(50)` floor
+        // (so no instance ends up an indistinguishable near-black).
+        let a = get_color(42);
+        let b = get_color(42);
+        assert_eq!(a, b, "hashing must be deterministic for the same id");
+        assert!(a.iter().all(|&c| c >= 50));
+    }
+
+    #[test]
     fn test_save_image_name() {
         let saver = SaveImage {
             name: "test".into(),

@@ -1309,6 +1309,113 @@ pub fn discover_coloc_detail_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::results::test_support::seed_results_db;
+
+    // ---- ResultsLoader against a real DuckDB file (backs the results table) ----
+
+    #[test]
+    fn results_loader_get_rois_fetches_real_rows_from_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = ResultsLoader::new(db_path);
+        let mut rois = loader.get_rois(DatabaseFilter::default()).expect("query should succeed");
+        rois.sort_by_key(|r| r.image_name.clone());
+
+        assert_eq!(rois.len(), 2);
+        assert_eq!(rois[0].image_name, "img1.tif");
+        assert_eq!(rois[0].object_class_name, vec!["ClassA".to_string()]);
+        assert_eq!(rois[0].area_px, 100);
+        assert_eq!(rois[1].image_name, "img2.tif");
+        assert_eq!(rois[1].object_class_name, vec!["ClassB".to_string()]);
+        assert_eq!(rois[1].area_px, 200);
+    }
+
+    #[test]
+    fn results_loader_get_rois_respects_the_image_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = ResultsLoader::new(db_path);
+        let filter =
+            DatabaseFilter { image_filter: Some(vec!["img2.tif".to_string()]), ..Default::default() };
+        let rois = loader.get_rois(filter).unwrap();
+
+        assert_eq!(rois.len(), 1);
+        assert_eq!(rois[0].image_name, "img2.tif");
+    }
+
+    #[test]
+    fn results_loader_get_rois_respects_the_class_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = ResultsLoader::new(db_path);
+        let filter =
+            DatabaseFilter { class_filter: Some(vec!["ClassA".to_string()]), ..Default::default() };
+        let rois = loader.get_rois(filter).unwrap();
+
+        assert_eq!(rois.len(), 1);
+        assert_eq!(rois[0].object_class_name, vec!["ClassA".to_string()]);
+    }
+
+    #[test]
+    fn results_loader_get_rois_sorts_by_the_requested_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = ResultsLoader::new(db_path);
+
+        let ascending = loader
+            .get_rois(DatabaseFilter {
+                sort_column: Some("area_px".to_string()),
+                sort_ascending: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(ascending.iter().map(|r| r.area_px).collect::<Vec<_>>(), vec![100, 200]);
+
+        let descending = loader
+            .get_rois(DatabaseFilter {
+                sort_column: Some("area_px".to_string()),
+                sort_ascending: false,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(descending.iter().map(|r| r.area_px).collect::<Vec<_>>(), vec![200, 100]);
+    }
+
+    #[test]
+    fn results_loader_get_rois_returns_empty_for_a_filter_matching_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = ResultsLoader::new(db_path);
+        let filter =
+            DatabaseFilter { image_filter: Some(vec!["no-such-image.tif".to_string()]), ..Default::default() };
+        assert!(loader.get_rois(filter).unwrap().is_empty());
+    }
+
+    #[test]
+    fn results_loader_get_image_names_and_class_names_reflect_the_seeded_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = ResultsLoader::new(db_path);
+        let mut images = loader.get_image_names().unwrap();
+        images.sort();
+        assert_eq!(images, vec!["img1.tif".to_string(), "img2.tif".to_string()]);
+
+        let mut classes = loader.get_class_names().unwrap();
+        classes.sort();
+        assert_eq!(classes, vec!["ClassA".to_string(), "ClassB".to_string()]);
+    }
 
     // ---- helpers ----
 

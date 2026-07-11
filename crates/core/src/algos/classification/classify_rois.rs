@@ -644,6 +644,159 @@ mod tests {
         );
     }
 
+    // -- match_handling: every other test in this file uses
+    // `RemoveAllClassesIfNotMatch` - these cover the other 9 `ClassifyMatchHandling`
+    // variants, each previously untested. `min_circularity: 2.0` is an
+    // unreachable bound (circularity tops out at 1.0) used to force
+    // `matches == false` for the "IfNotMatch" cases, since a lone filled
+    // rectangular ROI otherwise passes the wide-open default criteria.
+
+    #[test]
+    fn add_output_class_if_match_adds_alongside_the_existing_class() {
+        let cmd = ClassifyRois {
+            output_class: CLASS_B,
+            match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        run(&cmd, &mut cache);
+
+        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(roi.has_object_class(&CLASS_A), "original class must be kept, not replaced");
+        assert!(roi.has_object_class(&CLASS_B));
+    }
+
+    #[test]
+    fn add_output_class_if_not_match_only_fires_when_criteria_fail() {
+        let cmd = ClassifyRois {
+            output_class: CLASS_B,
+            min_circularity: 2.0,
+            match_handling: ClassifyMatchHandling::AddOutputClassIfNotMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        run(&cmd, &mut cache);
+
+        assert!(cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_B));
+    }
+
+    #[test]
+    fn remove_input_class_if_match_strips_listed_input_classes_only() {
+        let cmd = ClassifyRois {
+            input_classes: vec![CLASS_A],
+            match_handling: ClassifyMatchHandling::RemoveInputClassIfMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        let mut roi = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
+        roi.add_object_class(CLASS_B);
+        cache.roi_cache.insert(ObjectId(ID_A), roi);
+        run(&cmd, &mut cache);
+
+        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(!roi.has_object_class(&CLASS_A), "listed input class must be removed");
+        assert!(roi.has_object_class(&CLASS_B), "class not in input_classes must survive");
+    }
+
+    #[test]
+    fn remove_input_class_if_not_match_only_fires_when_criteria_fail() {
+        let cmd = ClassifyRois {
+            input_classes: vec![CLASS_A],
+            min_circularity: 2.0,
+            match_handling: ClassifyMatchHandling::RemoveInputClassIfNotMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        run(&cmd, &mut cache);
+
+        assert!(!cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A));
+    }
+
+    #[test]
+    fn remove_output_class_if_match_strips_only_the_output_class() {
+        let cmd = ClassifyRois {
+            output_class: CLASS_A,
+            match_handling: ClassifyMatchHandling::RemoveOutputClassIfMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        let mut roi = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
+        roi.add_object_class(CLASS_B);
+        cache.roi_cache.insert(ObjectId(ID_A), roi);
+        run(&cmd, &mut cache);
+
+        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(!roi.has_object_class(&CLASS_A));
+        assert!(roi.has_object_class(&CLASS_B), "only the output class should be touched");
+    }
+
+    #[test]
+    fn remove_output_class_if_not_match_only_fires_when_criteria_fail() {
+        let cmd = ClassifyRois {
+            output_class: CLASS_A,
+            min_circularity: 2.0,
+            match_handling: ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        run(&cmd, &mut cache);
+
+        assert!(!cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A));
+    }
+
+    #[test]
+    fn remove_all_classes_if_match_clears_every_class() {
+        let cmd = ClassifyRois {
+            match_handling: ClassifyMatchHandling::RemoveAllClassesIfMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        let mut roi = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
+        roi.add_object_class(CLASS_B);
+        cache.roi_cache.insert(ObjectId(ID_A), roi);
+        run(&cmd, &mut cache);
+
+        assert!(cache.roi_cache.get(&ObjectId(ID_A)).unwrap().object_class.is_empty());
+    }
+
+    #[test]
+    fn reclassify_if_match_replaces_every_class_with_the_output_class() {
+        let cmd = ClassifyRois {
+            output_class: CLASS_B,
+            match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        run(&cmd, &mut cache);
+
+        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(!roi.has_object_class(&CLASS_A));
+        assert!(roi.has_object_class(&CLASS_B));
+        assert_eq!(roi.object_class.len(), 1, "reclassify should leave exactly the output class");
+    }
+
+    #[test]
+    fn reclassify_if_not_match_only_fires_when_criteria_fail() {
+        let cmd = ClassifyRois {
+            output_class: CLASS_B,
+            min_circularity: 2.0,
+            match_handling: ClassifyMatchHandling::ReclassifyIfNotMatch,
+            ..Default::default()
+        };
+        let mut cache = PipelineCache::default();
+        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        run(&cmd, &mut cache);
+
+        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(!roi.has_object_class(&CLASS_A));
+        assert!(roi.has_object_class(&CLASS_B));
+    }
+
     #[test]
     fn overlapping_with_ignores_self_intersection() {
         // The overlap candidate bucket can legitimately include the ROI being evaluated

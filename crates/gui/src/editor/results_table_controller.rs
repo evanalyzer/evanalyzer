@@ -3661,6 +3661,154 @@ fn set_group_checked_for_search(
 mod tests {
     use super::*;
 
+    fn spec(id: &str, label: &str, visible: bool) -> ColumnSpec {
+        ColumnSpec { id: id.into(), label: label.into(), filterable: false, visible }
+    }
+
+    #[test]
+    fn map_group_by_mirrors_every_slint_variant() {
+        assert_eq!(map_group_by(ResultsGroupBy::None), GroupBy::None);
+        assert_eq!(map_group_by(ResultsGroupBy::Image), GroupBy::Image);
+        assert_eq!(map_group_by(ResultsGroupBy::Folder), GroupBy::Folder);
+        assert_eq!(map_group_by(ResultsGroupBy::Regex), GroupBy::Regex);
+    }
+
+    #[test]
+    fn sync_popup_checked_carries_checked_state_over_by_label() {
+        let items = vec![plain_item("A", true), plain_item("B", false)];
+        let popup = vec![plain_item("B", true), plain_item("C", false)];
+        let synced = sync_popup_checked(&items, &popup);
+        assert_eq!(synced.len(), 2, "popup's own item set is unchanged, only checked state moves");
+        assert!(!synced.iter().find(|i| i.label == "B").unwrap().checked, "B took items' false");
+        assert!(!synced.iter().find(|i| i.label == "C").unwrap().checked, "C has no match in items, unchanged");
+    }
+
+    #[test]
+    fn filter_popup_by_search_is_case_insensitive_substring() {
+        let items = vec![plain_item("Alpha", true), plain_item("beta", true), plain_item("gamma", true)];
+        let filtered = filter_popup_by_search(&items, "ETA");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].label, "beta");
+    }
+
+    #[test]
+    fn filter_popup_by_search_empty_search_returns_everything() {
+        let items = vec![plain_item("Alpha", true), plain_item("beta", true)];
+        assert_eq!(filter_popup_by_search(&items, "").len(), 2);
+    }
+
+    #[test]
+    fn set_checked_for_search_only_touches_matching_items() {
+        let items = vec![plain_item("Alpha", true), plain_item("beta", true)];
+        let result = set_checked_for_search(&items, "alp", false);
+        assert!(!result.iter().find(|i| i.label == "Alpha").unwrap().checked);
+        assert!(result.iter().find(|i| i.label == "beta").unwrap().checked, "non-matching item untouched");
+    }
+
+    #[test]
+    fn set_all_checked_touches_every_item_regardless_of_search() {
+        let items = vec![plain_item("Alpha", false), plain_item("beta", false)];
+        let result = set_all_checked(&items, true);
+        assert!(result.iter().all(|i| i.checked));
+    }
+
+    #[test]
+    fn carry_over_visibility_matches_by_id_and_ignores_unknown_columns() {
+        let mut fresh = vec![spec("roi_id", "ROI ID", true), spec("ch0_avg_bit", "Ch0 Avg", true)];
+        let prev = vec![spec("ch0_avg_bit", "Ch0 Avg", false), spec("stale_id", "Gone Now", false)];
+        carry_over_visibility(&mut fresh, &prev);
+        assert!(fresh[0].visible, "roi_id has no match in prev, keeps its fresh default");
+        assert!(!fresh[1].visible, "ch0_avg_bit's prior hidden state carried over");
+    }
+
+    #[test]
+    fn any_unchecked_and_all_checked_are_complementary_for_non_empty_lists() {
+        let all_true = vec![plain_item("A", true), plain_item("B", true)];
+        assert!(!any_unchecked(&all_true));
+        assert!(all_checked(&all_true));
+
+        let mixed = vec![plain_item("A", true), plain_item("B", false)];
+        assert!(any_unchecked(&mixed));
+        assert!(!all_checked(&mixed));
+    }
+
+    #[test]
+    fn all_checked_of_an_empty_list_is_vacuously_true() {
+        assert!(all_checked(&[]));
+        assert!(!any_unchecked(&[]));
+    }
+
+    #[test]
+    fn names_to_filter_items_starts_every_item_checked_and_ungrouped() {
+        let items = names_to_filter_items(&["A".to_string(), "B".to_string()]);
+        assert_eq!(items.len(), 2);
+        for item in &items {
+            assert!(item.checked);
+            assert_eq!(item.group, SharedString::new());
+            assert!(!item.group_header);
+        }
+        assert_eq!(items[0].label, SharedString::from("A"));
+    }
+
+    #[test]
+    fn column_group_buckets_by_id_prefix() {
+        assert_eq!(column_group("coloc_detail__ClassA__roi_id"), "Colocalization");
+        assert_eq!(column_group("ch0_avg_bit"), "Intensity");
+        assert_eq!(column_group("coloc_partner__ClassA__count"), "Colocalization");
+        assert_eq!(column_group("roi_id"), "");
+    }
+
+    #[test]
+    fn group_all_checked_and_set_group_checked_for_search_are_scoped_to_group_and_search() {
+        let items = vec![
+            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Min", true) },
+            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Max", false) },
+            FilterItem { group: "Other".into(), ..plain_item("Something", false) },
+        ];
+        assert!(!group_all_checked_for_search(&items, "Intensity", ""), "Ch0 Max is unchecked");
+
+        // Search-scoped: only "Ch0 Min" matches "min", and it's already checked.
+        assert!(group_all_checked_for_search(&items, "Intensity", "min"));
+
+        let updated = set_group_checked_for_search(&items, "Intensity", "max", true);
+        assert!(updated[0].checked, "Ch0 Min was already checked");
+        assert!(updated[1].checked, "Ch0 Max matched the search and got checked");
+        assert!(!updated[2].checked, "Other group untouched");
+    }
+
+    #[test]
+    fn plottable_column_labels_only_lists_visible_numeric_columns() {
+        let specs = vec![
+            spec("roi_id", "ROI ID", true),         // not numeric
+            spec("area_px", "Area (px)", true),      // numeric, visible
+            spec("ch0_avg_bit", "Ch0 Avg", false),   // numeric, hidden
+        ];
+        let labels = plottable_column_labels(&specs);
+        assert_eq!(labels, vec![SharedString::from("Area (px)")]);
+    }
+
+    #[test]
+    fn heatmap_metric_options_leads_with_the_count_sentinel() {
+        let specs = vec![spec("area_px", "Area (px)", true)];
+        let options = heatmap_metric_options(&specs);
+        assert_eq!(options[0], SharedString::from(HEATMAP_METRIC_COUNT_LABEL));
+        assert_eq!(options[1], SharedString::from("Area (px)"));
+        assert_eq!(options.len(), 2);
+    }
+
+    #[test]
+    fn heatmap_color_scheme_options_covers_every_scheme() {
+        let options = heatmap_color_scheme_options();
+        assert_eq!(options.len(), HeatmapColorScheme::all().len());
+    }
+
+    #[test]
+    fn has_intensity_columns_checks_for_a_ch_prefixed_id() {
+        assert!(has_intensity_columns(&[spec("ch0_avg_bit", "Ch0 Avg", true)]));
+        assert!(!has_intensity_columns(&[spec("roi_id", "ROI ID", true)]));
+        assert!(!has_intensity_columns(&[]));
+    }
+
     /// Simulates the exact chain `column_filter_apply` + `bg_reload_coloc_detail_page0`
     /// run through in the live app, without any Slint/GUI machinery: build the
     /// coloc-detail specs, hide one partner-class column by *label* (matching

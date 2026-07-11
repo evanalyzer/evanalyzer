@@ -2143,6 +2143,7 @@ dependencies = [
  "bitvec",
  "csv",
  "dirs",
+ "duckdb",
  "env_logger",
  "evanalyzer_cfg",
  "evanalyzer_core",

@@ -373,6 +373,13 @@ cargo llvm-cov --html                             # HTML report → target/llvm-
 cargo llvm-cov --lcov --output-path lcov.info    # lcov format (e.g. VS Code Coverage Gutters)
 ```
 
+### SBOM
+
+```sh
+cargo install cargo-cyclonedx
+cargo cyclonedx --format json
+```
+
 ---
 
 ## Testing

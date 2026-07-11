@@ -47,7 +47,7 @@ pub enum ProjectAction {
     Failure(String),
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum SelectNewProjectRootAction {
     /// Everything went fine, image added.
     Success,
@@ -56,7 +56,7 @@ pub enum SelectNewProjectRootAction {
     ImageNotFound,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum SaveProjectActions {
     /// Everything went fine, image added.
     Success,
@@ -1349,4 +1349,334 @@ pub fn import_legacy_project(
         tmp_settings: ProjectTmpSettings::default(),
     };
     Ok((project, outcome.warnings, outcome.legacy_image_folder))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::core_types::ObjectClass;
+
+    /// A project with one image ("img.tif") of one series (idx 0, 2x2px)
+    /// carrying two channels ("Ch0"/"Ch1"), selected as the current image -
+    /// i.e. everything `get_selected_image_series`/`get_current_image_*`
+    /// need to return `Some`.
+    fn project_with_one_image() -> ProjectWithRuntime {
+        let mut project = ProjectWithRuntime::default();
+        let rel_path = PathBuf::from("img.tif");
+
+        let channels = BTreeMap::from([
+            (0, ChannelSettings { name: "Ch0".into(), emission_wave_length: 488.0, visible: None, histogram: None }),
+            (1, ChannelSettings { name: "Ch1".into(), emission_wave_length: 561.0, visible: None, histogram: None }),
+        ]);
+        let series = SeriesSettings {
+            selected_channel: None,
+            image_width: 2,
+            image_height: 2,
+            channels,
+            pixel_sizes: PixelSizeSettings { x: 0.5, y: 0.5, z: 1.0 },
+            z_stack: None,
+            t_stack: None,
+            rois: Vec::new(),
+        };
+        project.images.list.insert(
+            rel_path.clone(),
+            ImageEntry {
+                rel_path: rel_path.clone(),
+                file_size: 16,
+                selected_series: 0,
+                series: BTreeMap::from([(0, series)]),
+            },
+        );
+        project.set_current_image_path(&rel_path);
+        project
+    }
+
+    fn class(id: u32, name: &str) -> Class {
+        Class { id: ObjectClass::Valid(id), name: name.into(), ..Default::default() }
+    }
+
+    // -- ROIs -----------------------------------------------------------
+
+    #[test]
+    fn add_get_delete_roi_round_trip() {
+        let mut project = project_with_one_image();
+        assert_eq!(project.get_rois().unwrap().len(), 0);
+
+        project.add_roi(&RoiSettings { id: ObjectId(1), ..Default::default() });
+        project.add_roi(&RoiSettings { id: ObjectId(2), ..Default::default() });
+        assert_eq!(project.get_rois().unwrap().len(), 2);
+
+        project.delete_roi(ObjectId(1));
+        let remaining = project.get_rois().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, ObjectId(2));
+    }
+
+    #[test]
+    fn roi_mutations_are_a_no_op_without_a_selected_image() {
+        let mut project = ProjectWithRuntime::default();
+        assert!(project.get_rois().is_none());
+        // Must not panic even though there's nothing to add to.
+        project.add_roi(&RoiSettings::default());
+        project.delete_roi(ObjectId(1));
+        assert!(project.get_rois().is_none());
+    }
+
+    #[test]
+    fn add_and_remove_class_from_roi() {
+        let mut project = project_with_one_image();
+        project.add_roi(&RoiSettings { id: ObjectId(1), ..Default::default() });
+
+        project.add_class_to_roi(ObjectId(1), ObjectClass::Valid(3));
+        assert!(project.get_rois().unwrap()[0].object_class.contains(&ObjectClass::Valid(3)));
+
+        project.remove_class_from_roi(ObjectId(1), &ObjectClass::Valid(3));
+        assert!(!project.get_rois().unwrap()[0].object_class.contains(&ObjectClass::Valid(3)));
+    }
+
+    // -- Classes ----------------------------------------------------------
+
+    #[test]
+    fn get_class_from_id_finds_by_id_not_position() {
+        let mut project = ProjectWithRuntime::default();
+        project.classification.classes.push(class(1, "A"));
+        project.classification.classes.push(class(2, "B"));
+
+        let found = project.get_class_from_id(&ObjectClass::Valid(2)).unwrap();
+        assert_eq!(found.name, "B");
+        assert!(project.get_class_from_id(&ObjectClass::Valid(99)).is_none());
+    }
+
+    #[test]
+    fn delete_all_classes_clears_the_list() {
+        let mut project = ProjectWithRuntime::default();
+        project.classification.classes.push(class(1, "A"));
+        project.delete_all_classes();
+        assert!(project.classification.classes.is_empty());
+    }
+
+    #[test]
+    fn selected_object_class_round_trips() {
+        let mut project = ProjectWithRuntime::default();
+        assert_eq!(project.get_selected_object_class(), ObjectClass::default());
+        project.set_selected_object_class(ObjectClass::Valid(4));
+        assert_eq!(project.get_selected_object_class(), ObjectClass::Valid(4));
+    }
+
+    #[test]
+    fn toggle_class_visibility_is_a_flip_flop() {
+        let mut project = ProjectWithRuntime::default();
+        let c = ObjectClass::Valid(1);
+        assert!(project.is_class_visible(&c), "classes are visible by default");
+
+        project.toggle_class_visibility(c.clone());
+        assert!(!project.is_class_visible(&c));
+
+        project.toggle_class_visibility(c.clone());
+        assert!(project.is_class_visible(&c));
+    }
+
+    #[test]
+    fn toggle_hide_unclassified_rois_is_a_flip_flop() {
+        let mut project = ProjectWithRuntime::default();
+        let initial = project.hide_unclassified_rois();
+        project.toggle_hide_unclassified_rois();
+        assert_eq!(project.hide_unclassified_rois(), !initial);
+        project.toggle_hide_unclassified_rois();
+        assert_eq!(project.hide_unclassified_rois(), initial);
+    }
+
+    #[test]
+    fn count_rois_for_class_counts_both_series_and_preview_rois() {
+        let mut project = project_with_one_image();
+        let target = ObjectClass::Valid(5);
+
+        project.add_roi(&RoiSettings { id: ObjectId(1), object_class: [target.clone()].into(), ..Default::default() });
+        project.add_roi(&RoiSettings { id: ObjectId(2), ..Default::default() });
+        project.tmp_settings.preview_rois.push(RoiSettings {
+            id: ObjectId(3),
+            object_class: [target.clone()].into(),
+            ..Default::default()
+        });
+
+        assert_eq!(project.count_rois_for_class(&target), 2);
+        assert_eq!(project.count_rois_for_class(&ObjectClass::Valid(999)), 0);
+    }
+
+    // -- Pixel sizes: series-level, then global override, then reset ------
+
+    #[test]
+    fn pixel_sizes_default_to_one_when_nothing_is_set() {
+        let project = ProjectWithRuntime::default();
+        let px = project.get_pixel_sizes();
+        assert_eq!((px.x, px.y, px.z), (1.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn pixel_sizes_prefer_global_over_series_and_reset_falls_back() {
+        let mut project = project_with_one_image();
+
+        project.set_image_pixel_size_settings(0.1, 0.2, 0.3);
+        let px = project.get_pixel_sizes();
+        assert_eq!((px.x, px.y, px.z), (0.1, 0.2, 0.3), "falls back to the series value");
+
+        project.set_global_pixel_size_settings(9.0, 9.0, 9.0);
+        let px = project.get_pixel_sizes();
+        assert_eq!((px.x, px.y, px.z), (9.0, 9.0, 9.0), "global overrides series");
+
+        project.reset_global_pixel_size_settings();
+        let px = project.get_pixel_sizes();
+        assert_eq!((px.x, px.y, px.z), (0.1, 0.2, 0.3), "clearing global falls back to series again");
+    }
+
+    // -- Channel visibility -------------------------------------------------
+
+    #[test]
+    fn channels_are_visible_by_default() {
+        let project = project_with_one_image();
+        let vis = project.get_image_channel_visibilities();
+        assert_eq!(vis.get(&0), Some(&true));
+        assert_eq!(vis.get(&1), Some(&true));
+    }
+
+    #[test]
+    fn set_image_preferences_overrides_per_channel_visibility() {
+        let mut project = project_with_one_image();
+        project.set_image_preferences(&BTreeMap::from([(0, false)]));
+
+        let vis = project.get_image_channel_visibilities();
+        assert_eq!(vis.get(&0), Some(&false));
+        assert_eq!(vis.get(&1), Some(&true), "untouched channel keeps its default");
+
+        let visible_only = project.get_image_channel_visibilities_vec();
+        assert!(!visible_only.contains(&0));
+        assert!(visible_only.contains(&1));
+    }
+
+    #[test]
+    fn set_global_preferences_is_the_fallback_when_a_channel_has_no_local_override() {
+        let mut project = project_with_one_image();
+        project.set_global_preferences(&BTreeMap::from([(0, false)]));
+        let vis = project.get_image_channel_visibilities();
+        assert_eq!(vis.get(&0), Some(&false));
+
+        // A local override still wins over the global one.
+        project.set_image_preferences(&BTreeMap::from([(0, true)]));
+        let vis = project.get_image_channel_visibilities();
+        assert_eq!(vis.get(&0), Some(&true));
+    }
+
+    // -- Image root / path resolution ---------------------------------------
+
+    #[test]
+    fn get_image_absolute_path_from_relative_only_resolves_known_images() {
+        let mut project = project_with_one_image();
+        project.images.root = Some(PathBuf::from("/data/images"));
+
+        assert_eq!(
+            project.get_image_absolute_path_from_relative(Path::new("img.tif")),
+            Some(PathBuf::from("/data/images/img.tif"))
+        );
+        assert_eq!(project.get_image_absolute_path_from_relative(Path::new("unknown.tif")), None);
+    }
+
+    #[test]
+    fn is_image_part_of_the_root_requires_a_root_to_be_set() {
+        let mut project = ProjectWithRuntime::default();
+        assert!(!project.is_image_part_of_the_root(Path::new("/data/images/img.tif")));
+
+        project.images.root = Some(PathBuf::from("/data/images"));
+        assert!(project.is_image_part_of_the_root(Path::new("/data/images/img.tif")));
+        assert!(!project.is_image_part_of_the_root(Path::new("/other/img.tif")));
+    }
+
+    #[test]
+    fn change_images_root_clears_the_image_list_and_current_image() {
+        let mut project = project_with_one_image();
+        assert!(!project.images.list.is_empty());
+
+        let new_root = PathBuf::from("/new/root");
+        project.change_images_root(&new_root);
+
+        assert!(project.images.list.is_empty());
+        assert_eq!(project.images.root, Some(new_root));
+        assert_eq!(project.get_current_image_path_cloned(), None);
+    }
+
+    #[test]
+    fn select_new_images_root_with_check_fails_when_the_sample_image_is_missing() {
+        let mut project = project_with_one_image();
+        let missing_root = PathBuf::from("/definitely/does/not/exist/anywhere");
+        let action = project.select_new_images_root_with_check(&missing_root);
+        assert_eq!(action, SelectNewProjectRootAction::ImageNotFound);
+        // A failed check must not have changed the root.
+        assert_ne!(project.images.root, Some(missing_root));
+    }
+
+    #[test]
+    fn select_new_images_root_with_check_succeeds_when_the_sample_image_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("img.tif"), b"fake image bytes").unwrap();
+
+        let mut project = project_with_one_image();
+        let action = project.select_new_images_root_with_check(&dir.path().to_path_buf());
+        assert_eq!(action, SelectNewProjectRootAction::Success);
+        assert_eq!(project.images.root, Some(dir.path().to_path_buf()));
+    }
+
+    // -- Save / load round trip ----------------------------------------------
+
+    #[test]
+    fn save_project_without_a_path_asks_the_caller_to_pick_one() {
+        let mut project = ProjectWithRuntime::default();
+        assert_eq!(project.save_project(), SaveProjectActions::PleaseSelectFile);
+    }
+
+    #[test]
+    fn save_project_as_appends_the_extension_and_records_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = ProjectWithRuntime::default();
+        project.metadata.name = "Round Trip Project".into();
+
+        // No extension given - save_project_as should append the project one.
+        let requested = dir.path().join("myproject");
+        project.save_project_as(&requested).expect("save should succeed");
+
+        let expected = dir.path().join(format!("myproject.{}", PROJECT_FILE_EXTENSIONS));
+        assert!(expected.exists(), "file should be written with the project extension appended");
+        assert_eq!(project.tmp_settings.current_project, Some(expected.clone()));
+
+        // save_project() (no path arg) should now reuse that recorded path.
+        project.metadata.name = "Changed After Save As".into();
+        assert_eq!(project.save_project(), SaveProjectActions::Success);
+
+        let written = std::fs::read_to_string(&expected).unwrap();
+        assert!(written.contains("Changed After Save As"));
+    }
+
+    #[test]
+    fn loaded_project_round_trips_rois_and_classes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.evaproj");
+
+        let mut project = project_with_one_image();
+        project.classification.classes.push(class(1, "Nucleus"));
+        project.add_roi(&RoiSettings {
+            id: ObjectId(1),
+            area: 1234,
+            object_class: [ObjectClass::Valid(1)].into(),
+            ..Default::default()
+        });
+        project.save_project_as(&path).unwrap();
+
+        let loaded = load_project(&path).expect("load should succeed");
+        assert_eq!(loaded.classification.classes.len(), 1);
+        assert_eq!(loaded.classification.classes[0].name, "Nucleus");
+        // `load_project` doesn't select an image on its own - it only loads
+        // `settings`, leaving `tmp_settings` at its defaults.
+        assert_eq!(loaded.get_current_image_path_cloned(), None);
+        let rois = &loaded.images.list.get(Path::new("img.tif")).unwrap().series[&0].rois;
+        assert_eq!(rois.len(), 1);
+        assert_eq!(rois[0].area, 1234);
+    }
 }

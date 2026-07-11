@@ -275,3 +275,146 @@ fn xlsx_row_writer(
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::results::results_loader::{build_column_specs, AggFunc};
+    use crate::results::test_support::seed_results_db;
+
+    fn parse_csv(path: &Path) -> Vec<Vec<String>> {
+        let mut reader = csv::Reader::from_path(path).expect("read csv back");
+        let mut rows = vec![reader.headers().expect("csv header row").iter().map(String::from).collect::<Vec<_>>()];
+        for record in reader.records() {
+            rows.push(record.expect("csv data row").iter().map(String::from).collect());
+        }
+        rows
+    }
+
+    fn col_index(header: &[String], label: &str) -> usize {
+        header.iter().position(|h| h == label).unwrap_or_else(|| panic!("no {label:?} column in {header:?}"))
+    }
+
+    #[test]
+    fn export_to_csv_writes_one_row_per_roi_with_the_right_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[0], &[]);
+
+        let csv_path = dir.path().join("out.csv");
+        exporter
+            .export_to_csv(DatabaseFilter::default(), &GroupConfig::default(), &specs, &csv_path)
+            .expect("export should succeed");
+
+        let rows = parse_csv(&csv_path);
+        assert_eq!(rows.len(), 3, "header + 2 ROI rows");
+
+        let header = &rows[0];
+        let class_col = col_index(header, "Class");
+        let image_col = col_index(header, "Image");
+        let area_col = col_index(header, "Area (px\u{00B2})");
+        let ch0_avg_col = col_index(header, "Ch0 Avg (bit)");
+
+        let by_image: std::collections::HashMap<&str, &Vec<String>> =
+            rows[1..].iter().map(|r| (r[image_col].as_str(), r)).collect();
+
+        let row1 = by_image["img1.tif"];
+        assert_eq!(row1[class_col], "ClassA");
+        assert_eq!(row1[area_col], "100");
+        assert_eq!(row1[ch0_avg_col], "127.0");
+
+        let row2 = by_image["img2.tif"];
+        assert_eq!(row2[class_col], "ClassB");
+        assert_eq!(row2[area_col], "200");
+    }
+
+    #[test]
+    fn export_to_csv_only_includes_visible_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let mut specs = build_column_specs(&[0], &[]);
+        for s in specs.iter_mut() {
+            if s.id == "class" {
+                s.visible = false;
+            }
+        }
+
+        let csv_path = dir.path().join("out.csv");
+        exporter
+            .export_to_csv(DatabaseFilter::default(), &GroupConfig::default(), &specs, &csv_path)
+            .expect("export should succeed");
+
+        let rows = parse_csv(&csv_path);
+        assert!(!rows[0].contains(&"Class".to_string()), "hidden column must not appear in the header");
+    }
+
+    #[test]
+    fn export_to_csv_respects_the_image_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[0], &[]);
+
+        let csv_path = dir.path().join("out.csv");
+        let filter = DatabaseFilter { image_filter: Some(vec!["img1.tif".to_string()]), ..Default::default() };
+        exporter.export_to_csv(filter, &GroupConfig::default(), &specs, &csv_path).unwrap();
+
+        let rows = parse_csv(&csv_path);
+        assert_eq!(rows.len(), 2, "header + only the one matching ROI");
+    }
+
+    #[test]
+    fn export_to_csv_grouped_writes_one_aggregated_row_per_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[0], &[]);
+
+        let group = GroupConfig { group_by: GroupBy::Image, aggs: vec![AggFunc::Avg], ..Default::default() };
+        let csv_path = dir.path().join("grouped.csv");
+        exporter.export_to_csv(DatabaseFilter::default(), &group, &specs, &csv_path).unwrap();
+
+        let rows = parse_csv(&csv_path);
+        // One image per source ROI here, so grouping by image still yields
+        // one row per ROI - this exercises the `group.group_by != None`
+        // branch (`aggregate_rois_sql`) end-to-end rather than proving a
+        // specific row count.
+        assert_eq!(rows.len(), 3, "header + one aggregated row per distinct image");
+    }
+
+    #[test]
+    fn export_to_xlsx_writes_a_readable_workbook() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[0], &[]);
+
+        let xlsx_path = dir.path().join("out.xlsx");
+        exporter
+            .export_to_xlsx(DatabaseFilter::default(), &GroupConfig::default(), &specs, &xlsx_path)
+            .expect("export should succeed");
+
+        let bytes = std::fs::read(&xlsx_path).expect("xlsx file should exist");
+        assert!(bytes.len() > 100, "workbook should have real content, not just a stub file");
+        // XLSX is a ZIP container - "PK\x03\x04" is the local-file-header
+        // magic every valid ZIP (and therefore every valid XLSX) starts with.
+        assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
+    }
+}

@@ -247,3 +247,151 @@ impl ProjectWithRuntime {
         };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    /// Adds a single image (one series, no channels) to `owner`'s project and
+    /// selects it, mirroring what `ProjectExt::add_image_to_list` +
+    /// `set_current_image_path` would do for a real scanned image - built by
+    /// hand here since that needs a real `ImageMeta` from actually reading a
+    /// file off disk.
+    fn seed_one_image(owner: &ProjectOwner, rel_path: &str) -> PathBuf {
+        let handle = owner.handle();
+        let mut project = handle.get_project_write();
+        let path = PathBuf::from(rel_path);
+        project.images.list.insert(
+            path.clone(),
+            ImageEntry {
+                rel_path: path.clone(),
+                file_size: 0,
+                selected_series: 0,
+                series: BTreeMap::from([(0, SeriesSettings::default())]),
+            },
+        );
+        drop(project);
+        handle.get_project_write().set_current_image_path(&path);
+        path
+    }
+
+    #[test]
+    fn current_path_is_none_for_a_fresh_owner() {
+        let owner = ProjectOwner::new();
+        assert_eq!(owner.current_path(), None);
+    }
+
+    #[test]
+    fn save_project_writes_json_and_records_current_path() {
+        let owner = ProjectOwner::new();
+        let handle = owner.handle();
+        handle.get_project_write().metadata.name = "My Project".into();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.evaproj");
+
+        owner.save_project(&path).expect("save should succeed");
+
+        assert_eq!(owner.current_path(), Some(path.clone()));
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("My Project"));
+    }
+
+    #[test]
+    fn load_project_round_trips_what_save_project_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("roundtrip.evaproj");
+
+        // Write with one owner...
+        let writer = ProjectOwner::new();
+        writer.handle().get_project_write().metadata.name = "Round Trip".into();
+        writer.save_project(&path).unwrap();
+
+        // ...and read back with a fresh one, as a real app restart would.
+        let reader = ProjectOwner::new();
+        reader.load_project(&path).expect("load should succeed");
+
+        assert_eq!(reader.current_path(), Some(path));
+        assert_eq!(reader.handle().get_project().metadata.name, "Round Trip");
+    }
+
+    #[test]
+    fn load_project_errors_for_a_missing_file() {
+        let owner = ProjectOwner::new();
+        let missing = Path::new("/nonexistent/does-not-exist.evaproj").to_path_buf();
+        assert!(owner.load_project(&missing).is_err());
+        // A failed load must not clobber `current_path`.
+        assert_eq!(owner.current_path(), None);
+    }
+
+    #[test]
+    fn get_preview_rois_reflects_tmp_settings() {
+        let owner = ProjectOwner::new();
+        let handle = owner.handle();
+        {
+            let mut project = handle.get_project_write();
+            project.tmp_settings.preview_rois.push(RoiSettings {
+                id: ObjectId(7),
+                ..Default::default()
+            });
+        }
+        let project = handle.get_project();
+        assert_eq!(project.get_preview_rois().len(), 1);
+        assert_eq!(project.get_preview_rois()[0].id, ObjectId(7));
+    }
+
+    #[test]
+    fn selected_roi_prefers_the_series_roi_over_a_same_id_preview_roi() {
+        let owner = ProjectOwner::new();
+        let path = seed_one_image(&owner, "img.tif");
+        let handle = owner.handle();
+        {
+            let mut project = handle.get_project_write();
+            project.set_current_image_path(&path);
+            project.add_roi(&RoiSettings {
+                id: ObjectId(1),
+                area: 100,
+                ..Default::default()
+            });
+            project.tmp_settings.preview_rois.push(RoiSettings {
+                id: ObjectId(1),
+                area: 999,
+                ..Default::default()
+            });
+            project.set_selected_roi(Some(ObjectId(1)));
+        }
+        let project = handle.get_project();
+        let selected = project.get_selected_roi().expect("a ROI is selected");
+        assert_eq!(selected.area, 100, "the real series ROI should win, not the preview one");
+    }
+
+    #[test]
+    fn selected_roi_falls_back_to_a_preview_roi_when_no_series_roi_matches() {
+        let owner = ProjectOwner::new();
+        let handle = owner.handle();
+        {
+            let mut project = handle.get_project_write();
+            project.tmp_settings.preview_rois.push(RoiSettings {
+                id: ObjectId(42),
+                area: 5,
+                ..Default::default()
+            });
+            project.set_selected_roi(Some(ObjectId(42)));
+        }
+        let project = handle.get_project();
+        let selected = project.get_selected_roi().expect("preview ROI should be found");
+        assert_eq!(selected.area, 5);
+    }
+
+    #[test]
+    fn selected_roi_is_none_when_nothing_is_selected() {
+        let owner = ProjectOwner::new();
+        let handle = owner.handle();
+        let project = handle.get_project();
+        assert_eq!(project.get_selected_roi_id(), None);
+        assert!(project.get_selected_roi().is_none());
+    }
+}

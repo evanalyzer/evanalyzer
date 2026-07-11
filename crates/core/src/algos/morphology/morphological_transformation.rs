@@ -316,6 +316,69 @@ mod tests {
         Ok(())
     }
 
+    /// Builds the same "single labeled pixel" fixture as
+    /// `test_label_morphology`, for exercising `apply_morph_u32`'s
+    /// Erode/Open/Close arms - `test_label_morphology` only covers Dilate,
+    /// leaving the rest of that match untested.
+    fn label_fixture() -> PipelineContext {
+        let size = ImageSize { width: 5, height: 5 };
+        let mut img = Image::<u32, 1, CpuAllocator>::from_size_val(size, 0, CpuAllocator).unwrap();
+        img.set_pixel(2, 2, 0, 7).unwrap();
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.segmentation_map = Some(img);
+        ctx
+    }
+
+    #[test]
+    fn test_label_morphology_erode_shrinks_a_single_pixel_label_to_background() -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = label_fixture();
+        let cmd = MorphologicalCommand {
+            op: MorphOps::Erode,
+            kernel_size: 3,
+            kernel_shape: KernelShapes::Box,
+            use_grayscale: false,
+        };
+        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        let labels = ctx.segmentation_map.as_ref().expect("no labels found");
+        // A single labeled pixel has no fully-labeled neighborhood, so erosion
+        // (the neighborhood minimum) wipes it out entirely.
+        assert_eq!(*labels.get_pixel(2, 2, 0).unwrap(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_label_morphology_open_removes_the_single_pixel_label() -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = label_fixture();
+        let cmd = MorphologicalCommand {
+            op: MorphOps::Open,
+            kernel_size: 3,
+            kernel_shape: KernelShapes::Box,
+            use_grayscale: false,
+        };
+        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        let labels = ctx.segmentation_map.as_ref().expect("no labels found");
+        // Open = erode then dilate; eroding away the single-pixel label
+        // leaves nothing for the dilate pass to expand back.
+        assert_eq!(*labels.get_pixel(2, 2, 0).unwrap(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_label_morphology_close_preserves_and_slightly_grows_the_label() -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = label_fixture();
+        let cmd = MorphologicalCommand {
+            op: MorphOps::Close,
+            kernel_size: 3,
+            kernel_shape: KernelShapes::Box,
+            use_grayscale: false,
+        };
+        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        let labels = ctx.segmentation_map.as_ref().expect("no labels found");
+        // Close = dilate then erode; the center pixel survives either way.
+        assert_eq!(*labels.get_pixel(2, 2, 0).unwrap(), 7);
+        Ok(())
+    }
+
     #[test]
     fn test_morph_rgb_ellipse_and_cross() -> Result<(), Box<dyn std::error::Error>> {
         // 1. Create a 3x3 image with a center pixel

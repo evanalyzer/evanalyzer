@@ -1897,3 +1897,79 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
     };
     detail
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::settings::meta_data::MetaData;
+
+    fn template(idx_seed: &str, steps: Vec<PipelineStepSettings>) -> PipelineTemplate {
+        PipelineTemplate {
+            meta: MetaData {
+                name: format!("Template {idx_seed}"),
+                short_description: "short".into(),
+                description: "long description".into(),
+                author_first_name: "Ada".into(),
+                author_last_name: "Lovelace".into(),
+                ..Default::default()
+            },
+            pipeline_steps: steps,
+        }
+    }
+
+    #[test]
+    fn template_to_command_def_encodes_the_index_as_a_negative_id() {
+        let t = template("A", vec![]);
+        assert_eq!(template_to_command_def(0, &t).id, -1);
+        assert_eq!(template_to_command_def(4, &t).id, -5);
+    }
+
+    #[test]
+    fn template_to_command_def_defaults_to_preprocess_with_no_steps() {
+        let t = template("Empty", vec![]);
+        let def = template_to_command_def(0, &t);
+        assert_eq!(def.category, StepCategory::Preprocess);
+        assert!(def.is_template);
+        assert_eq!(def.source, SharedString::from("template"));
+    }
+
+    #[test]
+    fn template_to_command_def_takes_its_category_from_the_first_step() {
+        // id 5 is "ConnectedComponents" -> CommandCategory::Object.
+        let step = PipelineStepSettings { enabled: true, command: default_command(5).unwrap() };
+        let t = template("Multi", vec![step]);
+        let def = template_to_command_def(0, &t);
+        assert_eq!(def.category, StepCategory::Object);
+    }
+
+    #[test]
+    fn template_to_command_def_joins_author_names_and_trims_when_empty() {
+        let mut t = template("X", vec![]);
+        let def = template_to_command_def(0, &t);
+        assert_eq!(def.author, SharedString::from("Ada Lovelace"));
+
+        t.meta.author_first_name.clear();
+        t.meta.author_last_name.clear();
+        let def_empty = template_to_command_def(0, &t);
+        assert_eq!(def_empty.author, SharedString::from(""), "no dangling space with both names empty");
+    }
+
+    #[test]
+    fn to_command_def_maps_every_built_in_category() {
+        for meta in all_command_meta() {
+            let def = to_command_def(&meta);
+            assert_eq!(def.id, meta.id);
+            assert_eq!(def.name, SharedString::from(meta.name));
+            assert!(!def.is_template);
+            assert_eq!(def.source, SharedString::from("built-in"));
+            let expected_category = match meta.category {
+                CommandCategory::Preprocess => StepCategory::Preprocess,
+                CommandCategory::Segment => StepCategory::Segment,
+                CommandCategory::Object => StepCategory::Object,
+                CommandCategory::Measure => StepCategory::Measure,
+                CommandCategory::Classify => StepCategory::Classify,
+            };
+            assert_eq!(def.category, expected_category, "id {}: {}", meta.id, meta.name);
+        }
+    }
+}
