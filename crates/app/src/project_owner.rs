@@ -4,7 +4,7 @@ use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, ObjectId},
     settings::{project_settings::ProjectSettings, roi_settings::RoiSettings},
 };
-use evanalyzer_core::{ImageReader, ReadMode};
+use evanalyzer_core::{ImageReader, ReadMode, recommended_reader_pool_size};
 use std::collections::HashSet;
 use std::{
     ops::{Deref, DerefMut},
@@ -134,10 +134,12 @@ impl ProjectOwner {
     }
 }
 
-/// A small pool of independent readers open on the same image path, so
-/// different channels/Z-slices can be read truly in parallel instead of
-/// serializing through one `IFormatReader` (see `BioFormatsWrapper.java`'s
-/// `synchronized(formatReader)` block - one reader is safe, not concurrent).
+/// A pool of independent readers open on the same image path (sized by
+/// [`recommended_reader_pool_size`], which balances cores against available
+/// RAM), so different channels/Z-slices can be read truly in parallel
+/// instead of serializing through one `IFormatReader` (see
+/// `BioFormatsWrapper.java`'s `synchronized(formatReader)` block - one
+/// reader is safe, not concurrent).
 ///
 /// Reader #1 pays the full `setId()` cost (BioFormats parses the file's
 /// structure). The BioFormats wrapper wraps every reader in a `Memoizer`,
@@ -153,18 +155,6 @@ impl ReaderPool {
     pub fn readers(&self) -> &[Arc<ImageReader>] {
         &self.readers
     }
-}
-
-/// Number of readers to keep per open image. Deliberately small and fixed
-/// (not scaled to channel count - some multiplexed formats have dozens of
-/// channels) and distinct from `resources::recommended_parallelism()`, which
-/// is sized for full pipeline workers, a much heavier unit than one reader
-/// plus its in-flight tile buffer.
-fn reader_pool_size() -> usize {
-    let cores = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-    cores.min(4).max(1)
 }
 
 /// AppHandle lightweight, cloneable, handed to GUI/CLI
@@ -256,7 +246,7 @@ impl AppHandle {
             }
         }
 
-        let size = reader_pool_size();
+        let size = recommended_reader_pool_size();
         let mut readers = Vec::with_capacity(size);
         // Built sequentially and in this order: the first call pays the
         // full BioFormats parse cost and populates the Memoizer cache, so
