@@ -64,6 +64,26 @@ pub struct ViewportController {
     pub(crate) high_res_is_ready: AtomicBool,
 }
 
+/// Posts `t` into the worker's single-slot task queue, merging it with
+/// whatever's already there instead of overwriting it.
+///
+/// The slot holds at most one pending task (see `wait_for_task`'s
+/// `task_slot.take()` in `viewport_worker.rs`), so a second dispatch that
+/// lands before the worker consumes the first would otherwise silently drop
+/// its flags - e.g. a debounced pan/zoom redraw (a plain default task)
+/// landing right after opening a new image would erase that task's
+/// `is_new_image`/`auto_adjust_if_not_set` flags, skipping histogram
+/// computation and rendering the image black.
+fn merge_into_slot(pair: &(Mutex<Option<DrawingTask>>, Condvar), t: DrawingTask) {
+    let (lock, cvar) = pair;
+    let mut slot = lock.lock().unwrap();
+    *slot = Some(match slot.take() {
+        Some(pending) => pending.merge(t),
+        None => t,
+    });
+    cvar.notify_one();
+}
+
 impl ViewportController {
     pub fn new(ui: slint::Weak<AppWindow>, app_state: Arc<UiState>) -> Self {
         let drawing_tasks = Tasks {
@@ -205,19 +225,12 @@ impl ViewportController {
     /// 2. Inject the new task into the slot.
     /// 3. Signal the `Condvar` to wake up a blocked worker thread.
     fn dispatch_worker_task(&self, task: DrawingTask, scope: TaskDispatch) {
-        let notify = |pair: &Arc<(Mutex<Option<DrawingTask>>, Condvar)>, t: DrawingTask| {
-            let (lock, cvar) = &**pair;
-            let mut slot = lock.lock().unwrap();
-            *slot = Some(t);
-            cvar.notify_one();
-        };
-
         if scope == TaskDispatch::LowRes || scope == TaskDispatch::HighResAndLowRes {
             self.drawing_tasks
                 .low_res_task
                 .task_count
                 .fetch_add(1, Ordering::SeqCst);
-            notify(&self.drawing_tasks.low_res_task.task_request, task.clone());
+            merge_into_slot(&self.drawing_tasks.low_res_task.task_request, task.clone());
         }
 
         if scope == TaskDispatch::HighRes || scope == TaskDispatch::HighResAndLowRes {
@@ -225,11 +238,11 @@ impl ViewportController {
                 .high_res_task
                 .task_count
                 .fetch_add(1, Ordering::SeqCst);
-            notify(&self.drawing_tasks.high_res_task.task_request, task.clone());
+            merge_into_slot(&self.drawing_tasks.high_res_task.task_request, task.clone());
         }
 
         if scope == TaskDispatch::Rois {
-            notify(&self.drawing_tasks.roi_task.task_request, task.clone());
+            merge_into_slot(&self.drawing_tasks.roi_task.task_request, task.clone());
         }
     }
 
@@ -1018,5 +1031,80 @@ mod composite_roi_instances_tests {
         blend_pixel_over(&mut expected, top);
         expected.a = 255; // isolated pixel -> border pass forces full opacity
         assert_eq!(pixels[0], expected);
+    }
+}
+
+#[cfg(test)]
+mod dispatch_slot_tests {
+    use super::*;
+
+    /// Reproduces the exact black-image race: a "new image" task is posted,
+    /// then (before the worker's `wait_for_task` consumes it) a plain
+    /// debounced-redraw task lands in the same slot. The slot must still
+    /// carry `is_new_image`/`auto_adjust_if_not_set` when the worker finally
+    /// takes it - a raw overwrite would have erased them here, skipping
+    /// histogram computation and leaving the render black.
+    #[test]
+    fn a_pending_new_image_task_survives_a_later_plain_dispatch() {
+        let pair: (Mutex<Option<DrawingTask>>, Condvar) = (Mutex::new(None), Condvar::new());
+
+        let new_image_task = DrawingTask {
+            auto_adjust_selected: false,
+            auto_adjust_if_not_set: true,
+            is_new_image: true,
+            fit_to_screen: true,
+            is_new_series: true,
+        };
+        merge_into_slot(&pair, new_image_task);
+
+        // The worker hasn't run yet: a stray debounced pan/zoom redraw fires
+        // and dispatches a plain task into the same slot.
+        merge_into_slot(&pair, DrawingTask::default());
+
+        // What the worker's `wait_for_task` would have taken.
+        let taken = pair.0.lock().unwrap().take().expect("a task must be pending");
+        assert!(
+            taken.is_new_image,
+            "the new-image request must not be dropped by the later plain dispatch"
+        );
+        assert!(taken.auto_adjust_if_not_set);
+        assert!(taken.fit_to_screen);
+        assert!(taken.is_new_series);
+    }
+
+    #[test]
+    fn dispatch_into_an_empty_slot_is_unchanged() {
+        let pair: (Mutex<Option<DrawingTask>>, Condvar) = (Mutex::new(None), Condvar::new());
+        let task = DrawingTask {
+            auto_adjust_selected: true,
+            ..DrawingTask::default()
+        };
+        merge_into_slot(&pair, task);
+
+        let taken = pair.0.lock().unwrap().take().expect("a task must be pending");
+        assert!(taken.auto_adjust_selected);
+        assert!(!taken.is_new_image);
+    }
+
+    #[test]
+    fn a_consumed_slot_is_not_affected_by_a_stale_merge() {
+        let pair: (Mutex<Option<DrawingTask>>, Condvar) = (Mutex::new(None), Condvar::new());
+        merge_into_slot(
+            &pair,
+            DrawingTask {
+                is_new_image: true,
+                ..DrawingTask::default()
+            },
+        );
+        // Worker consumes it.
+        pair.0.lock().unwrap().take().expect("a task must be pending");
+
+        // A later, unrelated plain dispatch must not resurrect the old flag.
+        merge_into_slot(&pair, DrawingTask::default());
+        let taken = pair.0.lock().unwrap().take().expect("a task must be pending");
+        assert!(
+            !taken.is_new_image,
+            "a fresh dispatch into an empty (already-consumed) slot must not merge with stale state"
+        );
     }
 }

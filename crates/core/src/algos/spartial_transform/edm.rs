@@ -294,7 +294,7 @@ mod tests {
 
         // 3. Extract result
         let result_container = ctx.image;
-        if let ImageContainer::F32Gray(res_img) = result_container {
+        if let ImageContainer::F32Gray(res_img) = result_container.as_ref() {
             res_img.print_window();
 
             let res_slice = res_img.as_slice();

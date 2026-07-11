@@ -12,6 +12,7 @@ use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_imgproc::filter::gaussian_blur;
 use macros::CommandsMeta;
+use std::sync::Arc;
 
 /// Smooths an image and reduces background noise using a Gaussian kernel.
 ///
@@ -65,7 +66,7 @@ impl ImageAlgorithm for GaussianBlur {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        match (&ctx.image, &mut ctx.scratch_pad) {
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             // Handle Grayscale (1 Channel)
             (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
                 gaussian_blur(
@@ -143,7 +144,7 @@ mod tests {
         // 4. Verify results
         // After a blur, the center pixel (1.0) should be smaller (spread out),
         // and the surrounding pixels should no longer be 0.0.
-        if let ImageContainer::F32Gray(output) = &ctx.image {
+        if let ImageContainer::F32Gray(output) = ctx.image.as_ref() {
             let center_pixel = output.get_pixel(2, 2, 0).map(|&v| v).unwrap();
             let edge_pixel = output.get_pixel(0, 0, 0).map(|&v| v).unwrap();
 
@@ -198,7 +199,7 @@ mod tests {
         blur.execute(&mut ctx, &mut cache).expect("RGB blur failed");
 
         // 4. Verify results
-        if let ImageContainer::F32Rgb(output) = &ctx.image {
+        if let ImageContainer::F32Rgb(output) = ctx.image.as_ref() {
             // Check center pixel reduction
             let r_center = output.get_pixel(2, 2, 0).unwrap();
             assert!(*r_center < 1.0, "Center red channel should have decreased");

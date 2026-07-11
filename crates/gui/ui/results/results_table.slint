@@ -14,7 +14,17 @@ export struct ResultsColumnDef {
 
 export struct ResultsRow {
     roi_id: int,
+    // The source ROI's stable database id, or "" for rows with no single
+    // source ROI (grouped rows) or where selection is disabled (coloc-detail
+    // rows). Used for row-selection lookups instead of `roi_id`, which is
+    // only a positional display index and isn't stable across page reloads.
+    object_id: string,
     values: [string],
+    // Alternating zebra-stripe flag, computed in Rust: toggles every row in
+    // the normal/grouped views, and toggles once per *source* ROI (not per
+    // flattened row) in the coloc-detail view, so all of one source ROI's
+    // colocalizing-partner rows read as a single band.
+    stripe: bool,
 }
 
 export struct FilterItem {
@@ -33,7 +43,48 @@ export struct FilterItem {
     group_all_checked: bool,
 }
 
-export enum ResultsViewMode { table, chart }
+// One queued file in the export dialog's "combinations to export" list: a
+// class subset (empty = every class) plus the format to write it in.
+export struct ExportBatchItem {
+    name: string,
+    // Class labels to include; empty means "every class" (no filter applied).
+    classes: [string],
+    // Precomputed display string for the list row, e.g. "ClassA, ClassB" or
+    // "All classes" — computed once in Rust when the batch is added so the
+    // dialog doesn't need to join arrays itself.
+    classes_label: string,
+    // "csv" or "xlsx".
+    format: string,
+    // Image names in scope. Unlike `classes`, this is never empty for a
+    // valid batch — even "every image" is stored as the concrete full list,
+    // since `each_image` needs real names to iterate over.
+    images: [string],
+    // Precomputed display string, e.g. "image_01.tif, image_02.tif" or "All images".
+    images_label: string,
+    // When true, one output file is written per image in `images` (its name
+    // folded into the output filename) instead of one file covering all of them.
+    each_image: bool,
+    // "table" or "coloc_detail" — captured at "Add" time, so a batch of
+    // queued combinations can mix both export styles (and grouped/ungrouped
+    // table exports) in one "Export All" run instead of sharing one style.
+    style: string,
+    // "none" | "image" | "regex" — grouping captured at "Add" time; only
+    // meaningful when `style == "table"`.
+    group_by: string,
+    // Regex pattern, only meaningful when `group_by == "regex"`.
+    group_regex: string,
+    // Precomputed display string for the list row, e.g. "Table", "Table ·
+    // Image", "Table · Regex", or "Coloc Details".
+    style_label: string,
+    // Column labels to include, captured from whichever column set matched
+    // `style` at "Add" time; empty means "every column" (no filter). Captured
+    // per-batch (not read live at export time) so a queued "Coloc Details"
+    // combination doesn't end up filtered by a "Table"-style column
+    // selection the user made afterwards, or vice versa.
+    columns: [string],
+}
+
+export enum ResultsViewMode { table, chart, coloc_table }
 
 // Which chart the chart view currently shows.
 export enum ResultsChartKind { histogram, scatter, heatmap }
@@ -53,10 +104,10 @@ export global ResultsState {
     ];
 
     in property <[ResultsRow]> rows: [
-        { roi_id: 1, values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"] },
-        { roi_id: 2, values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"] },
-        { roi_id: 3, values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"] },
-        { roi_id: 4, values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"] },
+        { roi_id: 1, object_id: "", values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"], stripe: true },
+        { roi_id: 2, object_id: "", values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"], stripe: false },
+        { roi_id: 3, object_id: "", values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"], stripe: true },
+        { roi_id: 4, object_id: "", values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"], stripe: false },
     ];
 
     in-out property <int> selected_roi_id:     0;
@@ -84,19 +135,36 @@ export global ResultsState {
     in-out property <bool> filter_coloc_active: false;
     in-out property <bool> filter_coloc_all_popup_checked: true;
 
-    callback roi_row_selected(int);
+    callback roi_row_selected(string);
     callback sort_requested(string, bool);
-    callback export_csv();
-    callback export_xlsx();
     callback copy_to_clipboard();
     callback filter_clicked();
     callback column_visibility_toggled(string, bool);
     callback clear_all_filters();
     callback filter_apply();
     callback load_more_rows();
+    // Mirrors `load_more_rows()` for the opposite (top) scroll edge: fired
+    // when scrolled near the top and an earlier page was evicted from memory
+    // (bounded scroll-memory window — see `RowWindow` in the Rust app crate),
+    // so Rust can transparently re-fetch and prepend it.
+    callback load_previous_rows();
 
     in-out property <bool> loading_more:    false;
     in-out property <bool> all_rows_loaded: false;
+    // Mirrors `all_rows_loaded` for the top edge: false once the window's
+    // oldest loaded page is no longer page 0 (i.e. an earlier page has been
+    // evicted and could be backfilled by scrolling up).
+    in-out property <bool> at_top_loaded: true;
+    // Rust sets this to ±N immediately after editing the front of `rows` to
+    // evict/prepend N rows, so the view can compensate the scroll position by
+    // the same N row-heights and the edit is invisible to the user. Consumed
+    // once by `changed front_row_delta` below, then reset to 0.
+    in-out property <int> front_row_delta: 0;
+    // True while a group_apply() is being processed by Rust. Set by the Slint UI
+    // immediately on any group action; cleared when rows arrive or preset state
+    // settles. Keeps the spinner visible across the gap where loading_more has
+    // already gone false but the grouped rows haven't been delivered yet.
+    in-out property <bool> group_computing: false;
     in-out property <int>  visible_column_count: 7;
     // Sum of visible columns' widths (logical px), recomputed whenever `columns` is rebuilt.
     in-out property <float> columns_total_width: 700.0;
@@ -154,6 +222,8 @@ export global ResultsState {
     in-out property <bool> group_active:         false;
     // Applies the current group_by / group_regex / aggregate selection.
     callback group_apply();
+    // Switches to the colocalization detail flat table (one row per source × partner pair).
+    callback coloc_detail_requested();
 
     // -- Chart view ---------------------------------------------------------
     in-out property <ResultsChartKind> chart_kind: ResultsChartKind.histogram;
@@ -176,6 +246,10 @@ export global ResultsState {
     in-out property <string> chart_heatmap_metric: "";
     // Raster cell size, in image pixels (square cells).
     in-out property <int> chart_cell_size_px:      20;
+    // Color scheme labels the heatmap gradient picker can choose from
+    // (e.g. "Viridis", "Magma", "Plasma", "Grayscale").
+    in property <[string]> chart_heatmap_color_scheme_options: [];
+    in-out property <string> chart_heatmap_color_scheme: "Viridis";
     // Rendered chart bitmap, built by the controller via the `plotters` crate.
     in property <image> chart_image;
     // Empty while a chart is shown; otherwise an explanatory/placeholder
@@ -213,6 +287,142 @@ export global ResultsState {
     in-out property <int> selected_z_stack: 0;
     in-out property <bool> z_stack_show_all: true;
     callback z_stack_changed(int, bool);
+
+    // -- Export dialog --------------------------------------------------------
+    // One toolbar button opens this dialog; all format/class-subset choices
+    // live here instead of on the toolbar.
+    in-out property <bool> export_dialog_active: false;
+    // Per-dialog-session class checklist — independent of the table's own
+    // Class column filter, seeded fresh (all checked) each time the dialog
+    // opens (see `export_dialog_open`).
+    in-out property <[FilterItem]> export_class_items: [];
+    in-out property <bool> export_class_all_checked: true;
+    // Live "checked/total" counts for the checklist, computed in Rust
+    // alongside `export_class_all_checked` above (Slint's function bodies
+    // have no loop or array-reduce construct, so this can't be computed
+    // in-component).
+    in-out property <int> export_class_checked_count: 0;
+    in-out property <int> export_class_total_count: 0;
+    // Search-filtered subset of `export_class_items` actually drawn by the
+    // ChecklistBox — recomputed in Rust on every keystroke and every
+    // mutation (toggle/select-all/clear-all), since Slint has no string
+    // `.contains()` to filter with in-component.
+    in-out property <[FilterItem]> export_class_displayed_items: [];
+    // Two-way bound to the ChecklistBox's own filter LineEdit, so Rust can
+    // clear it when the dialog re-opens (see `export_dialog_open`) and read
+    // the current text at every mutation site without a separate copy.
+    in-out property <string> export_class_search_text: "";
+    // Labels of up to the first 4 checked items (in `export_class_items`
+    // order), for the collapsed PickerField's chip row. Computed in Rust
+    // alongside the counts above — Slint has neither a loop/array-reduce
+    // construct nor recursive `pure function`s (self-calls are treated as a
+    // binding loop), so walking `export_class_items` to find the first N
+    // checked entries can't be done in-component either.
+    in-out property <[string]> export_class_chip_labels: [];
+    // Per-dialog-session image checklist — independent of the table's own
+    // Image column filter, seeded fresh (all checked) each time the dialog
+    // opens. Scopes the export to the checked images; combined with
+    // `export_each_image` below, also drives per-image file fan-out.
+    in-out property <[FilterItem]> export_image_items: [];
+    in-out property <bool> export_image_all_checked: true;
+    in-out property <int> export_image_checked_count: 0;
+    in-out property <int> export_image_total_count: 0;
+    in-out property <[FilterItem]> export_image_displayed_items: [];
+    in-out property <string> export_image_search_text: "";
+    in-out property <[string]> export_image_chip_labels: [];
+    // When true, "Add" queues a batch that writes one output file per
+    // checked image (its name folded into the filename) instead of one
+    // file covering all of them together.
+    in-out property <bool> export_each_image: false;
+    // "table" (per-ROI / grouped, mirrors the normal table view) or
+    // "coloc_detail" (flattened source × partner rows, mirrors Coloc
+    // Details). Switching this re-seeds `export_column_items` from the
+    // matching column set.
+    in-out property <string> export_style: "table";
+    // "none" | "image" | "regex" — overrides whatever grouping is active in
+    // the main table for the purposes of this export. Only meaningful when
+    // `export_style` is "table"; Coloc Details export is always flat.
+    in-out property <string> export_group_by: "none";
+    // Regex pattern, only used when `export_group_by == "regex"`.
+    in-out property <string> export_group_regex: "";
+    // Per-dialog-session column checklist — which columns of the chosen
+    // `export_style` end up in the file. Re-seeded (all checked) whenever
+    // the dialog opens or `export_style` changes.
+    in-out property <[FilterItem]> export_column_items: [];
+    in-out property <bool> export_column_all_checked: true;
+    in-out property <int> export_column_checked_count: 0;
+    in-out property <int> export_column_total_count: 0;
+    in-out property <[FilterItem]> export_column_displayed_items: [];
+    in-out property <string> export_column_search_text: "";
+    in-out property <[string]> export_column_chip_labels: [];
+    // Whether `export_column_items` currently has any "Intensity"-grouped
+    // column — gates showing the Intensity quick-pick buttons (None / Avg+Sum
+    // / All), which would otherwise be a no-op for a file with no channels.
+    in-out property <bool> export_has_intensity: false;
+    // Name + format for the combination currently being assembled from the
+    // checklists above; "Add" appends a snapshot of these to `export_batches`.
+    in-out property <string> export_combo_name: "";
+    // "csv" or "xlsx".
+    in-out property <string> export_format: "csv";
+    // Queued combinations; each produces one output file when "Export All"
+    // runs. May be empty — in that case Export All uses the checklist/name/
+    // format above directly, as a single one-off export.
+    in-out property <[ExportBatchItem]> export_batches: [];
+    in-out property <bool> export_running: false;
+    // Progress/result/validation message shown at the bottom of the dialog.
+    in-out property <string> export_status: "";
+    // How many of `export_progress_total` output files have been attempted
+    // so far (updated live while `export_running` is true).
+    in-out property <int> export_progress_current: 0;
+    in-out property <int> export_progress_total: 0;
+    // Same information as a 0..1 fraction, precomputed in Rust (avoids
+    // integer-division/divide-by-zero edge cases in the .slint binding) for
+    // the progress bar's `progress` property.
+    in-out property <float> export_progress_fraction: 0.0;
+
+    callback export_dialog_open();
+    callback export_dialog_close();
+    callback export_class_item_toggled(string);
+    callback export_class_select_all();
+    callback export_class_clear_all();
+    // Fired on every keystroke in the Classes ChecklistBox's filter box.
+    // Slint has no string `.contains()`, so the search-filtered
+    // `export_class_displayed_items` list is computed in Rust.
+    callback export_class_search_changed(string);
+    callback export_image_item_toggled(string);
+    callback export_image_select_all();
+    callback export_image_clear_all();
+    callback export_image_search_changed(string);
+    callback export_style_selected(string);
+    callback export_column_item_toggled(string);
+    callback export_column_select_all();
+    callback export_column_clear_all();
+    callback export_column_search_changed(string);
+    callback export_column_group_toggle(string);
+    // "none" | "avg_sum" | "all" — quick picks scoped to the Intensity section only.
+    callback export_column_intensity_preset(string);
+    // Copies one "Coloc {Class}" section's checked pattern onto every other
+    // Coloc class section (by field position), so configuring columns for
+    // one partner class can be stamped onto the rest instead of repeating
+    // the same clicks per class.
+    callback export_column_apply_group_to_all(string);
+    // Queues the current checklist/name/format as one combination to export.
+    callback export_add_batch();
+    // Queues a combination captured from the results table's own current
+    // filters/style/grouping/columns (not the dialog's checklists), using
+    // the current Name/Format fields — for stamping "whatever the table is
+    // showing right now" into the batch alongside other configured combos.
+    callback export_add_batch_from_table();
+    callback export_remove_batch(int);
+    // Picks an output folder, then writes one file per queued combination
+    // (or the checklist directly, if none are queued).
+    callback export_run_all();
+    // Requests the in-progress export stop after its current file finishes.
+    callback export_cancel();
+    // Immediately exports a single file matching the results table's own
+    // current filters/style/grouping/columns — bypasses the batch queue
+    // entirely, for a quick "just export what I'm looking at" action.
+    callback export_as_displayed();
 }
 
 // -- Shared checkbox item used inside filter popups ----------------------------
@@ -241,21 +451,25 @@ export component FilterCheckbox inherits Rectangle {
         spacing: 7px;
         alignment: start;
 
-        Rectangle {
-            width: 13px;
-            height: 13px;
-            border-radius: 2px;
-            border-width: 1.5px;
-            border-color: root.checked ? Theme.accent : Theme.border;
-            background: root.checked ? Theme.accent : transparent;
+        VerticalLayout {
+            alignment: center;
 
-            if root.checked: Image {
-                source: @image-url("../icons/regular-black/check.svg");
-                width: 9px;
-                height: 9px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: white;
+            Rectangle {
+                width: 13px;
+                height: 13px;
+                border-radius: 2px;
+                border-width: 1.5px;
+                border-color: root.checked ? Theme.accent : Theme.border;
+                background: root.checked ? Theme.accent : transparent;
+
+                if root.checked: Image {
+                    source: @image-url("../icons/regular-black/check.svg");
+                    width: 9px;
+                    height: 9px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: white;
+                }
             }
         }
 
@@ -702,7 +916,7 @@ component ResultsDataRow inherits Rectangle {
         }
     }
 
-    background: root.selected ? Theme.list-select-row-bg : (ta.has-hover ? Theme.raised : transparent);
+    background: root.selected ? Theme.list-select-row-bg : (ta.has-hover ? Theme.raised : (root.data.stripe ? transparent : Theme.list-row-alt-bg));
 
     if root.selected: Rectangle {
         x: 0px;
@@ -742,6 +956,12 @@ export component ResultsTable inherits Rectangle {
     // row read each column's width directly off `ResultsState.columns[i].width`, so the two
     // can never drift apart.
     property <length> content-width: max(table-scroll.visible-width, ResultsState.columns_total_width * 1px);
+    property <int> rows-count-proxy: ResultsState.rows.length;
+    changed rows-count-proxy => {
+        if (ResultsState.rows.length > 0) {
+            ResultsState.group_computing = false;
+        }
+    }
 
     VerticalLayout {
         spacing: 0;
@@ -764,10 +984,18 @@ export component ResultsTable inherits Rectangle {
                     col-id: col.id;
                     sorted: ResultsState.sort_column_id == col.id;
                     sort-asc: ResultsState.sort_ascending;
+                    // `group`/`group_class` are the grouped view's stand-ins for
+                    // `image`/`class` (grouping replaces those columns, but the
+                    // filter still restricts which *source* ROIs are grouped —
+                    // see `build_group_specs`), so they share the same image/
+                    // class filter popups rather than losing filter access
+                    // entirely the moment grouping is turned on.
+                    property <bool> is-image-col: col.id == "image" || col.id == "group";
+                    property <bool> is-class-col: col.id == "class" || col.id == "group_class";
                     filterable: col.filterable;
-                    filter-active: col.id == "image" ? ResultsState.filter_image_active : (col.id == "class" ? ResultsState.filter_class_active : ResultsState.filter_coloc_active);
-                    popup-items: col.filterable ? (col.id == "image" ? ResultsState.filter_image_popup : (col.id == "class" ? ResultsState.filter_class_popup : ResultsState.filter_coloc_popup)) : [];
-                    all-popup-checked: col.id == "image" ? ResultsState.filter_image_all_popup_checked : (col.id == "class" ? ResultsState.filter_class_all_popup_checked : ResultsState.filter_coloc_all_popup_checked);
+                    filter-active: is-image-col ? ResultsState.filter_image_active : (is-class-col ? ResultsState.filter_class_active : ResultsState.filter_coloc_active);
+                    popup-items: col.filterable ? (is-image-col ? ResultsState.filter_image_popup : (is-class-col ? ResultsState.filter_class_popup : ResultsState.filter_coloc_popup)) : [];
+                    all-popup-checked: is-image-col ? ResultsState.filter_image_all_popup_checked : (is-class-col ? ResultsState.filter_class_all_popup_checked : ResultsState.filter_coloc_all_popup_checked);
 
                     clicked => {
                         if (ResultsState.sort_column_id == col.id) {
@@ -779,10 +1007,10 @@ export component ResultsTable inherits Rectangle {
                         ResultsState.sort_requested(col.id, ResultsState.sort_ascending);
                     }
                     filter-label-toggled(lbl) => {
-                        if (col.id == "image") {
+                        if (is-image-col) {
                             ResultsState.image_filter_label_toggled(lbl);
                         }
-                        if (col.id == "class") {
+                        if (is-class-col) {
                             ResultsState.class_filter_label_toggled(lbl);
                         }
                         if (col.id == "colocalized") {
@@ -790,10 +1018,10 @@ export component ResultsTable inherits Rectangle {
                         }
                     }
                     filter-search-changed(txt) => {
-                        if (col.id == "image") {
+                        if (is-image-col) {
                             ResultsState.image_filter_search_changed(txt);
                         }
-                        if (col.id == "class") {
+                        if (is-class-col) {
                             ResultsState.class_filter_search_changed(txt);
                         }
                         if (col.id == "colocalized") {
@@ -801,10 +1029,10 @@ export component ResultsTable inherits Rectangle {
                         }
                     }
                     filter-select-all => {
-                        if (col.id == "image") {
+                        if (is-image-col) {
                             ResultsState.image_select_all();
                         }
-                        if (col.id == "class") {
+                        if (is-class-col) {
                             ResultsState.class_select_all();
                         }
                         if (col.id == "colocalized") {
@@ -812,10 +1040,10 @@ export component ResultsTable inherits Rectangle {
                         }
                     }
                     filter-clear-all => {
-                        if (col.id == "image") {
+                        if (is-image-col) {
                             ResultsState.image_clear_all();
                         }
-                        if (col.id == "class") {
+                        if (is-class-col) {
                             ResultsState.class_clear_all();
                         }
                         if (col.id == "colocalized") {
@@ -851,6 +1079,20 @@ export component ResultsTable inherits Rectangle {
                 }
             }
 
+            // Rust sets `ResultsState.front_row_delta` right after editing the
+            // front of `rows` (evicting rows scrolled past, or prepending a
+            // backfilled page) — this compensates the scroll position by the
+            // same number of row-heights so the edit is invisible to the user,
+            // the same "scroll anchoring" technique `scroll_trigger` above uses
+            // for jump-to-row.
+            property <int> front_row_delta_trigger: ResultsState.front_row_delta;
+            changed front_row_delta_trigger => {
+                if (ResultsState.front_row_delta != 0) {
+                    table-scroll.viewport-y += ResultsState.front_row_delta * 32px;
+                    ResultsState.front_row_delta = 0;
+                }
+            }
+
             // ListView virtualizes rows — only visible rows are rendered.
             // No viewport-width set here: preserves Slint's virtualization.
             // Horizontal scrolling is handled by clip+translate in each row.
@@ -863,6 +1105,9 @@ export component ResultsTable inherits Rectangle {
                     if (!ResultsState.all_rows_loaded && !ResultsState.loading_more && table-scroll.viewport-height + table-scroll.viewport-y - table-scroll.height < 3 * 32px) {
                         ResultsState.load_more_rows();
                     }
+                    if (!ResultsState.at_top_loaded && !ResultsState.loading_more && table-scroll.viewport-y > -3 * 32px) {
+                        ResultsState.load_previous_rows();
+                    }
                 }
 
                 for data in ResultsState.rows: ResultsDataRow {
@@ -872,21 +1117,33 @@ export component ResultsTable inherits Rectangle {
                     content-width: root.content-width;
                     row-clicked => {
                         ResultsState.selected_roi_id = data.roi_id;
-                        ResultsState.roi_row_selected(data.roi_id);
+                        ResultsState.roi_row_selected(data.object_id);
                     }
                 }
             }
 
-            // Spinner shown while the next page is loading (overlays the list bottom).
-            if ResultsState.loading_more: Rectangle {
-                y: parent.height - 40px;
-                height: 40px;
+            // Spinner shown while the next page is loading — centered floating card.
+            if ResultsState.loading_more || ResultsState.group_computing: Rectangle {
+                x: (parent.width - 52px) / 2;
+                y: (parent.height - 52px) / 2;
+                width: 52px;
+                height: 52px;
+                background: Theme.panel;
+                border-radius: Theme.radius-md;
+                border-width: 1px;
+                border-color: Theme.border;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: #00000024;
+
                 VerticalLayout {
                     alignment: center;
-                    Spinner {
-                        indeterminate: true;
-                        width: 20px;
-                        height: 20px;
+                    HorizontalLayout {
+                        alignment: center;
+                        Spinner {
+                            indeterminate: true;
+                            width: 24px;
+                            height: 24px;
+                        }
                     }
                 }
             }

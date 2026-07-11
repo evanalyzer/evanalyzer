@@ -4,8 +4,8 @@ use crate::args::{
 };
 use crate::commands::common::{build_database_filter, build_group_config, discover_columns};
 use evanalyzer_app::result::{
-    ColorBy, HeatmapMetric, ResultsExporter, ResultsLoader, compute_heatmap, compute_histogram,
-    compute_scatter, save_heatmap_png, save_histogram_png, save_scatter_png,
+    ColorBy, HeatmapColorScheme, HeatmapMetric, ResultsExporter, ResultsLoader, compute_heatmap,
+    compute_histogram, compute_scatter, save_heatmap_png, save_histogram_png, save_scatter_png,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::sync::Arc;
@@ -44,8 +44,15 @@ fn export_histogram(args: HistogramArgs) -> Result<(), InternalErrors> {
     let filter = build_database_filter(&args.filter, true, 0, 0);
     let rois = loader.get_rois(filter)?;
 
-    let data = compute_histogram(&rois, &args.column, &specs, args.buckets, args.log_scale)
-        .ok_or_else(|| column_not_found_error(&args.column, &args.db))?;
+    let data = compute_histogram(
+        &rois,
+        &args.column,
+        &specs,
+        args.buckets,
+        args.log_scale,
+        to_color_by(args.color_by),
+    )
+    .ok_or_else(|| column_not_found_error(&args.column, &args.db))?;
     save_histogram_png(&data, args.width, args.height, &args.out)?;
     println!("Saved histogram to {}", args.out.display());
     Ok(())
@@ -57,13 +64,8 @@ fn export_scatter(args: ScatterArgs) -> Result<(), InternalErrors> {
     let filter = build_database_filter(&args.filter, true, 0, 0);
     let rois = loader.get_rois(filter)?;
 
-    let color_by = match args.color_by {
-        ColorByKind::None => ColorBy::None,
-        ColorByKind::Class => ColorBy::Class,
-        ColorByKind::Colocalized => ColorBy::Colocalized,
-    };
-
-    let data = compute_scatter(&rois, &args.x, &args.y, color_by, &specs, args.max_points)
+    let data =
+        compute_scatter(&rois, &args.x, &args.y, to_color_by(args.color_by), &specs, args.max_points)
         .ok_or_else(|| column_not_found_error(&format!("{} / {}", args.x, args.y), &args.db))?;
     save_scatter_png(&data, args.width, args.height, &args.out)?;
     println!("Saved scatter plot to {}", args.out.display());
@@ -84,9 +86,18 @@ fn export_heatmap(args: HeatmapArgs) -> Result<(), InternalErrors> {
 
     let data = compute_heatmap(&rois, &metric, &specs, args.cell_size)
         .ok_or_else(|| column_not_found_error(&args.metric, &args.db))?;
-    save_heatmap_png(&data, args.width, args.height, &args.out)?;
+    let scheme = HeatmapColorScheme::from_label(&args.color_scheme);
+    save_heatmap_png(&data, scheme, args.width, args.height, &args.out)?;
     println!("Saved heatmap to {}", args.out.display());
     Ok(())
+}
+
+fn to_color_by(kind: ColorByKind) -> ColorBy {
+    match kind {
+        ColorByKind::None => ColorBy::None,
+        ColorByKind::Class => ColorBy::Class,
+        ColorByKind::Colocalized => ColorBy::Colocalized,
+    }
 }
 
 fn column_not_found_error(column: &str, db: &std::path::Path) -> InternalErrors {

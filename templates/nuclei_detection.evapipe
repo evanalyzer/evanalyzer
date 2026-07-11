@@ -81,6 +81,8 @@
         "outputClass": {
           "VALID": 1
         },
+        "overlappingWith": "UNSET",
+        "minIntersectionArea": 0.0,
         "sizeUnit": "px",
         "minArea": 26.6,
         "maxArea": 2147483648.0,

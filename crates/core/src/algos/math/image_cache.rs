@@ -75,20 +75,22 @@ impl ImageAlgorithm for ImageCache {
     ) -> Result<(), InternalErrors> {
         match self.mode {
             ImageCacheMode::Load => {
+                // Cheap Arc clone (refcount bump): the cache and the context
+                // now share the buffer until either side actually mutates it.
                 ctx.image = cache
                     .image_cache
                     .images
                     .get(&self.address)
                     .ok_or(InternalErrors::CacheMiss("".to_string()))?
-                    .as_ref()
                     .clone();
                 Ok(())
             }
             ImageCacheMode::Store => {
+                // Cheap Arc clone: no pixel data is copied here either.
                 cache
                     .image_cache
                     .images
-                    .insert(self.address.clone(), Arc::new(ctx.image.clone()));
+                    .insert(self.address.clone(), Arc::clone(&ctx.image));
                 Ok(())
             }
         }
@@ -148,7 +150,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_gray_from_image_test(test_image),
+            ImageContainer::new_f32_gray_from_image_test(test_image).into(),
         )?;
 
         let mut cache = PipelineCache::default();
@@ -169,11 +171,11 @@ mod tests {
 
         // 4. Modify context image so we can prove 'Load' actually changes it
         let empty_data = vec![0.0f32; 4];
-        ctx.image = ImageContainer::new_f32_gray_from_image_test(Image::new(
+        ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(Image::new(
             size,
             empty_data,
             CpuAllocator,
-        )?);
+        )?));
 
         // 5. Test LOAD mode
         let load_algo = ImageCache {
@@ -184,7 +186,7 @@ mod tests {
         load_algo.execute(&mut ctx, &mut cache)?;
 
         // 6. Final Assertions
-        if let ImageContainer::F32Gray(result_img) = ctx.image {
+        if let ImageContainer::F32Gray(result_img) = ctx.image.as_ref() {
             let result_slice = result_img.as_slice();
             assert_eq!(result_slice[0], 1.0);
             assert_eq!(result_slice[3], 4.0);

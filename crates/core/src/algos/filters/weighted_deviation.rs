@@ -20,6 +20,7 @@ use macros::CommandsMeta;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
+use std::sync::Arc;
 
 /// A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.
 ///
@@ -84,7 +85,7 @@ impl ImageAlgorithm for WeightedDeviation {
     ) -> Result<(), InternalErrors> {
         // Get input image as F32Gray (assuming conversion is handled upstream)
         // If your input is F32Rgb, you'll need a conversion step here first.
-        let size = match &ctx.image {
+        let size = match ctx.image.as_ref() {
             ImageContainer::F32Gray(img) => img.size(),
             _ => {
                 return Err(InternalErrors::FormatMismatch {
@@ -96,7 +97,7 @@ impl ImageAlgorithm for WeightedDeviation {
 
         // Prepare meanSq (E[X^2])
         // We calculate grayF * grayF into a temporary image
-        let mut mean_sq = if let ImageContainer::F32Gray(input) = &ctx.image {
+        let mut mean_sq = if let ImageContainer::F32Gray(input) = ctx.image.as_ref() {
             let mut ms = Image::<f32, 1, CpuAllocator>::new(
                 size,
                 vec![0.0; size.width * size.height],
@@ -119,7 +120,7 @@ impl ImageAlgorithm for WeightedDeviation {
 
         // Compute E[X^2] using the scratchpad
         // We blur the squared image
-        if let ImageContainer::F32Gray(ref mut scratch) = ctx.scratch_pad {
+        if let ImageContainer::F32Gray(scratch) = Arc::make_mut(&mut ctx.scratch_pad) {
             gaussian_blur(&mean_sq, scratch, k_size, sigma).map_err(InternalErrors::from_kornia)?;
             std::mem::swap(&mut mean_sq, scratch);
         }
@@ -134,7 +135,7 @@ impl ImageAlgorithm for WeightedDeviation {
         )
         .map_err(InternalErrors::from_kornia)?;
         if let (ImageContainer::F32Gray(input), ImageContainer::F32Gray(scratch)) =
-            (&ctx.image, &mut ctx.scratch_pad)
+            (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad))
         {
             gaussian_blur(input, scratch, k_size, sigma).map_err(InternalErrors::from_kornia)?;
             // Move blurred result from scratch to our 'mean' variable
@@ -143,7 +144,7 @@ impl ImageAlgorithm for WeightedDeviation {
 
         // Final Calculation: sqrt(mean_sq - mean * mean)
         // We write the final result back into the scratch_pad
-        if let ImageContainer::F32Gray(ref mut output) = ctx.scratch_pad {
+        if let ImageContainer::F32Gray(output) = Arc::make_mut(&mut ctx.scratch_pad) {
             let s_mean_sq = mean_sq.as_slice();
             let s_mean = mean.as_slice();
 
@@ -208,7 +209,7 @@ mod tests {
         algo.execute(&mut ctx, &mut cache)?;
 
         // 4. Verification
-        if let ImageContainer::F32Gray(result) = ctx.image {
+        if let ImageContainer::F32Gray(result) = ctx.image.as_ref() {
             let res_slice = result.as_slice();
 
             // At (5,5), which is right on the edge, the deviation should be high
