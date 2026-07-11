@@ -577,24 +577,13 @@ impl ImageReader {
         )
     }
 
-    /// Describe this function.
-    ///
-    /// # Arguments
-    ///
-    /// - `series` (`i32`) - Describe this parameter.
-    /// - `z_projection` (`ZProjection`) - Describe this parameter.
-    /// - `z_stack` (`i32`) - Describe this parameter.
-    /// - `t_stack` (`i32`) - Describe this parameter.
-    /// - `c_stacks` (`Vec<i32>`) - Describe this parameter.
-    /// - `image_tile` (`ImageTile`) - Describe this parameter.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use crate::...;
-    ///
-    /// let _ = read_image_tile_combined();
-    /// ```
+    /// Reads every requested channel's (possibly Z-projected) tile using
+    /// `self` alone - every channel shares the one BioFormats reader,
+    /// serialized through its `synchronized(formatReader)` block (see
+    /// `BioFormatsWrapper.java`). Used by callers that already parallelize
+    /// at a coarser level (e.g. `job_executor.rs` parallelizes across
+    /// tiles), where adding a second layer of parallelism here would just
+    /// contend rayon workers against that same lock for no gain.
     pub fn read_image_tile_combined(
         &self,
         series: i32,
@@ -605,7 +594,80 @@ impl ImageReader {
         c_stacks_in: Option<&Vec<i32>>,
         image_tile: &ImageTile,
     ) -> Result<Vec<ImageChannel>, InternalErrors> {
-        let series_info = self.image_meta.series.get(&series).ok_or_else(|| {
+        Self::read_image_tile_combined_impl(
+            std::slice::from_ref(&self),
+            series,
+            resolution_idx,
+            z_projection,
+            z_range,
+            t_stack,
+            c_stacks_in,
+            image_tile,
+            false,
+        )
+    }
+
+    /// Same as [`Self::read_image_tile_combined`], but distributes the
+    /// independent (channel, Z-slice) reads across `pool` in parallel
+    /// instead of running them one at a time on a single reader.
+    ///
+    /// Each `ImageReader` wraps its own BioFormats `IFormatReader` object,
+    /// which is not safe to call from multiple threads at once - see the
+    /// `synchronized(formatReader)` block in `BioFormatsWrapper.java`, which
+    /// only guarantees no corruption, not concurrency. `pool` must contain
+    /// genuinely distinct `ImageReader` instances opened on the same path
+    /// (e.g. from a reader pool built after the first instance's `setId()`
+    /// call has populated the BioFormats `Memoizer` cache, so the rest are
+    /// cheap to construct), not clones of the same one - each channel's
+    /// reads are pinned to one pool member (`pool[i % pool.len()]`), so two
+    /// channels never share a reader concurrently.
+    pub fn read_image_tile_combined_pooled(
+        pool: &[Arc<ImageReader>],
+        series: i32,
+        resolution_idx: i32,
+        z_projection: ZProjection,
+        z_range: &Option<RangeInclusive<i32>>,
+        t_stack: i32,
+        c_stacks_in: Option<&Vec<i32>>,
+        image_tile: &ImageTile,
+    ) -> Result<Vec<ImageChannel>, InternalErrors> {
+        if pool.is_empty() {
+            return Err(InternalErrors::Internal("Reader pool is empty".into()));
+        }
+        let refs: Vec<&ImageReader> = pool.iter().map(Arc::as_ref).collect();
+        Self::read_image_tile_combined_impl(
+            &refs,
+            series,
+            resolution_idx,
+            z_projection,
+            z_range,
+            t_stack,
+            c_stacks_in,
+            image_tile,
+            true,
+        )
+    }
+
+    /// Shared implementation behind [`Self::read_image_tile_combined`] and
+    /// [`Self::read_image_tile_combined_pooled`]. `pool[0]` is used for
+    /// metadata lookups (every pool member was opened on the same path, so
+    /// their metadata is equivalent); each channel's reads are pinned to
+    /// `pool[i % pool.len()]`. `parallel` selects rayon's work-stealing
+    /// iteration over the channel list vs. a plain sequential one - see the
+    /// two public wrappers for why that choice is per-caller, not automatic.
+    fn read_image_tile_combined_impl(
+        pool: &[&ImageReader],
+        series: i32,
+        resolution_idx: i32,
+        z_projection: ZProjection,
+        z_range: &Option<RangeInclusive<i32>>,
+        t_stack: i32,
+        c_stacks_in: Option<&Vec<i32>>,
+        image_tile: &ImageTile,
+        parallel: bool,
+    ) -> Result<Vec<ImageChannel>, InternalErrors> {
+        let primary = pool[0];
+        let series_info = primary.image_meta.series.get(&series).ok_or_else(|| {
             InternalErrors::ImageReadError(format!("Series {} does not exist", series))
         })?;
 
@@ -661,16 +723,14 @@ impl ImageReader {
                 0..=(series_info.nr_z_stacks.saturating_sub(1) as i32)
             }
         };
-        // BioFormats IFormatReader is NOT thread-safe: it holds mutable internal
-        // state (current series, plane, file position).  Calling readImageTile
-        // on the same Java instance from multiple threads corrupts that state.
-        let resulting_images: Vec<ImageChannel> = c_stacks
+
+        let selected_channels: Vec<&i32> = c_stacks
             .iter()
             .filter_map(|c_stack_to_read| {
                 if c_stack_to_read >= &series_info.nr_c_stacks {
                     return None;
                 }
-                if self.read_mode == ReadMode::Default
+                if primary.read_mode == ReadMode::Default
                     && pyramid_info.is_rgb
                     && c_stack_to_read > &0
                 {
@@ -678,87 +738,114 @@ impl ImageReader {
                 }
                 Some(c_stack_to_read)
             })
-            .map(|c_stack_to_read| {
-                // --- PREP READ PARAMETERS ---
-                let t_read = t_stack.min(series_info.nr_t_stacks.saturating_sub(1));
-                let c_read = *c_stack_to_read.min(&series_info.nr_c_stacks.saturating_sub(1));
+            .collect();
 
-                // Reused for every read below (the initial load and every
-                // Z-slice): width/height/bit depth/channel count are constant
-                // across a single channel's Z-stack, so this scratch buffer
-                // only ever grows once instead of reallocating per slice.
-                let mut byte_scratch: Vec<u8> = Vec::new();
+        // Reads one channel's (possibly Z-projected) tile from
+        // `pool[i % pool.len()]`. Each channel gets its own scratch buffer
+        // and pinned reader, so this is safe to call concurrently across
+        // channels - two channels never share a reader.
+        let read_channel = |i: usize, c_stack_to_read: &i32| -> Result<ImageChannel, InternalErrors> {
+            let reader = pool[i % pool.len()];
 
-                // --- INITIAL IMAGE LOAD ---
-                let mut image = self.read_image_tile(
-                    series,
-                    resolution_idx,
-                    &ImagePlane {
-                        z: z_stack_range.start().clone(),
-                        c: c_read,
-                        t: t_read,
-                    },
-                    &image_tile,
-                    &mut byte_scratch,
-                )?;
+            // --- PREP READ PARAMETERS ---
+            let t_read = t_stack.min(series_info.nr_t_stacks.saturating_sub(1));
+            let c_read = *c_stack_to_read.min(&series_info.nr_c_stacks.saturating_sub(1));
 
-                // --- Z-PROJECTION LOGIC ---
-                if z_projection != ZProjection::None && !pyramid_info.is_rgb {
-                    if let ImageContainer::F32Gray(mut gray_image) = image {
-                        for z in (z_stack_range.start() + 1)..=z_stack_range.end().clone() {
-                            let image_tmp = self.read_image_tile(
-                                series,
-                                resolution_idx,
-                                &ImagePlane {
-                                    z,
-                                    c: c_read,
-                                    t: t_read,
-                                },
-                                &image_tile,
-                                &mut byte_scratch,
-                            )?;
+            // Reused for every read below (the initial load and every
+            // Z-slice): width/height/bit depth/channel count are constant
+            // across a single channel's Z-stack, so this scratch buffer
+            // only ever grows once instead of reallocating per slice.
+            let mut byte_scratch: Vec<u8> = Vec::new();
 
-                            if let ImageContainer::F32Gray(image_tmp_gray) = image_tmp {
-                                let src = image_tmp_gray.as_slice();
-                                let dst = gray_image.as_slice_mut();
+            // --- INITIAL IMAGE LOAD ---
+            let mut image = reader.read_image_tile(
+                series,
+                resolution_idx,
+                &ImagePlane {
+                    z: z_stack_range.start().clone(),
+                    c: c_read,
+                    t: t_read,
+                },
+                image_tile,
+                &mut byte_scratch,
+            )?;
 
-                                match z_projection {
-                                    ZProjection::MaxIntensity => max_proj(dst, src),
-                                    ZProjection::MinIntensity => min_proj(dst, src),
-                                    ZProjection::AvgIntensity | ZProjection::SumIntensity => {
-                                        sum_proj(dst, src)
-                                    }
-                                    _ => {}
+            // --- Z-PROJECTION LOGIC ---
+            if z_projection != ZProjection::None && !pyramid_info.is_rgb {
+                if let ImageContainer::F32Gray(mut gray_image) = image {
+                    for z in (z_stack_range.start() + 1)..=z_stack_range.end().clone() {
+                        let image_tmp = reader.read_image_tile(
+                            series,
+                            resolution_idx,
+                            &ImagePlane {
+                                z,
+                                c: c_read,
+                                t: t_read,
+                            },
+                            image_tile,
+                            &mut byte_scratch,
+                        )?;
+
+                        if let ImageContainer::F32Gray(image_tmp_gray) = image_tmp {
+                            let src = image_tmp_gray.as_slice();
+                            let dst = gray_image.as_slice_mut();
+
+                            match z_projection {
+                                ZProjection::MaxIntensity => max_proj(dst, src),
+                                ZProjection::MinIntensity => min_proj(dst, src),
+                                ZProjection::AvgIntensity | ZProjection::SumIntensity => {
+                                    sum_proj(dst, src)
                                 }
+                                _ => {}
                             }
                         }
-
-                        if z_projection == ZProjection::AvgIntensity {
-                            let n_inv = 1.0 / (series_info.nr_z_stacks) as f32;
-                            gray_image
-                                .as_slice_mut()
-                                .iter_mut()
-                                .for_each(|p| *p *= n_inv);
-                        }
-                        image = ImageContainer::F32Gray(gray_image);
                     }
+
+                    if z_projection == ZProjection::AvgIntensity {
+                        let n_inv = 1.0 / (series_info.nr_z_stacks) as f32;
+                        gray_image
+                            .as_slice_mut()
+                            .iter_mut()
+                            .for_each(|p| *p *= n_inv);
+                    }
+                    image = ImageContainer::F32Gray(gray_image);
                 }
+            }
 
-                // --- METADATA & FINAL OBJECT ---
-                let channel_meta = series_info.channels.get(&c_stack_to_read).ok_or_else(|| {
-                    InternalErrors::ImageReadError(format!("Series {} does not exist", series))
-                })?;
+            // --- METADATA & FINAL OBJECT ---
+            let channel_meta = series_info.channels.get(&c_stack_to_read).ok_or_else(|| {
+                InternalErrors::ImageReadError(format!("Series {} does not exist", series))
+            })?;
 
-                Ok(ImageChannel {
-                    image: Arc::new(image),
-                    color: wavelength_to_rgb_float(channel_meta.emission_wave_length),
-                    is_visible: true,
-                    c_stack: *c_stack_to_read,
-                    name: channel_meta.name.clone(),
-                    is_rgb: pyramid_info.is_rgb,
-                })
+            Ok(ImageChannel {
+                image: Arc::new(image),
+                color: wavelength_to_rgb_float(channel_meta.emission_wave_length),
+                is_visible: true,
+                c_stack: *c_stack_to_read,
+                name: channel_meta.name.clone(),
+                is_rgb: pyramid_info.is_rgb,
             })
-            .collect::<Result<Vec<_>, InternalErrors>>()?; // Collects into a Result, bubble up error if any
+        };
+
+        let resulting_images: Vec<ImageChannel> = if parallel {
+            selected_channels
+                .into_par_iter()
+                .enumerate()
+                .map(|(i, c)| read_channel(i, c))
+                .collect::<Result<Vec<_>, InternalErrors>>()?
+        } else {
+            // BioFormats IFormatReader is NOT thread-safe: it holds mutable
+            // internal state (current series, plane, file position). With a
+            // single-element pool this loop always hits the same reader, so
+            // it stays sequential rather than paying rayon dispatch
+            // overhead for tasks that would just serialize on the reader's
+            // Java-side lock anyway.
+            selected_channels
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| read_channel(i, c))
+                .collect::<Result<Vec<_>, InternalErrors>>()?
+        };
 
         Ok(resulting_images)
     }
@@ -1204,6 +1291,70 @@ mod tests {
                 }
                 ImageContainer::F32Rgb(_) => todo!(),
                 ImageContainer::U32(_) => todo!(),
+            }
+        }
+    }
+
+    #[test]
+    fn pooled_parallel_read_matches_sequential_read() {
+        init_java_wrapper(1000000000).unwrap();
+
+        let path = "/workspaces/evanalyzer/crates/core/tests/multi-channel-4D-series.ome.tif";
+        let tile = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 0,
+            height: 0,
+        };
+
+        // Sequential baseline: one reader, every channel's Z-stack read one
+        // (z, c) plane at a time, exactly as read_image_tile_combined always has.
+        let sequential_reader = ImageReader::new(&path.into(), ReadMode::SplitChannels).unwrap();
+        let mut sequential = sequential_reader
+            .read_image_tile_combined(0, 0, ZProjection::MaxIntensity, &None, 0, None, &tile)
+            .unwrap();
+
+        // Pooled: independent readers (not clones - each opened separately,
+        // same as ReaderPool does), channels distributed round-robin across
+        // them and read concurrently.
+        let pool: Vec<Arc<ImageReader>> = (0..3)
+            .map(|_| Arc::new(ImageReader::new(&path.into(), ReadMode::SplitChannels).unwrap()))
+            .collect();
+        let mut pooled = ImageReader::read_image_tile_combined_pooled(
+            &pool,
+            0,
+            0,
+            ZProjection::MaxIntensity,
+            &None,
+            0,
+            None,
+            &tile,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sequential.len(),
+            pooled.len(),
+            "must read the same number of channels"
+        );
+        assert!(sequential.len() > 1, "test needs a genuinely multi-channel fixture");
+
+        // rayon's completion order isn't guaranteed to match input order.
+        sequential.sort_by_key(|c| c.c_stack);
+        pooled.sort_by_key(|c| c.c_stack);
+
+        for (seq_ch, pooled_ch) in sequential.iter().zip(pooled.iter()) {
+            assert_eq!(seq_ch.c_stack, pooled_ch.c_stack);
+            match (&*seq_ch.image, &*pooled_ch.image) {
+                (ImageContainer::F32Gray(a), ImageContainer::F32Gray(b)) => {
+                    assert_eq!(
+                        a.as_slice(),
+                        b.as_slice(),
+                        "channel {} pixels differ between sequential and pooled reads",
+                        seq_ch.c_stack
+                    );
+                }
+                other => panic!("unexpected variant combination: {other:?}"),
             }
         }
     }

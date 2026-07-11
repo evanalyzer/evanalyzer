@@ -15,3 +15,7 @@ lcov.info
 /crates/core/java
 docs/old
 docs/threshold
+
+# Bio-Formats Memoizer cache files, written next to whatever image was
+# opened (including test fixtures under crates/core/tests/).
+*.bfmemo

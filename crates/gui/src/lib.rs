@@ -2,7 +2,7 @@
 
 pub use evanalyzer_gui_slint::*;
 
-use evanalyzer_app::{AppHandle, Frontend, ProjectOwner, ProjectWithRuntime};
+use evanalyzer_app::{AppHandle, Frontend, ProjectOwner, ProjectWithRuntime, ReaderPool};
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::ImageReader;
 use slint::ComponentHandle;
@@ -55,6 +55,15 @@ impl UiState {
         new_path: &PathBuf,
     ) -> Result<Arc<ImageReader>, InternalErrors> {
         self.app.get_or_create_reader(new_path)
+    }
+
+    /// Returns or creates a cached pool of readers for the given path, for
+    /// reading multiple channels/Z-slices in parallel.
+    pub fn get_or_create_reader_pool(
+        &self,
+        new_path: &PathBuf,
+    ) -> Result<Arc<ReaderPool>, InternalErrors> {
+        self.app.get_or_create_reader_pool(new_path)
     }
 
     /// Loads a project from disk replacing the current project.

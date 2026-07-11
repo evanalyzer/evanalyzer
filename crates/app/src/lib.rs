@@ -6,7 +6,9 @@ mod results;
 pub mod templates;
 
 pub use frontend::Frontend;
-pub use project_owner::{AppHandle, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime};
+pub use project_owner::{
+    AppHandle, ProjectOwner, ProjectTmpSettings, ProjectWithRuntime, ReaderPool,
+};
 
 pub mod prelude {
     pub use super::Frontend;

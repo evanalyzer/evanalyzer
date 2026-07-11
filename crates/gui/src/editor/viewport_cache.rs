@@ -5,7 +5,7 @@ use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use evanalyzer_core::{
-    ImageChannel, ImageContainer, ImageTile, ManagedImage, PyramidInfo, ZProjection,
+    ImageChannel, ImageContainer, ImageReader, ImageTile, ManagedImage, PyramidInfo, ZProjection,
 };
 use kornia_image::allocator::CpuAllocator;
 use kornia_image::{Image, InterpolationMode};
@@ -279,8 +279,8 @@ impl ViewportCache {
             )
         };
 
-        let reader = self.app_state.get_or_create_reader(&path)?;
-        let meta = reader.get_image_meta();
+        let pool = self.app_state.get_or_create_reader_pool(&path)?;
+        let meta = pool.readers()[0].get_image_meta();
         let s_info = meta
             .series
             .get(&series)
@@ -493,8 +493,10 @@ impl ViewportCache {
             return Ok((cached_tile.data.clone(), ctx));
         }
 
-        // Read image from disk
-        let mut loaded = reader.read_image_tile_combined(
+        // Read image from disk - channels/Z-slices are read in parallel
+        // across the reader pool instead of one at a time.
+        let mut loaded = ImageReader::read_image_tile_combined_pooled(
+            pool.readers(),
             series,
             ctx.res_idx,
             z_projection,

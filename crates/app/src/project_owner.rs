@@ -105,6 +105,7 @@ impl ProjectOwner {
         AppHandle {
             project: Arc::clone(&self.project),
             reader: Arc::new(Mutex::new(None)),
+            reader_pool: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -133,6 +134,39 @@ impl ProjectOwner {
     }
 }
 
+/// A small pool of independent readers open on the same image path, so
+/// different channels/Z-slices can be read truly in parallel instead of
+/// serializing through one `IFormatReader` (see `BioFormatsWrapper.java`'s
+/// `synchronized(formatReader)` block - one reader is safe, not concurrent).
+///
+/// Reader #1 pays the full `setId()` cost (BioFormats parses the file's
+/// structure). The BioFormats wrapper wraps every reader in a `Memoizer`,
+/// which caches that parsed structure to disk (a `.bfmemo` file next to the
+/// image); every reader built after #1 reads that cache instead of
+/// re-parsing, so building the rest of the pool is cheap.
+pub struct ReaderPool {
+    path: PathBuf,
+    readers: Vec<Arc<ImageReader>>,
+}
+
+impl ReaderPool {
+    pub fn readers(&self) -> &[Arc<ImageReader>] {
+        &self.readers
+    }
+}
+
+/// Number of readers to keep per open image. Deliberately small and fixed
+/// (not scaled to channel count - some multiplexed formats have dozens of
+/// channels) and distinct from `resources::recommended_parallelism()`, which
+/// is sized for full pipeline workers, a much heavier unit than one reader
+/// plus its in-flight tile buffer.
+fn reader_pool_size() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    cores.min(4).max(1)
+}
+
 /// AppHandle lightweight, cloneable, handed to GUI/CLI
 /// Only exposes what GUI/CLI need no pipeline, no owner concerns
 #[derive(Clone)]
@@ -142,6 +176,10 @@ pub struct AppHandle {
 
     /// Per-handle image reader cache
     reader: Arc<Mutex<Option<Arc<ImageReader>>>>,
+
+    /// Per-handle reader pool cache, for callers that need to read multiple
+    /// channels/Z-slices in parallel (see `ReaderPool`).
+    reader_pool: Arc<Mutex<Option<Arc<ReaderPool>>>>,
 }
 
 impl AppHandle {
@@ -198,6 +236,43 @@ impl AppHandle {
         let new_reader = Arc::new(ImageReader::new(new_path, ReadMode::SplitChannels)?);
         *reader_lock = Some(Arc::clone(&new_reader));
         Ok(new_reader)
+    }
+
+    /// Returns or creates a small pool of readers for the given path, for
+    /// callers that read multiple channels/Z-slices in parallel (see
+    /// [`ReaderPool`]). Reuses the existing pool if the path has not
+    /// changed. Independent from [`Self::get_or_create_reader`]'s
+    /// single-reader cache - a small amount of redundancy (both may end up
+    /// holding an extra reader instance open on the same path) in exchange
+    /// for not cross-wiring the two caches.
+    pub fn get_or_create_reader_pool(
+        &self,
+        new_path: &PathBuf,
+    ) -> Result<Arc<ReaderPool>, InternalErrors> {
+        let mut pool_lock = self.reader_pool.lock().unwrap();
+        if let Some(ref pool) = *pool_lock {
+            if &pool.path == new_path {
+                return Ok(Arc::clone(pool));
+            }
+        }
+
+        let size = reader_pool_size();
+        let mut readers = Vec::with_capacity(size);
+        // Built sequentially and in this order: the first call pays the
+        // full BioFormats parse cost and populates the Memoizer cache, so
+        // every reader after it is cheap to construct (see `ReaderPool`'s
+        // docs). Building them concurrently would risk every reader racing
+        // to populate that cache at once, for no benefit.
+        for _ in 0..size {
+            readers.push(Arc::new(ImageReader::new(new_path, ReadMode::SplitChannels)?));
+        }
+
+        let pool = Arc::new(ReaderPool {
+            path: new_path.clone(),
+            readers,
+        });
+        *pool_lock = Some(Arc::clone(&pool));
+        Ok(pool)
     }
 }
 
