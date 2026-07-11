@@ -887,6 +887,23 @@ fn roi_select_sql(fetch_intensities: bool) -> String {
     )
 }
 
+/// Builds the shared `WHERE`/`ORDER BY` clauses for [`DuckDbReader::get_rois`]
+/// and [`DuckDbReader::stream_rois`]. `object_id` is always the final
+/// tiebreaker so results stay stably ordered even when many rows share the
+/// same sort-column value (load-bearing for `get_rois`'s page stability, and
+/// for `stream_rois`'s callers being able to assert on row order).
+fn where_and_order(filter: &RoiFilter) -> (String, String) {
+    let where_clause = build_where_clause(filter);
+    let order_by = match filter.sort_column.as_deref().and_then(column_order_expr) {
+        Some(expr) => format!(
+            "ORDER BY {expr} {}, object_id",
+            if filter.sort_ascending { "ASC" } else { "DESC" }
+        ),
+        None => "ORDER BY object_id".to_string(),
+    };
+    (where_clause, order_by)
+}
+
 impl DuckDbReader {
     pub fn open(path: &Path) -> Result<Self, InternalErrors> {
         let conn = Connection::open(path).map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -901,7 +918,7 @@ impl DuckDbReader {
             return Ok(vec![]);
         }
 
-        let where_clause = build_where_clause(filter);
+        let (where_clause, order_by) = where_and_order(filter);
 
         let pagination = if filter.page_size > 0 {
             format!(
@@ -911,20 +928,6 @@ impl DuckDbReader {
             )
         } else {
             String::new()
-        };
-
-        // `object_id` is always the final tiebreaker so pages stay stably ordered
-        // even when many rows share the same sort-column value.
-        let order_by = match filter
-            .sort_column
-            .as_deref()
-            .and_then(column_order_expr)
-        {
-            Some(expr) => format!(
-                "ORDER BY {expr} {}, object_id",
-                if filter.sort_ascending { "ASC" } else { "DESC" }
-            ),
-            None => "ORDER BY object_id".to_string(),
         };
 
         let sql = format!(
@@ -938,6 +941,46 @@ impl DuckDbReader {
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)
+    }
+
+    /// Streams every ROI matching `filter` to `on_row`, one at a time, in
+    /// `filter`'s sort order, via a single sorted scan over the whole
+    /// matching set. `filter.page_size`/`filter.page` are ignored.
+    ///
+    /// Unlike [`Self::get_rois`], which applies `LIMIT`/`OFFSET` and is the
+    /// right tool for the interactive table's random-access paging (jumping
+    /// straight to an arbitrary page), this is for callers - like a full
+    /// export - that always walk the entire matching set start to finish.
+    /// Repeatedly calling `get_rois` with an increasing `OFFSET` to do that
+    /// re-sorts and re-scans everything already returned on every single
+    /// call, so total cost grows quadratically with the number of matching
+    /// rows; this does the sort/scan exactly once.
+    ///
+    /// Can be called again (e.g. for a colocalization-partner lookup) on the
+    /// same `&self` connection from inside `on_row` — `DuckDbReader`'s
+    /// methods only ever hold the connection open for the duration of one
+    /// call, so nesting a second, fully-executed query inside the first
+    /// one's row callback is safe.
+    pub fn stream_rois(
+        &self,
+        filter: &RoiFilter,
+        mut on_row: impl FnMut(RoiRow) -> Result<(), InternalErrors>,
+    ) -> Result<(), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+
+        if filter_has_empty_selection(filter) {
+            return Ok(());
+        }
+
+        let (where_clause, order_by) = where_and_order(filter);
+        let sql = format!("{} {} {order_by}", roi_select_sql(filter.fetch_intensities), where_clause);
+
+        let mut stmt = self.conn.prepare(&sql).map_err(err)?;
+        let rows = stmt.query_map([], map_roi_row).map_err(err)?;
+        for row in rows {
+            on_row(row.map_err(err)?)?;
+        }
+        Ok(())
     }
 
     /// Returns distinct `(image_rel_path, image_name)` pairs matching `filter`'s

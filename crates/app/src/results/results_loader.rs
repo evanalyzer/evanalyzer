@@ -631,6 +631,25 @@ pub struct DatabaseFilter {
     pub sort_ascending: bool,
 }
 
+/// Converts the app-level filter into the core crate's query filter.
+/// Shared by `ResultsLoader::get_rois` and, for callers that hold their own
+/// `DuckDbReader` (see [`ResultsLoader::open_reader`]), by `results_exporter.rs`.
+pub(crate) fn to_roi_filter(filter: DatabaseFilter) -> RoiFilter {
+    RoiFilter {
+        image_filter: filter.image_filter,
+        class_filter: filter.class_filter,
+        coloc_filter: filter.coloc_filter,
+        object_id_filter: filter.object_id_filter,
+        t_stack_filter: filter.t_stack_filter,
+        z_stack_filter: filter.z_stack_filter,
+        page_size: filter.page_size,
+        page: filter.page,
+        fetch_intensities: filter.needs_intensities,
+        sort_column: filter.sort_column,
+        sort_ascending: filter.sort_ascending,
+    }
+}
+
 impl Default for DatabaseFilter {
     fn default() -> Self {
         Self {
@@ -1237,19 +1256,17 @@ impl ResultsLoader {
     }
 
     pub fn get_rois(&self, filter: DatabaseFilter) -> Result<Vec<RoiRow>, InternalErrors> {
-        DuckDbReader::open(&self.path)?.get_rois(&RoiFilter {
-            image_filter: filter.image_filter,
-            class_filter: filter.class_filter,
-            coloc_filter: filter.coloc_filter,
-            object_id_filter: filter.object_id_filter,
-            t_stack_filter: filter.t_stack_filter,
-            z_stack_filter: filter.z_stack_filter,
-            page_size: filter.page_size,
-            page: filter.page,
-            fetch_intensities: filter.needs_intensities,
-            sort_column: filter.sort_column,
-            sort_ascending: filter.sort_ascending,
-        })
+        DuckDbReader::open(&self.path)?.get_rois(&to_roi_filter(filter))
+    }
+
+    /// Opens a `DuckDbReader` the caller keeps alive across several calls -
+    /// e.g. one [`DuckDbReader::stream_rois`] pass interleaved with
+    /// per-batch [`DuckDbReader::get_rois`] lookups on the same connection,
+    /// as `ResultsExporter`'s colocalization-detail export does - instead of
+    /// paying a fresh connection-open on every call the way `get_rois`/
+    /// `stream_rois` on `ResultsLoader` itself do.
+    pub(crate) fn open_reader(&self) -> Result<DuckDbReader, InternalErrors> {
+        DuckDbReader::open(&self.path)
     }
 
     pub fn get_image_names(&self) -> Result<Vec<String>, InternalErrors> {

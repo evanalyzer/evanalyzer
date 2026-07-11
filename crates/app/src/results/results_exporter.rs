@@ -1,16 +1,20 @@
 use crate::results::results_loader::{
     aggregate_rois_sql, build_coloc_detail_column_specs, coloc_partner_ids,
-    discover_coloc_detail_columns, flatten_coloc_rows, to_display_row, ColumnSpec, DatabaseFilter,
-    GroupBy, GroupConfig, ResultsLoader,
+    discover_coloc_detail_columns, flatten_coloc_rows, to_display_row, to_roi_filter, ColumnSpec,
+    DatabaseFilter, GroupBy, GroupConfig, ResultsLoader,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_core::{DuckDbReader, RoiRow};
 use rust_xlsxwriter::{Format, Workbook};
 use std::{collections::HashSet, path::Path, sync::Arc};
 
-/// Rows per DB round-trip while exporting. Larger than the GUI's page size
-/// (`PAGE_SIZE = 500`) since export has no competing memory pressure from a
-/// live UI — fewer, bigger round-trips is a pure win here.
-const EXPORT_PAGE_SIZE: usize = 5_000;
+/// Source rows accumulated per colocalization-partner lookup while streaming
+/// the colocalization detail export - each batch does one `IN (...)` query
+/// for every partner id its rows reference, so this bounds both that query's
+/// size and how many source rows are held in memory at once. Not used by the
+/// plain per-ROI/grouped export, which streams the DB's own row-at-a-time
+/// cursor straight through to the CSV/XLSX writer (see `export_rows`).
+const COLOC_PARTNER_BATCH_SIZE: usize = 5_000;
 
 pub struct ResultsExporter {
     results_loader: Arc<ResultsLoader>,
@@ -54,7 +58,12 @@ impl ResultsExporter {
     ) -> Result<(), InternalErrors> {
         let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
         let mut workbook = Workbook::new();
-        let sheet = workbook.add_worksheet();
+        // `export_rows` always writes strictly in row order (never revisits
+        // an earlier row), so "constant memory" mode applies cleanly here —
+        // it flushes each row to a temp file as the next one is written
+        // instead of buffering the whole sheet, keeping memory flat
+        // regardless of row count.
+        let sheet = workbook.add_worksheet_with_constant_memory();
         sheet.set_name("Results").map_err(err)?;
         sheet.set_freeze_panes(1, 0).map_err(err)?;
 
@@ -98,7 +107,7 @@ impl ResultsExporter {
     ) -> Result<(), InternalErrors> {
         let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
         let mut workbook = Workbook::new();
-        let sheet = workbook.add_worksheet();
+        let sheet = workbook.add_worksheet_with_constant_memory();
         sheet.set_name("Coloc Detail").map_err(err)?;
         sheet.set_freeze_panes(1, 0).map_err(err)?;
 
@@ -112,15 +121,19 @@ impl ResultsExporter {
 
     /// Streams the rows matching `filter` (or grouped/aggregated rows, when
     /// `group.group_by != GroupBy::None`) to `emit_row` — the header labels
-    /// first, then each data row, one page at a time — instead of
-    /// materializing the whole matching result set as one `Vec` in memory.
+    /// first, then each data row — instead of materializing the whole
+    /// matching result set as one `Vec` in memory.
     ///
     /// `base_specs` are the per-ROI column specs from the table (carrying the
     /// current visibility selection), so the export mirrors what is shown:
     /// - grouped → one aggregated row per group over the visible metrics
     ///   (always a single, small pass — the aggregated result set is never
     ///   large regardless of how many ROIs it summarizes);
-    /// - otherwise → per-ROI rows for the visible columns only, paged.
+    /// - otherwise → per-ROI rows for the visible columns only, via a single
+    ///   DB cursor over every matching row (see `DuckDbReader::stream_rois`)
+    ///   instead of a fresh `LIMIT`/`OFFSET` query per page — the entire
+    ///   matching set is sorted/scanned exactly once, no matter how many
+    ///   rows it contains, and Rust-side memory stays at one row at a time.
     fn export_rows(
         &self,
         filter: DatabaseFilter,
@@ -144,42 +157,31 @@ impl ResultsExporter {
             base_specs.iter().filter(|c| c.visible).map(|c| c.label.clone()).collect();
         emit_row(&headers)?;
 
-        let mut page = 0;
-        loop {
-            let rois_page = self.results_loader.get_rois(DatabaseFilter {
-                page_size: EXPORT_PAGE_SIZE,
-                page,
-                needs_intensities: true,
-                ..filter.clone()
-            })?;
-            if rois_page.is_empty() {
-                break;
-            }
-            let done = rois_page.len() < EXPORT_PAGE_SIZE;
-            for (i, roi) in rois_page.iter().enumerate() {
-                let display = to_display_row(page * EXPORT_PAGE_SIZE + i, roi, base_specs);
-                let values: Vec<String> = base_specs
-                    .iter()
-                    .zip(display.values.iter())
-                    .filter(|(col, _)| col.visible)
-                    .map(|(_, v)| v.clone())
-                    .collect();
-                emit_row(&values)?;
-            }
-            if done {
-                break;
-            }
-            page += 1;
-        }
-
-        Ok(())
+        let reader = self.results_loader.open_reader()?;
+        let roi_filter = to_roi_filter(DatabaseFilter { needs_intensities: true, ..filter });
+        let mut row_idx = 0usize;
+        reader.stream_rois(&roi_filter, |roi| {
+            let display = to_display_row(row_idx, &roi, base_specs);
+            row_idx += 1;
+            let values: Vec<String> = base_specs
+                .iter()
+                .zip(display.values.iter())
+                .filter(|(col, _)| col.visible)
+                .map(|(_, v)| v.clone())
+                .collect();
+            emit_row(&values)
+        })
     }
 
     /// Streams the colocalization detail flat table to `emit_row` — the header
-    /// labels first, then each flattened row — one page of source ROIs at a
-    /// time, fetching only the colocalization partner ROIs that page's
-    /// `coloc_json` actually references (via
-    /// `DatabaseFilter::object_id_filter`), instead of every ROI in the image.
+    /// labels first, then each flattened row — via a single DB cursor over
+    /// every matching source ROI (see `DuckDbReader::stream_rois`), fetching
+    /// only the colocalization partner ROIs each batch of
+    /// `COLOC_PARTNER_BATCH_SIZE` source rows actually references (via
+    /// `DatabaseFilter::object_id_filter`) instead of every ROI in the image.
+    /// The source stream and every partner lookup share one open connection
+    /// (see `ResultsLoader::open_reader`), so a large export pays for exactly
+    /// one connection instead of one per batch.
     fn export_coloc_detail_rows(
         &self,
         filter: DatabaseFilter,
@@ -198,48 +200,56 @@ impl ResultsExporter {
             specs.iter().filter(|c| c.visible).map(|c| c.label.clone()).collect();
         emit_row(&headers)?;
 
-        let mut page = 0;
-        loop {
-            let source_page = self.results_loader.get_rois(DatabaseFilter {
-                page_size: EXPORT_PAGE_SIZE,
-                page,
-                needs_intensities: true,
-                ..filter.clone()
-            })?;
-            if source_page.is_empty() {
-                break;
-            }
-            let done = source_page.len() < EXPORT_PAGE_SIZE;
+        let reader = self.results_loader.open_reader()?;
+        let roi_filter = to_roi_filter(DatabaseFilter { needs_intensities: true, ..filter });
 
-            let ids = coloc_partner_ids(&source_page);
-            let partner_page = if ids.is_empty() {
-                vec![]
-            } else {
-                self.results_loader.get_rois(DatabaseFilter {
-                    object_id_filter: Some(ids),
-                    page_size: 0,
-                    needs_intensities: true,
-                    ..Default::default()
-                })?
-            };
-
-            for row in flatten_coloc_rows(&source_page, &partner_page, &specs) {
-                let values: Vec<String> = specs
-                    .iter()
-                    .zip(row.values.iter())
-                    .filter(|(col, _)| col.visible)
-                    .map(|(_, v)| v.clone())
-                    .collect();
-                emit_row(&values)?;
+        let mut batch: Vec<RoiRow> = Vec::with_capacity(COLOC_PARTNER_BATCH_SIZE);
+        reader.stream_rois(&roi_filter, |roi| {
+            batch.push(roi);
+            if batch.len() >= COLOC_PARTNER_BATCH_SIZE {
+                flush_coloc_detail_batch(&reader, &mut batch, &specs, &mut emit_row)?;
             }
-            if done {
-                break;
-            }
-            page += 1;
-        }
-
-        Ok(())
+            Ok(())
+        })?;
+        flush_coloc_detail_batch(&reader, &mut batch, &specs, &mut emit_row)
     }
+}
+
+/// Resolves colocalization partners for one accumulated batch of source ROIs
+/// against `reader` (the same connection `export_coloc_detail_rows`'s source
+/// stream is still open on — see `DuckDbReader::stream_rois`'s doc comment
+/// for why nesting a second query here is safe), flattens and emits the
+/// batch's rows, then clears it for the next batch. A no-op on an empty
+/// batch (the final flush after a source count that divides evenly).
+fn flush_coloc_detail_batch(
+    reader: &DuckDbReader,
+    batch: &mut Vec<RoiRow>,
+    specs: &[ColumnSpec],
+    emit_row: &mut dyn FnMut(&[String]) -> Result<(), InternalErrors>,
+) -> Result<(), InternalErrors> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+
+    let ids = coloc_partner_ids(batch);
+    let partner_batch = if ids.is_empty() {
+        vec![]
+    } else {
+        reader.get_rois(&to_roi_filter(DatabaseFilter {
+            object_id_filter: Some(ids),
+            page_size: 0,
+            needs_intensities: true,
+            ..Default::default()
+        }))?
+    };
+
+    for row in flatten_coloc_rows(batch, &partner_batch, specs) {
+        let values: Vec<String> =
+            specs.iter().zip(row.values.iter()).filter(|(col, _)| col.visible).map(|(_, v)| v.clone()).collect();
+        emit_row(&values)?;
+    }
+    batch.clear();
+    Ok(())
 }
 
 /// Builds an `emit_row` closure that writes each row into `sheet` in turn —
@@ -280,7 +290,10 @@ fn xlsx_row_writer(
 mod tests {
     use super::*;
     use crate::results::results_loader::{build_column_specs, AggFunc};
-    use crate::results::test_support::seed_results_db;
+    use crate::results::test_support::{
+        decode_object_id_idx, seed_large_coloc_db, seed_large_results_db, seed_results_db,
+    };
+    use calamine::{open_workbook_auto, Data, Reader};
 
     fn parse_csv(path: &Path) -> Vec<Vec<String>> {
         let mut reader = csv::Reader::from_path(path).expect("read csv back");
@@ -289,6 +302,31 @@ mod tests {
             rows.push(record.expect("csv data row").iter().map(String::from).collect());
         }
         rows
+    }
+
+    /// Reads an XLSX workbook's first sheet back as strings, mirroring
+    /// `parse_csv`'s shape (header row first) so both formats can be
+    /// asserted on with the same test logic. Numeric cells (written by
+    /// `xlsx_row_writer` as real numbers, not strings) are rendered without
+    /// a trailing `.0` when they're integral, matching the CSV writer's text
+    /// output for the same value.
+    fn parse_xlsx(path: &Path) -> Vec<Vec<String>> {
+        let mut workbook: calamine::Sheets<_> = open_workbook_auto(path).expect("open xlsx back");
+        let range = workbook.worksheet_range_at(0).expect("sheet 0 present").expect("read sheet 0");
+        range
+            .rows()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| match cell {
+                        Data::Float(f) if f.fract() == 0.0 => format!("{f:.0}"),
+                        Data::Int(i) => i.to_string(),
+                        Data::Float(f) => f.to_string(),
+                        Data::Empty => String::new(),
+                        other => other.to_string(),
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     fn col_index(header: &[String], label: &str) -> usize {
@@ -416,5 +454,111 @@ mod tests {
         // XLSX is a ZIP container - "PK\x03\x04" is the local-file-header
         // magic every valid ZIP (and therefore every valid XLSX) starts with.
         assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
+    }
+
+    // -------------------------------------------------------------------------
+    // Large-dataset characterization tests.
+    //
+    // These seed far more rows than any GUI page or DB round-trip holds and
+    // assert every seeded row appears in the export exactly once, in the
+    // expected order - proving there's no off-by-one, duplicate, or
+    // dropped-row bug when a result set spans many DB round-trips. Originally
+    // written against the per-page `LIMIT`/`OFFSET` re-query implementation
+    // (each round-trip a separate page) and left unchanged across the move to
+    // `DuckDbReader::stream_rois`'s single-cursor implementation (each
+    // round-trip a chunk of one continuous scan) - passing before and after
+    // is exactly what proves the two implementations return identical
+    // results.
+
+    #[test]
+    fn export_to_csv_across_a_large_result_set_returns_every_row_exactly_once_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        let n = COLOC_PARTNER_BATCH_SIZE * 2 + 345;
+        seed_large_results_db(&db_path, n);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[0], &[]);
+
+        let csv_path = dir.path().join("out.csv");
+        exporter
+            .export_to_csv(DatabaseFilter::default(), &GroupConfig::default(), &specs, &csv_path)
+            .expect("export should succeed");
+
+        let rows = parse_csv(&csv_path);
+        assert_eq!(rows.len(), n + 1, "header + one row per seeded ROI, none dropped or duplicated");
+
+        let area_col = col_index(&rows[0], "Area (px\u{00B2})");
+        let areas: Vec<u64> = rows[1..].iter().map(|r| r[area_col].parse().unwrap()).collect();
+        let expected: Vec<u64> = (0..n as u64).collect();
+        assert_eq!(
+            areas, expected,
+            "rows must come back in ascending object_id order across every export page"
+        );
+    }
+
+    #[test]
+    fn export_to_xlsx_across_a_large_result_set_returns_every_row_exactly_once_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        let n = COLOC_PARTNER_BATCH_SIZE * 2 + 345;
+        seed_large_results_db(&db_path, n);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[0], &[]);
+
+        let xlsx_path = dir.path().join("out.xlsx");
+        exporter
+            .export_to_xlsx(DatabaseFilter::default(), &GroupConfig::default(), &specs, &xlsx_path)
+            .expect("export should succeed");
+
+        let rows = parse_xlsx(&xlsx_path);
+        assert_eq!(rows.len(), n + 1, "header + one row per seeded ROI, none dropped or duplicated");
+
+        let area_col = col_index(&rows[0], "Area (px\u{00B2})");
+        let areas: Vec<u64> = rows[1..].iter().map(|r| r[area_col].parse().unwrap()).collect();
+        let expected: Vec<u64> = (0..n as u64).collect();
+        assert_eq!(
+            areas, expected,
+            "rows must come back in ascending object_id order across every export page"
+        );
+    }
+
+    #[test]
+    fn export_coloc_detail_to_csv_across_a_large_result_set_resolves_every_partner_correctly() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        let n_sources = COLOC_PARTNER_BATCH_SIZE + 777;
+        let n_partners = 500;
+        seed_large_coloc_db(&db_path, n_sources, n_partners);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        let csv_path = dir.path().join("coloc_detail.csv");
+        let filter = DatabaseFilter { class_filter: Some(vec!["ClassA".to_string()]), ..Default::default() };
+        exporter.export_coloc_detail_to_csv(filter, None, &csv_path).expect("export should succeed");
+
+        let rows = parse_csv(&csv_path);
+        assert_eq!(rows.len(), n_sources + 1, "header + exactly one flattened row per source ROI");
+
+        let roi_id_col = col_index(&rows[0], "ROI ID");
+        let partner_id_col = col_index(&rows[0], "Coloc ClassB ROI ID");
+
+        let mut seen_source_idx = vec![false; n_sources];
+        for row in &rows[1..] {
+            let source_idx = decode_object_id_idx(&row[roi_id_col]);
+            let partner_idx = decode_object_id_idx(&row[partner_id_col]);
+            assert_eq!(
+                partner_idx,
+                source_idx % n_partners,
+                "row for source {source_idx} resolved the wrong partner across an export page boundary"
+            );
+            assert!(!seen_source_idx[source_idx], "source ROI {source_idx} exported more than once");
+            seen_source_idx[source_idx] = true;
+        }
+        assert!(seen_source_idx.into_iter().all(|seen| seen), "every source ROI must be exported exactly once");
     }
 }
