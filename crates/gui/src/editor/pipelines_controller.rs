@@ -15,17 +15,20 @@ use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
+use evanalyzer_cfg::settings::images_settings::{ImageEntry, ImageSettings};
 use evanalyzer_cfg::settings::parameter_def::{ParamType as CfgParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::CommandMeta;
 use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, all_command_meta, default_command,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use evanalyzer_cfg::settings::templates::PipelineTemplate;
 use log::debug;
 use log::info;
 use log::warn;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::{Condvar, Mutex, atomic::AtomicBool};
 
@@ -1045,6 +1048,35 @@ impl PipelinesController {
         self.sync_commands_to_selection_dialog_slint();
     }
 
+    /// Builds the `ProjectSettings` for a single-image preview run.
+    ///
+    /// Clones every project-level field except `images.list`: that map holds
+    /// one `ImageEntry` per project image, each carrying its own
+    /// `SeriesSettings::rois` (full `RoiSettings`, mask data included) - so a
+    /// naive `ProjectSettings::clone()` followed by `list.clear()` pays to
+    /// clone every other image's ROI results just to immediately discard
+    /// them. Building `list` fresh with only the preview image skips that
+    /// entirely.
+    fn build_preview_project_settings(
+        project: &ProjectSettings,
+        image_path: PathBuf,
+        image_settings: ImageEntry,
+    ) -> ProjectSettings {
+        let mut list = indexmap::IndexMap::with_capacity(1);
+        list.insert(image_path, image_settings);
+        ProjectSettings {
+            metadata: project.metadata.clone(),
+            classification: project.classification.clone(),
+            plate: project.plate.clone(),
+            images: ImageSettings {
+                root: project.images.root.clone(),
+                list,
+                settings: project.images.settings.clone(),
+            },
+            pipelines: project.pipelines.clone(),
+        }
+    }
+
     /// Dispatches a lightweight, single-image pipeline execution task for real-time UI preview.
     ///
     /// This function acts as a safety-gated entry point for the preview system. It validates
@@ -1087,13 +1119,14 @@ impl PipelinesController {
 
         info!("Started preview for {:?}", current_image_path);
 
-        // We remove all images and add only the actual selected, because this is just the preview
-        let mut project_tmp = project.clone();
-        project_tmp.images.list.clear();
-        project_tmp
-            .images
-            .list
-            .insert(current_image_path, current_image_settings.clone());
+        // Only the selected image is needed for a preview - build the settings
+        // fresh instead of cloning every other image's settings (and their
+        // stored ROI results) just to discard them.
+        let project_tmp = Self::build_preview_project_settings(
+            &project.settings,
+            current_image_path,
+            current_image_settings.clone(),
+        );
 
         let breakpoint = self
             .breakpoint
@@ -1901,7 +1934,83 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_cfg::settings::images_settings::SeriesSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
+    use evanalyzer_cfg::settings::roi_settings::RoiSettings;
+    use std::collections::BTreeMap;
+
+    fn image_entry_with_rois(rel_path: &str, roi_count: usize) -> ImageEntry {
+        ImageEntry {
+            rel_path: PathBuf::from(rel_path),
+            file_size: 42,
+            selected_series: 0,
+            series: BTreeMap::from([(
+                0,
+                SeriesSettings {
+                    rois: (0..roi_count).map(|_| RoiSettings::default()).collect(),
+                    ..Default::default()
+                },
+            )]),
+        }
+    }
+
+    fn project_with_images(entries: &[(&str, usize)]) -> ProjectSettings {
+        let mut list = indexmap::IndexMap::new();
+        for (rel_path, roi_count) in entries {
+            list.insert(PathBuf::from(rel_path), image_entry_with_rois(rel_path, *roi_count));
+        }
+        ProjectSettings {
+            metadata: MetaData { name: "test-project".into(), ..Default::default() },
+            images: ImageSettings { root: Some(PathBuf::from("/root")), list, settings: Default::default() },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn build_preview_project_settings_keeps_only_the_selected_image() {
+        let project = project_with_images(&[("a.tif", 5), ("b.tif", 3), ("c.tif", 7)]);
+        let selected = project.images.list.get(&PathBuf::from("b.tif")).unwrap().clone();
+
+        let preview = PipelinesController::build_preview_project_settings(
+            &project,
+            PathBuf::from("b.tif"),
+            selected,
+        );
+
+        assert_eq!(preview.images.list.len(), 1);
+        let (path, entry) = preview.images.list.iter().next().unwrap();
+        assert_eq!(path, &PathBuf::from("b.tif"));
+        assert_eq!(entry.series[&0].rois.len(), 3, "preview must keep the selected image's own ROIs");
+    }
+
+    #[test]
+    fn build_preview_project_settings_preserves_every_other_project_field() {
+        let project = project_with_images(&[("a.tif", 1)]);
+        let selected = project.images.list.get(&PathBuf::from("a.tif")).unwrap().clone();
+
+        let preview = PipelinesController::build_preview_project_settings(
+            &project,
+            PathBuf::from("a.tif"),
+            selected,
+        );
+
+        assert_eq!(preview.metadata.name, "test-project");
+        assert_eq!(preview.images.root, project.images.root);
+    }
+
+    #[test]
+    fn build_preview_project_settings_does_not_mutate_the_source_project() {
+        let project = project_with_images(&[("a.tif", 1), ("b.tif", 2)]);
+        let selected = project.images.list.get(&PathBuf::from("a.tif")).unwrap().clone();
+
+        let _preview = PipelinesController::build_preview_project_settings(
+            &project,
+            PathBuf::from("a.tif"),
+            selected,
+        );
+
+        assert_eq!(project.images.list.len(), 2, "the source project's image list must be untouched");
+    }
 
     fn template(idx_seed: &str, steps: Vec<PipelineStepSettings>) -> PipelineTemplate {
         PipelineTemplate {
