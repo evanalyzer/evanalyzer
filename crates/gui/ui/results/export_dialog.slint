@@ -391,9 +391,15 @@ component ChecklistBox inherits Rectangle {
                         }
                     }
 
-                    // Non-matching, non-header rows are already excluded from
-                    // `displayed_items` by Rust — this just skips headers.
-                    if !item.group_header: FilterCheckbox {
+                    // Rendered unconditionally, even for the item that's also
+                    // its group's header (e.g. "Coloc w/ ClassA (#)", which
+                    // `mark_group_headers` in Rust reuses as the "Coloc
+                    // ClassA" section banner above) — that item is still a
+                    // real, individually exportable column and needs its own
+                    // checkbox, not just the group-wide toggle in the header
+                    // row. Non-matching rows are already excluded from
+                    // `displayed_items` by Rust.
+                    FilterCheckbox {
                         label: item.label;
                         checked: item.checked;
                         toggled => {

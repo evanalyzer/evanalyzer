@@ -3277,31 +3277,39 @@ fn model_to_vec(model: &slint::ModelRc<FilterItem>) -> Vec<FilterItem> {
         .collect()
 }
 
-/// Number of real (non-group-header) checked items — the "N" in the export
-/// dialog's ChecklistBox "N/M selected" count. Computed here because Slint's
-/// function bodies have no loop or array-reduce construct (only `.length`
-/// is a builtin array method), so this can't be computed in the component.
+/// Number of checked items — the "N" in the export dialog's ChecklistBox
+/// "N/M selected" count. Computed here because Slint's function bodies have
+/// no loop or array-reduce construct (only `.length` is a builtin array
+/// method), so this can't be computed in the component.
+///
+/// Counts every item, including one that's also serving as its group's
+/// header banner (e.g. "Coloc w/ ClassA (#)", the first column pushed for
+/// each partner class in `build_column_specs`, which `mark_group_headers`
+/// reuses as the "Coloc ClassA" section header rather than inserting a
+/// synthetic row) — that item is still a real, individually exportable
+/// column with its own checkbox in `ChecklistBox`, not just a banner, so it
+/// has to count like any other row. An earlier version excluded
+/// `group_header` items here to match `ChecklistBox` not giving them their
+/// own checkbox row at all, which made that first column of every group
+/// effectively unselectable and invisible from the count.
 fn checked_count(items: &[FilterItem]) -> i32 {
-    items.iter().filter(|i| !i.group_header && i.checked).count() as i32
+    items.iter().filter(|i| i.checked).count() as i32
 }
 
 /// The "M" counterpart to `checked_count`.
 fn total_count(items: &[FilterItem]) -> i32 {
-    items.iter().filter(|i| !i.group_header).count() as i32
+    items.len() as i32
 }
 
-/// Labels of up to the first `cap` checked, non-header items, in `items`
-/// order — backs the export dialog's collapsed PickerField chip row. Same
-/// "no loop/array-reduce in Slint" reasoning as `checked_count` above; a
-/// recursive `pure function` isn't a workaround either, since Slint treats a
-/// function calling itself as a binding loop and refuses to compile it.
+/// Labels of up to the first `cap` checked items, in `items` order — backs
+/// the export dialog's collapsed PickerField chip row. See `checked_count`
+/// for why group-header items are included rather than skipped. Same "no
+/// loop/array-reduce in Slint" reasoning as `checked_count` for why this is
+/// computed here; a recursive `pure function` isn't a workaround either,
+/// since Slint treats a function calling itself as a binding loop and
+/// refuses to compile it.
 fn checked_labels(items: &[FilterItem], cap: usize) -> Vec<SharedString> {
-    items
-        .iter()
-        .filter(|i| !i.group_header && i.checked)
-        .take(cap)
-        .map(|i| i.label.clone())
-        .collect()
+    items.iter().filter(|i| i.checked).take(cap).map(|i| i.label.clone()).collect()
 }
 
 /// The export dialog ChecklistBox's search-filtered display list. Slint has
@@ -3868,7 +3876,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_count_excludes_group_headers_but_total_count_still_counts_them() {
+    fn checked_count_and_total_count_include_the_group_header_item_itself() {
         // A grouped list (mirrors the Columns checklist): item[0] is a plain
         // column, item[1] is the checked "Intensity" section header itself
         // (mark_group_headers reuses a real item as its group's header, it
@@ -3881,13 +3889,12 @@ mod tests {
         ]);
         assert!(items[1].group_header, "sanity: item[1] is the group header");
 
-        // total_count excludes the header row entirely (matches the
-        // ChecklistBox's original, pre-Rust-port intent), so it's 2 here
-        // even though there are 3 real columns.
-        assert_eq!(total_count(&items), 2);
-        // checked_count then only has ROI ID (item[1] is skipped for being
-        // a header, regardless of its own checked state).
-        assert_eq!(checked_count(&items), 1);
+        // The header item is still a real, individually exportable column
+        // (`ChecklistBox` gives it its own checkbox alongside the section
+        // banner), so it counts like any other row: 3 real columns, 2 of
+        // them checked (ROI ID and the header item, Ch0 Min).
+        assert_eq!(total_count(&items), 3);
+        assert_eq!(checked_count(&items), 2);
     }
 
     #[test]
