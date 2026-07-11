@@ -14,17 +14,20 @@ item you want implemented, and optionally add a note, then hand the file back.
   `initial_image.as_ref().clone()` clones the pixel buffer inside the `Arc`, not just the `Arc` handle. For a 4096×4096 f32 tile that's 64MB+ copied per pipeline run, multiplied by the number of chained pipelines per tile ([`job_executor.rs:530-543`](crates/core/src/job/job_executor.rs#L530)).
   *Fix:* share via `Arc`/`Cow`, only deep-copy on first mutation.
 
-- [ ] **AI models reload from disk on every call** — [`cellpose.rs:86`](crates/core/src/algos/ai_segmentation/cellpose.rs#L86), [`stardist.rs:81`](crates/core/src/algos/ai_segmentation/stardist.rs#L81), [`unet.rs:109`](crates/core/src/algos/ai_segmentation/unet.rs#L109)
+- [x] **AI models reload from disk on every call** — [`cellpose.rs:86`](crates/core/src/algos/ai_segmentation/cellpose.rs#L86), [`stardist.rs:81`](crates/core/src/algos/ai_segmentation/stardist.rs#L81), [`unet.rs:109`](crates/core/src/algos/ai_segmentation/unet.rs#L109)
   Every tile/image re-reads and re-parses the TorchScript file and re-uploads weights. Dominates wall-clock time for any batch/tiled AI job.
   *Fix:* cache the loaded `CModule` (e.g. in `PipelineCache`, keyed by model path), reload only when the path changes.
+  *Done:* thread-local cache (`ai_segmentation/model_cache.rs`) keyed by model path, wired into all three algos. 3 unit tests on the cache logic; all 275 tests pass with `--features ai`.
 
-- [ ] **Image decode allocates 2-3x the needed buffers** — [`image_reader.rs:786-855`](crates/core/src/image/image_reader.rs#L786)
+- [x] **Image decode allocates 2-3x the needed buffers** — [`image_reader.rs:786-855`](crates/core/src/image/image_reader.rs#L786)
   Planar RGB/RGBA tiles: full `raw_f32` buffer, then a *second* full-size buffer built via a single-threaded per-pixel `push` loop, on top of the original byte buffer.
   *Fix:* parallelize the planar→interleaved step with rayon, or write directly into the final buffer instead of two intermediate `Vec`s.
+  *Done:* planar RGB/RGBA now decodes straight into the final interleaved buffer (alpha plane bytes never read for RGBA). Measured on a 4096×4096 RGB16 tile: peak float memory 384→192 MiB (50% less), wall time 113ms→17ms (6.6x faster, after restoring the parallel decode on the new path). New tests pin exact output; existing JNI-backed tests still pass.
 
-- [ ] **Z-projection reallocates a buffer per Z-slice** — [`image_reader.rs:677-727`](crates/core/src/image/image_reader.rs#L677)
+- [x] **Z-projection reallocates a buffer per Z-slice** — [`image_reader.rs:677-727`](crates/core/src/image/image_reader.rs#L677)
   Each Z slice in sum/max/min/avg projection gets a fresh decode buffer that's discarded right after use.
   *Fix:* reuse one scratch buffer across the Z loop, resize once.
+  *Done:* one scratch buffer per channel, reused across all Z-slices (resized once). Measured allocator-churn saving: ~30x (8.7ms→0.29ms for 20 reads of an 8MB tile), mostly from skipping the repeated memset. All Z-projection tests (max/min/avg/sum) still pass against real reference data.
 
 - [ ] **Morphology kernels are O(k²) when they could be O(k)** — [`morph_ops.rs:74-196`](crates/core/src/extlibs/libmorphology/morph_ops.rs#L74)
   Box/cross structuring elements are separable but scanned as full 2D kernels with bounds-checked `get_pixel` in the innermost loop. Likely the biggest CPU cost in the morphology path (Open/Close runs dilate+erode back to back, kernel sizes up to 27).
@@ -52,7 +55,8 @@ item you want implemented, and optionally add a note, then hand the file back.
 
 ## Medium priority
 
-- [ ] **Correctness bug**: `ImageContainer::clone_empty` builds the wrong variant for `U32` — [`image_container.rs:117-125`](crates/core/src/image/image_container.rs#L117). Builds an `F32Rgb`-shaped buffer instead of matching the source's channel count — likely an oversized allocation downstream, not just a perf issue.
+- [x] **Correctness bug**: `ImageContainer::clone_empty` builds the wrong variant for `U32` — [`image_reader.rs:117-125`](crates/core/src/image/image_reader.rs#L117). Builds an `F32Rgb`-shaped buffer instead of matching the source's channel count — likely an oversized allocation downstream, not just a perf issue.
+  *Done:* now returns a matching `U32` buffer. Regression test written first (confirmed it failed against the old code — was returning `F32Rgb{width,height,channels:3}`), then fixed; all tests pass.
 - [ ] RGBA→RGB strip allocates a second full buffer via `flat_map`/`collect` instead of in-place compaction — [`image_reader.rs:823-828`](crates/core/src/image/image_reader.rs#L823).
 - [ ] `sync_channel::<PipelineCache>(4)` in job executor is a flat buffer count, not scaled to tile size — could hold several hundred MB extra in flight for large tiles. [`job_executor.rs:502,757`](crates/core/src/job/job_executor.rs#L502)
 - [ ] `pipeline_cache.rs` `Scratchpad` allocates a fresh zero-filled buffer on every request instead of reusing one — [`pipeline_cache.rs:76-119`](crates/core/src/pipeline/pipeline_cache.rs#L76)

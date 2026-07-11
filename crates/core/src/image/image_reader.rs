@@ -115,9 +115,9 @@ impl ImageContainer {
                 })
             }
             ImageContainer::U32(img) => {
-                let new_img = kornia_image::Image::from_size_val(img.size(), 0.0, CpuAllocator)
+                let new_img = kornia_image::Image::from_size_val(img.size(), 0u32, CpuAllocator)
                     .expect("Failed to allocate scratch buffer");
-                ImageContainer::F32Rgb(ManagedImage {
+                ImageContainer::U32(ManagedImage {
                     data: new_img,
                     tile_offset: img.tile_offset.clone(),
                     plane: img.plane.clone(),
@@ -436,6 +436,7 @@ impl ImageReader {
         resolution_idx: i32,
         image_plane: &ImagePlane,
         image_tile: &ImageTile,
+        byte_scratch: &mut Vec<u8>,
     ) -> Result<ImageContainer, InternalErrors> {
         // 1. Setup Environment and Instance
         let wrapper = JAVA_WRAPPER
@@ -506,7 +507,16 @@ impl ImageReader {
             ));
         }
 
-        let mut buffer = vec![0u8; buffer_size].into_boxed_slice();
+        // Reuse the caller's scratch allocation when it's already the right
+        // size (e.g. across Z-slices of the same tile/channel, where width,
+        // height, bit depth and channel count never change) instead of
+        // allocating a fresh buffer on every call. The Java call below always
+        // overwrites the full `buffer_size` region, so stale bytes left over
+        // from a previous read are never observed.
+        if byte_scratch.len() != buffer_size {
+            byte_scratch.resize(buffer_size, 0u8);
+        }
+        let buffer = byte_scratch;
 
         // Create Direct View (Zero-Copy)
         // IMPORTANT: 'buffer' must not be dropped while 'direct_buffer' is in use by Java.
@@ -553,7 +563,7 @@ impl ImageReader {
             ));
         }
         decode_image(
-            buffer,
+            buffer.as_slice(),
             pyramid_info.is_interleaved,
             pyramid_info.is_little_endian,
             ImageSize {
@@ -673,6 +683,12 @@ impl ImageReader {
                 let t_read = t_stack.min(series_info.nr_t_stacks.saturating_sub(1));
                 let c_read = *c_stack_to_read.min(&series_info.nr_c_stacks.saturating_sub(1));
 
+                // Reused for every read below (the initial load and every
+                // Z-slice): width/height/bit depth/channel count are constant
+                // across a single channel's Z-stack, so this scratch buffer
+                // only ever grows once instead of reallocating per slice.
+                let mut byte_scratch: Vec<u8> = Vec::new();
+
                 // --- INITIAL IMAGE LOAD ---
                 let mut image = self.read_image_tile(
                     series,
@@ -683,6 +699,7 @@ impl ImageReader {
                         t: t_read,
                     },
                     &image_tile,
+                    &mut byte_scratch,
                 )?;
 
                 // --- Z-PROJECTION LOGIC ---
@@ -698,6 +715,7 @@ impl ImageReader {
                                     t: t_read,
                                 },
                                 &image_tile,
+                                &mut byte_scratch,
                             )?;
 
                             if let ImageContainer::F32Gray(image_tmp_gray) = image_tmp {
@@ -750,7 +768,7 @@ impl ImageReader {
 ///
 /// # Arguments
 ///
-/// - `buffer` (`Box<[u8]>`) - Describe this parameter.
+/// - `buffer` (`&[u8]`) - Describe this parameter.
 ///
 /// # Returns
 ///
@@ -768,7 +786,7 @@ impl ImageReader {
 /// let _ = decode_image();
 /// ```
 fn decode_image(
-    buffer: Box<[u8]>,
+    buffer: &[u8],
     is_interleaved: bool,
     is_little_endian: bool,
     image_size: ImageSize,
@@ -780,75 +798,34 @@ fn decode_image(
     let max_val = (1u64 << nr_bits) - 1;
     let inv_divisor = 1.0 / (max_val as f32);
 
-    // Convert raw bytes to normalised f32 in parallel.
-    // Use direct integer constructors for the two most common bit depths to
-    // avoid the 8-byte stack-buffer allocation that read_le/read_be would do.
-    let raw_f32: Vec<f32> = match nr_bits {
-        8 => buffer.par_iter().map(|&b| b as f32 * inv_divisor).collect(),
-        16 => buffer
-            .par_chunks_exact(2)
-            .map(|c| {
-                let v = if is_little_endian {
-                    u16::from_le_bytes([c[0], c[1]])
-                } else {
-                    u16::from_be_bytes([c[0], c[1]])
-                };
-                v as f32 * inv_divisor
-            })
-            .collect(),
-        _ => {
-            let bytes_per_sample = (nr_bits as usize + 7) / 8;
-            buffer
-                .par_chunks_exact(bytes_per_sample)
-                .map(|chunk| {
-                    let val = if is_little_endian {
-                        read_le(chunk)
-                    } else {
-                        read_be(chunk)
-                    };
-                    val as f32 * inv_divisor
-                })
-                .collect()
-        }
-    };
-
     let final_data = match (color_channels, is_interleaved) {
-        // Grayscal pass through
-        (1, _) => raw_f32,
+        // Grayscale pass through
+        (1, _) => decode_samples_parallel(buffer, nr_bits, is_little_endian, inv_divisor),
 
         // RGB interleaved (still correct layout: RGBRGB...)
-        (3, true) => raw_f32,
+        (3, true) => decode_samples_parallel(buffer, nr_bits, is_little_endian, inv_divisor),
 
         // RGB interleaved with alpha channel -> Remove alpha channel
         (4, true) => {
+            let raw_f32 = decode_samples_parallel(buffer, nr_bits, is_little_endian, inv_divisor);
             raw_f32
                 .chunks_exact(4)
                 .flat_map(|rgba| [rgba[0], rgba[1], rgba[2]]) // Nimm nur R, G, B
                 .collect()
         }
 
-        // RGB planar (RRR...GGG...BBB...) -> convert to interleaved (RGBRGB...)
+        // RGB planar (RRR...GGG...BBB...) -> interleaved (RGBRGB...), decoded
+        // directly from the source bytes: no full-size intermediate buffer is
+        // ever materialized (unlike the interleaved paths above, which can
+        // reuse the parallel decode as-is since no reordering is needed).
         (3, false) => {
-            let n = raw_f32.len() / 3;
-            let mut interleaved = Vec::with_capacity(raw_f32.len());
-            for i in 0..n {
-                interleaved.push(raw_f32[i]); // R
-                interleaved.push(raw_f32[i + n]); // G
-                interleaved.push(raw_f32[i + 2 * n]); // B
-            }
-            interleaved
+            decode_planar_to_interleaved(buffer, nr_bits, is_little_endian, inv_divisor, 3)
         }
 
-        // RGBA planar with alpha channel -> RGB interleaved remove alpha
+        // RGBA planar with alpha channel -> RGB interleaved, alpha plane bytes
+        // are never even read.
         (4, false) => {
-            let n = raw_f32.len() / 4;
-            let mut interleaved = Vec::with_capacity(n * 3);
-            for i in 0..n {
-                interleaved.push(raw_f32[i]); // R
-                interleaved.push(raw_f32[i + n]); // G
-                interleaved.push(raw_f32[i + 2 * n]); // B
-            }
-            interleaved
+            decode_planar_to_interleaved(buffer, nr_bits, is_little_endian, inv_divisor, 4)
         }
 
         _ => return Err(InternalErrors::ImageReadError("".to_string())),
@@ -878,6 +855,122 @@ fn decode_image(
             plane: Some(plane),
         }))
     }
+}
+
+/// Converts a raw byte buffer into normalized `f32` samples in parallel, one
+/// sample per pixel-channel, preserving the buffer's original sample order.
+/// Use direct integer constructors for the two most common bit depths to
+/// avoid the 8-byte stack-buffer allocation that read_le/read_be would do.
+fn decode_samples_parallel(
+    buffer: &[u8],
+    nr_bits: u8,
+    is_little_endian: bool,
+    inv_divisor: f32,
+) -> Vec<f32> {
+    match nr_bits {
+        8 => buffer.par_iter().map(|&b| b as f32 * inv_divisor).collect(),
+        16 => buffer
+            .par_chunks_exact(2)
+            .map(|c| {
+                let v = if is_little_endian {
+                    u16::from_le_bytes([c[0], c[1]])
+                } else {
+                    u16::from_be_bytes([c[0], c[1]])
+                };
+                v as f32 * inv_divisor
+            })
+            .collect(),
+        _ => {
+            let bytes_per_sample = (nr_bits as usize + 7) / 8;
+            buffer
+                .par_chunks_exact(bytes_per_sample)
+                .map(|chunk| {
+                    let val = if is_little_endian {
+                        read_le(chunk)
+                    } else {
+                        read_be(chunk)
+                    };
+                    val as f32 * inv_divisor
+                })
+                .collect()
+        }
+    }
+}
+
+/// Reads and normalizes a single sample at `byte_offset`, matching
+/// [`decode_samples_parallel`]'s per-bit-depth semantics exactly.
+fn sample_f32(
+    buffer: &[u8],
+    byte_offset: usize,
+    nr_bits: u8,
+    is_little_endian: bool,
+    inv_divisor: f32,
+) -> f32 {
+    match nr_bits {
+        8 => buffer[byte_offset] as f32 * inv_divisor,
+        16 => {
+            let v = if is_little_endian {
+                u16::from_le_bytes([buffer[byte_offset], buffer[byte_offset + 1]])
+            } else {
+                u16::from_be_bytes([buffer[byte_offset], buffer[byte_offset + 1]])
+            };
+            v as f32 * inv_divisor
+        }
+        _ => {
+            let bytes_per_sample = (nr_bits as usize + 7) / 8;
+            let chunk = &buffer[byte_offset..byte_offset + bytes_per_sample];
+            let val = if is_little_endian {
+                read_le(chunk)
+            } else {
+                read_be(chunk)
+            };
+            val as f32 * inv_divisor
+        }
+    }
+}
+
+/// Decodes a planar (RRR...GGG...BBB...[AAA...]) byte buffer directly into an
+/// interleaved RGB `f32` buffer. `source_planes` is 3 for RGB or 4 for RGBA
+/// source data; only the first three planes are ever read, so an alpha plane
+/// (if present) is dropped without its bytes ever being touched. Unlike the
+/// interleaved decode path, this never materializes a full-size normalized
+/// copy of the source planes before reordering them. The per-pixel work is
+/// independent, so it's parallelized the same way the byte decode it
+/// replaces already was.
+fn decode_planar_to_interleaved(
+    buffer: &[u8],
+    nr_bits: u8,
+    is_little_endian: bool,
+    inv_divisor: f32,
+    source_planes: usize,
+) -> Vec<f32> {
+    let bytes_per_sample = (nr_bits as usize + 7) / 8;
+    let n = buffer.len() / (bytes_per_sample * source_planes);
+    let plane_stride = n * bytes_per_sample;
+
+    let mut interleaved = vec![0f32; n * 3];
+    interleaved
+        .par_chunks_mut(3)
+        .enumerate()
+        .for_each(|(i, px)| {
+            let base = i * bytes_per_sample;
+            px[0] = sample_f32(buffer, base, nr_bits, is_little_endian, inv_divisor);
+            px[1] = sample_f32(
+                buffer,
+                plane_stride + base,
+                nr_bits,
+                is_little_endian,
+                inv_divisor,
+            );
+            px[2] = sample_f32(
+                buffer,
+                plane_stride * 2 + base,
+                nr_bits,
+                is_little_endian,
+                inv_divisor,
+            );
+        });
+    interleaved
 }
 
 // Helper functions for byte read
@@ -1198,6 +1291,114 @@ mod tests {
                 ImageContainer::F32Rgb(_) => todo!(),
                 ImageContainer::U32(_) => todo!(),
             }
+        }
+    }
+
+    #[test]
+    fn decode_image_planar_rgb_8bit_interleaves_correctly() {
+        // 2x2 image, 8-bit planar RGB: R plane, then G plane, then B plane.
+        let buffer: Vec<u8> = vec![
+            10, 20, 30, 40, // R
+            50, 60, 70, 80, // G
+            90, 100, 110, 120, // B
+        ];
+
+        let result = decode_image(
+            &buffer,
+            false,
+            true,
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            8,
+            3,
+            ImageTile::default(),
+            ImagePlane { z: 0, c: 0, t: 0 },
+        )
+        .unwrap();
+
+        match result {
+            ImageContainer::F32Rgb(img) => {
+                let expected: Vec<f32> = [
+                    10, 50, 90, 20, 60, 100, 30, 70, 110, 40, 80, 120,
+                ]
+                .iter()
+                .map(|&v| v as f32 / 255.0)
+                .collect();
+                compare_data(&expected, img.as_slice(), 1e-6);
+            }
+            other => panic!("expected F32Rgb, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_image_planar_rgba_16bit_drops_alpha_and_interleaves() {
+        // 2x1 image, 16-bit little-endian planar RGBA: R, G, B, A planes.
+        let samples: [u16; 8] = [
+            1000, 2000, // R
+            3000, 4000, // G
+            5000, 6000, // B
+            9999, 9999, // A (must be dropped)
+        ];
+        let mut buffer = Vec::with_capacity(samples.len() * 2);
+        for s in samples {
+            buffer.extend_from_slice(&s.to_le_bytes());
+        }
+
+        let result = decode_image(
+            &buffer,
+            false,
+            true,
+            ImageSize {
+                width: 2,
+                height: 1,
+            },
+            16,
+            4,
+            ImageTile::default(),
+            ImagePlane { z: 0, c: 0, t: 0 },
+        )
+        .unwrap();
+
+        match result {
+            ImageContainer::F32Rgb(img) => {
+                let inv = 1.0 / 65535.0;
+                let expected: Vec<f32> = [1000, 3000, 5000, 2000, 4000, 6000]
+                    .iter()
+                    .map(|&v| v as f32 * inv)
+                    .collect();
+                compare_data(&expected, img.as_slice(), 1e-6);
+            }
+            other => panic!("expected F32Rgb, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clone_empty_u32_returns_matching_variant_and_size() {
+        let size = ImageSize {
+            width: 4,
+            height: 3,
+        };
+        let source = ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1, CpuAllocator>::new(size, vec![7u32; size.width * size.height], CpuAllocator)
+                .unwrap(),
+            tile_offset: Point2d { x: 1, y: 2 },
+            plane: None,
+        });
+
+        let empty = source.clone_empty();
+
+        match empty {
+            ImageContainer::U32(img) => {
+                assert_eq!(img.size().width, size.width);
+                assert_eq!(img.size().height, size.height);
+                assert_eq!(img.as_slice().len(), size.width * size.height);
+                assert!(img.as_slice().iter().all(|&v| v == 0));
+            }
+            other => panic!(
+                "clone_empty() on a U32 container must return a U32 container, got {other:?}"
+            ),
         }
     }
 
