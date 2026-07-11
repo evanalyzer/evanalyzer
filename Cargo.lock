@@ -2325,6 +2325,7 @@ dependencies = [
  "evanalyzer_core",
  "evanalyzer_gui_slint",
  "indexmap",
+ "kornia-apriltag",
  "kornia-image",
  "kornia-imgproc",
  "log",

@@ -11,13 +11,13 @@ use kornia_image::allocator::CpuAllocator;
 use kornia_image::{Image, InterpolationMode};
 use kornia_imgproc::resize;
 use log::error;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, Mutex, RwLock};
-pub(crate) type TileCache = Mutex<
-    CLruCache<TileKey, Arc<CachedTile>, std::collections::hash_map::RandomState, TileWeightScale>,
->;
+
+type InnerCache =
+    CLruCache<TileKey, Arc<CachedTile>, std::collections::hash_map::RandomState, TileWeightScale>;
 
 const LOW_RES_MAX_WIDTH_AND_HEIGHT: u64 = 1024;
 const TILE_SIZE_TO_LOAD: f32 = 1024.0;
@@ -82,10 +82,141 @@ impl CachedTile {
 
 pub(crate) type RenderSource = Arc<Vec<ImageChannel>>;
 
+/// Everything about a cached tile except its spatial position - the part of
+/// a request that must match exactly, used to scope the spatial
+/// "does a bigger cached tile already cover this" search to a small
+/// candidate set instead of the whole cache.
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+struct TileGroupKey {
+    series: i32,
+    level: i32,
+    t: i32,
+    z_projection: ZProjection,
+    z_range: Option<RangeInclusive<i32>>,
+}
+
+impl From<&TileKey> for TileGroupKey {
+    fn from(key: &TileKey) -> Self {
+        Self {
+            series: key.series,
+            level: key.level,
+            t: key.t,
+            z_projection: key.z_projection.clone(),
+            z_range: key.z_range.clone(),
+        }
+    }
+}
+
+/// Groups every key currently in a [`InnerCache`] by [`TileGroupKey`], so a
+/// spatial-superset search only scans tiles that could possibly match
+/// instead of the entire cache.
+///
+/// Kept in sync on insert: a plain insert appends to its group; anything
+/// that could have evicted another entry (the cache didn't grow by exactly
+/// one) triggers a full rebuild from the cache's current contents - `clru`
+/// has no eviction callback, so this is the only way to guarantee no stale
+/// entry lingers forever. A stale entry between an insert and its resync is
+/// harmless either way: [`IndexedTileCache::find_spatial_superset`] always
+/// re-checks presence via `cache.get()` before trusting a candidate.
+#[derive(Default)]
+struct TileGroupIndex {
+    by_group: HashMap<TileGroupKey, Vec<TileKey>>,
+}
+
+impl TileGroupIndex {
+    fn record(&mut self, key: &TileKey) {
+        self.by_group
+            .entry(TileGroupKey::from(key))
+            .or_default()
+            .push(key.clone());
+    }
+
+    fn rebuild_from(&mut self, cache: &InnerCache) {
+        self.by_group.clear();
+        for (key, _) in cache.iter() {
+            self.record(key);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.by_group.clear();
+    }
+
+    fn candidates(&self, group: &TileGroupKey) -> &[TileKey] {
+        self.by_group.get(group).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+/// A weight-bounded LRU tile cache plus a [`TileGroupIndex`] kept in sync
+/// with it.
+struct IndexedTileCache {
+    cache: InnerCache,
+    index: TileGroupIndex,
+}
+
+impl IndexedTileCache {
+    fn new(capacity: NonZeroUsize) -> Self {
+        Self {
+            cache: CLruCache::with_config(
+                clru::CLruCacheConfig::new(capacity).with_scale(TileWeightScale),
+            ),
+            index: TileGroupIndex::default(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+        self.index.clear();
+    }
+
+    fn get_exact(&mut self, key: &TileKey) -> Option<Arc<CachedTile>> {
+        self.cache.get(key).cloned()
+    }
+
+    /// Finds a cached tile in `req`'s exact (series, level, t, z) group whose
+    /// spatial bounds fully contain `req`, refreshing its LRU priority.
+    fn find_spatial_superset(&mut self, req: &TileKey) -> Option<(TileKey, Arc<CachedTile>)> {
+        let group = TileGroupKey::from(req);
+        let found_key = self
+            .index
+            .candidates(&group)
+            .iter()
+            .find(|key| {
+                key.x <= req.x
+                    && key.y <= req.y
+                    && (key.x + key.width) >= (req.x + req.width)
+                    && (key.y + key.height) >= (req.y + req.height)
+            })
+            .cloned()?;
+        // Also guards against a stale index entry: if it was already
+        // evicted, this returns None and the caller falls back to disk.
+        let tile = self.cache.get(&found_key).cloned()?;
+        Some((found_key, tile))
+    }
+
+    fn insert(&mut self, key: TileKey, value: Arc<CachedTile>) -> Result<(), ()> {
+        let len_before = self.cache.len();
+        match self.cache.put_with_weight(key.clone(), value) {
+            Ok(_) => {
+                if self.cache.len() == len_before + 1 {
+                    self.index.record(&key);
+                } else {
+                    // Either a replace (len unchanged) or an eviction made
+                    // room for this insert - resync fully rather than trust
+                    // partial bookkeeping.
+                    self.index.rebuild_from(&self.cache);
+                }
+                Ok(())
+            }
+            Err(_) => Err(()),
+        }
+    }
+}
+
 pub struct ViewportCache {
     pub(crate) app_state: Arc<UiState>,
-    pub(crate) cache_high_res: TileCache,
-    pub(crate) cache_low_res: TileCache,
+    cache_high_res: Mutex<IndexedTileCache>,
+    cache_low_res: Mutex<IndexedTileCache>,
     pub active_high_res_data: RwLock<Option<(RenderSource, ReadContext)>>,
 }
 
@@ -96,12 +227,8 @@ impl ViewportCache {
 
         Self {
             app_state,
-            cache_high_res: Mutex::new(CLruCache::with_config(
-                clru::CLruCacheConfig::new(high_res_capacity).with_scale(TileWeightScale),
-            )),
-            cache_low_res: Mutex::new(CLruCache::with_config(
-                clru::CLruCacheConfig::new(low_res_capacity).with_scale(TileWeightScale),
-            )),
+            cache_high_res: Mutex::new(IndexedTileCache::new(high_res_capacity)),
+            cache_low_res: Mutex::new(IndexedTileCache::new(low_res_capacity)),
             active_high_res_data: RwLock::new(None),
         }
     }
@@ -395,13 +522,13 @@ impl ViewportCache {
 
         if is_low_res {
             let mut guard = self.cache_low_res.lock().unwrap();
-            let ret = guard.put_with_weight(cache_key.clone(), cached_tile);
+            let ret = guard.insert(cache_key.clone(), cached_tile);
             if ret.is_err() {
                 error!("Not enough space for low-res tile!");
             }
         } else {
             let mut guard = self.cache_high_res.lock().unwrap();
-            let ret = guard.put_with_weight(cache_key.clone(), Arc::clone(&cached_tile));
+            let ret = guard.insert(cache_key.clone(), Arc::clone(&cached_tile));
             if ret.is_err() {
                 error!("Not enough space!");
             }
@@ -430,80 +557,26 @@ impl ViewportCache {
     /// Is looking for an image tile in the cache
     ///
     /// Is looking for an image in the cache, first looking for a exact match
-    /// if not found a spheral search is done to look for an image in the cache which
-    /// overlaps with a still existing tile in the cache
+    /// if not found a spatial search is done to look for an image in the
+    /// cache which overlaps with a still existing tile in the cache. The
+    /// spatial search only scans tiles in `req`'s exact (series, level, t, z)
+    /// group ([`TileGroupIndex`]) instead of the whole cache.
     fn find_in_cache(
         &self,
         req: &TileKey,
         low_resolution: bool,
     ) -> Option<(TileKey, Arc<CachedTile>)> {
-        if low_resolution {
-            let mut cache = self.cache_low_res.lock().unwrap();
-
-            if let Some(tile) = cache.get(req) {
-                return Some((req.clone(), Arc::clone(tile)));
-            }
-
-            let mut found_key: Option<TileKey> = None;
-
-            for (key, _) in cache.iter() {
-                if key.level == req.level
-                    && key.series == req.series
-                    && key.t == req.t
-                    && key.z_range == req.z_range
-                    && key.z_projection == req.z_projection
-                    && key.x <= req.x
-                    && key.y <= req.y
-                    && (key.x + key.width) >= (req.x + req.width)
-                    && (key.y + key.height) >= (req.y + req.height)
-                {
-                    found_key = Some(key.clone());
-                    break;
-                }
-            }
-
-            // If found spatially, call .get() to refresh its priority in the LRU cache
-            if let Some(key) = found_key {
-                if let Some(tile) = cache.get(&key) {
-                    return Some((key, Arc::clone(tile)));
-                }
-            }
-
-            return None;
+        let mut cache = if low_resolution {
+            self.cache_low_res.lock().unwrap()
         } else {
-            let mut cache = self.cache_high_res.lock().unwrap();
+            self.cache_high_res.lock().unwrap()
+        };
 
-            if let Some(tile) = cache.get(req) {
-                return Some((req.clone(), Arc::clone(tile)));
-            }
-
-            let mut found_key: Option<TileKey> = None;
-
-            for (key, _) in cache.iter() {
-                if key.level == req.level
-                    && key.series == req.series
-                    && key.t == req.t
-                    && key.z_range == req.z_range
-                    && key.z_projection == req.z_projection
-                    && key.x <= req.x
-                    && key.y <= req.y
-                    && (key.x + key.width) >= (req.x + req.width)
-                    && (key.y + key.height) >= (req.y + req.height)
-                {
-                    found_key = Some(key.clone());
-                    break;
-                }
-            }
-
-            // If found spatially, call .get() to refresh its priority in the LRU cache
-            if let Some(key) = found_key {
-                if let Some(tile) = cache.get(&key) {
-                    return Some((key, Arc::clone(tile)));
-                }
-            }
-
-            return None;
+        if let Some(tile) = cache.get_exact(req) {
+            return Some((req.clone(), tile));
         }
+
+        cache.find_spatial_superset(req)
     }
 }
 
@@ -616,5 +689,159 @@ pub fn to_z_projection(z_handling: ZStackHandling) -> ZProjection {
         ZStackHandling::AvgIntensity => ZProjection::AvgIntensity,
         ZStackHandling::SumIntensity => ZProjection::SumIntensity,
         ZStackHandling::TakeTheMiddle => ZProjection::TakeTheMiddle,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_core::ImagePlane;
+    use kornia_apriltag::utils::Point2d;
+    use kornia_image::ImageSize;
+
+    fn key(series: i32, level: i32, t: i32, x: usize, y: usize, w: usize, h: usize) -> TileKey {
+        TileKey {
+            series,
+            level,
+            x,
+            y,
+            width: w,
+            height: h,
+            z_projection: ZProjection::None,
+            z_range: None,
+            t,
+        }
+    }
+
+    /// A tile with a real, size-proportional weight (w*h*4 bytes for a single
+    /// F32Gray channel), so capacity/eviction behaves like production.
+    fn weighted_tile(w: usize, h: usize) -> Arc<CachedTile> {
+        let image = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: w,
+                height: h,
+            },
+            vec![0.0f32; w * h],
+            CpuAllocator,
+        )
+        .unwrap();
+        let container = ImageContainer::F32Gray(ManagedImage {
+            data: image,
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        });
+        Arc::new(CachedTile {
+            data: Arc::new(vec![ImageChannel {
+                image: Arc::new(container),
+                color: [1.0, 1.0, 1.0],
+                is_visible: true,
+                c_stack: 0,
+                name: "ch0".to_string(),
+                is_rgb: false,
+            }]),
+        })
+    }
+
+    #[test]
+    fn exact_match_is_found_without_a_spatial_search() {
+        let mut cache = IndexedTileCache::new(NonZeroUsize::new(1_000_000).unwrap());
+        let k = key(0, 0, 0, 0, 0, 10, 10);
+        cache.insert(k.clone(), weighted_tile(10, 10)).unwrap();
+
+        assert!(cache.get_exact(&k).is_some());
+    }
+
+    #[test]
+    fn spatial_superset_is_found_within_the_same_group() {
+        let mut cache = IndexedTileCache::new(NonZeroUsize::new(1_000_000).unwrap());
+        let big = key(0, 0, 0, 0, 0, 100, 100);
+        cache.insert(big.clone(), weighted_tile(100, 100)).unwrap();
+
+        // A smaller request fully inside `big`, same group, no exact key match.
+        let small_req = key(0, 0, 0, 10, 10, 20, 20);
+        assert!(cache.get_exact(&small_req).is_none());
+        let (found_key, _) = cache
+            .find_spatial_superset(&small_req)
+            .expect("must find the containing tile");
+        assert_eq!(found_key, big);
+    }
+
+    #[test]
+    fn spatial_search_never_matches_a_different_group() {
+        let mut cache = IndexedTileCache::new(NonZeroUsize::new(1_000_000).unwrap());
+        // Same spatial footprint, but a different `t` - stands in for any of
+        // (series, level, t, z_projection, z_range) differing.
+        let other_group = key(0, 0, /* t = */ 1, 0, 0, 100, 100);
+        cache.insert(other_group, weighted_tile(100, 100)).unwrap();
+
+        let req = key(0, 0, /* t = */ 0, 10, 10, 20, 20);
+        assert!(cache.find_spatial_superset(&req).is_none());
+    }
+
+    #[test]
+    fn candidates_are_restricted_to_the_requested_group_even_with_many_groups_cached() {
+        let mut cache = IndexedTileCache::new(NonZeroUsize::new(10_000_000).unwrap());
+        // Populate 20 different `t` groups with one tile each, plus the group
+        // we'll actually query - this is exactly the scenario the linear
+        // scan used to pay for on every miss.
+        for t in 0..20 {
+            cache
+                .insert(key(0, 0, t, 0, 0, 50, 50), weighted_tile(50, 50))
+                .unwrap();
+        }
+        let target_group = key(0, 0, 999, 0, 0, 50, 50);
+        cache
+            .insert(target_group.clone(), weighted_tile(50, 50))
+            .unwrap();
+
+        let group = TileGroupKey::from(&target_group);
+        let candidates = cache.index.candidates(&group);
+        assert_eq!(
+            candidates.len(),
+            1,
+            "the group index must not return tiles from other (series, level, t, z) groups"
+        );
+        assert_eq!(candidates[0], target_group);
+    }
+
+    #[test]
+    fn evicted_tiles_are_never_returned_as_spatial_matches() {
+        // Small enough capacity that inserting a second tile evicts the first.
+        let one_tile_weight = 50 * 50 * 4; // F32Gray, w*h*4 bytes
+        let mut cache = IndexedTileCache::new(NonZeroUsize::new(one_tile_weight + 10).unwrap());
+
+        let first = key(0, 0, 0, 0, 0, 50, 50);
+        cache.insert(first.clone(), weighted_tile(50, 50)).unwrap();
+        assert!(cache.get_exact(&first).is_some());
+
+        // Second tile in the same group forces eviction of `first` (LRU, over budget).
+        let second = key(0, 0, 0, 1000, 1000, 50, 50);
+        cache.insert(second, weighted_tile(50, 50)).unwrap();
+        assert!(
+            cache.get_exact(&first).is_none(),
+            "sanity check: first must actually have been evicted"
+        );
+
+        // A request `first` would have spatially covered must not resolve to
+        // it now that it's gone.
+        let req_within_first = key(0, 0, 0, 10, 10, 5, 5);
+        assert!(
+            cache.find_spatial_superset(&req_within_first).is_none(),
+            "an evicted tile must never be returned, even transiently through the index"
+        );
+    }
+
+    #[test]
+    fn clear_empties_both_the_cache_and_the_index() {
+        let mut cache = IndexedTileCache::new(NonZeroUsize::new(1_000_000).unwrap());
+        let k = key(0, 0, 0, 0, 0, 10, 10);
+        cache.insert(k.clone(), weighted_tile(10, 10)).unwrap();
+        assert!(cache.get_exact(&k).is_some());
+
+        cache.clear();
+
+        assert!(cache.get_exact(&k).is_none());
+        let group = TileGroupKey::from(&k);
+        assert!(cache.index.candidates(&group).is_empty());
     }
 }

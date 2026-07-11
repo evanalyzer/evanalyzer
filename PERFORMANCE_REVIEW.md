@@ -39,9 +39,10 @@ item you want implemented, and optionally add a note, then hand the file back.
   Same pattern as the pipeline clone, but in the algorithm layer — full pixel-buffer clones on every call where a borrow or buffer-swap would do (pattern already used correctly in `blur.rs` / `structure_tensor.rs`).
   *Done:* fixed as a byproduct of the pipeline `Arc` refactor above — all three `.clone()` calls now clone an `Arc<ImageContainer>` (cheap) instead of an `ImageContainer` (deep pixel copy). Traced `median_subtract.rs`'s snapshot-then-subtract composition (RankFilter → ImageMath) by hand to confirm `Arc::make_mut`'s copy-on-write still produces the correct result when the scratchpad aliases the main image; confirmed by the passing test suite.
 
-- [ ] **Viewport cache does a linear scan on every tile miss** — [`viewport_cache.rs:341-507`](crates/gui/src/editor/viewport_cache.rs#L341)
+- [x] **Viewport cache does a linear scan on every tile miss** — [`viewport_cache.rs:341-507`](crates/gui/src/editor/viewport_cache.rs#L341)
   `find_in_cache` walks the entire cache (up to 1GB/256MB of tiles) for spatial matches. Runs on the **undebounced** low-res pan/zoom path — i.e. every mouse-drag tick.
   *Fix:* index cached tiles by `(series, level, t, z)` so the scan is restricted to a small candidate set.
+  *Done:* added `TileGroupIndex`, a `HashMap<(series, level, t, z_projection, z_range), Vec<TileKey>>` kept alongside each `CLruCache` in a new `IndexedTileCache` wrapper. `clru` has no eviction callback, so the index resyncs fully whenever an insert doesn't grow the cache by exactly one (covers both eviction and key-replace); a `cache.get()` re-check before trusting any candidate guards against any residual staleness regardless. 6 new unit tests cover exact-match, spatial-superset-within-group, cross-group isolation, candidate-set scoping with many groups cached, eviction safety, and clear. Measured: 60 T/Z groups × 10 tiles/group, 20k miss lookups — 56ms → 0.74ms (75.6x).
 
 - [ ] **GUI preview clones the entire project on every parameter tweak** — [`pipelines_controller.rs:1091`](crates/gui/src/editor/pipelines_controller.rs#L1091)
   `project.clone()` copies all pipelines/images/ROIs/settings just to preview one image, partially defeating the existing 400ms debounce.
