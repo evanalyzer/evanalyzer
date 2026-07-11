@@ -80,6 +80,7 @@ impl UiState {
             }
         })
         .ok();
+        self.set_window_title(true);
     }
 
     /// Clears the unsaved-changes indicator.
@@ -88,6 +89,39 @@ impl UiState {
         slint::invoke_from_event_loop(move || {
             if let Some(w) = ui.upgrade() {
                 w.global::<ToolbarState>().set_has_unsaved_changes(false);
+            }
+        })
+        .ok();
+        self.set_window_title(false);
+    }
+
+    /// Recomputes and pushes the main window's title from the project's
+    /// current file path (`tmp_settings.current_project`, set on load/save)
+    /// and `dirty` — the standard "<file> — AppName" pattern most desktop
+    /// apps use (VS Code, Office, JetBrains IDEs, ...), with a leading "●"
+    /// while there are unsaved changes. `dirty` is passed in by the caller
+    /// (`mark_dirty`/`clear_dirty` already know it) rather than read back
+    /// from `ToolbarState`, so this works the same whether called from the
+    /// UI thread or a background one.
+    pub fn set_window_title(&self, dirty: bool) {
+        let filename = self
+            .get_project()
+            .tmp_settings
+            .current_project
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|f| f.to_string_lossy().into_owned());
+        let name = filename.unwrap_or_else(|| "Untitled".to_string());
+        let title = if dirty {
+            format!("● {name} — EVAnalyzer")
+        } else {
+            format!("{name} — EVAnalyzer")
+        };
+
+        let ui = self.ui_handle.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(w) = ui.upgrade() {
+                w.set_window_title(title.into());
             }
         })
         .ok();
@@ -138,6 +172,11 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
         ui_handle.clone(),
         results_ui_handle.clone(),
     ));
+    // Reflects whatever project state already exists at startup — either the
+    // blank default project, or one passed via a CLI `--project` argument
+    // (loaded into `owner` before the GUI was created, so it's already
+    // sitting in the shared `ProjectWithRuntime` `ui_state` now points at).
+    ui_state.set_window_title(false);
 
     // Attach callbacks synchronously before the event loop starts.
     // Using invoke_from_event_loop here caused the initial `changed width/height`

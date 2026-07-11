@@ -113,7 +113,14 @@ export {GlobalAppState,ProjectSettingsSlint, ProjectSettingsState,
 
 
 export component AppWindow inherits Window {
-    title: "EVAnalyzer";
+    // A literal binding on the inherited `title` property isn't settable
+    // from Rust (Slint only generates an accessor for a plain, binding-free
+    // `in`/`in-out` property) — so the actual title lives in this property
+    // instead, and `title` just mirrors it. Rust pushes the open project's
+    // filename (plus an unsaved-changes marker) into `window_title` via
+    // `UiState::set_window_title`.
+    in-out property <string> window_title: "EVAnalyzer";
+    title: root.window_title;
     icon: @image-url("icons/icon.png");
     preferred-width: 1500px;
     preferred-height: 900px;
