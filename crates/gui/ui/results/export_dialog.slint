@@ -563,7 +563,6 @@ component PickerField inherits Rectangle {
             }
         }
     }
-
 }
 
 // The floating panel shown alongside an open `PickerField` — a searchable
@@ -817,6 +816,7 @@ export component ExportDialog inherits Rectangle {
 
                             HorizontalLayout {
                                 spacing: 8px;
+                                alignment: start;
 
                                 Text {
                                     text: "Images to export:";
@@ -845,12 +845,57 @@ export component ExportDialog inherits Rectangle {
                             }
                         }
 
+                        each-image-ta := TouchArea {
+                            height: 22px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.export_each_image = !ResultsState.export_each_image;
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 2px;
+                                spacing: 7px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 13px;
+                                        height: 13px;
+                                        border-radius: 2px;
+                                        border-width: 1.5px;
+                                        border-color: ResultsState.export_each_image ? Theme.accent : Theme.border;
+                                        background: ResultsState.export_each_image ? Theme.accent : transparent;
+
+                                        if ResultsState.export_each_image: Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 9px;
+                                            height: 9px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: white;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: "Export each checked image as its own file (filename gets the image name)";
+                                    font-size: 11px;
+                                    font-family: Theme.font-sans;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
                         VerticalLayout {
                             spacing: 6px;
                             alignment: start;
 
                             HorizontalLayout {
                                 spacing: 8px;
+                                alignment: start;
 
                                 Text {
                                     text: "Classes to include:";
@@ -876,50 +921,6 @@ export component ExportDialog inherits Rectangle {
                                 checked_count: ResultsState.export_class_checked_count;
                                 chip_labels: ResultsState.export_class_chip_labels;
                                 item_toggled(label) => { ResultsState.export_class_item_toggled(label); }
-                            }
-                        }
-                    }
-
-                    each-image-ta := TouchArea {
-                        height: 22px;
-                        mouse-cursor: pointer;
-                        clicked => {
-                            ResultsState.export_each_image = !ResultsState.export_each_image;
-                        }
-
-                        HorizontalLayout {
-                            padding-left: 2px;
-                            spacing: 7px;
-                            alignment: start;
-
-                            VerticalLayout {
-                                alignment: center;
-
-                                Rectangle {
-                                    width: 13px;
-                                    height: 13px;
-                                    border-radius: 2px;
-                                    border-width: 1.5px;
-                                    border-color: ResultsState.export_each_image ? Theme.accent : Theme.border;
-                                    background: ResultsState.export_each_image ? Theme.accent : transparent;
-
-                                    if ResultsState.export_each_image: Image {
-                                        source: @image-url("../icons/regular-black/check.svg");
-                                        width: 9px;
-                                        height: 9px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        colorize: white;
-                                    }
-                                }
-                            }
-
-                            Text {
-                                text: "Export each checked image as its own file (filename gets the image name)";
-                                font-size: 11px;
-                                font-family: Theme.font-sans;
-                                color: Theme.text-dim;
-                                vertical-alignment: center;
                             }
                         }
                     }
