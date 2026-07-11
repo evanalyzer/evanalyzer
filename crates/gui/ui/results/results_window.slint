@@ -14,6 +14,7 @@ import {
 } from "results_table.slint";
 import { ResultsChart } from "results_chart.slint";
 import { FrameStepper } from "frame_stepper.slint";
+import { ExportDialog } from "export_dialog.slint";
 export {
     ResultsState,
     ResultsViewMode,
@@ -22,6 +23,7 @@ export {
     ResultsColumnDef,
     ResultsRow,
     FilterItem,
+    ExportBatchItem,
 }from "results_table.slint";
 
 
@@ -88,11 +90,113 @@ component GroupOptionRow inherits TouchArea {
     }
 }
 
+// -- Ribbon-style labeled dropdown button -------------------------------------
+
+component RibbonButton inherits Rectangle {
+    in property <image> icon;
+    in property <color> icon-color:Theme.text;
+    in property <string> label: "";
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    height: 36px;
+    border-radius: 6px;
+//    background: root.active ? Theme.hover : (ta.has-hover ? Theme.hover : Theme.bg);
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 5px;
+        alignment: center;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 16px;
+                height: 16px;
+                colorize: root.icon-color;
+            }
+        }
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-family: Theme.font-sans;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("../icons/regular-black/caret-down.svg");
+                width: 8px;
+                height: 8px;
+                colorize: Theme.text-mute;
+            }
+        }
+    }
+}
+
 // -- Toolbar -------------------------------------------------------------------
 
 component ResultsToolbar inherits Rectangle {
     height: 48px;
     background: Theme.bg;
+
+    // Preset 1: group by image name + class, avg + sum only
+    property <bool> quick-preset1-active:
+        ResultsState.group_active &&
+        ResultsState.group_by == ResultsGroupBy.image &&
+        ResultsState.group_by_class &&
+        ResultsState.group_agg_avg &&
+        ResultsState.group_agg_sum &&
+        !ResultsState.group_agg_min &&
+        !ResultsState.group_agg_max &&
+        !ResultsState.group_agg_median &&
+        !ResultsState.group_agg_stdev;
+    // Preset 2: group by regex on image name + class, avg + sum only
+    property <bool> quick-preset2-active:
+        ResultsState.group_active &&
+        ResultsState.group_by == ResultsGroupBy.regex &&
+        ResultsState.group_by_class &&
+        ResultsState.group_agg_avg &&
+        ResultsState.group_agg_sum &&
+        !ResultsState.group_agg_min &&
+        !ResultsState.group_agg_max &&
+        !ResultsState.group_agg_median &&
+        !ResultsState.group_agg_stdev;
+    // Preset 3: no grouping active
+    property <bool> quick-preset3-active: !ResultsState.group_active;
+    // Manual: grouping active but doesn't match any quick preset.
+    // Gated on pending-preset == 0 so a preset click's in-flight Rust round-trip
+    // (where group_active is still true but group_by changed) doesn't briefly
+    // satisfy this condition and flash "Custom settings…" as selected.
+    property <bool> quick-manual-active:
+        root.pending-preset == 0 &&
+        ResultsState.group_active &&
+        !root.quick-preset1-active &&
+        !root.quick-preset2-active;
+    // Optimistic pending state: set on click so the button lights up immediately
+    // while Rust is still computing the grouped result (group_active lags behind).
+    property <int> pending-preset: 0;
+    changed quick-preset1-active => {
+        if (root.quick-preset1-active) { root.pending-preset = 0; ResultsState.group_computing = false; }
+    }
+    changed quick-preset2-active => {
+        if (root.quick-preset2-active) { root.pending-preset = 0; ResultsState.group_computing = false; }
+    }
+    changed quick-preset3-active => {
+        if (root.quick-preset3-active) { root.pending-preset = 0; ResultsState.group_computing = false; }
+    }
 
     HorizontalLayout {
         padding-top: 5px;
@@ -103,12 +207,14 @@ component ResultsToolbar inherits Rectangle {
 
         // -- Column visibility (funnel icon opens popup) -----------------------
         col-vis-btn := Rectangle {
-            width: 36px;
+            width: 96px;
             height: 36px;
             property <bool> col-popup-open: false;
 
-            ToolToggleButton {
+            RibbonButton {
                 icon: @image-url("../icons/regular-black/funnel.svg");
+                label: "Columns";
+                icon-color: #2b2b2b;
                 clicked => {
                     col-vis-btn.col-popup-open = true;
                     col-filter-popup.show();
@@ -416,22 +522,307 @@ component ResultsToolbar inherits Rectangle {
             }
         }
 
-        // -- Group by (stack icon opens popup) ---------------------------------
-        group-btn := Rectangle {
-            width: 36px;
+        // -- Group by ribbon dropdown ------------------------------------------
+        group-ribbon-btn := Rectangle {
+            width: 110px;
             height: 36px;
 
-            ToolToggleButton {
-                icon: @image-url("../icons/regular-black/stack.svg");
-                checked: ResultsState.group_active;
-                clicked => {
-                    group-popup.show();
+            RibbonButton {
+                icon-color: #006039;
+                icon: (root.pending-preset == 1 || root.quick-preset1-active)
+                    ? @image-url("../icons/regular-black/image.svg")
+                    : ((root.pending-preset == 2 || root.quick-preset2-active)
+                    ? @image-url("../icons/regular-black/asterisk.svg")
+                    : ((root.pending-preset == 3 || root.quick-preset3-active)
+                    ? @image-url("../icons/regular-black/stack-minus.svg")
+                    : (root.quick-manual-active
+                    ? @image-url("../icons/regular-black/sliders-horizontal.svg")
+                    : @image-url("../icons/regular-black/stack.svg"))));
+                label: "Group by";
+                active: ResultsState.group_active || root.pending-preset != 0;
+                clicked => { group-quick-popup.show(); }
+            }
+
+            // Quick-pick dropdown: 3 presets + separator + custom settings
+            group-quick-popup := PopupWindow {
+                x: 0px;
+                y: group-ribbon-btn.height + 2px;
+                width: 230px;
+                close-policy: close-on-click-outside;
+
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-md;
+                    drop-shadow-blur: 12px;
+                    drop-shadow-color: #00000036;
+                    drop-shadow-offset-y: 4px;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+                        padding: 4px;
+
+                        // Preset 1: Image name + class
+                        p1-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.group_computing = true;
+                                root.pending-preset = 1;
+                                ResultsState.clear_all_filters();
+                                ResultsState.group_by = ResultsGroupBy.image;
+                                ResultsState.group_agg_min = false;
+                                ResultsState.group_agg_max = false;
+                                ResultsState.group_agg_avg = true;
+                                ResultsState.group_agg_median = false;
+                                ResultsState.group_agg_stdev = false;
+                                ResultsState.group_agg_sum = true;
+                                ResultsState.group_split_colocalized = false;
+                                ResultsState.group_by_class = true;
+                                ResultsState.group_apply();
+                                group-quick-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: p1-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (root.quick-preset1-active || root.pending-preset == 1) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/image.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (root.quick-preset1-active || root.pending-preset == 1) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Image name + class";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (root.quick-preset1-active || root.pending-preset == 1) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Preset 2: Regex on name + class
+                        p2-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.group_computing = true;
+                                root.pending-preset = 2;
+                                ResultsState.clear_all_filters();
+                                ResultsState.group_by = ResultsGroupBy.regex;
+                                ResultsState.group_agg_min = false;
+                                ResultsState.group_agg_max = false;
+                                ResultsState.group_agg_avg = true;
+                                ResultsState.group_agg_median = false;
+                                ResultsState.group_agg_stdev = false;
+                                ResultsState.group_agg_sum = true;
+                                ResultsState.group_split_colocalized = false;
+                                ResultsState.group_by_class = true;
+                                ResultsState.group_apply();
+                                group-quick-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: p2-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (root.quick-preset2-active || root.pending-preset == 2) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/asterisk.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (root.quick-preset2-active || root.pending-preset == 2) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Regex on name + class";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (root.quick-preset2-active || root.pending-preset == 2) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Preset 3: No grouping
+                        p3-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.group_computing = true;
+                                root.pending-preset = 3;
+                                ResultsState.group_by = ResultsGroupBy.none;
+                                ResultsState.group_apply();
+                                group-quick-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: p3-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (root.quick-preset3-active || root.pending-preset == 3) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/stack-minus.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (root.quick-preset3-active || root.pending-preset == 3) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "No grouping";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (root.quick-preset3-active || root.pending-preset == 3) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        // Custom settings (opens the detailed popup)
+                        custom-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                group-quick-popup.close();
+                                group-settings-popup.show();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: custom-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: root.quick-manual-active ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/sliders-horizontal.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: root.quick-manual-active ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Custom settings…";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: root.quick-manual-active ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            group-popup := PopupWindow {
+            // Detailed custom group settings (all knobs — same content as before)
+            group-settings-popup := PopupWindow {
                 x: 0px;
-                y: group-btn.height + 2px;
+                y: group-ribbon-btn.height + 2px;
                 width: 250px;
                 height: 467px;
                 close-policy: no-auto-close;
@@ -449,7 +840,6 @@ component ResultsToolbar inherits Rectangle {
                     VerticalLayout {
                         spacing: 0px;
 
-                        // -- "Group by" section header ---------------------
                         Rectangle {
                             height: 26px;
                             background: Theme.bg;
@@ -500,7 +890,6 @@ component ResultsToolbar inherits Rectangle {
                             clicked => { ResultsState.group_by_class = !ResultsState.group_by_class; }
                         }
 
-                        // -- Regex pattern input ---------------------------
                         Rectangle {
                             height: 36px;
                             background: Theme.bg;
@@ -533,9 +922,7 @@ component ResultsToolbar inherits Rectangle {
                                                 vertical-alignment: center;
                                                 enabled: ResultsState.group_by == ResultsGroupBy.regex;
                                                 text: ResultsState.group_regex;
-                                                edited => {
-                                                    ResultsState.group_regex = self.text;
-                                                }
+                                                edited => { ResultsState.group_regex = self.text; }
                                             }
 
                                             if regex-input.text == "": Text {
@@ -552,7 +939,6 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
-                        // -- "Aggregate" section header --------------------
                         Rectangle {
                             height: 26px;
                             background: Theme.bg;
@@ -629,7 +1015,6 @@ component ResultsToolbar inherits Rectangle {
                             background: Theme.border-soft;
                         }
 
-                        // -- "Split" section header ------------------------
                         Rectangle {
                             height: 26px;
                             background: Theme.bg;
@@ -653,9 +1038,7 @@ component ResultsToolbar inherits Rectangle {
                             label: "Colocalized / not colocalized";
                             checkbox: true;
                             selected: ResultsState.group_split_colocalized;
-                            clicked => {
-                                ResultsState.group_split_colocalized = !ResultsState.group_split_colocalized;
-                            }
+                            clicked => { ResultsState.group_split_colocalized = !ResultsState.group_split_colocalized; }
                         }
 
                         Rectangle {
@@ -663,13 +1046,14 @@ component ResultsToolbar inherits Rectangle {
                             background: Theme.border-soft;
                         }
 
-                        // -- Apply button ----------------------------------
                         apply-ta := TouchArea {
                             height: 30px;
                             mouse-cursor: pointer;
                             clicked => {
+                                root.pending-preset = 0;
+                                ResultsState.group_computing = true;
                                 ResultsState.group_apply();
-                                group-popup.close();
+                                group-settings-popup.close();
                             }
 
                             Rectangle {
@@ -693,20 +1077,348 @@ component ResultsToolbar inherits Rectangle {
 
         VerticalDivider { }
 
-        // -- View mode ---------------------------------------------------------
-        ToolToggleButton {
-            icon: @image-url("../icons/regular-black/table.svg");
-            checked: ResultsState.view_mode == ResultsViewMode.table;
-            clicked => {
-                ResultsState.view_mode = ResultsViewMode.table;
-            }
-        }
+        // -- View mode ribbon dropdown -----------------------------------------
+        view-ribbon-btn := Rectangle {
+            width: 80px;
+            height: 36px;
 
-        ToolToggleButton {
-            icon: @image-url("../icons/regular-black/chart-scatter.svg");
-            checked: ResultsState.view_mode == ResultsViewMode.chart;
-            clicked => {
-                ResultsState.view_mode = ResultsViewMode.chart;
+            RibbonButton {
+                // Icon tracks the active selection so the user sees what's shown at a glance.
+                icon: ResultsState.view_mode == ResultsViewMode.table
+                    ? @image-url("../icons/regular-black/table.svg")
+                    : (ResultsState.view_mode == ResultsViewMode.coloc_table
+                    ? @image-url("../icons/regular-black/intersect-three.svg")
+                    : (ResultsState.chart_kind == ResultsChartKind.histogram
+                    ? @image-url("../icons/regular-black/chart-bar.svg")
+                    : (ResultsState.chart_kind == ResultsChartKind.scatter
+                    ? @image-url("../icons/regular-black/chart-scatter.svg")
+                    : @image-url("../icons/regular-black/grid-four.svg"))));
+                label: "View";
+                icon-color: #4A90E2;
+                active: ResultsState.view_mode == ResultsViewMode.chart
+                     || ResultsState.view_mode == ResultsViewMode.coloc_table;
+                clicked => { view-popup.show(); }
+            }
+
+            view-popup := PopupWindow {
+                x: 0px;
+                y: view-ribbon-btn.height + 2px;
+                width: 180px;
+                close-policy: close-on-click-outside;
+
+                Rectangle {
+                    background: Theme.panel;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-md;
+                    drop-shadow-blur: 12px;
+                    drop-shadow-color: #00000036;
+                    drop-shadow-offset-y: 4px;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+                        padding: 4px;
+
+                        // Table
+                        vt-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                // When leaving coloc_table, trigger a normal reload to
+                                // restore per-ROI columns/rows (group_apply re-uses the
+                                // current group config, which may be none = plain table).
+                                if (ResultsState.view_mode == ResultsViewMode.coloc_table) {
+                                    ResultsState.loading_more = true;
+                                    ResultsState.group_apply();
+                                }
+                                ResultsState.view_mode = ResultsViewMode.table;
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vt-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: ResultsState.view_mode == ResultsViewMode.table ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/table.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: ResultsState.view_mode == ResultsViewMode.table ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Table";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: ResultsState.view_mode == ResultsViewMode.table ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        // Histogram
+                        vh-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.view_mode = ResultsViewMode.chart;
+                                ResultsState.chart_kind = ResultsChartKind.histogram;
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vh-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.histogram) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/chart-bar.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.histogram) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Histogram";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.histogram) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Scatter
+                        vs-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.view_mode = ResultsViewMode.chart;
+                                ResultsState.chart_kind = ResultsChartKind.scatter;
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vs-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.scatter) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/chart-scatter.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.scatter) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Scatter";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.scatter) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Heatmap
+                        vmh-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.view_mode = ResultsViewMode.chart;
+                                ResultsState.chart_kind = ResultsChartKind.heatmap;
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vmh-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.heatmap) ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/grid-four.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.heatmap) ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Heatmap";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: (ResultsState.view_mode == ResultsViewMode.chart && ResultsState.chart_kind == ResultsChartKind.heatmap) ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        // Coloc Detail — flat table, one row per source × partner pair
+                        vcd-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.group_computing = true;
+                                ResultsState.loading_more = true;
+                                ResultsState.view_mode = ResultsViewMode.coloc_table;
+                                ResultsState.coloc_detail_requested();
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vcd-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: ResultsState.view_mode == ResultsViewMode.coloc_table ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/intersect-three.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: ResultsState.view_mode == ResultsViewMode.coloc_table ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Coloc Detail";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: ResultsState.view_mode == ResultsViewMode.coloc_table ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -774,16 +1486,9 @@ component ResultsToolbar inherits Rectangle {
         }
 
         ToolToggleButton {
-            icon: @image-url("../icons/regular-black/file-csv.svg");
+            icon: @image-url("../icons/regular-black/export.svg");
             clicked => {
-                ResultsState.export_csv();
-            }
-        }
-
-        ToolToggleButton {
-            icon: @image-url("../icons/regular-black/file-xls.svg");
-            clicked => {
-                ResultsState.export_xlsx();
+                ResultsState.export_dialog_open();
             }
         }
     }
@@ -884,8 +1589,9 @@ component ResultsStatusBar inherits Rectangle {
 
 export component ResultsWindow inherits Window {
     title: "Results - EVAnalyzer";
+    icon: @image-url("../icons/icon.png");
     preferred-width: 1100px;
-    preferred-height: 680px;
+    preferred-height: 900px;
     min-width: 900px;
     min-height: 300px;
     background: Theme.bg;
@@ -905,7 +1611,8 @@ export component ResultsWindow inherits Window {
             background: Theme.border;
         }
 
-        if ResultsState.view_mode == ResultsViewMode.table: ResultsTable {
+        if ResultsState.view_mode == ResultsViewMode.table
+        || ResultsState.view_mode == ResultsViewMode.coloc_table: ResultsTable {
             vertical-stretch: 1;
             background: Theme.panel;
         }
@@ -914,5 +1621,10 @@ export component ResultsWindow inherits Window {
         }
 
         ResultsStatusBar { }
+    }
+
+    if ResultsState.export_dialog_active: ExportDialog {
+        width: 100%;
+        height: 100%;
     }
 }

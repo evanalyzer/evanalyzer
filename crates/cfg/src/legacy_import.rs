@@ -937,6 +937,8 @@ fn convert_classifier(
                 input_classes: vec![],
                 match_handling: ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch,
                 output_class,
+                overlapping_with: ObjectClass::Unset,
+                min_intersection_area: 0.0,
                 size_unit: SizeUnits::Pixels,
                 min_area: filter.metrics.min_particle_size.max(0.0),
                 max_area: if filter.metrics.max_particle_size >= 0.0 {

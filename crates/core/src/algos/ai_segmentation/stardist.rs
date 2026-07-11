@@ -13,7 +13,7 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -78,7 +78,10 @@ impl ImageAlgorithm for Stardist {
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
         let device = Device::cuda_if_available();
-        let model = CModule::load_on_device(&self.model_path, device).map_err(|e| {
+        let model = load_cached_model(&self.model_path, || {
+            CModule::load_on_device(&self.model_path, device)
+        })
+        .map_err(|e| {
             InternalErrors::Generic(format!(
                 "Failed to load StarDist model from {}: {e}",
                 self.model_path.display()

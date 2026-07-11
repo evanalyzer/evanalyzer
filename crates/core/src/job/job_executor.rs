@@ -805,8 +805,8 @@ impl<'a> JobExecutor {
                 pixel_sizes.clone(),
             )?;
 
-            let mut stop_image: Option<crate::image::ImageContainer> = None;
-            let mut snapshot_image: Option<crate::image::ImageContainer> = None;
+            let mut stop_image: Option<std::sync::Arc<crate::image::ImageContainer>> = None;
+            let mut snapshot_image: Option<std::sync::Arc<crate::image::ImageContainer>> = None;
             for pipe_id in order {
                 if stop_image.is_some() {
                     break;
@@ -833,7 +833,7 @@ impl<'a> JobExecutor {
                 if is_bp_target {
                     sender
                         .send(ProgressEvent::BreakpointReached {
-                            image,
+                            image: (*image).clone(),
                             tile_offset_x: tile.offset_x,
                             tile_offset_y: tile.offset_y,
                             tile_width: tile.width,
@@ -850,7 +850,7 @@ impl<'a> JobExecutor {
                 if is_bp_target {
                     sender
                         .send(ProgressEvent::BreakpointReached {
-                            image,
+                            image: (*image).clone(),
                             tile_offset_x: tile.offset_x,
                             tile_offset_y: tile.offset_y,
                             tile_width: tile.width,

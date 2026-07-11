@@ -14,6 +14,7 @@ use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use std::f32::NAN;
+use std::sync::Arc;
 
 /// Specifies the statistical operation to perform on the local pixel neighborhood.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -86,24 +87,24 @@ impl ImageAlgorithm for RankFilter {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        match &ctx.image {
+        match ctx.image.as_ref() {
             ImageContainer::F32Gray(img) => {
                 let out = self.process_image::<1>(img)?;
-                ctx.scratch_pad = ImageContainer::F32Gray(ManagedImage {
+                ctx.scratch_pad = Arc::new(ImageContainer::F32Gray(ManagedImage {
                     data: out,
                     tile_offset: img.tile_offset,
                     plane: img.plane,
-                });
+                }));
                 ctx.swap()?;
                 Ok(())
             }
             ImageContainer::F32Rgb(img) => {
                 let out = self.process_image::<3>(img)?;
-                ctx.scratch_pad = ImageContainer::F32Rgb(ManagedImage {
+                ctx.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
                     data: out,
                     tile_offset: img.tile_offset,
                     plane: img.plane,
-                });
+                }));
                 ctx.swap()?;
                 Ok(())
             }
@@ -297,7 +298,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_gray_from_image_test(image),
+            ImageContainer::new_f32_gray_from_image_test(image).into(),
         )
         .unwrap();
 
@@ -311,7 +312,7 @@ mod tests {
         };
         max_filter.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Gray(ref out_img) = ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             // The pixel at (1,1) was 0, but is now a neighbor of (2,2), so it should be 9
             assert_eq!(*out_img.get_pixel(1, 1, 0).unwrap(), 9.0);
             assert_eq!(*out_img.get_pixel(0, 0, 0).unwrap(), 0.0); // Too far away
@@ -325,7 +326,7 @@ mod tests {
         };
         min_filter.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Gray(ref out_img) = ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             // The center should still be 9, but neighbors should return to 0
             assert_eq!(*out_img.get_pixel(2, 2, 0).unwrap(), 9.0);
             assert_eq!(*out_img.get_pixel(1, 1, 0).unwrap(), 0.0);
@@ -340,7 +341,7 @@ mod tests {
         };
         median_filter.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Gray(ref out_img) = ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             // The spike at the center should be gone (0.0)
             assert_eq!(*out_img.get_pixel(2, 2, 0).unwrap(), 0.0);
         }
@@ -384,7 +385,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_rgb_from_image_test(image),
+            ImageContainer::new_f32_rgb_from_image_test(image).into(),
         )
         .unwrap();
         let mut cache = PipelineCache::default();
@@ -395,7 +396,7 @@ mod tests {
         };
         max_filter.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Rgb(ref out_img) = ctx.image {
+        if let ImageContainer::F32Rgb(out_img) = ctx.image.as_ref() {
             // Dilation should spread Red (9.0) to neighbors
             assert_eq!(*out_img.get_pixel(0, 0, 0).unwrap(), 9.0);
             assert_eq!(*out_img.get_pixel(0, 0, 1).unwrap(), 0.0);
@@ -482,7 +483,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_gray_from_image_test(image),
+            ImageContainer::new_f32_gray_from_image_test(image).into(),
         )
         .unwrap();
         let mut cache = PipelineCache::default();
@@ -496,7 +497,7 @@ mod tests {
 
         outlier_filter.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Gray(ref out_img) = ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             // The outlier (1.0) should now be replaced by the median (5.0)
             assert_eq!(*out_img.get_pixel(1, 1, 0).unwrap(), 5.0);
             // Background pixels should remain unchanged

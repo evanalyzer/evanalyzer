@@ -7,16 +7,17 @@ use crate::{
 use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, PipelineId};
 use kornia_image::ImageSize;
 use log::info;
+use std::sync::Arc;
 use std::{path::PathBuf, time::Instant};
 
 pub struct PipelineResult {
-    pub image: ImageContainer,
+    pub image: Arc<ImageContainer>,
     pub cache: PipelineCache,
     /// True when the pipeline stopped early due to a Stop breakpoint.
     pub breakpoint_hit: bool,
     /// Populated when a Snapshot breakpoint was reached: the image captured
     /// at that step while the pipeline continued to run to completion.
-    pub breakpoint_snapshot: Option<ImageContainer>,
+    pub breakpoint_snapshot: Option<Arc<ImageContainer>>,
 }
 
 pub struct CorePipelineSettings {
@@ -103,10 +104,10 @@ impl Pipeline {
         let mut ctx = PipelineContext::new_from_image(
             output_path,
             cache.image_cache.image_meta.clone(),
-            initial_image.as_ref().clone(),
+            initial_image,
         )?;
         let start = Instant::now();
-        let mut breakpoint_snapshot: Option<ImageContainer> = None;
+        let mut breakpoint_snapshot: Option<Arc<ImageContainer>> = None;
 
         for (idx, command) in self.commands.iter().enumerate() {
             let step_start = Instant::now();
@@ -349,5 +350,138 @@ mod tests {
                 (tile_size.0 * tile_size.1) as f64 * 2.0
             );
         }
+    }
+
+    fn default_image_meta(size: ImageSize) -> PipelineImageMeta {
+        PipelineImageMeta {
+            image_tile_info: crate::ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
+            full_image_width: size,
+            is_rgb: false,
+            nr_of_bits: 8,
+            pixel_sizes: crate::image::PixelSizes {
+                px_size_x: 1.0,
+                px_size_y: 1.0,
+                px_size_z: 1.0,
+            },
+        }
+    }
+
+    /// Mutates a single pixel in place via [`PipelineContext::get_f32_gray_image_mut`],
+    /// the copy-on-write boundary. Used to test that boundary directly rather
+    /// than through a full algorithm's math.
+    struct SetFirstPixel {
+        value: f32,
+    }
+
+    impl ImageAlgorithm for SetFirstPixel {
+        fn execute(
+            &self,
+            ctx: &mut PipelineContext,
+            _cache: &mut PipelineCache,
+        ) -> Result<(), InternalErrors> {
+            let img = ctx.get_f32_gray_image_mut()?;
+            img.as_slice_mut()[0] = self.value;
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "SetFirstPixel"
+        }
+    }
+
+    #[test]
+    fn read_only_pipeline_shares_the_cached_image_without_cloning() {
+        let size = ImageSize {
+            width: 4,
+            height: 4,
+        };
+        let channel_image = Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::new(size, vec![2.0f32; 16], CpuAllocator).unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }));
+
+        let mut cache = PipelineCache::default();
+        cache.image_cache.image_meta = default_image_meta(size);
+        cache
+            .image_cache
+            .add_to_channel_cache(Arc::clone(&channel_image), 0);
+
+        // FakeSegmenter only ever touches segmentation_map/instance_map, never
+        // ctx.image - exactly the shape of a real segmentation+measurement
+        // pipeline (e.g. Cellpose -> ExtractRois).
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        pipeline.add_command(Box::new(FakeSegmenter {
+            rect: [0, 0, 1, 1],
+        }));
+
+        let result = pipeline
+            .run(PathBuf::default(), cache, None, false)
+            .expect("run must not fail");
+
+        assert!(
+            Arc::ptr_eq(&result.image, &channel_image),
+            "a pipeline that never mutates the image must share the cache's Arc, not copy it"
+        );
+    }
+
+    #[test]
+    fn mutating_command_clones_before_writing_leaving_the_cached_image_untouched() {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let channel_image = Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::new(size, vec![1.0f32; 4], CpuAllocator).unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }));
+
+        let mut cache = PipelineCache::default();
+        cache.image_cache.image_meta = default_image_meta(size);
+        cache
+            .image_cache
+            .add_to_channel_cache(Arc::clone(&channel_image), 0);
+
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        pipeline.add_command(Box::new(SetFirstPixel { value: 9.0 }));
+
+        let result = pipeline
+            .run(PathBuf::default(), cache, None, false)
+            .expect("run must not fail");
+
+        // The pipeline's own output reflects the mutation...
+        match result.image.as_ref() {
+            ImageContainer::F32Gray(img) => assert_eq!(img.as_slice()[0], 9.0),
+            other => panic!("expected F32Gray, got {other:?}"),
+        }
+
+        // ...but the cache's original Arc must never observe it: make_mut has
+        // to clone before writing, not mutate the shared buffer in place.
+        match channel_image.as_ref() {
+            ImageContainer::F32Gray(img) => {
+                assert_eq!(img.as_slice()[0], 1.0, "cached image must remain unmutated")
+            }
+            other => panic!("expected F32Gray, got {other:?}"),
+        }
+        assert!(
+            !Arc::ptr_eq(&result.image, &channel_image),
+            "mutation must have produced a distinct buffer"
+        );
     }
 }

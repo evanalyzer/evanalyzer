@@ -390,11 +390,112 @@ impl RollingBall {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use super::*;
     use crate::{ImageContainer, image::PixelSizes, pipeline::pipeline::PipelineImageMeta};
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
+
+    /// RollingBall is the one filter that mutates `ctx.image` in place (via
+    /// `get_f32_gray_image_mut`) instead of the scratch+swap pattern every
+    /// other filter uses. If `ctx.image`'s `Arc` is shared with something
+    /// else - the pipeline cache, another pipeline reading the same channel -
+    /// that in-place write must not be observed by the other holder. This is
+    /// exactly the copy-on-write boundary `Arc::make_mut` provides.
+    #[test]
+    fn rolling_ball_does_not_mutate_a_shared_original_image() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let width = 40;
+        let height = 40;
+        let mut data = vec![0.0f32; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                data[y * width + x] = (x as f32) * 0.01;
+            }
+        }
+        let signal_value = 0.5;
+        let (center_x, center_y) = (20isize, 20isize);
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let idx = ((center_y + dy) * (width as isize) + (center_x + dx)) as usize;
+                data[idx] += signal_value;
+            }
+        }
+        let original_pixels = data.clone();
+
+        let image =
+            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        // This Arc stands in for the pipeline cache's own reference to the
+        // channel image - something that keeps reading it after this run.
+        let shared_original: Arc<ImageContainer> =
+            ImageContainer::new_f32_gray_from_image_test(image).into();
+
+        let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
+            PipelineImageMeta {
+                image_tile_info: crate::ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: 40,
+                    height: 40,
+                },
+                full_image_width: ImageSize {
+                    width: 40,
+                    height: 40,
+                },
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: PixelSizes {
+                    px_size_x: 1.0,
+                    px_size_y: 1.0,
+                    px_size_z: 1.0,
+                },
+            },
+            Arc::clone(&shared_original), // no clone: shares the same Arc as `shared_original`
+        )?;
+
+        let rb = RollingBall {
+            radius: 10.0,
+            ball_type: BallType::Ball,
+            pre_smooth: true,
+        };
+        let mut cache = PipelineCache::default();
+        rb.execute(&mut ctx, &mut cache)?;
+
+        // The shared handle must still read back the exact original pixels -
+        // RollingBall's in-place write must have cloned before touching them.
+        match shared_original.as_ref() {
+            ImageContainer::F32Gray(img) => {
+                assert_eq!(
+                    img.as_slice(),
+                    original_pixels.as_slice(),
+                    "RollingBall must not mutate a shared/cached original image"
+                );
+            }
+            other => panic!("expected F32Gray, got {other:?}"),
+        }
+
+        // ...and the pipeline's own output must actually differ (RollingBall
+        // did do real work, just on its own private copy).
+        match ctx.image.as_ref() {
+            ImageContainer::F32Gray(img) => {
+                assert_ne!(
+                    img.as_slice(),
+                    original_pixels.as_slice(),
+                    "RollingBall should have changed the pipeline's own image"
+                );
+            }
+            other => panic!("expected F32Gray, got {other:?}"),
+        }
+
+        assert!(
+            !Arc::ptr_eq(&ctx.image, &shared_original),
+            "mutation must have produced a distinct buffer, not aliased the shared one"
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_rolling_ball_background_subtraction() -> Result<(), Box<dyn std::error::Error>> {
@@ -445,7 +546,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_gray_from_image_test(image),
+            ImageContainer::new_f32_gray_from_image_test(image).into(),
         )
         .unwrap();
 
@@ -457,7 +558,7 @@ mod tests {
         let mut cache = PipelineCache::default();
         rb.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Gray(ref out_img) = ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             let out_data = out_img.as_slice();
 
             // The cell peak should remain strong
@@ -525,7 +626,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            ImageContainer::new_f32_gray_from_image_test(image),
+            ImageContainer::new_f32_gray_from_image_test(image).into(),
         )
         .unwrap();
         let mut cache = PipelineCache::default();
@@ -539,7 +640,7 @@ mod tests {
 
         rb.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Gray(ref out_img) = ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             let out_data = out_img.as_slice();
             // Signal remains, background is correctly suppressed through the upscaling step
             assert!(

@@ -99,6 +99,9 @@ impl ProjectController {
             .sync_classification_to_slint();
         self.pipelines_controller.sync_pipelines_to_slint();
         self.results_list_controller.sync_results_files_to_slint();
+        // A freshly opened project has no unsaved changes yet - also updates
+        // the window title to the newly opened file (see `clear_dirty`).
+        self.app_state.clear_dirty();
 
         let ui_weak = self.ui.clone();
         let image_root_dir_str = image_root_dir.to_string_lossy().into_owned();

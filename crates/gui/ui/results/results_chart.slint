@@ -119,6 +119,23 @@ export component ResultsChart inherits Rectangle {
                         selected: ResultsState.chart_log_scale;
                         clicked => { ResultsState.chart_log_scale = !ResultsState.chart_log_scale; }
                     }
+
+                    Text {
+                        text: "Color by:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        width: 110px;
+                        model: ["None", "Class", "Colocalized"];
+                        current-value: ResultsState.chart_color_by == "class" ? "Class" : (ResultsState.chart_color_by == "colocalized" ? "Colocalized" : "None");
+                        selected(v) => {
+                            ResultsState.chart_color_by = v == "Class" ? "class" : (v == "Colocalized" ? "colocalized" : "");
+                        }
+                    }
                 }
 
                 if ResultsState.chart_kind == ResultsChartKind.scatter: HorizontalLayout {
@@ -204,6 +221,21 @@ export component ResultsChart inherits Rectangle {
                         maximum: 10000;
                         value: ResultsState.chart_cell_size_px;
                         edited(v) => { ResultsState.chart_cell_size_px = v; }
+                    }
+
+                    Text {
+                        text: "Colors:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        width: 110px;
+                        model: ResultsState.chart_heatmap_color_scheme_options;
+                        current-value: ResultsState.chart_heatmap_color_scheme;
+                        selected(v) => { ResultsState.chart_heatmap_color_scheme = v; }
                     }
                 }
 

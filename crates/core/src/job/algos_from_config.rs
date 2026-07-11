@@ -271,6 +271,8 @@ impl From<ClassifyRoisSettings> for ClassifyRois {
             input_classes: _s.input_classes.into_iter().map(|v| v.into()).collect(),
             match_handling: ClassifyMatchHandling::from(_s.match_handling),
             output_class: _s.output_class,
+            overlapping_with: _s.overlapping_with,
+            min_intersection_area: _s.min_intersection_area.clamp(0.0, 2147483600.0),
             size_unit: _s.size_unit,
             min_area: _s.min_area.clamp(0.0, 2147483600.0),
             max_area: _s.max_area.clamp(0.0, 2147483600.0),

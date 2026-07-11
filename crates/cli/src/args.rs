@@ -179,6 +179,10 @@ pub struct HistogramArgs {
     #[arg(long)]
     pub log_scale: bool,
 
+    /// Overlay one semi-transparent histogram per group instead of one plain histogram
+    #[arg(long, value_enum, default_value = "none")]
+    pub color_by: ColorByKind,
+
     #[arg(long, default_value_t = 1000)]
     pub width: u32,
 
@@ -248,6 +252,10 @@ pub struct HeatmapArgs {
     /// Cell size in image pixels (square cells)
     #[arg(long, default_value_t = 256.0)]
     pub cell_size: f64,
+
+    /// Color scheme: viridis, magma, plasma, or grayscale
+    #[arg(long, default_value = "viridis")]
+    pub color_scheme: String,
 
     #[arg(long, default_value_t = 1000)]
     pub width: u32,

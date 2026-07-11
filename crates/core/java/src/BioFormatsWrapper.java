@@ -25,7 +25,16 @@ public class BioFormatsWrapper {
             ServiceFactory factory = new ServiceFactory();
             service = factory.getInstance(OMEXMLService.class);
 
-            IFormatReader memoizer = new Memoizer(new ImageReader(), 1, null);
+            // The 2-arg constructor (not the 3-arg one with an explicit
+            // `null` directory) is required: Memoizer's `doInPlaceCaching`
+            // flag - which lets a null directory mean "cache next to the
+            // source file" - is only set true by this constructor. Passing
+            // `null` to the 3-arg constructor leaves it false, silently
+            // disabling the memo cache (isSavedToMemo()/isLoadedFromMemo()
+            // never true, no .bfmemo file ever written) - verified via
+            // javap against bioformats.jar 7.0.1's actual bytecode, not
+            // just the API docs.
+            IFormatReader memoizer = new Memoizer(new ImageReader(), 1);
             if (splitImageChannels) {
                 formatReader = new ChannelSeparator(memoizer);
             } else {

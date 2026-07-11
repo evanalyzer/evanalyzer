@@ -453,7 +453,7 @@ mod tests {
         classes[0] = 2; // Instance ID: 2
 
         // Load data into context (assuming your API allows this)
-        ctx.image = crate::image::ImageContainer::F32Gray(ManagedImage {
+        ctx.image = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
             data: Image::<f32, 1, CpuAllocator>::from_size_slice(
                 ImageSize {
                     width: 10,
@@ -465,7 +465,7 @@ mod tests {
             .expect("Failed to create test image"),
             tile_offset: Point2d { x: 0, y: 0 },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
-        });
+        }));
 
         ctx.segmentation_map = Some(
             Image::<u32, 1, CpuAllocator>::from_size_slice(
@@ -493,7 +493,7 @@ mod tests {
 
         cache
             .image_cache
-            .add_to_channel_cache(Arc::new(ctx.image.clone()), 0);
+            .add_to_channel_cache(ctx.image.clone(), 0);
 
         // 2. Execute Algorithm
         let extractor = ExtractRois {
@@ -572,7 +572,7 @@ mod tests {
         intensity[0] = 50.0; // Value at local (0,0)
 
         // Mock ImageContainer in Context
-        ctx.image = crate::image::ImageContainer::F32Gray(ManagedImage {
+        ctx.image = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
             data: Image::<f32, 1, CpuAllocator>::from_size_slice(
                 tile_size,
                 &intensity,
@@ -581,7 +581,7 @@ mod tests {
             .unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
-        });
+        }));
 
         ctx.instance_map = Some(
             Image::<u32, 1, CpuAllocator>::from_size_slice(tile_size, &classes, CpuAllocator)
@@ -597,7 +597,7 @@ mod tests {
 
         cache
             .image_cache
-            .add_to_channel_cache(Arc::new(ctx.image.clone()), 0);
+            .add_to_channel_cache(ctx.image.clone(), 0);
 
         // Execute
         let extractor = ExtractRois {
@@ -653,12 +653,12 @@ mod tests {
         intensity[0] = 10.0;
         intensity[5 * 15 + 7] = 99.0;
 
-        ctx.image = crate::image::ImageContainer::F32Gray(ManagedImage {
+        ctx.image = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
             data: Image::<f32, 1, CpuAllocator>::from_size_slice(tile_size, &intensity, CpuAllocator)
                 .unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
-        });
+        }));
 
         ctx.instance_map = Some(
             Image::<u32, 1, CpuAllocator>::from_size_slice(tile_size, &classes, CpuAllocator)
@@ -672,7 +672,7 @@ mod tests {
 
         cache
             .image_cache
-            .add_to_channel_cache(Arc::new(ctx.image.clone()), 0);
+            .add_to_channel_cache(ctx.image.clone(), 0);
 
         let extractor = ExtractRois {
             max_objects_before_fail: 100_000,

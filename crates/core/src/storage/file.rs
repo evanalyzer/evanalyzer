@@ -2,16 +2,51 @@ use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::storage::PipelineResultExporter;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use std::collections::HashMap;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+/// Holds the open output file across `export()` calls, plus whether the
+/// header row still needs to be written - `export()` is called once per
+/// tile/z/t work unit (potentially thousands of times per job), so opening
+/// the file fresh on every call would mean thousands of redundant
+/// open/append/flush cycles for what is really one long-lived output stream.
+struct CsvWriterState {
+    writer: csv::Writer<File>,
+    header_written: bool,
+}
 
 pub struct CsvExporter {
-    pub output_path: PathBuf,
+    // csv::Writer<File> is Send but not Sync; the Mutex makes the struct Sync
+    // so it can satisfy the `PipelineResultExporter: Send + Sync` bound.
+    state: Mutex<CsvWriterState>,
     /// Maps ObjectClass → human-readable name from project classification settings.
     pub class_names: HashMap<ObjectClass, String>,
 }
 
 impl CsvExporter {
+    /// Opens (or creates, for appending) the output file once and returns a
+    /// ready exporter. If the file already existed and had content, the
+    /// header row is assumed to already be present and won't be rewritten.
+    pub fn new(
+        output_path: impl Into<PathBuf>,
+        class_names: HashMap<ObjectClass, String>,
+    ) -> Result<Self, InternalErrors> {
+        let output_path: PathBuf = output_path.into();
+        let header_written = output_path.exists();
+
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&output_path)
+            .map_err(|e| InternalErrors::Io(format!("IO Error: {}", e)))?;
+
+        Ok(Self {
+            state: Mutex::new(CsvWriterState { writer: csv::Writer::from_writer(file), header_written }),
+            class_names,
+        })
+    }
+
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
@@ -32,15 +67,10 @@ impl CsvExporter {
 
 impl PipelineResultExporter for CsvExporter {
     fn export(&self, cache: &PipelineCache) -> Result<(), InternalErrors> {
-        let file_exists = self.output_path.exists();
-
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.output_path)
-            .map_err(|e| InternalErrors::Io(format!("IO Error: {}", e)))?;
-
-        let mut writer = csv::Writer::from_writer(file);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| InternalErrors::Io("Failed to acquire CsvExporter lock".to_string()))?;
 
         let px = &cache.image_cache.image_meta.pixel_sizes;
 
@@ -63,7 +93,7 @@ impl PipelineResultExporter for CsvExporter {
         coloc_classes.dedup();
 
         // --- Phase 3: Header Assembly ---
-        if !file_exists {
+        if !state.header_written {
             let mut header = vec![
                 // Image & Plane Info
                 "image".to_string(),
@@ -141,9 +171,11 @@ impl PipelineResultExporter for CsvExporter {
                 header.push(self.coloc_col_name(class));
             }
 
-            writer
+            state
+                .writer
                 .write_record(&header)
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            state.header_written = true;
         }
 
         // --- Phase 4: Data Row Serialization ---
@@ -261,12 +293,14 @@ impl PipelineResultExporter for CsvExporter {
                 }
             }
 
-            writer
+            state
+                .writer
                 .write_record(&row)
                 .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
         }
 
-        writer
+        state
+            .writer
             .flush()
             .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
         Ok(())
@@ -284,10 +318,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("test_export.csv");
 
-        let exporter = CsvExporter {
-            output_path: output_path.clone(),
-            class_names: HashMap::new(),
-        };
+        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
         let mut cache = PipelineCache::default();
         cache.image_rel_path = PathBuf::from("test_image.tif");
@@ -302,10 +333,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("test_morphology.csv");
 
-        let exporter = CsvExporter {
-            output_path: output_path.clone(),
-            class_names: HashMap::new(),
-        };
+        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
         let cache = PipelineCache::default();
         let _ = exporter.export(&cache);
@@ -325,5 +353,47 @@ mod tests {
             "Should contain feret_diameter"
         );
         assert!(content.contains("centroid_x"), "Should contain centroid_x");
+    }
+
+    #[test]
+    fn test_csv_export_across_multiple_calls_writes_header_once_and_appends_every_row() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("test_multi_call.csv");
+
+        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+
+        let mut cache_a = PipelineCache::default();
+        cache_a.image_rel_path = PathBuf::from("image_a.tif");
+        let mut roi_a = crate::roi::Roi::new(crate::roi::RoiInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            ..Default::default()
+        });
+        roi_a.plane.t = 0;
+        cache_a.roi_cache.insert(roi_a.id.clone(), roi_a);
+
+        let mut cache_b = PipelineCache::default();
+        cache_b.image_rel_path = PathBuf::from("image_b.tif");
+        let mut roi_b = crate::roi::Roi::new(crate::roi::RoiInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            area: 20,
+            bbox: [1, 1, 4, 4],
+            ..Default::default()
+        });
+        roi_b.plane.t = 0;
+        cache_b.roi_cache.insert(roi_b.id.clone(), roi_b);
+
+        exporter.export(&cache_a).expect("first export should succeed");
+        exporter.export(&cache_b).expect("second export should succeed");
+
+        let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3, "expected one header row plus one data row per export() call, got: {content}");
+        assert_eq!(
+            lines.iter().filter(|l| l.starts_with("image,channel")).count(),
+            1,
+            "the header row must be written exactly once across multiple export() calls"
+        );
     }
 }

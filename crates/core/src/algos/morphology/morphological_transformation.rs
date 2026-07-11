@@ -111,7 +111,7 @@ impl ImageAlgorithm for MorphologicalCommand {
             return Ok(());
         }
 
-        match &mut ctx.image {
+        match ctx.image.as_ref() {
             ImageContainer::F32Gray(_) => {
                 let (labels, scratch) = ctx.get_gray_img_gray_buf()?;
                 self.apply_morph_f32(labels, scratch)?;
@@ -252,7 +252,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut cache)?;
 
         // 5. Verify results
-        if let ImageContainer::F32Gray(out_img) = ctx.image {
+        if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
             // In a 3x3 dilation, the 1.0 at (2,2) should expand to (1,1) through (3,3)
             assert_eq!(
                 *out_img.get_pixel(1, 1, 0).unwrap(),
@@ -316,6 +316,69 @@ mod tests {
         Ok(())
     }
 
+    /// Builds the same "single labeled pixel" fixture as
+    /// `test_label_morphology`, for exercising `apply_morph_u32`'s
+    /// Erode/Open/Close arms - `test_label_morphology` only covers Dilate,
+    /// leaving the rest of that match untested.
+    fn label_fixture() -> PipelineContext {
+        let size = ImageSize { width: 5, height: 5 };
+        let mut img = Image::<u32, 1, CpuAllocator>::from_size_val(size, 0, CpuAllocator).unwrap();
+        img.set_pixel(2, 2, 0, 7).unwrap();
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.segmentation_map = Some(img);
+        ctx
+    }
+
+    #[test]
+    fn test_label_morphology_erode_shrinks_a_single_pixel_label_to_background() -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = label_fixture();
+        let cmd = MorphologicalCommand {
+            op: MorphOps::Erode,
+            kernel_size: 3,
+            kernel_shape: KernelShapes::Box,
+            use_grayscale: false,
+        };
+        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        let labels = ctx.segmentation_map.as_ref().expect("no labels found");
+        // A single labeled pixel has no fully-labeled neighborhood, so erosion
+        // (the neighborhood minimum) wipes it out entirely.
+        assert_eq!(*labels.get_pixel(2, 2, 0).unwrap(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_label_morphology_open_removes_the_single_pixel_label() -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = label_fixture();
+        let cmd = MorphologicalCommand {
+            op: MorphOps::Open,
+            kernel_size: 3,
+            kernel_shape: KernelShapes::Box,
+            use_grayscale: false,
+        };
+        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        let labels = ctx.segmentation_map.as_ref().expect("no labels found");
+        // Open = erode then dilate; eroding away the single-pixel label
+        // leaves nothing for the dilate pass to expand back.
+        assert_eq!(*labels.get_pixel(2, 2, 0).unwrap(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_label_morphology_close_preserves_and_slightly_grows_the_label() -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = label_fixture();
+        let cmd = MorphologicalCommand {
+            op: MorphOps::Close,
+            kernel_size: 3,
+            kernel_shape: KernelShapes::Box,
+            use_grayscale: false,
+        };
+        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        let labels = ctx.segmentation_map.as_ref().expect("no labels found");
+        // Close = dilate then erode; the center pixel survives either way.
+        assert_eq!(*labels.get_pixel(2, 2, 0).unwrap(), 7);
+        Ok(())
+    }
+
     #[test]
     fn test_morph_rgb_ellipse_and_cross() -> Result<(), Box<dyn std::error::Error>> {
         // 1. Create a 3x3 image with a center pixel
@@ -340,7 +403,7 @@ mod tests {
         };
         cmd_cross.execute(&mut ctx, &mut cache)?;
 
-        if let ImageContainer::F32Rgb(ref out) = ctx.image {
+        if let ImageContainer::F32Rgb(out) = ctx.image.as_ref() {
             assert_eq!(*out.get_pixel(1, 0, 0).unwrap(), 1.0); // Up
             assert_eq!(*out.get_pixel(0, 1, 0).unwrap(), 1.0); // Left (Cross doesn't hit diagonals)
             assert_eq!(
@@ -360,7 +423,7 @@ mod tests {
         cmd_ellipse.execute(&mut ctx, &mut cache)?;
 
         // Ellipse with size 3 is often equivalent to Box, verify center
-        if let ImageContainer::F32Rgb(ref out) = ctx.image {
+        if let ImageContainer::F32Rgb(out) = ctx.image.as_ref() {
             assert_eq!(*out.get_pixel(1, 1, 0).unwrap(), 1.0);
         }
 
@@ -416,7 +479,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut PipelineCache::default())
             .unwrap();
 
-        let img = match ctx.image {
+        let img = match ctx.image.as_ref() {
             ImageContainer::F32Gray(managed_image) => managed_image,
             ImageContainer::F32Rgb(_) => todo!(),
             ImageContainer::U32(_) => todo!(),
@@ -436,7 +499,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut PipelineCache::default())
             .unwrap();
 
-        let img = match ctx.image {
+        let img = match ctx.image.as_ref() {
             ImageContainer::F32Gray(managed_image) => managed_image,
             ImageContainer::F32Rgb(_) => todo!(),
             ImageContainer::U32(_) => todo!(),
@@ -456,7 +519,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut PipelineCache::default())
             .unwrap();
 
-        let img = match ctx.image {
+        let img = match ctx.image.as_ref() {
             ImageContainer::F32Gray(managed_image) => managed_image,
             ImageContainer::F32Rgb(_) => todo!(),
             ImageContainer::U32(_) => todo!(),
@@ -476,7 +539,7 @@ mod tests {
         cmd.execute(&mut ctx, &mut PipelineCache::default())
             .unwrap();
 
-        let img = match ctx.image {
+        let img = match ctx.image.as_ref() {
             ImageContainer::F32Gray(managed_image) => managed_image,
             ImageContainer::F32Rgb(_) => todo!(),
             ImageContainer::U32(_) => todo!(),

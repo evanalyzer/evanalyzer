@@ -370,6 +370,8 @@
             "outputClass": {
               "VALID": 15
             },
+            "overlappingWith": "UNSET",
+            "minIntersectionArea": 0.0,
             "sizeUnit": "px",
             "minArea": 5.0,
             "maxArea": 2147483648.0,
@@ -479,6 +481,8 @@
             "outputClass": {
               "VALID": 1
             },
+            "overlappingWith": "UNSET",
+            "minIntersectionArea": 0.0,
             "sizeUnit": "px",
             "minArea": 5.0,
             "maxArea": 2147483648.0,
@@ -588,6 +592,8 @@
             "outputClass": {
               "VALID": 5
             },
+            "overlappingWith": "UNSET",
+            "minIntersectionArea": 0.0,
             "sizeUnit": "px",
             "minArea": 5.0,
             "maxArea": 2147483648.0,
@@ -697,6 +703,8 @@
             "outputClass": {
               "VALID": 16
             },
+            "overlappingWith": "UNSET",
+            "minIntersectionArea": 0.0,
             "sizeUnit": "px",
             "minArea": 5.0,
             "maxArea": 2147483648.0,

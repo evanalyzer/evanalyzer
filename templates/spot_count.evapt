@@ -153,6 +153,8 @@
             "outputClass": {
               "VALID": 21
             },
+            "overlappingWith": "UNSET",
+            "minIntersectionArea": 0.0,
             "sizeUnit": "px",
             "minArea": 3.0,
             "maxArea": 2147483648.0,
@@ -262,6 +264,8 @@
             "outputClass": {
               "VALID": 5
             },
+            "overlappingWith": "UNSET",
+            "minIntersectionArea": 0.0,
             "sizeUnit": "px",
             "minArea": 5.0,
             "maxArea": 2147483648.0,

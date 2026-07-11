@@ -128,7 +128,7 @@ mod tests {
                     px_size_z: 1.0,
                 },
             },
-            input_img,
+            input_img.into(),
         )?;
         let mut cache = PipelineCache::default();
 
@@ -145,7 +145,7 @@ mod tests {
         // Result = 50.0 - 10.0 = 40.0
         // Flat areas: 10.0 - 10.0 = 0.0
 
-        if let ImageContainer::F32Gray(result_img) = ctx.image {
+        if let ImageContainer::F32Gray(result_img) = ctx.image.as_ref() {
             let res = result_img.as_slice();
 
             let center_pixel = res[12];

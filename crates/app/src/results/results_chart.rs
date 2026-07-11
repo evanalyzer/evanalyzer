@@ -46,13 +46,28 @@ pub struct HistogramBucket {
     pub count: usize,
 }
 
+/// One "color by" group's bucket counts — e.g. one series per class, or one
+/// per colocalized status. Every series in a given [`HistogramData`] shares
+/// the exact same bucket edges (computed once, from every group's values
+/// combined), so overlaying them is a direct, aligned comparison.
+#[derive(Debug, Clone)]
+pub struct HistogramSeries {
+    /// Group label (class name / "Yes" / "No"), or `""` when not grouped
+    /// (`ColorBy::None`) — `HistogramData::series` holds exactly one series
+    /// in that case.
+    pub label: String,
+    pub buckets: Vec<HistogramBucket>,
+}
+
 #[derive(Debug, Clone)]
 pub struct HistogramData {
     pub column_label: String,
-    pub buckets: Vec<HistogramBucket>,
-    /// Whether `buckets` were spaced equally in log space rather than linear
-    /// space — drives `draw_histogram`'s choice of axis. Bucket edges are
-    /// always reported back in real (linear) units either way.
+    /// One series per "color by" group, all sharing one set of bucket edges.
+    /// Never empty when `compute_histogram` returns `Some`.
+    pub series: Vec<HistogramSeries>,
+    /// Whether bucket edges were spaced equally in log space rather than
+    /// linear space — drives `draw_histogram`'s choice of axis. Bucket edges
+    /// are always reported back in real (linear) units either way.
     pub log_scale: bool,
     /// Values `<= 0` can't be log-binned and are dropped; this is how many
     /// were, so the GUI can surface a "N values excluded" notice. Always 0
@@ -60,22 +75,44 @@ pub struct HistogramData {
     pub excluded_non_positive: usize,
 }
 
-/// Splits `values` into `bucket_count` equal-width buckets in `to_space(v)`
-/// space, then reports each bucket's edges back via `from_space` — e.g.
-/// `to_space = f64::ln, from_space = f64::exp` buckets equally in log-space
-/// while still reporting real-world bucket edges.
-fn bucket_values(
-    values: &[f64],
-    bucket_count: usize,
-    to_space: impl Fn(f64) -> f64,
-    from_space: impl Fn(f64) -> f64,
-) -> Vec<HistogramBucket> {
-    let transformed: Vec<f64> = values.iter().map(|&v| to_space(v)).collect();
-    let min = transformed.iter().copied().fold(f64::INFINITY, f64::min);
-    let max = transformed.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+impl HistogramData {
+    /// Convenience for the common ungrouped case (`ColorBy::None`), where
+    /// there's exactly one series: its buckets directly. Panics if `series`
+    /// is empty, which `compute_histogram` never produces.
+    pub fn buckets(&self) -> &[HistogramBucket] {
+        &self.series[0].buckets
+    }
+}
 
+/// The transformed-space `[min, max]` of `values` under `to_space` — the
+/// shared reference range multiple value subsets (e.g. one per "color by"
+/// group) can all be binned against, so their bars land on identical edges
+/// and can be overlaid for direct comparison.
+fn transformed_range(values: &[f64], to_space: &impl Fn(f64) -> f64) -> (f64, f64) {
+    let transformed = values.iter().map(|&v| to_space(v));
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for t in transformed {
+        min = min.min(t);
+        max = max.max(t);
+    }
+    (min, max)
+}
+
+/// Buckets `values` into `bucket_count` equal-width buckets over an
+/// already-known transformed-space `[min, max]` range (see
+/// `transformed_range`), reporting real-world edges back via `from_space`.
+fn bucket_into_range(
+    values: &[f64],
+    min: f64,
+    max: f64,
+    bucket_count: usize,
+    to_space: &impl Fn(f64) -> f64,
+    from_space: &impl Fn(f64) -> f64,
+) -> Vec<HistogramBucket> {
     if max <= min {
-        // Every ROI has the same value — one bucket holds them all.
+        // Every value (in the *reference* range) is identical — one bucket
+        // holds this subset's count (0 if this subset itself has no values).
         let edge = from_space(min);
         return vec![HistogramBucket {
             range_start: edge,
@@ -86,10 +123,11 @@ fn bucket_values(
 
     let width = (max - min) / bucket_count as f64;
     let mut counts = vec![0usize; bucket_count];
-    for v in &transformed {
+    for &v in values {
+        let t = to_space(v);
         // The max value lands exactly on the last bucket's upper edge;
         // clamp it into that bucket instead of overflowing.
-        let idx = (((v - min) / width) as usize).min(bucket_count - 1);
+        let idx = (((t - min) / width) as usize).min(bucket_count - 1);
         counts[idx] += 1;
     }
     counts
@@ -118,34 +156,72 @@ pub fn compute_histogram(
     columns: &[ColumnSpec],
     bucket_count: usize,
     log_scale: bool,
+    color_by: ColorBy,
 ) -> Option<HistogramData> {
     if bucket_count == 0 {
         return None;
     }
     let column_label = columns.iter().find(|c| c.id == column_id)?.label.clone();
-    let mut values: Vec<f64> = rois.iter().filter_map(|r| numeric_value(r, column_id)).collect();
+
+    // (value, group label) pairs; group label is "" for every row when
+    // `color_by == None`, so they all land in one series below.
+    let mut pairs: Vec<(f64, String)> = rois
+        .iter()
+        .filter_map(|r| {
+            let v = numeric_value(r, column_id)?;
+            let group = match color_by {
+                ColorBy::None => String::new(),
+                ColorBy::Class => compute_class(r),
+                ColorBy::Colocalized => coloc_label(is_colocalized(&r.coloc_json)),
+            };
+            Some((v, group))
+        })
+        .collect();
 
     let excluded_non_positive = if log_scale {
-        let before = values.len();
-        values.retain(|v| *v > 0.0);
-        before - values.len()
+        let before = pairs.len();
+        pairs.retain(|(v, _)| *v > 0.0);
+        before - pairs.len()
     } else {
         0
     };
 
-    if values.is_empty() {
+    if pairs.is_empty() {
         return None;
     }
 
-    let buckets = if log_scale {
-        bucket_values(&values, bucket_count, f64::ln, f64::exp)
-    } else {
-        bucket_values(&values, bucket_count, |v| v, |v| v)
-    };
+    let to_space: fn(f64) -> f64 = if log_scale { f64::ln } else { |v| v };
+    let from_space: fn(f64) -> f64 = if log_scale { f64::exp } else { |v| v };
+
+    // Every series shares these edges (computed from *every* group's values
+    // combined) so overlaid bars land at the same x positions.
+    let all_values: Vec<f64> = pairs.iter().map(|(v, _)| *v).collect();
+    let (edge_min, edge_max) = transformed_range(&all_values, &to_space);
+
+    let mut group_labels: Vec<String> = pairs.iter().map(|(_, g)| g.clone()).collect();
+    group_labels.sort();
+    group_labels.dedup();
+
+    let series = group_labels
+        .into_iter()
+        .map(|label| {
+            let group_values: Vec<f64> =
+                pairs.iter().filter(|(_, g)| *g == label).map(|(v, _)| *v).collect();
+            let buckets = bucket_into_range(
+                &group_values,
+                edge_min,
+                edge_max,
+                bucket_count,
+                &to_space,
+                &from_space,
+            );
+            HistogramSeries { label, buckets }
+        })
+        .collect();
 
     Some(HistogramData {
         column_label,
-        buckets,
+        series,
         log_scale,
         excluded_non_positive,
     })
@@ -400,7 +476,7 @@ impl PixelToData {
 
 #[derive(Debug, Clone)]
 enum HitTestData {
-    Histogram { buckets: Vec<HistogramBucket>, log_scale: bool, column_label: String },
+    Histogram { series: Vec<HistogramSeries>, log_scale: bool, column_label: String },
     Scatter { points: Vec<ScatterPoint>, x_label: String, y_label: String },
     Heatmap {
         cols: usize,
@@ -435,19 +511,38 @@ impl ChartHitTester {
         }
         let (data_x, data_y) = self.mapping.data_at(px, py);
         match &self.data {
-            HitTestData::Histogram { buckets, log_scale, column_label } => {
+            HitTestData::Histogram { series, log_scale, column_label } => {
                 let real_x = if *log_scale { data_x.exp() } else { data_x };
-                let bucket = buckets
+                // Every series shares identical bucket edges (see
+                // `compute_histogram`), so finding the hit bucket in the
+                // first series also locates it — by index — in every other.
+                let first = series.first()?;
+                let bucket_idx = first
+                    .buckets
                     .iter()
-                    .find(|b| real_x >= b.range_start && real_x < b.range_end)
-                    .or_else(|| buckets.last().filter(|b| real_x >= b.range_start))?;
-                Some(format!(
-                    "{}: {} – {}\nCount: {}",
+                    .position(|b| real_x >= b.range_start && real_x < b.range_end)
+                    .or_else(|| {
+                        first
+                            .buckets
+                            .last()
+                            .filter(|b| real_x >= b.range_start)
+                            .map(|_| first.buckets.len() - 1)
+                    })?;
+                let bucket = &first.buckets[bucket_idx];
+                let mut text = format!(
+                    "{}: {} – {}",
                     column_label,
                     format_axis_value(bucket.range_start),
                     format_axis_value(bucket.range_end),
-                    bucket.count
-                ))
+                );
+                if series.len() == 1 && series[0].label.is_empty() {
+                    text.push_str(&format!("\nCount: {}", bucket.count));
+                } else {
+                    for s in series {
+                        text.push_str(&format!("\n{}: {}", s.label, s.buckets[bucket_idx].count));
+                    }
+                }
+                Some(text)
             }
             HitTestData::Scatter { points, x_label, y_label } => {
                 const MAX_DIST_PX: f64 = 10.0;
@@ -541,9 +636,10 @@ fn draw_histogram(
 ) -> Result<Option<ChartHitTester>, InternalErrors> {
     root.fill(&WHITE).map_err(to_internal_error)?;
 
-    let max_count = data.buckets.iter().map(|b| b.count).max().unwrap_or(0);
-    let x_min = data.buckets.first().map_or(0.0, |b| b.range_start);
-    let x_max_raw = data.buckets.last().map_or(1.0, |b| b.range_end);
+    let max_count =
+        data.series.iter().flat_map(|s| s.buckets.iter()).map(|b| b.count).max().unwrap_or(0);
+    let x_min = data.buckets().first().map_or(0.0, |b| b.range_start);
+    let x_max_raw = data.buckets().last().map_or(1.0, |b| b.range_end);
     let x_max = if x_max_raw > x_min { x_max_raw } else { x_min + 1.0 };
 
     // In log mode, bars are positioned by the log of their (real-unit) edges
@@ -575,20 +671,42 @@ fn draw_histogram(
         .draw()
         .map_err(to_internal_error)?;
 
-    chart
-        .draw_series(data.buckets.iter().map(|b| {
-            Rectangle::new(
-                [(to_axis(b.range_start), 0.0), (to_axis(b.range_end), b.count as f64)],
-                PALETTE[0].filled(),
-            )
-        }))
-        .map_err(to_internal_error)?;
+    let grouped = data.series.len() > 1;
+    for (i, series) in data.series.iter().enumerate() {
+        // Ungrouped (single series): solid bars, same as before. Grouped:
+        // each series gets its own palette color, drawn semi-transparent and
+        // overlaid so every group's shape stays visible where they overlap.
+        let color = if grouped { PALETTE[i % PALETTE.len()].mix(0.45) } else { PALETTE[0].mix(1.0) };
+        let handle = chart
+            .draw_series(series.buckets.iter().map(|b| {
+                Rectangle::new(
+                    [(to_axis(b.range_start), 0.0), (to_axis(b.range_end), b.count as f64)],
+                    color.filled(),
+                )
+            }))
+            .map_err(to_internal_error)?;
+        if grouped {
+            let legend_color = PALETTE[i % PALETTE.len()];
+            handle
+                .label(series.label.clone())
+                .legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 16, y + 5)], legend_color.filled()));
+        }
+    }
+    if grouped {
+        chart
+            .configure_series_labels()
+            .background_style(WHITE.mix(0.8))
+            .border_style(BLACK)
+            .label_font(("sans-serif", 14))
+            .draw()
+            .map_err(to_internal_error)?;
+    }
 
     root.present().map_err(to_internal_error)?;
     Ok(mapping.map(|mapping| ChartHitTester {
         mapping,
         data: HitTestData::Histogram {
-            buckets: data.buckets.clone(),
+            series: data.series.clone(),
             log_scale: data.log_scale,
             column_label: data.column_label.clone(),
         },
@@ -611,6 +729,34 @@ fn padded_axis_bounds(values: impl Iterator<Item = f64>) -> (f64, f64) {
     }
     let pad = (max - min) * 0.05;
     (min - pad, max + pad)
+}
+
+/// Computes how much to symmetrically pad `data_w`/`data_h` (a data-space
+/// rectangle) so that rendering it into a `plot_px_w`x`plot_px_h` pixel area
+/// gives *equal* pixels-per-data-unit on both axes — i.e. so a square in data
+/// space (like one heatmap cell) renders as an actual square on screen,
+/// regardless of the plot area's own aspect ratio. Only the axis with the
+/// *lower* pixel density gets padded (its density is raised to match the
+/// other axis, by widening its apparent data range around the same center);
+/// the other axis's padding is always `0.0`. Returns `(pad_x, pad_y)`.
+///
+/// This is the "letterbox" technique: the padded axis shows extra blank space
+/// on both sides within the plot, exactly like fitting a fixed-aspect image
+/// into a differently-shaped viewport.
+fn square_aspect_padding(data_w: f64, data_h: f64, plot_px_w: u32, plot_px_h: u32) -> (f64, f64) {
+    if data_w <= 0.0 || data_h <= 0.0 || plot_px_w == 0 || plot_px_h == 0 {
+        return (0.0, 0.0);
+    }
+    let px_per_unit_x = plot_px_w as f64 / data_w;
+    let px_per_unit_y = plot_px_h as f64 / data_h;
+    let px_per_unit = px_per_unit_x.min(px_per_unit_y);
+
+    let target_w = plot_px_w as f64 / px_per_unit;
+    let target_h = plot_px_h as f64 / px_per_unit;
+    (
+        (target_w - data_w).max(0.0) / 2.0,
+        (target_h - data_h).max(0.0) / 2.0,
+    )
 }
 
 fn draw_scatter(
@@ -688,34 +834,100 @@ fn draw_scatter(
     }))
 }
 
-/// A small Viridis-like sequential colormap (5 anchor stops, linearly
-/// interpolated) — perceptually uniform-ish and colorblind-friendlier than a
-/// raw hue sweep, without depending on plotters' own colormap feature.
-fn viridis_color(t: f64) -> RGBColor {
-    const STOPS: [(f64, u8, u8, u8); 5] = [
-        (0.00, 68, 1, 84),
-        (0.25, 59, 82, 139),
-        (0.50, 33, 145, 140),
-        (0.75, 94, 201, 98),
-        (1.00, 253, 231, 37),
-    ];
+/// Sequential colormaps offered for the heatmap. Each is a small set of
+/// anchor stops, linearly interpolated in RGB space — perceptually uniform-ish
+/// (except `Grayscale`) and colorblind-friendlier than a raw hue sweep,
+/// without depending on plotters' own colormap feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeatmapColorScheme {
+    Viridis,
+    Magma,
+    Plasma,
+    Grayscale,
+}
+
+impl HeatmapColorScheme {
+    /// Label shown in the GUI's color-scheme picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            HeatmapColorScheme::Viridis => "Viridis",
+            HeatmapColorScheme::Magma => "Magma",
+            HeatmapColorScheme::Plasma => "Plasma",
+            HeatmapColorScheme::Grayscale => "Grayscale",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Self {
+        match label.to_ascii_lowercase().as_str() {
+            "magma" => HeatmapColorScheme::Magma,
+            "plasma" => HeatmapColorScheme::Plasma,
+            "grayscale" => HeatmapColorScheme::Grayscale,
+            _ => HeatmapColorScheme::Viridis,
+        }
+    }
+
+    /// All schemes, in the order the GUI's picker should list them.
+    pub fn all() -> &'static [HeatmapColorScheme] {
+        &[
+            HeatmapColorScheme::Viridis,
+            HeatmapColorScheme::Magma,
+            HeatmapColorScheme::Plasma,
+            HeatmapColorScheme::Grayscale,
+        ]
+    }
+
+    fn stops(self) -> &'static [(f64, u8, u8, u8)] {
+        match self {
+            HeatmapColorScheme::Viridis => &[
+                (0.00, 68, 1, 84),
+                (0.25, 59, 82, 139),
+                (0.50, 33, 145, 140),
+                (0.75, 94, 201, 98),
+                (1.00, 253, 231, 37),
+            ],
+            HeatmapColorScheme::Magma => &[
+                (0.00, 0, 0, 4),
+                (0.25, 81, 18, 124),
+                (0.50, 183, 55, 121),
+                (0.75, 252, 137, 97),
+                (1.00, 252, 253, 191),
+            ],
+            HeatmapColorScheme::Plasma => &[
+                (0.00, 13, 8, 135),
+                (0.25, 126, 3, 168),
+                (0.50, 204, 71, 120),
+                (0.75, 248, 148, 65),
+                (1.00, 240, 249, 33),
+            ],
+            HeatmapColorScheme::Grayscale => &[(0.00, 20, 20, 20), (1.00, 235, 235, 235)],
+        }
+    }
+
+    /// Maps `t` (clamped to `[0, 1]`) to a color via this scheme's stops.
+    pub fn color(self, t: f64) -> RGBColor {
+        interpolate_stops(self.stops(), t)
+    }
+}
+
+fn interpolate_stops(stops: &[(f64, u8, u8, u8)], t: f64) -> RGBColor {
     let t = t.clamp(0.0, 1.0);
-    for i in 0..STOPS.len() - 1 {
-        let (t0, r0, g0, b0) = STOPS[i];
-        let (t1, r1, g1, b1) = STOPS[i + 1];
+    for i in 0..stops.len() - 1 {
+        let (t0, r0, g0, b0) = stops[i];
+        let (t1, r1, g1, b1) = stops[i + 1];
         if t <= t1 {
             let local_t = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
             let lerp = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * local_t) as u8;
             return RGBColor(lerp(r0, r1), lerp(g0, g1), lerp(b0, b1));
         }
     }
-    let (_, r, g, b) = STOPS[STOPS.len() - 1];
+    let (_, r, g, b) = stops[stops.len() - 1];
     RGBColor(r, g, b)
 }
 
 fn draw_heatmap(
     root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
     data: &HeatmapData,
+    scheme: HeatmapColorScheme,
 ) -> Result<Option<ChartHitTester>, InternalErrors> {
     root.fill(&WHITE).map_err(to_internal_error)?;
 
@@ -728,8 +940,34 @@ fn draw_heatmap(
     let (chart_area, legend_area) =
         root.split_horizontally((total_width as i32 - legend_width).max(0));
 
-    let x_max = data.x_min + data.cols as f64 * data.cell_size;
-    let y_max = data.y_min + data.rows as f64 * data.cell_size;
+    let x_max_raw = data.x_min + data.cols as f64 * data.cell_size;
+    let y_max_raw = data.y_min + data.rows as f64 * data.cell_size;
+    let data_w = data.cols as f64 * data.cell_size;
+    let data_h = data.rows as f64 * data.cell_size;
+
+    // First pass: build with the raw (possibly non-square-cell) range just to
+    // measure the plotting area's actual pixel size once axis labels/margins
+    // are accounted for — `chart_area` is cheap to reuse (`DrawingArea` is a
+    // `Clone`-able handle), so this costs one throwaway chart build.
+    let probe = ChartBuilder::on(&chart_area.clone())
+        .margin(10)
+        .x_label_area_size(50)
+        .y_label_area_size(65)
+        .caption(format!("Heatmap: {}", data.value_label), ("sans-serif", 24))
+        .build_cartesian_2d(data.x_min..x_max_raw, y_max_raw..data.y_min)
+        .map_err(to_internal_error)?;
+    let (plot_px_w, plot_px_h) = probe.plotting_area().dim_in_pixel();
+    drop(probe);
+
+    // Pad whichever axis has spare pixel density so both axes end up with the
+    // same pixels-per-data-unit — this is what makes each cell an actual
+    // on-screen square regardless of the chart area's own aspect ratio (see
+    // `square_aspect_padding`).
+    let (pad_x, pad_y) = square_aspect_padding(data_w, data_h, plot_px_w, plot_px_h);
+    let x_min = data.x_min - pad_x;
+    let x_max = x_max_raw + pad_x;
+    let y_top = y_max_raw + pad_y;
+    let y_bottom = data.y_min - pad_y;
 
     let mut chart = ChartBuilder::on(&chart_area)
         .margin(10)
@@ -738,7 +976,7 @@ fn draw_heatmap(
         .caption(format!("Heatmap: {}", data.value_label), ("sans-serif", 24))
         // Image-style coordinates: y grows downward, so the top-left ROI ends
         // up top-left on screen rather than bottom-left.
-        .build_cartesian_2d(data.x_min..x_max, y_max..data.y_min)
+        .build_cartesian_2d(x_min..x_max, y_top..y_bottom)
         .map_err(to_internal_error)?;
     let mapping = PixelToData::from_chart(&chart);
 
@@ -752,6 +990,9 @@ fn draw_heatmap(
         .draw()
         .map_err(to_internal_error)?;
 
+    // Fill pass, then a separate border pass on top — `ShapeStyle` carries a
+    // single color for both fill and stroke, so a differently-colored thin
+    // border needs its own unfilled `Rectangle` drawn after the filled one.
     chart
         .draw_series(data.cells.iter().enumerate().filter(|(_, c)| c.count > 0).map(
             |(i, cell)| {
@@ -759,10 +1000,25 @@ fn draw_heatmap(
                 let row = i / data.cols;
                 let x0 = data.x_min + col as f64 * data.cell_size;
                 let y0 = data.y_min + row as f64 * data.cell_size;
-                let color = viridis_color(cell.value / max_value);
+                let color = scheme.color(cell.value / max_value);
                 Rectangle::new(
                     [(x0, y0), (x0 + data.cell_size, y0 + data.cell_size)],
                     color.filled(),
+                )
+            },
+        ))
+        .map_err(to_internal_error)?;
+    const CELL_BORDER: RGBColor = RGBColor(110, 110, 110);
+    chart
+        .draw_series(data.cells.iter().enumerate().filter(|(_, c)| c.count > 0).map(
+            |(i, _cell)| {
+                let col = i % data.cols;
+                let row = i / data.cols;
+                let x0 = data.x_min + col as f64 * data.cell_size;
+                let y0 = data.y_min + row as f64 * data.cell_size;
+                Rectangle::new(
+                    [(x0, y0), (x0 + data.cell_size, y0 + data.cell_size)],
+                    ShapeStyle { color: CELL_BORDER.to_rgba(), filled: false, stroke_width: 1 },
                 )
             },
         ))
@@ -792,7 +1048,7 @@ fn draw_heatmap(
             let t1 = (i + 1) as f64 / LEGEND_STEPS as f64;
             Rectangle::new(
                 [(0.0, t0 * max_value), (1.0, t1 * max_value)],
-                viridis_color(t0).filled(),
+                scheme.color(t0).filled(),
             )
         }))
         .map_err(to_internal_error)?;
@@ -854,11 +1110,16 @@ pub fn save_scatter_png(data: &ScatterData, width: u32, height: u32, path: &Path
 
 /// Renders into an in-memory RGB8 buffer — used by the GUI to build a
 /// `slint::Image` without touching disk.
-pub fn render_heatmap(data: &HeatmapData, width: u32, height: u32) -> Result<RenderedChart, InternalErrors> {
+pub fn render_heatmap(
+    data: &HeatmapData,
+    scheme: HeatmapColorScheme,
+    width: u32,
+    height: u32,
+) -> Result<RenderedChart, InternalErrors> {
     let mut rgb = vec![0u8; (width * height * 3) as usize];
     let hit_test = {
         let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
-        draw_heatmap(root, data)?
+        draw_heatmap(root, data, scheme)?
     };
     Ok(RenderedChart { width, height, rgb, hit_test })
 }
@@ -866,9 +1127,15 @@ pub fn render_heatmap(data: &HeatmapData, width: u32, height: u32) -> Result<Ren
 /// Renders straight to a PNG file. Not called anywhere yet — exists so a
 /// future CLI "export chart" command is a thin wrapper around the same
 /// drawing code the GUI uses, instead of new plotting logic.
-pub fn save_heatmap_png(data: &HeatmapData, width: u32, height: u32, path: &Path) -> Result<(), InternalErrors> {
+pub fn save_heatmap_png(
+    data: &HeatmapData,
+    scheme: HeatmapColorScheme,
+    width: u32,
+    height: u32,
+    path: &Path,
+) -> Result<(), InternalErrors> {
     let root = BitMapBackend::new(path, (width, height)).into_drawing_area();
-    draw_heatmap(root, data)?;
+    draw_heatmap(root, data, scheme)?;
     Ok(())
 }
 
@@ -884,6 +1151,50 @@ pub fn save_rendered_chart_png(chart: &RenderedChart, path: &Path) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn square_aspect_padding_pads_the_higher_density_axis() {
+        // 20x10 data rect (wider than tall) into a SQUARE 100x100px area:
+        // px-per-unit is 5 for x (100/20) and 10 for y (100/10) — y is
+        // "zoomed in" 2x more than x. To equalize, y's data range gets
+        // expanded (reducing its density down to x's), not x's.
+        let (pad_x, pad_y) = square_aspect_padding(20.0, 10.0, 100, 100);
+        assert_eq!(pad_x, 0.0, "the already-lower-density axis (x) is never padded");
+        assert!(pad_y > 0.0, "the higher-density axis (y) must be padded down to match");
+        // After padding, both axes must have equal px-per-unit.
+        let padded_h = 10.0 + 2.0 * pad_y;
+        assert!((100.0 / padded_h - 100.0 / 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn square_aspect_padding_matching_aspect_needs_no_padding() {
+        // Data aspect already matches the pixel area's aspect exactly.
+        let (pad_x, pad_y) = square_aspect_padding(200.0, 100.0, 400, 200);
+        assert_eq!(pad_x, 0.0);
+        assert_eq!(pad_y, 0.0);
+    }
+
+    #[test]
+    fn square_aspect_padding_degenerate_inputs_yield_no_padding() {
+        assert_eq!(square_aspect_padding(0.0, 10.0, 100, 100), (0.0, 0.0));
+        assert_eq!(square_aspect_padding(10.0, 10.0, 0, 100), (0.0, 0.0));
+    }
+
+    #[test]
+    fn heatmap_color_scheme_endpoints_and_label_roundtrip() {
+        for scheme in HeatmapColorScheme::all() {
+            // Every scheme's first/last stop should be reproduced at t=0/t=1.
+            let c0 = scheme.color(0.0);
+            let c1 = scheme.color(1.0);
+            assert_ne!(c0.rgb(), c1.rgb(), "{:?} should visibly change across its range", scheme);
+            assert_eq!(HeatmapColorScheme::from_label(scheme.label()), *scheme);
+        }
+    }
+
+    #[test]
+    fn heatmap_color_scheme_from_label_falls_back_to_viridis() {
+        assert_eq!(HeatmapColorScheme::from_label("nonsense"), HeatmapColorScheme::Viridis);
+    }
 
     fn make_roi(area_px: u64, intensities_json: &str, object_class_name: Vec<String>, coloc_json: &str) -> RoiRow {
         RoiRow {
@@ -956,34 +1267,34 @@ mod tests {
             make_roi(99, "{}", vec![], "{}"),
         ];
         let columns = base_columns();
-        let data = compute_histogram(&rois, "area_px", &columns, 10, false).unwrap();
+        let data = compute_histogram(&rois, "area_px", &columns, 10, false, ColorBy::None).unwrap();
         assert_eq!(data.column_label, "Area (px²)");
-        assert_eq!(data.buckets.len(), 10);
+        assert_eq!(data.buckets().len(), 10);
         assert!(!data.log_scale);
         assert_eq!(data.excluded_non_positive, 0);
-        let total: usize = data.buckets.iter().map(|b| b.count).sum();
+        let total: usize = data.buckets().iter().map(|b| b.count).sum();
         assert_eq!(total, 4);
         // width = (99-0)/10 = 9.9: 0 -> bucket 0, 10 -> bucket 1, 50 -> bucket 5, 99 -> bucket 9.
-        assert_eq!(data.buckets[0].count, 1);
-        assert_eq!(data.buckets[1].count, 1);
-        assert_eq!(data.buckets[5].count, 1);
-        assert_eq!(data.buckets[9].count, 1, "max value (99) clamps into the last bucket");
+        assert_eq!(data.buckets()[0].count, 1);
+        assert_eq!(data.buckets()[1].count, 1);
+        assert_eq!(data.buckets()[5].count, 1);
+        assert_eq!(data.buckets()[9].count, 1, "max value (99) clamps into the last bucket");
     }
 
     #[test]
     fn compute_histogram_identical_values_single_bucket() {
         let rois = vec![make_roi(5, "{}", vec![], "{}"), make_roi(5, "{}", vec![], "{}")];
-        let data = compute_histogram(&rois, "area_px", &base_columns(), 10, false).unwrap();
-        assert_eq!(data.buckets.len(), 1);
-        assert_eq!(data.buckets[0].count, 2);
+        let data = compute_histogram(&rois, "area_px", &base_columns(), 10, false, ColorBy::None).unwrap();
+        assert_eq!(data.buckets().len(), 1);
+        assert_eq!(data.buckets()[0].count, 2);
     }
 
     #[test]
     fn compute_histogram_unknown_column_or_empty_rois_is_none() {
         let columns = base_columns();
-        assert!(compute_histogram(&[], "area_px", &columns, 10, false).is_none());
-        assert!(compute_histogram(&[make_roi(1, "{}", vec![], "{}")], "does_not_exist", &columns, 10, false).is_none());
-        assert!(compute_histogram(&[make_roi(1, "{}", vec![], "{}")], "area_px", &columns, 0, false).is_none());
+        assert!(compute_histogram(&[], "area_px", &columns, 10, false, ColorBy::None).is_none());
+        assert!(compute_histogram(&[make_roi(1, "{}", vec![], "{}")], "does_not_exist", &columns, 10, false, ColorBy::None).is_none());
+        assert!(compute_histogram(&[make_roi(1, "{}", vec![], "{}")], "area_px", &columns, 0, false, ColorBy::None).is_none());
     }
 
     #[test]
@@ -994,9 +1305,9 @@ mod tests {
         let mut rois: Vec<RoiRow> = (1..=20).map(|i| make_roi(i * 100, "{}", vec![], "{}")).collect();
         rois.push(make_roi(1_000_000, "{}", vec![], "{}"));
         let columns = base_columns();
-        let data = compute_histogram(&rois, "area_px", &columns, 10, true).unwrap();
+        let data = compute_histogram(&rois, "area_px", &columns, 10, true, ColorBy::None).unwrap();
         assert!(data.log_scale);
-        let occupied = data.buckets.iter().filter(|b| b.count > 0).count();
+        let occupied = data.buckets().iter().filter(|b| b.count > 0).count();
         assert!(occupied > 1, "log binning should spread values across more than one bucket");
     }
 
@@ -1008,10 +1319,55 @@ mod tests {
             make_roi(100, "{}", vec![], "{}"),
         ];
         let columns = base_columns();
-        let data = compute_histogram(&rois, "area_px", &columns, 5, true).unwrap();
+        let data = compute_histogram(&rois, "area_px", &columns, 5, true, ColorBy::None).unwrap();
         assert_eq!(data.excluded_non_positive, 1, "area_px == 0 can't be log-binned");
-        let total: usize = data.buckets.iter().map(|b| b.count).sum();
+        let total: usize = data.buckets().iter().map(|b| b.count).sum();
         assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn compute_histogram_color_by_class_produces_one_series_per_class_with_shared_edges() {
+        let rois = vec![
+            make_roi(0, "{}", vec!["ClassA".into()], "{}"),
+            make_roi(50, "{}", vec!["ClassA".into()], "{}"),
+            make_roi(99, "{}", vec!["ClassB".into()], "{}"),
+        ];
+        let columns = base_columns();
+        let data =
+            compute_histogram(&rois, "area_px", &columns, 10, false, ColorBy::Class).unwrap();
+
+        assert_eq!(data.series.len(), 2, "one series per distinct class");
+        let labels: Vec<&str> = data.series.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, vec!["ClassA", "ClassB"], "sorted by label");
+
+        // Every series must share identical bucket edges (computed from all
+        // classes' values combined), so they can be overlaid directly.
+        let class_a = &data.series[0];
+        let class_b = &data.series[1];
+        assert_eq!(class_a.buckets.len(), class_b.buckets.len());
+        for (a, b) in class_a.buckets.iter().zip(class_b.buckets.iter()) {
+            assert_eq!(a.range_start, b.range_start);
+            assert_eq!(a.range_end, b.range_end);
+        }
+
+        // ClassA has 2 ROIs, ClassB has 1 — each series' total matches only
+        // its own class's ROI count, not the combined total.
+        assert_eq!(class_a.buckets.iter().map(|b| b.count).sum::<usize>(), 2);
+        assert_eq!(class_b.buckets.iter().map(|b| b.count).sum::<usize>(), 1);
+    }
+
+    #[test]
+    fn compute_histogram_color_by_colocalized_groups_yes_no() {
+        let mut coloc_roi = make_roi(10, "{}", vec![], "{}");
+        coloc_roi.coloc_json = r#"{"Target":["00000000-0000-0000-0000-000000000002"]}"#.into();
+        let not_coloc_roi = make_roi(20, "{}", vec![], "{}");
+        let rois = vec![coloc_roi, not_coloc_roi];
+        let columns = base_columns();
+
+        let data =
+            compute_histogram(&rois, "area_px", &columns, 5, false, ColorBy::Colocalized).unwrap();
+        let labels: Vec<&str> = data.series.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, vec!["No", "Yes"]);
     }
 
     // ---- compute_scatter ----
@@ -1140,10 +1496,13 @@ mod tests {
     fn render_histogram_produces_correctly_sized_buffer() {
         let data = HistogramData {
             column_label: "Area".into(),
-            buckets: vec![
-                HistogramBucket { range_start: 0.0, range_end: 1.0, count: 3 },
-                HistogramBucket { range_start: 1.0, range_end: 2.0, count: 5 },
-            ],
+            series: vec![HistogramSeries {
+                label: String::new(),
+                buckets: vec![
+                    HistogramBucket { range_start: 0.0, range_end: 1.0, count: 3 },
+                    HistogramBucket { range_start: 1.0, range_end: 2.0, count: 5 },
+                ],
+            }],
             log_scale: false,
             excluded_non_positive: 0,
         };
@@ -1157,10 +1516,13 @@ mod tests {
     fn render_histogram_log_scale_produces_correctly_sized_buffer() {
         let data = HistogramData {
             column_label: "Area".into(),
-            buckets: vec![
-                HistogramBucket { range_start: 10.0, range_end: 100.0, count: 3 },
-                HistogramBucket { range_start: 100.0, range_end: 1_000_000.0, count: 5 },
-            ],
+            series: vec![HistogramSeries {
+                label: String::new(),
+                buckets: vec![
+                    HistogramBucket { range_start: 10.0, range_end: 100.0, count: 3 },
+                    HistogramBucket { range_start: 100.0, range_end: 1_000_000.0, count: 5 },
+                ],
+            }],
             log_scale: true,
             excluded_non_positive: 2,
         };
@@ -1201,7 +1563,7 @@ mod tests {
                 HeatmapCell { count: 1, value: 1.0 },
             ],
         };
-        let chart = render_heatmap(&data, 200, 150).unwrap();
+        let chart = render_heatmap(&data, HeatmapColorScheme::Viridis, 200, 150).unwrap();
         assert_eq!(chart.width, 200);
         assert_eq!(chart.height, 150);
         assert_eq!(chart.rgb.len(), 200 * 150 * 3);
@@ -1211,7 +1573,10 @@ mod tests {
     fn save_rendered_chart_png_writes_a_readable_png() {
         let data = HistogramData {
             column_label: "Area".into(),
-            buckets: vec![HistogramBucket { range_start: 0.0, range_end: 1.0, count: 3 }],
+            series: vec![HistogramSeries {
+                label: String::new(),
+                buckets: vec![HistogramBucket { range_start: 0.0, range_end: 1.0, count: 3 }],
+            }],
             log_scale: false,
             excluded_non_positive: 0,
         };
@@ -1234,10 +1599,13 @@ mod tests {
     fn histogram_hit_test_identifies_bucket_under_cursor() {
         let data = HistogramData {
             column_label: "Area".into(),
-            buckets: vec![
-                HistogramBucket { range_start: 0.0, range_end: 10.0, count: 3 },
-                HistogramBucket { range_start: 10.0, range_end: 20.0, count: 9 },
-            ],
+            series: vec![HistogramSeries {
+                label: String::new(),
+                buckets: vec![
+                    HistogramBucket { range_start: 0.0, range_end: 10.0, count: 3 },
+                    HistogramBucket { range_start: 10.0, range_end: 20.0, count: 9 },
+                ],
+            }],
             log_scale: false,
             excluded_non_positive: 0,
         };
@@ -1265,6 +1633,34 @@ mod tests {
         let near_right = tester.hit_test(left + (right - left) * 0.9, y).unwrap();
         assert!(near_left.contains("Count: 3"), "left side should be the first bucket: {near_left}");
         assert!(near_right.contains("Count: 9"), "right side should be the second bucket: {near_right}");
+    }
+
+    #[test]
+    fn histogram_hit_test_reports_one_line_per_group_when_color_by_is_set() {
+        let data = HistogramData {
+            column_label: "Area".into(),
+            series: vec![
+                HistogramSeries {
+                    label: "ClassA".into(),
+                    buckets: vec![HistogramBucket { range_start: 0.0, range_end: 10.0, count: 3 }],
+                },
+                HistogramSeries {
+                    label: "ClassB".into(),
+                    buckets: vec![HistogramBucket { range_start: 0.0, range_end: 10.0, count: 7 }],
+                },
+            ],
+            log_scale: false,
+            excluded_non_positive: 0,
+        };
+        let chart = render_histogram(&data, 800, 500).unwrap();
+        let tester = chart.hit_test.expect("histogram should produce a hit tester");
+
+        let y = 250.0;
+        let hit = (0..800)
+            .find_map(|x| tester.hit_test(x as f64, y))
+            .expect("single bucket spans the whole plot width");
+        assert!(hit.contains("ClassA: 3"), "expected a ClassA line: {hit}");
+        assert!(hit.contains("ClassB: 7"), "expected a ClassB line: {hit}");
     }
 
     #[test]
@@ -1319,7 +1715,7 @@ mod tests {
                 HeatmapCell { count: 5, value: 5.0 },
             ],
         };
-        let chart = render_heatmap(&data, 800, 500).unwrap();
+        let chart = render_heatmap(&data, HeatmapColorScheme::Viridis, 800, 500).unwrap();
         let tester = chart.hit_test.expect("heatmap should produce a hit tester");
 
         let mut hits = std::collections::HashSet::new();

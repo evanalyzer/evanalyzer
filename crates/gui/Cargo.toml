@@ -40,10 +40,13 @@ features = ["renderer-skia"]
 version = "1.15"
 default-features = false
 features = [
-    "std",               
-    "compat-1-2", 
+    "std",
+    "compat-1-2",
     "renderer-software",
     "backend-winit",
 ]
+
+[dev-dependencies]
+kornia-apriltag = { git = "https://github.com/kornia/kornia-rs" }
 
 

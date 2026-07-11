@@ -399,3 +399,104 @@ fn roi_rust_to_roi_slint(
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::settings::roi_settings::IntensitySettings;
+    use indexmap::IndexMap;
+
+    fn roi_with_area_and_perimeter(area: usize, perimeter: f32) -> RoiSettings {
+        RoiSettings { area, perimeter, ..Default::default() }
+    }
+
+    #[test]
+    fn format_circularity_is_empty_for_a_zero_area_roi() {
+        assert_eq!(format_circularity(&roi_with_area_and_perimeter(0, 10.0)), "");
+    }
+
+    #[test]
+    fn format_circularity_is_empty_when_perimeter_is_not_positive() {
+        assert_eq!(format_circularity(&roi_with_area_and_perimeter(100, 0.0)), "");
+        assert_eq!(format_circularity(&roi_with_area_and_perimeter(100, -1.0)), "");
+    }
+
+    #[test]
+    fn format_circularity_of_a_perfect_circle_is_one() {
+        // area = pi * r^2, perimeter = 2 * pi * r -> circularity should be ~1.0.
+        let r = 10.0f32;
+        let area = (std::f32::consts::PI * r * r) as usize;
+        let perimeter = 2.0 * std::f32::consts::PI * r;
+        let result = format_circularity(&roi_with_area_and_perimeter(area, perimeter));
+        assert_eq!(result, "1.00");
+    }
+
+    #[test]
+    fn format_circularity_is_clamped_to_one_for_measurement_noise() {
+        // A tiny/jagged mask can push the raw formula slightly above 1.0 -
+        // the result must still clamp to "1.00", not overshoot.
+        let result = format_circularity(&roi_with_area_and_perimeter(1000, 1.0));
+        assert_eq!(result, "1.00");
+    }
+
+    #[test]
+    fn format_intensities_per_channel_is_empty_with_no_channel_data() {
+        let roi = RoiSettings::default();
+        let (sums, avgs) = format_intensities_per_channel(&roi);
+        assert!(sums.is_empty());
+        assert!(avgs.is_empty());
+    }
+
+    #[test]
+    fn format_intensities_per_channel_sizes_the_vec_to_the_highest_channel_id() {
+        let mut roi = RoiSettings { area: 10, ..Default::default() };
+        let mut intensities = IndexMap::new();
+        intensities.insert(0, IntensitySettings { sum_intensity: 100.0, ..Default::default() });
+        intensities.insert(2, IntensitySettings { sum_intensity: 50.0, ..Default::default() });
+        roi.intensities = intensities;
+
+        let (sums, avgs) = format_intensities_per_channel(&roi);
+        // max channel id is 2, so the vecs must be length 3 (0, 1, 2).
+        assert_eq!(sums.len(), 3);
+        assert_eq!(avgs.len(), 3);
+        assert_eq!(sums[0], "100.0");
+        assert_eq!(sums[1], "", "no data for channel 1 - left as the default empty string");
+        assert_eq!(sums[2], "50.0");
+        assert_eq!(avgs[0], "10.0"); // 100 / area(10)
+        assert_eq!(avgs[2], "5.0"); // 50 / area(10)
+    }
+
+    #[test]
+    fn format_intensities_per_channel_leaves_avg_empty_when_area_is_zero() {
+        let mut roi = RoiSettings { area: 0, ..Default::default() };
+        let mut intensities = IndexMap::new();
+        intensities.insert(0, IntensitySettings { sum_intensity: 100.0, ..Default::default() });
+        roi.intensities = intensities;
+
+        let (sums, avgs) = format_intensities_per_channel(&roi);
+        assert_eq!(sums[0], "100.0");
+        assert_eq!(avgs[0], "", "can't average over a zero-area ROI");
+    }
+
+    #[test]
+    fn format_area_nm2_picks_the_right_unit_suffix() {
+        let unit_px = PixelSizeSettings { x: 1.0, y: 1.0, z: 1.0 };
+        assert_eq!(format_area_nm2(500, &unit_px), "500.0");
+        assert_eq!(format_area_nm2(1500, &unit_px), "1.5 k");
+        assert_eq!(format_area_nm2(2_500_000, &unit_px), "2.50 M");
+    }
+
+    #[test]
+    fn format_area_nm2_scales_by_pixel_size() {
+        let px = PixelSizeSettings { x: 2.0, y: 3.0, z: 1.0 };
+        // 100 px * 2.0 * 3.0 = 600.0 nm^2
+        assert_eq!(format_area_nm2(100, &px), "600.0");
+    }
+
+    #[test]
+    fn format_area_nm2_boundary_is_inclusive_of_the_next_unit() {
+        let unit_px = PixelSizeSettings { x: 1.0, y: 1.0, z: 1.0 };
+        assert_eq!(format_area_nm2(1000, &unit_px), "1.0 k");
+        assert_eq!(format_area_nm2(1_000_000, &unit_px), "1.00 M");
+    }
+}

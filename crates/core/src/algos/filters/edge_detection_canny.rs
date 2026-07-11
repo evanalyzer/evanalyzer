@@ -15,6 +15,7 @@ use kornia_imgproc::filter::spatial_gradient_float;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use std::f32::consts::PI;
+use std::sync::Arc;
 
 /// Extracts structural boundaries and fine edges using the multi-stage Canny algorithm.
 ///
@@ -71,7 +72,7 @@ impl ImageAlgorithm for EdgeDetectionCanny {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
-        let (input, output) = match (&ctx.image, &mut ctx.scratch_pad) {
+        let (input, output) = match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(in_img), ImageContainer::F32Gray(out_img)) => {
                 (in_img, out_img)
             }
@@ -275,7 +276,7 @@ mod tests {
 
         // Verify Results
         // After ctx.swap(), the result is in ctx.image
-        if let ImageContainer::F32Gray(final_image) = &ctx.image {
+        if let ImageContainer::F32Gray(final_image) = ctx.image.as_ref() {
             let pixels = final_image.as_slice();
 
             // Check specific known edge points

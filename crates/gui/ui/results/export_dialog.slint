@@ -1,0 +1,1310 @@
+import {
+    ScrollView,
+    ComboBox,
+    LineEdit,
+    ProgressIndicator,
+} from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ResultsState, FilterCheckbox, FilterItem } from "results_table.slint";
+
+// ===========================================================================
+// REDESIGN: collapsed chip fields + on-demand panel.
+//
+// The previous layout kept three checklists (Classes / Images / Columns)
+// permanently expanded as fixed-height scrollboxes, eating most of the
+// dialog's vertical space even when most rows never need a second look.
+// This version collapses each one to a single-line field that shows chips
+// for what's currently checked ("None selected — click to choose…" when
+// empty, "+N more" past 4 chips) and opens a floating searchable panel on
+// click — same search/select-all/grouping logic as before, just rendered
+// on demand via PopupWindow instead of being always visible.
+//
+// `ChecklistBox` (search row, "(Select All)" row, grouped rows with the
+// apply-to-all icon) is UNCHANGED in its internals — it's simply now the
+// content of a floating `PickerPanel` instead of being inlined directly in
+// the dialog body. `PickerField` is the collapsed-field trigger; every
+// callback name/signature and the `FilterItem` shape are untouched, so no
+// Rust-side changes are required.
+//
+// The floating panel is a manually-positioned overlay, NOT a `PopupWindow`.
+// `PopupWindow`'s automatic positioning is broken in this Slint version —
+// verified with a minimal standalone repro (a `PopupWindow` at `x: 0px; y:
+// <field>.height + 2px;`, declared directly inside the field it belongs to)
+// that renders the popup near the window's top-left corner instead of
+// under the field, regardless of nesting depth, presence of a ScrollView,
+// or window manager. A plain conditionally-shown element positioned via
+// the builtin `absolute-position` property (which reliably reports an
+// item's true window-relative position — confirmed against the same repro)
+// does not have this bug, so that's what `PickerPanel` uses below. Each of
+// the three panels is declared at `ExportDialog`'s own root (not nested
+// inside `body-scroll`'s `ScrollView`, and not inside the clipped dialog
+// card) so it isn't clipped and always renders on top; its `x`/`y` are
+// computed from the triggering `PickerField`'s `absolute-position`, which
+// works out to dialog-local coordinates directly since `ExportDialog`
+// itself fills the window at (0, 0).
+//
+// The panel closes via an explicit "Done" button (same pattern as the
+// toolbar's own filter/settings popups in results_window.slint) or by
+// re-clicking the field — there's no click-outside-to-close, since a plain
+// overlay has no equivalent of `PopupWindow`'s close policy.
+//
+// CAVEATS:
+//   - Slint's layouts have no flex-wrap equivalent, so the chip row is a
+//     single line (elided if it overflows the field width) rather than
+//     wrapping to multiple rows the way a CSS mock would.
+//   - Slint's function bodies can't use imperative `for` loops (only
+//     element repeaters can), can't recurse (a `pure function` calling
+//     itself is rejected at compile time as a binding loop), and strings
+//     have no `.contains()` (only `.to-lowercase()/.to-uppercase()/
+//     .is-empty()/.character-count()`) — so counts, search filtering, and
+//     the collapsed field's chip labels are all computed in Rust
+//     (`results_table_controller.rs`) and exposed as the `_checked_count`,
+//     `_total_count`, `_displayed_items`, and `_chip_labels` properties on
+//     `ResultsState`, mirroring the `export_class_checked_count` etc.
+//     already there.
+// ===========================================================================
+
+// Two-way toggle for the export style ("Table" vs "Coloc details") — same
+// visual shape as ChartKindButton in results_chart.slint.
+component StyleToggleButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+
+    width: 100px;
+    height: 26px;
+    border-radius: Theme.radius-sm;
+    background: selected ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.raised);
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        font-weight: 600;
+        color: root.selected ? white : Theme.text-dim;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Small removable pill used in a PickerField's collapsed chip row.
+component Chip inherits Rectangle {
+    in property <string> label;
+    callback remove;
+
+    height: 22px;
+    border-radius: 11px;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 4px;
+        spacing: 6px;
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-family: Theme.font-sans;
+            color: Theme.text;
+            vertical-alignment: center;
+            // Caps how wide a single chip can get — otherwise one long
+            // label is enough to push the whole PickerField (and the
+            // dialog's fixed-width layout around it) wider than intended.
+            max-width: 70px;
+            overflow: elide;
+        }
+
+        rm-ta := TouchArea {
+            width: 14px;
+            height: 14px;
+            mouse-cursor: pointer;
+            clicked => { root.remove(); }
+
+            Text {
+                text: "×";
+                font-size: 10px;
+                color: rm-ta.has-hover ? Theme.text : Theme.text-mute;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// Non-removable pill for the "+N more" overflow indicator.
+component OverflowChip inherits Rectangle {
+    in property <int> count;
+    height: 22px;
+    border-radius: 11px;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+
+    Text {
+        text: "+" + root.count + " more";
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        color: Theme.text-mute;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 9px;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+// Scrollable checklist with a "(Select All)" row on top, a filter box, and a
+// live selected/total count — shared shape for Classes, Images, and
+// Columns. Unchanged from the always-visible version except it now lives
+// inside a PickerField's popup instead of being inlined in the dialog body.
+component ChecklistBox inherits Rectangle {
+    // Full backing list — drives "(Select All)"'s own checked state only;
+    // rows are drawn from `displayed_items` below.
+    in property <[FilterItem]> items: [];
+    in property <bool> all_checked: true;
+    // Search-filtered subset of `items` to actually draw. Slint has no
+    // string `.contains()` (only `.to-lowercase()/.to-uppercase()/
+    // .is-empty()/.character-count()`), so this — and `checked_count`/
+    // `total_count` below — is computed in Rust on every keystroke and
+    // every mutation (toggle/select-all/clear-all).
+    in property <[FilterItem]> displayed_items: [];
+    in property <int> checked_count: 0;
+    in property <int> total_count: 0;
+    callback item_toggled(string);
+    callback select_all();
+    callback clear_all();
+    // Fired when a section header (e.g. "Intensity", "Coloc ClassA") is
+    // clicked, to toggle every item in that section at once. No-op (never
+    // fired) when `items` isn't grouped.
+    callback group_toggled(string);
+    // Fired when a Coloc class section's "copy to all" icon is clicked.
+    callback group_apply_to_all(string);
+    // Fired on every keystroke in the filter box, so Rust can recompute
+    // `displayed_items`.
+    callback search_changed(string);
+
+    // Two-way bound to `ResultsState.export_*_search_text` (via PickerField)
+    // so Rust can clear it when the dialog re-opens or the export style
+    // changes.
+    in-out property <string> search_text: "";
+
+    border-width: 1px;
+    border-color: Theme.border-soft;
+    border-radius: Theme.radius-sm;
+    clip: true;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // -- Filter + live count ---------------------------------------------
+        Rectangle {
+            height: 30px;
+            background: Theme.bg;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 6px;
+                alignment: center;
+
+                LineEdit {
+                    horizontal-stretch: 1;
+                    placeholder-text: "Filter…";
+                    text <=> root.search_text;
+                    font-size: 11px;
+                    edited(text) => { root.search_changed(text); }
+                }
+
+                Text {
+                    text: root.checked_count + "/" + root.total_count;
+                    font-size: 10px;
+                    font-family: Theme.font-mono;
+                    font-weight: 600;
+                    color: root.checked_count > 0 ? Theme.accent : Theme.text-faint;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: start;
+
+                sel-all-ta := TouchArea {
+                    height: 24px;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (root.all_checked) {
+                            root.clear_all();
+                        } else {
+                            root.select_all();
+                        }
+                    }
+
+                    Rectangle {
+                        background: sel-all-ta.has-hover ? Theme.hover.with-alpha(0.3) : Theme.raised.with-alpha(0.4);
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 6px;
+                            spacing: 7px;
+                            alignment: start;
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                Rectangle {
+                                    width: 13px;
+                                    height: 13px;
+                                    border-radius: 2px;
+                                    border-width: 1.5px;
+                                    border-color: root.all_checked ? Theme.accent : Theme.border;
+                                    background: root.all_checked ? Theme.accent : transparent;
+
+                                    if root.all_checked: Image {
+                                        source: @image-url("../icons/regular-black/check.svg");
+                                        width: 9px;
+                                        height: 9px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: white;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "(Select All)";
+                                font-size: 11px;
+                                font-family: Theme.font-mono;
+                                font-weight: 600;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                for item in root.displayed_items: VerticalLayout {
+                    spacing: 0px;
+
+                    // -- Section header (e.g. "Intensity") — click toggles every
+                    // column in this section at once. Rust's search filter
+                    // always keeps group-header rows in `displayed_items`
+                    // regardless of match, so a section banner never
+                    // disappears while its other members are being searched
+                    // for — no extra "does this group have a match" guard
+                    // needed here.
+                    if item.group_header: group-header-ta := TouchArea {
+                        height: 22px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.group_toggled(item.group);
+                        }
+
+                        Rectangle {
+                            background: group-header-ta.has-hover ? Theme.raised : Theme.bg;
+                            animate background { duration: 80ms; }
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 6px;
+                                spacing: 7px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 13px;
+                                        height: 13px;
+                                        border-radius: 2px;
+                                        border-width: 1.5px;
+                                        border-color: item.group_all_checked ? Theme.accent : Theme.border;
+                                        background: item.group_all_checked ? Theme.accent : transparent;
+
+                                        if item.group_all_checked: Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 9px;
+                                            height: 9px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: white;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: item.group;
+                                    font-size: 10px;
+                                    font-family: Theme.font-sans;
+                                    font-weight: 700;
+                                    color: Theme.text-mute;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+
+                                // Stamps this Coloc class's checked pattern onto every
+                                // other Coloc class section. Only shown for Coloc
+                                // sections — Intensity is always a singleton, so
+                                // there'd be nothing to copy to.
+                                if item.group != "Intensity": apply-all-ta := TouchArea {
+                                    width: 20px;
+                                    height: 20px;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.group_apply_to_all(item.group);
+                                    }
+
+                                    Rectangle {
+                                        border-radius: Theme.radius-sm;
+                                        background: apply-all-ta.has-hover ? Theme.hover : transparent;
+
+                                        Image {
+                                            source: @image-url("../icons/regular-black/copy-simple.svg");
+                                            width: 11px;
+                                            height: 11px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: Theme.text-mute;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Rendered unconditionally, even for the item that's also
+                    // its group's header (e.g. "Coloc w/ ClassA (#)", which
+                    // `mark_group_headers` in Rust reuses as the "Coloc
+                    // ClassA" section banner above) — that item is still a
+                    // real, individually exportable column and needs its own
+                    // checkbox, not just the group-wide toggle in the header
+                    // row. Non-matching rows are already excluded from
+                    // `displayed_items` by Rust.
+                    FilterCheckbox {
+                        label: item.label;
+                        checked: item.checked;
+                        toggled => {
+                            root.item_toggled(item.label);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component DialogButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    width: 96px;
+    height: 30px;
+    border-radius: Theme.radius-sm;
+    background: !root.enabled ? Theme.raised : (root.primary ? (ta.has-hover ? Theme.accent.darker(15%) : Theme.accent) : (ta.has-hover ? Theme.hover : Theme.raised));
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+
+    Text {
+        text: root.label;
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        font-weight: 600;
+        color: root.primary ? white : (root.enabled ? Theme.text-dim : Theme.text-faint);
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// The collapsed-field trigger. Shows chips for the first 4 checked
+// (non-header) items, "+N more" beyond that, or a placeholder when nothing
+// is checked. Clicking anywhere on the field toggles `panel_open`, which
+// the enclosing `ExportDialog` uses to conditionally show/position an
+// (external) `PickerPanel` overlay — see the header comment for why the
+// floating panel isn't declared inside this component the way an actual
+// `PopupWindow` would be.
+component PickerField inherits Rectangle {
+    // Only the count/chip summary is needed here — the checklist itself
+    // now lives in the `PickerPanel` overlay `ExportDialog` renders
+    // alongside this field, fed directly from `ResultsState`.
+    in property <int> checked_count: 0;
+    // Labels of up to the first 4 checked items, computed in Rust (see the
+    // header comment) — backs the chip row below.
+    in property <[string]> chip_labels: [];
+    // How many of `chip_labels` to actually draw before collapsing the
+    // rest into a "+N more" chip. Rust always computes up to 4 regardless
+    // of this — narrower fields (Classes/Images, side by side) just show
+    // fewer of them so the row's width stays bounded; the wider Columns
+    // field can afford to show more. Without a cap here, a field with many
+    // checked items would grow past its allotted share of the dialog's
+    // fixed-width layout and get pushed outside the visible area.
+    in property <int> max_chips: 4;
+    callback item_toggled(string);
+    in-out property <bool> panel_open: false;
+
+    height: 40px;
+    border-radius: Theme.radius-sm;
+    background: Theme.bg;
+    border-width: 1px;
+    border-color: root.panel_open ? Theme.accent : Theme.border-soft;
+    animate border-color { duration: 80ms; }
+    // Belt-and-suspenders alongside the chip cap above and each Chip's own
+    // `max-width` — clips anything that still doesn't fit rather than
+    // letting it push this field (and the layout around it) wider.
+    clip: true;
+
+    field-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.panel_open = !root.panel_open;
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 5px;
+        alignment: start;
+
+        // Chips have a fixed 22px height inside this 40px-tall field, so a
+        // plain HorizontalLayout stretches them to full height instead of
+        // centering them (same "fixed-size item in a HorizontalLayout"
+        // situation as the checkbox squares elsewhere in this file) — wrap
+        // each one in a centering VerticalLayout to match.
+        if root.checked_count == 0: VerticalLayout {
+            alignment: center;
+            Text {
+                text: "None selected — click to choose…";
+                font-size: 11.5px;
+                font-family: Theme.font-sans;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.max_chips > 0 && root.chip_labels.length > 0: VerticalLayout {
+            alignment: center;
+            Chip {
+                label: root.chip_labels[0];
+                remove => { root.item_toggled(root.chip_labels[0]); }
+            }
+        }
+
+        if root.max_chips > 1 && root.chip_labels.length > 1: VerticalLayout {
+            alignment: center;
+            Chip {
+                label: root.chip_labels[1];
+                remove => { root.item_toggled(root.chip_labels[1]); }
+            }
+        }
+
+        if root.max_chips > 2 && root.chip_labels.length > 2: VerticalLayout {
+            alignment: center;
+            Chip {
+                label: root.chip_labels[2];
+                remove => { root.item_toggled(root.chip_labels[2]); }
+            }
+        }
+
+        if root.max_chips > 3 && root.chip_labels.length > 3: VerticalLayout {
+            alignment: center;
+            Chip {
+                label: root.chip_labels[3];
+                remove => { root.item_toggled(root.chip_labels[3]); }
+            }
+        }
+
+        if root.checked_count > root.max_chips: VerticalLayout {
+            alignment: center;
+            OverflowChip {
+                count: root.checked_count - root.max_chips;
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.panel_open ? "▴" : "▾";
+                font-size: 10px;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// The floating panel shown alongside an open `PickerField` — a searchable
+// checklist plus a "Done" button. Declared and positioned by `ExportDialog`
+// itself (see the header comment for why), not by `PickerField`.
+component PickerPanel inherits Rectangle {
+    in property <[FilterItem]> items: [];
+    in property <bool> all_checked: true;
+    in property <int> checked_count: 0;
+    in property <int> total_count: 0;
+    in property <[FilterItem]> displayed_items: [];
+    in-out property <string> search_text: "";
+    callback item_toggled(string);
+    callback select_all();
+    callback clear_all();
+    callback group_toggled(string);
+    callback group_apply_to_all(string);
+    callback search_changed(string);
+    // Fired by the "Done" button — the caller (a `PickerField`'s
+    // `panel_open`) owns whether this panel exists at all.
+    callback done();
+
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: Theme.radius-md;
+    drop-shadow-color: Theme.shadow;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    clip: true;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        ChecklistBox {
+            vertical-stretch: 1;
+            items: root.items;
+            all_checked: root.all_checked;
+            checked_count: root.checked_count;
+            total_count: root.total_count;
+            displayed_items: root.displayed_items;
+            search_text <=> root.search_text;
+            item_toggled(label) => { root.item_toggled(label); }
+            select_all => { root.select_all(); }
+            clear_all => { root.clear_all(); }
+            group_toggled(group) => { root.group_toggled(group); }
+            group_apply_to_all(group) => { root.group_apply_to_all(group); }
+            search_changed(text) => { root.search_changed(text); }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border-soft;
+        }
+
+        done-ta := TouchArea {
+            height: 28px;
+            mouse-cursor: pointer;
+            clicked => {
+                root.done();
+            }
+
+            Rectangle {
+                background: done-ta.has-hover ? Theme.raised : transparent;
+                animate background { duration: 80ms; }
+
+                Text {
+                    text: "Done";
+                    font-size: 11px;
+                    font-family: Theme.font-sans;
+                    font-weight: 500;
+                    color: Theme.accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+export component ExportDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(640px, parent.width - 40px);
+        height: min(680px, parent.height - 40px);
+        background: Theme.panel;
+        border-radius: Theme.radius-lg;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        clip: true;
+
+        VerticalLayout {
+            spacing: 0;
+
+            // -- Header ---------------------------------------------------------
+            Rectangle {
+                height: 52px;
+                background: Theme.panel;
+
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+
+                    Text {
+                        text: "Export results";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-family: Theme.font-sans;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: Theme.radius-sm;
+                        background: close-ta.has-hover ? Theme.raised : transparent;
+
+                        Text {
+                            text: "x";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-ta := TouchArea {
+                            clicked => {
+                                ResultsState.export_dialog_close();
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
+            // -- Body -------------------------------------------------------------
+            // Scrollable so the dialog degrades gracefully (rather than
+            // silently clipping the footer) if the window is short enough
+            // that the fixed-size sections below don't all fit at once. The
+            // collapsed picker fields make this a lot less likely to matter
+            // than it did with three always-open scrollboxes.
+            body-scroll := ScrollView {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "Export style:";
+                            width: 74px;
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        StyleToggleButton {
+                            label: "Table";
+                            selected: ResultsState.export_style == "table";
+                            clicked => { ResultsState.export_style_selected("table"); }
+                        }
+
+                        StyleToggleButton {
+                            label: "Coloc details";
+                            selected: ResultsState.export_style == "coloc_detail";
+                            clicked => { ResultsState.export_style_selected("coloc_detail"); }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    if ResultsState.export_style == "table": HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "Group by:";
+                            width: 74px;
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        StyleToggleButton {
+                            label: "No Grouping";
+                            selected: ResultsState.export_group_by == "none";
+                            clicked => { ResultsState.export_group_by = "none"; }
+                        }
+
+                        StyleToggleButton {
+                            label: "Image";
+                            selected: ResultsState.export_group_by == "image";
+                            clicked => { ResultsState.export_group_by = "image"; }
+                        }
+
+                        StyleToggleButton {
+                            label: "Regex";
+                            selected: ResultsState.export_group_by == "regex";
+                            clicked => { ResultsState.export_group_by = "regex"; }
+                        }
+
+                        if ResultsState.export_group_by == "regex": LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "e.g. (.*)_ch\\d+";
+                            text <=> ResultsState.export_group_regex;
+                        }
+
+                        if ResultsState.export_group_by != "regex": Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    // -- Images + Classes: collapsed chip fields, stacked -------------
+                    // Each field now gets the dialog's full width (like Columns
+                    // below), so both can afford to show more chips before
+                    // collapsing into "+N more".
+                    VerticalLayout {
+                        spacing: 10px;
+                        vertical-stretch: 0;
+
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+
+                                Text {
+                                    text: "Images to export:";
+                                    font-size: 11px;
+                                    font-family: Theme.font-sans;
+                                    font-weight: 600;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: ResultsState.export_image_checked_count + "/" + ResultsState.export_image_total_count;
+                                    font-size: 10.5px;
+                                    font-family: Theme.font-mono;
+                                    font-weight: 600;
+                                    color: ResultsState.export_image_checked_count > 0 ? Theme.accent : Theme.text-faint;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            image-picker := PickerField {
+                                max_chips: 4;
+                                checked_count: ResultsState.export_image_checked_count;
+                                chip_labels: ResultsState.export_image_chip_labels;
+                                item_toggled(label) => { ResultsState.export_image_item_toggled(label); }
+                            }
+                        }
+
+                        each-image-ta := TouchArea {
+                            height: 22px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.export_each_image = !ResultsState.export_each_image;
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 2px;
+                                spacing: 7px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 13px;
+                                        height: 13px;
+                                        border-radius: 2px;
+                                        border-width: 1.5px;
+                                        border-color: ResultsState.export_each_image ? Theme.accent : Theme.border;
+                                        background: ResultsState.export_each_image ? Theme.accent : transparent;
+
+                                        if ResultsState.export_each_image: Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 9px;
+                                            height: 9px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: white;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: "Export each checked image as its own file (filename gets the image name)";
+                                    font-size: 11px;
+                                    font-family: Theme.font-sans;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+
+                                Text {
+                                    text: "Classes to include:";
+                                    font-size: 11px;
+                                    font-family: Theme.font-sans;
+                                    font-weight: 600;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: ResultsState.export_class_checked_count + "/" + ResultsState.export_class_total_count;
+                                    font-size: 10.5px;
+                                    font-family: Theme.font-mono;
+                                    font-weight: 600;
+                                    color: ResultsState.export_class_checked_count > 0 ? Theme.accent : Theme.text-faint;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            class-picker := PickerField {
+                                max_chips: 4;
+                                checked_count: ResultsState.export_class_checked_count;
+                                chip_labels: ResultsState.export_class_chip_labels;
+                                item_toggled(label) => { ResultsState.export_class_item_toggled(label); }
+                            }
+                        }
+                    }
+
+                    // -- Columns: collapsed chip field, grouped popup content ---------
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            vertical-stretch: 0;
+
+                            Text {
+                                text: "Columns to export:";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                font-weight: 600;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: ResultsState.export_column_checked_count + "/" + ResultsState.export_column_total_count;
+                                font-size: 10.5px;
+                                font-family: Theme.font-mono;
+                                font-weight: 600;
+                                color: ResultsState.export_column_checked_count > 0 ? Theme.accent : Theme.text-faint;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            if ResultsState.export_has_intensity: Text {
+                                text: "Intensity:";
+                                font-size: 10px;
+                                font-family: Theme.font-sans;
+                                color: Theme.text-faint;
+                                vertical-alignment: center;
+                            }
+
+                            if ResultsState.export_has_intensity: DialogButton {
+                                width: 60px;
+                                height: 22px;
+                                label: "None";
+                                clicked => { ResultsState.export_column_intensity_preset("none"); }
+                            }
+
+                            if ResultsState.export_has_intensity: DialogButton {
+                                width: 76px;
+                                height: 22px;
+                                label: "Avg+Sum";
+                                clicked => { ResultsState.export_column_intensity_preset("avg_sum"); }
+                            }
+
+                            if ResultsState.export_has_intensity: DialogButton {
+                                width: 60px;
+                                height: 22px;
+                                label: "All";
+                                clicked => { ResultsState.export_column_intensity_preset("all"); }
+                            }
+                        }
+
+                        column-picker := PickerField {
+                            checked_count: ResultsState.export_column_checked_count;
+                            chip_labels: ResultsState.export_column_chip_labels;
+                            item_toggled(label) => { ResultsState.export_column_item_toggled(label); }
+                        }
+                    }
+
+                    // -- Combination builder -------------------------------------
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            text: "Name:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "e.g. GroupABC";
+                            text <=> ResultsState.export_combo_name;
+                        }
+
+                        Text {
+                            text: "Format:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 90px;
+                            model: ["CSV", "XLSX"];
+                            current-value: ResultsState.export_format == "xlsx" ? "XLSX" : "CSV";
+                            selected(v) => {
+                                ResultsState.export_format = v == "XLSX" ? "xlsx" : "csv";
+                            }
+                        }
+
+                        DialogButton {
+                            label: "+ Add";
+                            clicked => {
+                                ResultsState.export_add_batch();
+                            }
+                        }
+
+                        DialogButton {
+                            width: 118px;
+                            label: "Add from table";
+                            clicked => {
+                                ResultsState.export_add_batch_from_table();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border-soft;
+                    }
+
+                    Text {
+                        text: "Combinations to export:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        font-weight: 600;
+                        color: Theme.text-dim;
+                    }
+
+                    Rectangle {
+                        height: 140px;
+                        border-width: 1px;
+                        border-color: Theme.border-soft;
+                        border-radius: Theme.radius-sm;
+                        clip: true;
+
+                        if ResultsState.export_batches.length == 0: Text {
+                            x: 8px;
+                            y: 6px;
+                            width: parent.width - 16px;
+                            text: "No combinations queued — Export All will use the classes checked above.";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-faint;
+                            wrap: word-wrap;
+                        }
+
+                        if ResultsState.export_batches.length > 0: ScrollView {
+                            VerticalLayout {
+                                alignment: start;
+
+                                for batch[idx] in ResultsState.export_batches: Rectangle {
+                                    height: 28px;
+                                    background: row-ta.has-hover ? Theme.hover.with-alpha(0.3) : transparent;
+
+                                    row-ta := TouchArea { }
+
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 6px;
+                                        spacing: 8px;
+
+                                        Text {
+                                            text: batch.name;
+                                            font-size: 11px;
+                                            font-family: Theme.font-mono;
+                                            font-weight: 600;
+                                            color: Theme.text-dim;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: batch.classes_label;
+                                            font-size: 11px;
+                                            font-family: Theme.font-mono;
+                                            color: Theme.text-mute;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: batch.each_image ? "each image: " + batch.images_label : batch.images_label;
+                                            font-size: 11px;
+                                            font-family: Theme.font-mono;
+                                            color: batch.each_image ? Theme.accent : Theme.text-mute;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: batch.style_label;
+                                            width: 80px;
+                                            font-size: 10px;
+                                            font-family: Theme.font-mono;
+                                            font-weight: 600;
+                                            color: Theme.text-dim;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: batch.format == "xlsx" ? "XLSX" : "CSV";
+                                            font-size: 10px;
+                                            font-family: Theme.font-mono;
+                                            font-weight: 600;
+                                            color: Theme.accent;
+                                            vertical-alignment: center;
+                                        }
+
+                                        remove-ta := TouchArea {
+                                            width: 18px;
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                ResultsState.export_remove_batch(idx);
+                                            }
+
+                                            Text {
+                                                text: "x";
+                                                font-size: 12px;
+                                                color: remove-ta.has-hover ? Theme.err : Theme.text-mute;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if ResultsState.export_status != "": Text {
+                        text: ResultsState.export_status;
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            // -- Footer -----------------------------------------------------------
+            Rectangle {
+                height: ResultsState.export_running ? 64px : 56px;
+                background: Theme.bg;
+
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+
+                VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 4px;
+                    alignment: center;
+
+                    if ResultsState.export_running: VerticalLayout {
+                        spacing: 2px;
+
+                        ProgressIndicator {
+                            progress: ResultsState.export_progress_fraction;
+                        }
+
+                        Text {
+                            text: ResultsState.export_progress_total > 0
+                                ? "File " + ResultsState.export_progress_current + " of " + ResultsState.export_progress_total
+                                : "";
+                            font-size: 10px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-faint;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+
+                        DialogButton {
+                            width: 140px;
+                            label: "Export as Displayed";
+                            enabled: !ResultsState.export_running;
+                            clicked => {
+                                ResultsState.export_as_displayed();
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        DialogButton {
+                            label: "Cancel";
+                            clicked => {
+                                if (ResultsState.export_running) {
+                                    ResultsState.export_cancel();
+                                } else {
+                                    ResultsState.export_dialog_close();
+                                }
+                            }
+                        }
+
+                        DialogButton {
+                            label: ResultsState.export_running ? "Exporting…" : "Export All";
+                            primary: true;
+                            enabled: !ResultsState.export_running;
+                            clicked => {
+                                ResultsState.export_run_all();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // -- Picker panels ---------------------------------------------------------
+    // Declared here, at the dialog's own root, rather than nested inside the
+    // `card` Rectangle above or the `body-scroll` ScrollView within it — see
+    // the header comment for why. `ExportDialog` fills the window at (0, 0),
+    // so each field's `absolute-position` is already dialog-local.
+    if class-picker.panel_open: PickerPanel {
+        x: class-picker.absolute-position.x;
+        y: class-picker.absolute-position.y + class-picker.height + 2px;
+        width: 420px;
+        height: 300px;
+        items: ResultsState.export_class_items;
+        all_checked: ResultsState.export_class_all_checked;
+        checked_count: ResultsState.export_class_checked_count;
+        total_count: ResultsState.export_class_total_count;
+        displayed_items: ResultsState.export_class_displayed_items;
+        search_text <=> ResultsState.export_class_search_text;
+        item_toggled(label) => { ResultsState.export_class_item_toggled(label); }
+        select_all => { ResultsState.export_class_select_all(); }
+        clear_all => { ResultsState.export_class_clear_all(); }
+        search_changed(text) => { ResultsState.export_class_search_changed(text); }
+        done => { class-picker.panel_open = false; }
+    }
+
+    if image-picker.panel_open: PickerPanel {
+        x: image-picker.absolute-position.x;
+        y: image-picker.absolute-position.y + image-picker.height + 2px;
+        width: 420px;
+        height: 300px;
+        items: ResultsState.export_image_items;
+        all_checked: ResultsState.export_image_all_checked;
+        checked_count: ResultsState.export_image_checked_count;
+        total_count: ResultsState.export_image_total_count;
+        displayed_items: ResultsState.export_image_displayed_items;
+        search_text <=> ResultsState.export_image_search_text;
+        item_toggled(label) => { ResultsState.export_image_item_toggled(label); }
+        select_all => { ResultsState.export_image_select_all(); }
+        clear_all => { ResultsState.export_image_clear_all(); }
+        search_changed(text) => { ResultsState.export_image_search_changed(text); }
+        done => { image-picker.panel_open = false; }
+    }
+
+    if column-picker.panel_open: PickerPanel {
+        x: column-picker.absolute-position.x;
+        y: column-picker.absolute-position.y + column-picker.height + 2px;
+        width: 420px;
+        height: 340px;
+        items: ResultsState.export_column_items;
+        all_checked: ResultsState.export_column_all_checked;
+        checked_count: ResultsState.export_column_checked_count;
+        total_count: ResultsState.export_column_total_count;
+        displayed_items: ResultsState.export_column_displayed_items;
+        search_text <=> ResultsState.export_column_search_text;
+        item_toggled(label) => { ResultsState.export_column_item_toggled(label); }
+        select_all => { ResultsState.export_column_select_all(); }
+        clear_all => { ResultsState.export_column_clear_all(); }
+        group_toggled(group) => { ResultsState.export_column_group_toggle(group); }
+        group_apply_to_all(group) => { ResultsState.export_column_apply_group_to_all(group); }
+        search_changed(text) => { ResultsState.export_column_search_changed(text); }
+        done => { column-picker.panel_open = false; }
+    }
+}

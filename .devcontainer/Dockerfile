@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN rustup component add rustfmt
 RUN cargo install cargo-llvm-cov
+RUN cargo install cargo-cyclonedx
 RUN rustup component add llvm-tools-preview
 
 # Cross build

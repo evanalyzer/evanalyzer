@@ -1305,6 +1305,19 @@ pub struct ClassifyRoisSettings {
     ///  Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
     ///  Has no effect when the selected operation only manipulates input classes or clears all classes.
     pub output_class: ObjectClass,
+    ///  Additional criterion: the object must intersect an ROI carrying this class
+    ///
+    ///  If unset (the default) this filter is not applied. When set, an object only
+    ///  satisfies the overall criteria if it also overlaps at least one ROI carrying this
+    ///  class by at least `min_intersection_area`. Combine with e.g.
+    ///  `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
+    ///  or `AddOutputClassIfMatch` to tag objects that do.
+    pub overlapping_with: ObjectClass,
+    ///  Minimum intersection area with an `overlapping_with` object, in `size_unit`
+    ///
+    ///  Has no effect while `overlapping_with` is Unset.
+    #[schemars(range(min = 0, max = 2147483600))]
+    pub min_intersection_area: f32,
     ///  Unit to use for roi extraction
     pub size_unit: SizeUnits,
     ///  Minimum area size
@@ -1409,6 +1422,8 @@ impl Default for ClassifyRoisSettings {
             match_handling:
                 ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch,
             output_class: ObjectClass::Unset,
+            overlapping_with: ObjectClass::Unset,
+            min_intersection_area: 0.0f32,
             size_unit: SizeUnits::NanoMeter,
             min_area: 0.0f32,
             max_area: 2147483648.0f32,
