@@ -116,6 +116,11 @@ component Chip inherits Rectangle {
             font-family: Theme.font-sans;
             color: Theme.text;
             vertical-alignment: center;
+            // Caps how wide a single chip can get — otherwise one long
+            // label is enough to push the whole PickerField (and the
+            // dialog's fixed-width layout around it) wider than intended.
+            max-width: 70px;
+            overflow: elide;
         }
 
         rm-ta := TouchArea {
@@ -448,6 +453,14 @@ component PickerField inherits Rectangle {
     // Labels of up to the first 4 checked items, computed in Rust (see the
     // header comment) — backs the chip row below.
     in property <[string]> chip_labels: [];
+    // How many of `chip_labels` to actually draw before collapsing the
+    // rest into a "+N more" chip. Rust always computes up to 4 regardless
+    // of this — narrower fields (Classes/Images, side by side) just show
+    // fewer of them so the row's width stays bounded; the wider Columns
+    // field can afford to show more. Without a cap here, a field with many
+    // checked items would grow past its allotted share of the dialog's
+    // fixed-width layout and get pushed outside the visible area.
+    in property <int> max_chips: 4;
     callback item_toggled(string);
     in-out property <bool> panel_open: false;
 
@@ -457,6 +470,10 @@ component PickerField inherits Rectangle {
     border-width: 1px;
     border-color: root.panel_open ? Theme.accent : Theme.border-soft;
     animate border-color { duration: 80ms; }
+    // Belt-and-suspenders alongside the chip cap above and each Chip's own
+    // `max-width` — clips anything that still doesn't fit rather than
+    // letting it push this field (and the layout around it) wider.
+    clip: true;
 
     field-ta := TouchArea {
         mouse-cursor: pointer;
@@ -487,7 +504,7 @@ component PickerField inherits Rectangle {
             }
         }
 
-        if root.chip_labels.length > 0: VerticalLayout {
+        if root.max_chips > 0 && root.chip_labels.length > 0: VerticalLayout {
             alignment: center;
             Chip {
                 label: root.chip_labels[0];
@@ -495,7 +512,7 @@ component PickerField inherits Rectangle {
             }
         }
 
-        if root.chip_labels.length > 1: VerticalLayout {
+        if root.max_chips > 1 && root.chip_labels.length > 1: VerticalLayout {
             alignment: center;
             Chip {
                 label: root.chip_labels[1];
@@ -503,7 +520,7 @@ component PickerField inherits Rectangle {
             }
         }
 
-        if root.chip_labels.length > 2: VerticalLayout {
+        if root.max_chips > 2 && root.chip_labels.length > 2: VerticalLayout {
             alignment: center;
             Chip {
                 label: root.chip_labels[2];
@@ -511,7 +528,7 @@ component PickerField inherits Rectangle {
             }
         }
 
-        if root.chip_labels.length > 3: VerticalLayout {
+        if root.max_chips > 3 && root.chip_labels.length > 3: VerticalLayout {
             alignment: center;
             Chip {
                 label: root.chip_labels[3];
@@ -519,10 +536,10 @@ component PickerField inherits Rectangle {
             }
         }
 
-        if root.checked_count > 4: VerticalLayout {
+        if root.checked_count > root.max_chips: VerticalLayout {
             alignment: center;
             OverflowChip {
-                count: root.checked_count - 4;
+                count: root.checked_count - root.max_chips;
             }
         }
 
@@ -780,47 +797,15 @@ export component ExportDialog inherits Rectangle {
                         }
                     }
 
-                    // -- Classes + Images: collapsed chip fields, side by side --------
-                    HorizontalLayout {
-                        spacing: 12px;
+                    // -- Images + Classes: collapsed chip fields, stacked -------------
+                    // Each field now gets the dialog's full width (like Columns
+                    // below), so both can afford to show more chips before
+                    // collapsing into "+N more".
+                    VerticalLayout {
+                        spacing: 10px;
                         vertical-stretch: 0;
 
                         VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 6px;
-                            alignment: start;
-
-                            HorizontalLayout {
-                                spacing: 8px;
-
-                                Text {
-                                    text: "Classes to include:";
-                                    font-size: 11px;
-                                    font-family: Theme.font-sans;
-                                    font-weight: 600;
-                                    color: Theme.text-dim;
-                                    vertical-alignment: center;
-                                }
-
-                                Text {
-                                    text: ResultsState.export_class_checked_count + "/" + ResultsState.export_class_total_count;
-                                    font-size: 10.5px;
-                                    font-family: Theme.font-mono;
-                                    font-weight: 600;
-                                    color: ResultsState.export_class_checked_count > 0 ? Theme.accent : Theme.text-faint;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            class-picker := PickerField {
-                                checked_count: ResultsState.export_class_checked_count;
-                                chip_labels: ResultsState.export_class_chip_labels;
-                                item_toggled(label) => { ResultsState.export_class_item_toggled(label); }
-                            }
-                        }
-
-                        VerticalLayout {
-                            horizontal-stretch: 1;
                             spacing: 6px;
                             alignment: start;
 
@@ -847,9 +832,44 @@ export component ExportDialog inherits Rectangle {
                             }
 
                             image-picker := PickerField {
+                                max_chips: 4;
                                 checked_count: ResultsState.export_image_checked_count;
                                 chip_labels: ResultsState.export_image_chip_labels;
                                 item_toggled(label) => { ResultsState.export_image_item_toggled(label); }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                Text {
+                                    text: "Classes to include:";
+                                    font-size: 11px;
+                                    font-family: Theme.font-sans;
+                                    font-weight: 600;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: ResultsState.export_class_checked_count + "/" + ResultsState.export_class_total_count;
+                                    font-size: 10.5px;
+                                    font-family: Theme.font-mono;
+                                    font-weight: 600;
+                                    color: ResultsState.export_class_checked_count > 0 ? Theme.accent : Theme.text-faint;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            class-picker := PickerField {
+                                max_chips: 4;
+                                checked_count: ResultsState.export_class_checked_count;
+                                chip_labels: ResultsState.export_class_chip_labels;
+                                item_toggled(label) => { ResultsState.export_class_item_toggled(label); }
                             }
                         }
                     }
@@ -1228,7 +1248,7 @@ export component ExportDialog inherits Rectangle {
     if class-picker.panel_open: PickerPanel {
         x: class-picker.absolute-position.x;
         y: class-picker.absolute-position.y + class-picker.height + 2px;
-        width: 320px;
+        width: 420px;
         height: 300px;
         items: ResultsState.export_class_items;
         all_checked: ResultsState.export_class_all_checked;
@@ -1246,7 +1266,7 @@ export component ExportDialog inherits Rectangle {
     if image-picker.panel_open: PickerPanel {
         x: image-picker.absolute-position.x;
         y: image-picker.absolute-position.y + image-picker.height + 2px;
-        width: 360px;
+        width: 420px;
         height: 300px;
         items: ResultsState.export_image_items;
         all_checked: ResultsState.export_image_all_checked;

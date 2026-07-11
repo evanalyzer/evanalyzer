@@ -1,10 +1,25 @@
 ## Editor
 
-- [ ] feat: Read rdf file for auto configure AI segmentation
 - [ ] feat: "old" or non used objects in the respective pipelines should not be displayed.
 - [ ] feat: channel should change with pipeline automatically
 - [ ] fix: Cy5 displayed in yellow
+- [ ] feat: Allow to switch to grayscale mode
 
 ## Results
 
 - [ ] Export R
+
+## Algorithms
+- [ ] Add measure distance command
+- [ ] Allow to train pixel classifier
+
+## Other
+
+- [ ] Add open recent files
+- [ ] Add application icon/logo
+- [ ] Display filename of actual opened project in Title Bar
+- [ ] Rework if About dialog
+  - [ ] Add License
+  - [ ] Add open sourcr licenses and list
+  - [ ] Add other contributors
+  - [ ] Show Version and system resources
