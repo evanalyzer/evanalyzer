@@ -187,7 +187,11 @@ pub struct ImageChannel {
 }
 
 pub struct ImageReader {
-    wrapper_instance: Option<GlobalRef>,
+    // pub(crate) (rather than private) so sibling modules - e.g.
+    // image_ome_parser's tests, which construct a JVM-free `ImageReader` via
+    // struct literal to unit-test `parse_ome_xml` in isolation - can build
+    // one without going through `new()`'s JNI call.
+    pub(crate) wrapper_instance: Option<GlobalRef>,
     pub(crate) read_mode: ReadMode,
     pub image_meta: Arc<ImageMeta>,
     pub(crate) current_path: PathBuf,
@@ -1089,10 +1093,21 @@ fn read_be(chunk: &[u8]) -> u64 {
 /// ```
 impl Drop for ImageReader {
     fn drop(&mut self) {
+        // Nothing to close - either the JVM close-out already ran once (this
+        // `take()`s the field), or this reader never had a live Java object
+        // to begin with (e.g. one built directly via struct literal for a
+        // unit test that only exercises pure-Rust parsing code, bypassing
+        // `new()`'s JNI call entirely). Either way, there is no live object
+        // for the JVM lookup below to act on, so skip it - a `Drop` impl
+        // must never panic, and requiring an initialized JVM just to drop a
+        // reader with nothing to clean up would do exactly that.
+        let Some(instance) = self.wrapper_instance.take() else {
+            return;
+        };
         let wrapper = JAVA_WRAPPER
             .get()
             .expect("Java Runtime not initialized, call init_java_wrapper");
-        let instance = self.wrapper_instance.take();
+        let instance = Some(instance);
         if let Some(jvm) = &wrapper.jvm {
             if let Ok(mut env) = jvm.attach_current_thread() {
                 if let (Some(obj), Some(close_raw)) = (&instance, wrapper.m_close) {

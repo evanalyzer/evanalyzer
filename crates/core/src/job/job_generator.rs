@@ -140,3 +140,182 @@ fn generate_job_from_project_settings_intenal(
 
     Ok(job)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
+    use evanalyzer_cfg::settings::images_settings::PixelSizeSettings;
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+    use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
+
+    fn blur_step(enabled: bool) -> PipelineStepSettings {
+        PipelineStepSettings {
+            enabled,
+            command: PipelineCommand::Blur(BlurSettings::default()),
+        }
+    }
+
+    fn pipeline(id: u32, enabled: bool, steps: Vec<PipelineStepSettings>) -> PipelineSettings {
+        PipelineSettings {
+            id: PipelineId(id),
+            name: None,
+            image_source: ImageAddress::Channel(0),
+            enabled,
+            steps,
+        }
+    }
+
+    fn project_with(root: Option<PathBuf>, pipelines: Vec<PipelineSettings>) -> ProjectSettings {
+        let mut project = ProjectSettings::default();
+        project.images.root = root;
+        project.pipelines = pipelines;
+        project
+    }
+
+    #[test]
+    fn missing_image_root_is_rejected_with_invalid_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = project_with(None, vec![]);
+
+        let err = generate_preview_job_from_project_settings(project, dir.path().to_path_buf())
+            .err()
+            .expect("no image root must be an error");
+
+        assert!(matches!(err, InternalErrors::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn preview_job_creates_the_results_preview_directory_and_forwards_paths() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
+
+        let job = generate_preview_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+        )
+        .expect("valid config with an image root must succeed");
+
+        let expected_output = project_dir.path().join("results").join("preview");
+        assert!(expected_output.is_dir(), "preview output directory must be created on disk");
+        assert_eq!(job.output_path, expected_output);
+        assert_eq!(job.project_path, project_dir.path());
+        assert_eq!(job.image_base_path, image_root.path());
+        assert!(job.pipelines.is_empty());
+    }
+
+    #[test]
+    fn disabled_pipelines_are_skipped_entirely() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![
+                pipeline(1, false, vec![blur_step(true)]),
+                pipeline(2, true, vec![blur_step(true)]),
+            ],
+        );
+
+        let job = generate_preview_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+        )
+        .unwrap();
+
+        assert_eq!(job.pipelines.len(), 1, "only the enabled pipeline must be added");
+        assert!(job.pipelines.contains_key(&PipelineId(2)));
+        assert!(!job.pipelines.contains_key(&PipelineId(1)));
+    }
+
+    #[test]
+    fn disabled_steps_within_an_enabled_pipeline_are_skipped() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(
+                1,
+                true,
+                vec![blur_step(true), blur_step(false), blur_step(true)],
+            )],
+        );
+
+        let job = generate_preview_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+        )
+        .unwrap();
+
+        let built = job.pipelines.get(&PipelineId(1)).expect("pipeline 1 must exist");
+        assert_eq!(built.commands.len(), 2, "only the two enabled steps must become commands");
+    }
+
+    #[test]
+    fn pixel_size_override_is_forwarded_when_set() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let mut project = project_with(Some(image_root.path().to_path_buf()), vec![]);
+        project.images.settings.pixel_sizes = Some(PixelSizeSettings { x: 1.5, y: 2.5, z: 3.5 });
+
+        let job = generate_preview_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+        )
+        .unwrap();
+
+        let sizes = job.override_pixel_sizes.expect("pixel size override must be forwarded");
+        assert_eq!(sizes.px_size_x, 1.5);
+        assert_eq!(sizes.px_size_y, 2.5);
+        assert_eq!(sizes.px_size_z, 3.5);
+    }
+
+    #[test]
+    fn pixel_size_override_is_none_when_unset() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
+
+        let job = generate_preview_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+        )
+        .unwrap();
+
+        assert!(job.override_pixel_sizes.is_none());
+    }
+
+    #[test]
+    fn analyze_job_creates_a_timestamped_results_database() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![blur_step(true)])],
+        );
+
+        let job = generate_analyze_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+        )
+        .expect("valid config with an image root must succeed");
+
+        assert_eq!(job.pipelines.len(), 1);
+        assert!(
+            job.output_path.starts_with(project_dir.path().join("results")),
+            "the analyze job's output directory must live under <project>/results"
+        );
+        assert!(job.output_path.is_dir());
+
+        let db_files: Vec<_> = std::fs::read_dir(&job.output_path)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().extension().and_then(|s| s.to_str())
+                    == Some(evanalyzer_cfg::RESULTS_FILE_EXTENSION)
+            })
+            .collect();
+        assert_eq!(db_files.len(), 1, "exactly one .evadb file must be created");
+    }
+}

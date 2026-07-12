@@ -375,3 +375,259 @@ impl ImageReader {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Builds an `ImageReader` with no live JVM/Bio-Formats session -
+    /// `parse_ome_xml` is pure string-in/struct-out and only reads
+    /// `current_path`/`read_mode`, so it can be unit-tested without opening
+    /// a real image.
+    fn reader_at(path: &str, mode: ReadMode) -> ImageReader {
+        ImageReader {
+            wrapper_instance: None,
+            read_mode: mode,
+            image_meta: std::sync::Arc::new(ImageMeta::default()),
+            current_path: PathBuf::from(path),
+        }
+    }
+
+    /// The real OME-XML (+ JODA pyramid extension) Bio-Formats produces for
+    /// `crates/core/tests/multi-channel-4D-series.ome.tif`, the same fixture
+    /// several JNI-backed tests in `image_reader.rs` open for real.
+    fn real_fixture_xml() -> String {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ome.xml");
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    }
+
+    #[test]
+    fn real_fixture_parses_series_channels_and_pyramid_resolution() {
+        let reader = reader_at("/some/dir/multi-channel-4D-series.ome.tif", ReadMode::Default);
+        let meta = reader.parse_ome_xml(&real_fixture_xml()).expect("real fixture must parse");
+
+        // Name comes from the reader's own path, not the XML's Image/@Name.
+        assert_eq!(meta.name, "multi-channel-4D-series.ome.tif");
+
+        assert_eq!(meta.series.len(), 1);
+        let series = meta.series.get(&0).expect("series 0 must exist");
+        assert_eq!(series.nr_c_stacks, 3);
+        assert_eq!(series.nr_t_stacks, 7);
+        assert_eq!(series.nr_z_stacks, 5);
+
+        assert_eq!(series.channels.len(), 3);
+        for c in 0..3 {
+            assert!(series.channels.contains_key(&c), "channel {c} must be present");
+        }
+
+        assert_eq!(series.resolutions.len(), 1);
+        let res = series.resolutions.get(&0).expect("resolution 0 must exist");
+        assert_eq!(res.width, 439);
+        assert_eq!(res.height, 167);
+        assert_eq!(res.tile_width, 439);
+        assert_eq!(res.tile_height, 1);
+        assert_eq!(res.nr_bits, 8);
+        assert_eq!(res.color_channels, 1);
+        assert!(!res.is_interleaved);
+        assert!(!res.is_little_endian);
+        // color_channels (1) is not > 2, so the ReadMode::Default RGB rule
+        // (`color_channels > 2`) does not mark this - correctly - as RGB.
+        assert!(!res.is_rgb);
+    }
+
+    /// Regression test pinning the exact trigger for the "Image decoder can
+    /// panic on real files" issue: a `<PyramidResolution>` that omits
+    /// `BitsPerPixel` (plausible for a pyramid sub-resolution level in a
+    /// real-world file) leaves `nr_bits` at its `u8` default of 0, which
+    /// `image_reader.rs`'s decode path then divides/chunks by. This test
+    /// only pins the parser's actual behaviour (nr_bits stays 0, no error is
+    /// raised) - it intentionally does not assert a fix, since the decoder
+    /// fix is tracked separately.
+    #[test]
+    fn pyramid_resolution_missing_bits_per_pixel_leaves_nr_bits_at_zero() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Image ID="Image:0">
+    <Pixels ID="Pixels:0" SizeC="1" SizeT="1" SizeZ="1" SizeX="10" SizeY="10"/>
+  </Image>
+</OME>
+<JODA xmlns="https://www.imagec.org/" SeriesCount="1">
+  <Series idx="0" ResolutionCount="1">
+    <PyramidResolution idx="0" width="10" height="10" TileWidth="10" TileHeight="10" RGBChannelCount="1" IsInterleaved="0" IsLittleEndian="0"/>
+  </Series>
+</JODA>"#;
+
+        let reader = reader_at("/some/dir/thumbnail.tif", ReadMode::Default);
+        let meta = reader.parse_ome_xml(xml).expect("missing BitsPerPixel must not itself be a parse error");
+
+        let res = meta.series[&0].resolutions.get(&0).expect("resolution 0 must exist");
+        assert_eq!(res.nr_bits, 0, "nr_bits must default to 0 when BitsPerPixel is absent");
+    }
+
+    #[test]
+    fn physical_pixel_sizes_and_channel_wavelengths_are_converted_to_nanometers() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Image ID="Image:0">
+    <Pixels ID="Pixels:0" SizeC="2" SizeT="1" SizeZ="1"
+        PhysicalSizeX="0.5" PhysicalSizeXUnit="µm"
+        PhysicalSizeY="0.5" PhysicalSizeYUnit="µm"
+        PhysicalSizeZ="1.2" PhysicalSizeZUnit="µm">
+      <Channel ID="Channel:0:0" Name="DAPI" EmissionWavelength="461" EmissionWavelengthUnit="nm"/>
+      <Channel ID="Channel:0:1" Name="GFP" EmissionWavelength="0.509" EmissionWavelengthUnit="µm"/>
+    </Pixels>
+  </Image>
+</OME>"#;
+
+        let reader = reader_at("/some/dir/img.tif", ReadMode::Default);
+        let meta = reader.parse_ome_xml(xml).unwrap();
+        let series = &meta.series[&0];
+
+        assert_eq!(series.pixel_sizes.px_size_x, 500.0);
+        assert_eq!(series.pixel_sizes.px_size_y, 500.0);
+        assert_eq!(series.pixel_sizes.px_size_z, 1200.0);
+
+        let ch0 = &series.channels[&0];
+        assert_eq!(ch0.name, "DAPI");
+        assert_eq!(ch0.emission_wave_length, 461.0);
+
+        let ch1 = &series.channels[&1];
+        assert_eq!(ch1.name, "GFP");
+        assert_eq!(ch1.emission_wave_length, 509.0, "0.509 µm must convert to 509 nm");
+    }
+
+    #[test]
+    fn split_channels_rgb_heuristic_renames_channels_when_it_matches() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Image ID="Image:0">
+    <Pixels ID="Pixels:0" SizeC="3" SizeT="1" SizeZ="1">
+      <Channel ID="Channel:0:0"/>
+      <Channel ID="Channel:0:1"/>
+      <Channel ID="Channel:0:2"/>
+    </Pixels>
+  </Image>
+</OME>
+<JODA xmlns="https://www.imagec.org/" SeriesCount="1">
+  <Series idx="0" ResolutionCount="1">
+    <PyramidResolution idx="0" width="4" height="4" TileWidth="4" TileHeight="4" BitsPerPixel="8" RGBChannelCount="1" IsInterleaved="0" IsLittleEndian="0"/>
+  </Series>
+</JODA>"#;
+
+        let reader = reader_at("/some/dir/rgb.tif", ReadMode::SplitChannels);
+        let meta = reader.parse_ome_xml(xml).unwrap();
+        let series = &meta.series[&0];
+
+        let res = series.resolutions.get(&0).unwrap();
+        assert!(res.is_rgb, "1 color channel + non-interleaved + 3 C-stacks + 8-bit must trip the RGB heuristic");
+
+        assert_eq!(series.channels[&0].name, "Red");
+        assert_eq!(series.channels[&1].name, "Green");
+        assert_eq!(series.channels[&2].name, "Blue");
+        assert_eq!(series.channels[&0].emission_wave_length, 635.0);
+        assert_eq!(series.channels[&1].emission_wave_length, 532.0);
+        assert_eq!(series.channels[&2].emission_wave_length, 450.0);
+    }
+
+    #[test]
+    fn split_channels_rgb_heuristic_does_not_trigger_in_default_read_mode() {
+        // Identical pyramid metadata to the test above, but read in
+        // ReadMode::Default: only `Self::color_channels > 2` decides `is_rgb`
+        // there, and color_channels is 1, so no channel gets renamed.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Image ID="Image:0">
+    <Pixels ID="Pixels:0" SizeC="3" SizeT="1" SizeZ="1">
+      <Channel ID="Channel:0:0" Name="Ch0"/>
+    </Pixels>
+  </Image>
+</OME>
+<JODA xmlns="https://www.imagec.org/" SeriesCount="1">
+  <Series idx="0" ResolutionCount="1">
+    <PyramidResolution idx="0" width="4" height="4" TileWidth="4" TileHeight="4" BitsPerPixel="8" RGBChannelCount="1" IsInterleaved="0" IsLittleEndian="0"/>
+  </Series>
+</JODA>"#;
+
+        let reader = reader_at("/some/dir/rgb.tif", ReadMode::Default);
+        let meta = reader.parse_ome_xml(xml).unwrap();
+        let series = &meta.series[&0];
+
+        assert!(!series.resolutions[&0].is_rgb);
+        assert_eq!(series.channels[&0].name, "Ch0", "channel must keep its parsed name, not be renamed");
+    }
+
+    #[test]
+    fn multiple_images_are_tracked_as_independent_series() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Image ID="Image:0">
+    <Pixels ID="Pixels:0" SizeC="1" SizeT="1" SizeZ="1"/>
+  </Image>
+  <Image ID="Image:1">
+    <Pixels ID="Pixels:1" SizeC="4" SizeT="2" SizeZ="3"/>
+  </Image>
+</OME>"#;
+
+        let reader = reader_at("/some/dir/multi-series.tif", ReadMode::Default);
+        let meta = reader.parse_ome_xml(xml).unwrap();
+
+        assert_eq!(meta.series.len(), 2);
+        assert_eq!(meta.series[&0].nr_c_stacks, 1);
+        assert_eq!(meta.series[&1].nr_c_stacks, 4);
+        assert_eq!(meta.series[&1].nr_t_stacks, 2);
+        assert_eq!(meta.series[&1].nr_z_stacks, 3);
+    }
+
+    #[test]
+    fn image_id_without_a_colon_is_a_parse_error_not_a_panic() {
+        let xml = r#"<OME><Image ID="NoColonHere"><Pixels ID="Pixels:0"/></Image></OME>"#;
+        let reader = reader_at("/x.tif", ReadMode::Default);
+        let err = reader.parse_ome_xml(xml).err().expect("missing ':' in Image/@ID must error");
+        assert!(matches!(err, InternalErrors::ParseError(_)));
+    }
+
+    #[test]
+    fn channel_id_without_a_colon_is_a_parse_error_not_a_panic() {
+        let xml = r#"<OME><Image ID="Image:0"><Pixels ID="Pixels:0" SizeC="1"><Channel ID="NoColonHere"/></Pixels></Image></OME>"#;
+        let reader = reader_at("/x.tif", ReadMode::Default);
+        let err = reader.parse_ome_xml(xml).err().expect("missing ':' in Channel/@ID must error");
+        assert!(matches!(err, InternalErrors::ParseError(_)));
+    }
+
+    #[test]
+    fn non_numeric_image_id_suffix_is_a_parse_error_not_a_panic() {
+        let xml = r#"<OME><Image ID="Image:not-a-number"><Pixels ID="Pixels:0"/></Image></OME>"#;
+        let reader = reader_at("/x.tif", ReadMode::Default);
+        let err = reader.parse_ome_xml(xml).err().expect("non-numeric series index must error");
+        // A colon is present, so this goes through `val.parse::<i32>()?` rather
+        // than the `ok_or_else(ParseError)` "no colon at all" branch above -
+        // the `?` auto-converts the `ParseIntError` via `InternalErrors`'s
+        // `#[from]` impl, so it surfaces as `ParseIntError`, not `ParseError`.
+        assert!(matches!(err, InternalErrors::ParseIntError(_)));
+    }
+
+    #[test]
+    fn unknown_physical_size_unit_is_a_parse_error_not_a_panic() {
+        let xml = r#"<OME><Image ID="Image:0"><Pixels ID="Pixels:0" SizeC="1" PhysicalSizeX="1.0" PhysicalSizeXUnit="px"/></Image></OME>"#;
+        let reader = reader_at("/x.tif", ReadMode::Default);
+        let err = reader.parse_ome_xml(xml).err().expect("unsupported unit 'px' must error, not silently default");
+        assert!(matches!(err, InternalErrors::ParseError(_)));
+    }
+
+    #[test]
+    fn malformed_numeric_attribute_is_a_parse_error_not_a_panic() {
+        let xml = r#"<OME><Image ID="Image:0"><Pixels ID="Pixels:0" SizeC="not-a-number"/></Image></OME>"#;
+        let reader = reader_at("/x.tif", ReadMode::Default);
+        let err = reader.parse_ome_xml(xml).err().expect("non-numeric SizeC must error");
+        assert!(matches!(err, InternalErrors::ParseError(_)));
+    }
+
+    #[test]
+    fn empty_document_yields_default_metadata_named_from_the_path() {
+        let reader = reader_at("/some/dir/unnamed.tif", ReadMode::Default);
+        let meta = reader.parse_ome_xml("").unwrap();
+        assert_eq!(meta.name, "unnamed.tif");
+        assert!(meta.series.is_empty());
+    }
+}
