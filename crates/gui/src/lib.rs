@@ -11,6 +11,7 @@ use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 
 mod editor;
 mod helper;
+mod license_text;
 mod prelude;
 
 // ----------------------------------------------------------------
@@ -170,6 +171,29 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
 
     let ui = AppWindow::new()?;
     let ui_handle = ui.as_weak();
+
+    // About dialog content: version comes from the crate version (which the
+    // release CI patches to the git tag before building), the rest is read
+    // from the host machine once at startup - none of it changes at runtime.
+    {
+        let diagnostics = evanalyzer_core::system_diagnostics();
+        let info = ui.global::<AppInfoState>();
+        info.set_version(env!("CARGO_PKG_VERSION").into());
+        info.set_cpu_cores(diagnostics.cpu_cores as i32);
+        info.set_ram_total(
+            format!(
+                "{:.1} GB",
+                diagnostics.total_ram_bytes as f64 / 1_073_741_824.0
+            )
+            .into(),
+        );
+        info.set_cuda_available(diagnostics.cuda_available);
+        let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
+            .split("\n\n")
+            .map(|p| p.into())
+            .collect();
+        info.set_license_paragraphs(slint::ModelRc::new(slint::VecModel::from(paragraphs)));
+    }
 
     let results_ui = ResultsWindow::new()?;
     let results_ui_handle = results_ui.as_weak();
