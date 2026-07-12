@@ -1477,4 +1477,159 @@ mod tests {
             }
         }
     }
+
+    // ---- small pure helpers, tested directly ----
+
+    #[test]
+    fn split_author_name_splits_on_the_first_space() {
+        assert_eq!(split_author_name("Ada Lovelace"), ("Ada".to_string(), "Lovelace".to_string()));
+        // Extra words all land in the last-name half.
+        assert_eq!(split_author_name("Mary Wollstonecraft Shelley"), ("Mary".to_string(), "Wollstonecraft Shelley".to_string()));
+    }
+
+    #[test]
+    fn split_author_name_handles_a_single_word_and_empty_input() {
+        assert_eq!(split_author_name("Cher"), ("Cher".to_string(), String::new()));
+        assert_eq!(split_author_name(""), (String::new(), String::new()));
+        assert_eq!(split_author_name("   "), (String::new(), String::new()), "must trim whitespace-only input to empty");
+    }
+
+    #[test]
+    fn parse_numeric_class_id_accepts_plain_digits_and_rejects_everything_else() {
+        assert_eq!(parse_numeric_class_id("7"), Some(7));
+        assert_eq!(parse_numeric_class_id("0"), Some(0));
+        assert_eq!(parse_numeric_class_id("M01"), None, "temp-class ids have no numeric equivalent");
+        assert_eq!(parse_numeric_class_id("$"), None);
+        assert_eq!(parse_numeric_class_id(""), None);
+    }
+
+    #[test]
+    fn resolve_class_substitutes_the_pipeline_default_for_the_dollar_placeholder() {
+        let mut warnings = Vec::new();
+        let resolved = resolve_class("$", ObjectClass::Valid(5), "ctx", "field", &mut warnings);
+        assert_eq!(resolved, ObjectClass::Valid(5));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_class_treats_none_undefined_and_empty_as_unset_without_a_warning() {
+        let mut warnings = Vec::new();
+        for s in ["", "None", "Undefined"] {
+            assert_eq!(resolve_class(s, ObjectClass::Valid(5), "ctx", "field", &mut warnings), ObjectClass::Unset);
+        }
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_class_parses_a_plain_number_directly() {
+        let mut warnings = Vec::new();
+        assert_eq!(resolve_class("12", ObjectClass::Valid(5), "ctx", "field", &mut warnings), ObjectClass::Valid(12));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_class_warns_and_falls_back_to_unset_for_an_unsupported_temp_class_id() {
+        let mut warnings = Vec::new();
+        let resolved = resolve_class("M01", ObjectClass::Valid(5), "my-context", "my-field", &mut warnings);
+        assert_eq!(resolved, ObjectClass::Unset);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("my-context"));
+        assert!(warnings[0].contains("my-field"));
+        assert!(warnings[0].contains("M01"));
+    }
+
+    #[test]
+    fn parse_hex_color_accepts_a_leading_hash_or_bare_hex() {
+        assert_eq!(parse_hex_color("#ff0000"), Some(0xff0000));
+        assert_eq!(parse_hex_color("00ff00"), Some(0x00ff00));
+        assert_eq!(parse_hex_color("#0000FF"), Some(0x0000ff), "hex parsing must be case-insensitive");
+    }
+
+    #[test]
+    fn parse_hex_color_rejects_non_hex_input() {
+        assert_eq!(parse_hex_color("not-a-color"), None);
+        assert_eq!(parse_hex_color(""), None);
+    }
+
+    #[test]
+    fn map_measure_channel_covers_every_documented_legacy_name() {
+        use MeasurementChannels::*;
+        let cases = [
+            ("Count", ObjectCount),
+            ("AreaSize", AreaSize),
+            ("Perimeter", Perimeter),
+            ("Circularity", Circularity),
+            ("IntensitySum", IntensitySum),
+            ("IntensityAvg", IntensityAvg),
+            ("IntensityMin", IntensityMin),
+            ("IntensityMax", IntensityMax),
+            ("Intersecting", Intersecting),
+            ("CenteroidX", Position),
+            ("CenteroidY", Position),
+            ("DistanceCentroidToCentoid", DistanceCenterToCenter),
+            ("DistanceCentroidToSurfaceMin", DistanceCenterToSurfaceMin),
+            ("DistanceCentroidToSurfaceMax", DistanceCenterToSurfaceMax),
+            ("DistanceSurfaceToSurfaceMin", DistanceSurfaceToSurfaceMin),
+            ("DistanceSurfaceToSurfaceMax", DistanceSurfaceToSurfaceMax),
+        ];
+        for (legacy, expected) in cases {
+            assert_eq!(map_measure_channel(legacy), Some(expected), "mapping {legacy}");
+        }
+    }
+
+    #[test]
+    fn map_measure_channel_returns_none_for_an_unknown_name() {
+        assert_eq!(map_measure_channel("SomethingNew"), None);
+        assert_eq!(map_measure_channel(""), None);
+    }
+
+    #[test]
+    fn map_stat_covers_every_documented_legacy_name_and_rejects_dropped_ones() {
+        use MeasurementStatistics::*;
+        assert_eq!(map_stat("Avg"), Some(Avg));
+        assert_eq!(map_stat("Max"), Some(Max));
+        assert_eq!(map_stat("Min"), Some(Min));
+        assert_eq!(map_stat("Sum"), Some(Sum));
+        assert_eq!(map_stat("Median"), Some(Median));
+        assert_eq!(map_stat("Stddev"), Some(Stdev));
+        // "Off"/"Cnt" have no new equivalent by design.
+        assert_eq!(map_stat("Off"), None);
+        assert_eq!(map_stat("Cnt"), None);
+    }
+
+    #[test]
+    fn legacy_unit_to_nm_factor_covers_every_known_unit() {
+        assert_eq!(legacy_unit_to_nm_factor("nm"), 1.0);
+        assert_eq!(legacy_unit_to_nm_factor("um"), 1_000.0);
+        assert_eq!(legacy_unit_to_nm_factor("mm"), 1_000_000.0);
+        assert_eq!(legacy_unit_to_nm_factor("cm"), 10_000_000.0);
+        assert_eq!(legacy_unit_to_nm_factor("m"), 1_000_000_000.0);
+        assert_eq!(legacy_unit_to_nm_factor("km"), 1_000_000_000_000.0);
+    }
+
+    #[test]
+    fn legacy_unit_to_nm_factor_treats_unitless_values_as_already_nm() {
+        assert_eq!(legacy_unit_to_nm_factor("Px"), 1.0);
+        assert_eq!(legacy_unit_to_nm_factor("Undefined"), 1.0);
+        assert_eq!(legacy_unit_to_nm_factor("bogus"), 1.0);
+    }
+
+    #[test]
+    fn map_z_projection_covers_every_known_mode_and_falls_back_to_single_stack() {
+        assert_eq!(map_z_projection("MaxIntensity"), ZStackHandling::MaxIntensity);
+        assert_eq!(map_z_projection("MinIntensity"), ZStackHandling::MinIntensity);
+        assert_eq!(map_z_projection("AvgIntensity"), ZStackHandling::AvgIntensity);
+        assert_eq!(map_z_projection("TakeMiddle"), ZStackHandling::TakeTheMiddle);
+        assert_eq!(map_z_projection("SingleStack"), ZStackHandling::SingleStack);
+        assert_eq!(map_z_projection("SomethingUnknown"), ZStackHandling::SingleStack);
+    }
+
+    #[test]
+    fn map_threshold_method_covers_the_misspelled_legacy_names_and_falls_back_to_none() {
+        use SegmentationThresholdThresholdMethodSettings as M;
+        assert_eq!(map_threshold_method("Percentil"), M::Percentile);
+        assert_eq!(map_threshold_method("TenyiEntropy"), M::RenyiEntropy);
+        assert_eq!(map_threshold_method("Otsu"), M::Otsu);
+        assert_eq!(map_threshold_method("SomethingUnknown"), M::None);
+    }
 }

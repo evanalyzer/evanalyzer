@@ -1392,6 +1392,9 @@ pub fn import_legacy_project(
 mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::ObjectClass;
+    use evanalyzer_cfg::settings::images_settings::{TStackHandling, ZStackHandling};
+    use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+    use evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings;
 
     /// A project with one image ("img.tif") of one series (idx 0, 2x2px)
     /// carrying two channels ("Ch0"/"Ch1"), selected as the current image -
@@ -1715,5 +1718,390 @@ mod tests {
         let rois = &loaded.images.list.get(Path::new("img.tif")).unwrap().series[&0].rois;
         assert_eq!(rois.len(), 1);
         assert_eq!(rois[0].area, 1234);
+    }
+
+    // -- Pipeline management ---------------------------------------------
+
+    fn pipeline(id: u32) -> PipelineSettings {
+        PipelineSettings {
+            id: PipelineId(id),
+            name: None,
+            image_source: ImageAddress::default(),
+            enabled: true,
+            steps: vec![],
+        }
+    }
+
+    #[test]
+    fn add_pipeline_appends_to_the_list() {
+        let mut project = ProjectWithRuntime::default();
+        project.add_pipeline(pipeline(1));
+        project.add_pipeline(pipeline(2));
+        assert_eq!(project.pipelines.iter().map(|p| p.id).collect::<Vec<_>>(), vec![PipelineId(1), PipelineId(2)]);
+    }
+
+    #[test]
+    fn move_pipeline_up_and_down_swap_neighbors_and_are_edge_noops() {
+        let mut project = ProjectWithRuntime::default();
+        project.add_pipeline(pipeline(1));
+        project.add_pipeline(pipeline(2));
+        project.add_pipeline(pipeline(3));
+
+        project.move_pipeline_up(PipelineId(2));
+        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![2, 1, 3]);
+
+        // Already first: no-op.
+        project.move_pipeline_up(PipelineId(2));
+        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![2, 1, 3]);
+
+        project.move_pipeline_down(PipelineId(2));
+        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+
+        // Already last: no-op.
+        project.move_pipeline_down(PipelineId(3));
+        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+
+        // Unknown id: no-op, no panic.
+        project.move_pipeline_up(PipelineId(99));
+        project.move_pipeline_down(PipelineId(99));
+        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn enable_pipeline_toggles_only_the_matching_pipeline() {
+        let mut project = ProjectWithRuntime::default();
+        project.add_pipeline(pipeline(1));
+        project.add_pipeline(pipeline(2));
+
+        project.enable_pipeline(false, PipelineId(1));
+        assert!(!project.pipelines[0].enabled);
+        assert!(project.pipelines[1].enabled);
+
+        // Unknown id: no panic, no effect.
+        project.enable_pipeline(false, PipelineId(99));
+    }
+
+    #[test]
+    fn enable_pipeline_step_toggles_only_the_matching_step() {
+        let mut project = ProjectWithRuntime::default();
+        let mut p = pipeline(1);
+        p.steps = vec![
+            PipelineStepSettings { enabled: true, command: PipelineCommand::Blur(Default::default()) },
+            PipelineStepSettings { enabled: true, command: PipelineCommand::Blur(Default::default()) },
+        ];
+        project.add_pipeline(p);
+
+        project.enable_pipeline_step(false, PipelineId(1), 0);
+        assert!(!project.pipelines[0].steps[0].enabled);
+        assert!(project.pipelines[0].steps[1].enabled);
+
+        // Unknown pipeline / out-of-range step: no panic.
+        project.enable_pipeline_step(false, PipelineId(99), 0);
+        project.enable_pipeline_step(false, PipelineId(1), 99);
+    }
+
+    #[test]
+    fn add_pipeline_from_template_file_assigns_the_next_id_and_carries_the_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.evapipe");
+        let template = evanalyzer_cfg::settings::templates::PipelineTemplate {
+            meta: evanalyzer_cfg::settings::meta_data::MetaData { name: "Imported".into(), ..Default::default() },
+            pipeline_steps: vec![],
+        };
+        std::fs::write(&path, serde_json::to_string(&template).unwrap()).unwrap();
+
+        let mut project = ProjectWithRuntime::default();
+        project.add_pipeline(pipeline(5));
+        project.add_pipeline_from_template_file(&path);
+
+        assert_eq!(project.pipelines.len(), 2);
+        assert_eq!(project.pipelines[1].id, PipelineId(6), "next id must be max(existing) + 1");
+        assert_eq!(project.pipelines[1].name.as_deref(), Some("Imported"));
+    }
+
+    #[test]
+    fn add_pipeline_from_template_file_is_a_noop_for_a_missing_file() {
+        let mut project = ProjectWithRuntime::default();
+        project.add_pipeline_from_template_file(&PathBuf::from("/does/not/exist.evapipe"));
+        assert!(project.pipelines.is_empty());
+    }
+
+    #[test]
+    fn add_pipeline_from_template_file_is_a_noop_for_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.evapipe");
+        std::fs::write(&path, "{ not json").unwrap();
+
+        let mut project = ProjectWithRuntime::default();
+        project.add_pipeline_from_template_file(&path);
+        assert!(project.pipelines.is_empty());
+    }
+
+    #[test]
+    fn apply_project_template_replaces_classification_plate_and_pipelines() {
+        let mut project = ProjectWithRuntime::default();
+        project.classification.classes.push(class(1, "Stale"));
+        project.add_pipeline(pipeline(1));
+
+        let template = evanalyzer_cfg::settings::templates::ProjectTemplate {
+            meta: Default::default(),
+            classification: evanalyzer_cfg::settings::classification_settings::ClassificationSettings {
+                classes: vec![class(9, "Fresh")],
+            },
+            plate: Default::default(),
+            pipelines: vec![evanalyzer_cfg::settings::templates::PipelineTemplate {
+                meta: evanalyzer_cfg::settings::meta_data::MetaData { name: "P1".into(), ..Default::default() },
+                pipeline_steps: vec![],
+            }],
+        };
+        project.apply_project_template(&template);
+
+        assert_eq!(project.classification.classes.len(), 1);
+        assert_eq!(project.classification.classes[0].name, "Fresh");
+        assert_eq!(project.pipelines.len(), 1);
+        assert_eq!(project.pipelines[0].id, PipelineId(1), "ids are renumbered from 1, not carried over from the old pipelines");
+        assert_eq!(project.pipelines[0].name.as_deref(), Some("P1"));
+    }
+
+    // -- Image existence / root checks ------------------------------------
+
+    #[test]
+    fn does_project_images_exist_is_true_when_no_root_is_set() {
+        let project = ProjectWithRuntime::default();
+        assert!(project.does_project_images_exist());
+    }
+
+    #[test]
+    fn does_project_images_exist_checks_the_first_listed_image_under_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("img.tif"), b"x").unwrap();
+
+        let mut project = project_with_one_image();
+        project.images.root = Some(dir.path().to_path_buf());
+        assert!(project.does_project_images_exist());
+
+        // Point the root somewhere that doesn't have img.tif.
+        let other_dir = tempfile::tempdir().unwrap();
+        project.images.root = Some(other_dir.path().to_path_buf());
+        assert!(!project.does_project_images_exist());
+    }
+
+    #[test]
+    fn does_project_image_exists_at_path_is_true_for_an_empty_image_list() {
+        let project = ProjectWithRuntime::default();
+        assert!(project.does_project_image_exists_at_path(&PathBuf::from("/anywhere")));
+    }
+
+    // -- add_image / add_image_to_list ------------------------------------
+
+    fn sample_image_meta(channel_name: &str, wavelength: f32) -> ImageMeta {
+        let mut resolutions = BTreeMap::new();
+        resolutions.insert(0, evanalyzer_core::PyramidInfo { width: 4, height: 4, nr_bits: 8, ..Default::default() });
+        let mut channels = BTreeMap::new();
+        channels.insert(0, evanalyzer_core::ChannelInfo { name: channel_name.into(), emission_wave_length: wavelength, ..Default::default() });
+        let mut series = BTreeMap::new();
+        series.insert(0, evanalyzer_core::ImageInfo { nr_c_stacks: 1, nr_z_stacks: 1, nr_t_stacks: 1, resolutions, channels, ..Default::default() });
+        ImageMeta { name: "meta".into(), series, ..Default::default() }
+    }
+
+    #[test]
+    fn add_image_sets_the_root_from_the_first_images_parent_when_unset() {
+        let mut project = ProjectWithRuntime::default();
+        let meta = sample_image_meta("Ch0", 488.0);
+        let action = project.add_image(Path::new("/data/plate1/img.tif"), &meta);
+
+        assert_eq!(action, ProjectAction::Success);
+        assert_eq!(project.images.root, Some(PathBuf::from("/data/plate1")));
+        assert!(project.images.list.contains_key(Path::new("img.tif")));
+    }
+
+    #[test]
+    fn add_image_accepts_a_path_inside_an_existing_root() {
+        let mut project = ProjectWithRuntime::default();
+        project.images.root = Some(PathBuf::from("/data/plate1"));
+        let meta = sample_image_meta("Ch0", 488.0);
+
+        let action = project.add_image(Path::new("/data/plate1/well_A1/img.tif"), &meta);
+        assert_eq!(action, ProjectAction::Success);
+        assert!(project.images.list.contains_key(Path::new("well_A1/img.tif")));
+    }
+
+    #[test]
+    fn add_image_outside_an_existing_root_is_a_conflict_and_does_not_add_it() {
+        let mut project = ProjectWithRuntime::default();
+        project.images.root = Some(PathBuf::from("/data/plate1"));
+        let meta = sample_image_meta("Ch0", 488.0);
+
+        let action = project.add_image(Path::new("/other/img.tif"), &meta);
+        assert!(matches!(action, ProjectAction::OutSideRootConflict { .. }));
+        assert!(project.images.list.is_empty());
+    }
+
+    #[test]
+    fn add_image_to_list_skips_a_path_that_is_already_present() {
+        let mut project = ProjectWithRuntime::default();
+        let first = sample_image_meta("Ch0", 488.0);
+        let second = sample_image_meta("ShouldNotOverwrite", 600.0);
+
+        project.add_image_to_list(Path::new("img.tif"), Path::new("/abs/img.tif"), &first);
+        project.add_image_to_list(Path::new("img.tif"), Path::new("/abs/img.tif"), &second);
+
+        let entry = project.images.list.get(Path::new("img.tif")).unwrap();
+        assert_eq!(entry.series[&0].channels[&0].name, "Ch0", "the second insert must be a no-op");
+    }
+
+    #[test]
+    fn add_image_to_list_derives_series_and_channel_settings_from_the_metadata() {
+        let mut project = ProjectWithRuntime::default();
+        let meta = sample_image_meta("DAPI", 461.0);
+        project.add_image_to_list(Path::new("img.tif"), Path::new("/abs/img.tif"), &meta);
+
+        let entry = project.images.list.get(Path::new("img.tif")).unwrap();
+        let series = &entry.series[&0];
+        assert_eq!(series.image_width, 4);
+        assert_eq!(series.image_height, 4);
+        assert_eq!(series.channels[&0].name, "DAPI");
+        assert_eq!(series.channels[&0].emission_wave_length, 461.0);
+        assert_eq!(entry.file_size, 4 * 4 * 8, "approximate size is width * height * bits");
+    }
+
+    // -- Series / channel selection ---------------------------------------
+
+    #[test]
+    fn set_active_series_updates_the_current_images_selected_series() {
+        let mut project = project_with_one_image();
+        project.with_current_image_mut(|img| {
+            img.series.insert(1, img.series[&0].clone());
+        });
+        project.set_active_series(&1);
+        assert_eq!(project.get_selected_image_series_idx(), Some(1));
+        assert!(project.get_selected_image_series().is_some());
+    }
+
+    #[test]
+    fn get_selected_image_series_mut_allows_editing_the_active_series() {
+        let mut project = project_with_one_image();
+        project.get_selected_image_series_mut().unwrap().image_width = 999;
+        assert_eq!(project.get_selected_image_series().unwrap().image_width, 999);
+    }
+
+    #[test]
+    fn selected_channel_prefers_local_over_global_over_zero() {
+        let mut project = project_with_one_image();
+        assert_eq!(project.get_selected_image_channel_idx(), 0, "defaults to 0 with nothing set");
+
+        project.set_global_selected_channel(&1);
+        assert_eq!(project.get_selected_image_channel_idx(), 1, "falls back to the global setting");
+
+        project.set_image_selected_channel(&0);
+        assert_eq!(project.get_selected_image_channel_idx(), 0, "a local override wins over global");
+        assert_eq!(project.get_selected_image_channel().unwrap().name, "Ch0");
+    }
+
+    // -- Z / T stack --------------------------------------------------------
+
+    #[test]
+    fn z_stack_prefers_local_over_global() {
+        let mut project = project_with_one_image();
+        assert!(project.get_z_stack().is_none());
+
+        let global = ZStackSettings { z_projection: ZStackHandling::MaxIntensity, z_range: None };
+        project.set_global_z_stack(&global);
+        assert_eq!(project.get_z_stack().unwrap().z_projection, ZStackHandling::MaxIntensity);
+
+        let local = ZStackSettings { z_projection: ZStackHandling::SumIntensity, z_range: None };
+        project.set_image_z_stack(&local);
+        assert_eq!(project.get_z_stack().unwrap().z_projection, ZStackHandling::SumIntensity);
+    }
+
+    #[test]
+    fn t_stack_prefers_local_over_global() {
+        let mut project = project_with_one_image();
+        assert!(project.get_t_stack().is_none());
+
+        let global = TStackSettings { stack_handling: TStackHandling::AllStacks, playback_speed: 1.0, t_stack: 0 };
+        project.set_global_t_stack(&global);
+        assert_eq!(project.get_t_stack().unwrap().stack_handling, TStackHandling::AllStacks);
+
+        let local = TStackSettings { stack_handling: TStackHandling::SingleStack, playback_speed: 1.0, t_stack: 3 };
+        project.set_image_t_stack(&local);
+        assert_eq!(project.get_t_stack().unwrap().stack_handling, TStackHandling::SingleStack);
+    }
+
+    // -- Histogram settings -------------------------------------------------
+
+    #[test]
+    fn set_image_histogram_settings_for_channel_updates_only_that_channel() {
+        let mut project = project_with_one_image();
+        project.set_image_histogram_settings_for_channel(0, 0.1, 0.9, 0.0, 1.0);
+
+        let hist = project.get_image_channel_histograms();
+        assert_eq!(hist[&0].as_ref().unwrap().min, 0.1);
+        assert_eq!(hist[&0].as_ref().unwrap().max, 0.9);
+        assert!(hist[&1].is_none());
+    }
+
+    #[test]
+    fn set_image_histogram_settings_for_active_channel_targets_the_selected_channel() {
+        let mut project = project_with_one_image();
+        project.set_image_selected_channel(&1);
+        project.set_image_histogram_settings_for_active_channel(0.2, 0.8, 0.0, 1.0);
+
+        assert_eq!(project.get_histograms_from_selected_channel().unwrap().min, 0.2);
+        assert!(project.get_image_channel_histograms()[&0].is_none());
+    }
+
+    #[test]
+    fn set_image_histogram_settings_for_an_unknown_channel_does_not_panic() {
+        let mut project = project_with_one_image();
+        project.set_image_histogram_settings_for_channel(99, 0.0, 1.0, 0.0, 1.0);
+        // No channel 99 exists - nothing to assert beyond "did not panic".
+    }
+
+    // -- auto_add_classes_based_on_image_meta -------------------------------
+
+    #[test]
+    fn auto_add_classes_creates_one_class_per_channel_of_the_first_image() {
+        let mut project = project_with_one_image();
+        assert!(project.classification.classes.is_empty());
+
+        project.auto_add_classes_based_on_image_meta();
+
+        let names: Vec<&str> = project.classification.classes.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"Ch0"));
+        assert!(names.contains(&"Ch1"));
+        // `add_class` (via `ClassificationExt`) assigns each one a fresh,
+        // unique id - the `ObjectClass::Unset` built in the collected `Class`
+        // is only a placeholder that gets overwritten there, not the final id.
+        let ids: Vec<u32> = project.classification.classes.iter().filter_map(|c| c.id.to_u32()).collect();
+        assert_eq!(ids.len(), 2, "both classes must have been assigned a real Valid id");
+    }
+
+    // -- misc getters ---------------------------------------------------
+
+    #[test]
+    fn get_current_relative_path_and_find_image_round_trip() {
+        let project = project_with_one_image();
+        let rel = project.get_current_rel_image_path_cloned().unwrap();
+        assert_eq!(rel, PathBuf::from("img.tif"));
+
+        // `find_image` takes an *absolute* path and relativizes it against
+        // `images.root`; with no root set, "absolute" and "relative" are the
+        // same string here.
+        assert!(project.find_image(&PathBuf::from("img.tif")).is_some());
+        assert!(project.find_image(&PathBuf::from("missing.tif")).is_none());
+    }
+
+    #[test]
+    fn find_image_mut_allows_editing_and_rest_current_image_path_clears_the_selection() {
+        let mut project = project_with_one_image();
+        project.find_image_mut(&PathBuf::from("img.tif")).unwrap().file_size = 777;
+        assert_eq!(project.images.list.get(Path::new("img.tif")).unwrap().file_size, 777);
+
+        assert!(project.get_current_image_path_cloned().is_some());
+        project.rest_current_image_path();
+        assert!(project.get_current_image_path_cloned().is_none());
+        assert!(project.get_current_image_settings().is_none());
     }
 }
