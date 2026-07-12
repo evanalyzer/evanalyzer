@@ -67,6 +67,7 @@ impl ViewPortRoiController {
                     };
                     manager.viewport_controller.trigger_image_redraw_rois();
                     manager.image_list_controller.sync_image_list_to_slint();
+                    manager.roi_list_controller.sync_rois_to_slint();
                 },
             );
 
