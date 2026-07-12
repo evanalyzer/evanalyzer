@@ -1172,12 +1172,12 @@ mod tests {
     fn test_no_projection_z0() {
         init_java_wrapper(1000000000).unwrap();
         let reference_data_f32 = read_raw_data(
-            "/workspaces/evanalyzer/crates/core/tests/slice_Z0_C0_T0.raw",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0.raw"),
             8,
         );
 
         let reader = ImageReader::new(
-            &"/workspaces/evanalyzer/crates/core/tests/multi-channel-4D-series.ome.tif".into(),
+            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1214,12 +1214,12 @@ mod tests {
     fn test_no_projection_z1() {
         init_java_wrapper(1000000000).unwrap();
         let reference_data_f32 = read_raw_data(
-            "/workspaces/evanalyzer/crates/core/tests/slice_Z1_C0_T0.raw",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z1_C0_T0.raw"),
             8,
         );
 
         let reader = ImageReader::new(
-            &"/workspaces/evanalyzer/crates/core/tests/multi-channel-4D-series.ome.tif".into(),
+            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1257,7 +1257,7 @@ mod tests {
         init_java_wrapper(1000000000).unwrap();
 
         let reader = ImageReader::new(
-            &"/workspaces/evanalyzer/crates/core/tests/multi-channel-4D-series.ome.tif".into(),
+            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1279,7 +1279,7 @@ mod tests {
             .unwrap();
 
         let reference_data_f32 = read_raw_data(
-            "/workspaces/evanalyzer/crates/core/tests/slice_Z0_C0_T0_max_intensity.raw",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0_max_intensity.raw"),
             8,
         );
 
@@ -1299,7 +1299,7 @@ mod tests {
     fn pooled_parallel_read_matches_sequential_read() {
         init_java_wrapper(1000000000).unwrap();
 
-        let path = "/workspaces/evanalyzer/crates/core/tests/multi-channel-4D-series.ome.tif";
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif");
         let tile = ImageTile {
             offset_x: 0,
             offset_y: 0,
@@ -1364,7 +1364,7 @@ mod tests {
         init_java_wrapper(1000000000).unwrap();
 
         let reader = ImageReader::new(
-            &"/workspaces/evanalyzer/crates/core/tests/multi-channel-4D-series.ome.tif".into(),
+            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1386,7 +1386,7 @@ mod tests {
             .unwrap();
 
         let reference_data_f32 = read_raw_data(
-            "/workspaces/evanalyzer/crates/core/tests/slice_Z0_C0_T0_min_intensity.raw",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0_min_intensity.raw"),
             8,
         );
 
@@ -1407,7 +1407,7 @@ mod tests {
         init_java_wrapper(1000000000).unwrap();
 
         let reader = ImageReader::new(
-            &"/workspaces/evanalyzer/crates/core/tests/multi-channel-4D-series.ome.tif".into(),
+            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1429,7 +1429,7 @@ mod tests {
             .unwrap();
 
         let reference_data_f32 = read_raw_data(
-            "/workspaces/evanalyzer/crates/core/tests/slice_Z0_C0_T0_avg_intensity.raw",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0_avg_intensity.raw"),
             8,
         );
 
@@ -1558,7 +1558,7 @@ mod tests {
         init_java_wrapper(1000000000).unwrap();
 
         let reader = ImageReader::new(
-            &"/workspaces/evanalyzer/crates/core/tests/muliple_z_stacks.nd2".into(),
+            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/muliple_z_stacks.nd2").into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1594,7 +1594,7 @@ mod tests {
         init_java_wrapper(1000000000).unwrap();
 
         let reader =
-            ImageReader::new("/workspaces/evanalyzer/crates/core/tests/multi-channel-4D-series.ome.tif")
+            ImageReader::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif"))
                 .unwrap();
         let result = reader
             .read_image_tile_combined(
@@ -1613,7 +1613,7 @@ mod tests {
             .unwrap();
 
         let reference_data_f32 = read_raw_data(
-            "/workspaces/evanalyzer/crates/core/tests/slice_Z0_C0_T0_sum_intensity.raw",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0_sum_intensity.raw"),
             32,
         );
 

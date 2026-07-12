@@ -1,0 +1,114 @@
+name: CI
+
+# Runs the test suite (+ coverage) on every push to main/beta-fix and every
+# pull request. Separate from release.yml (which only builds release
+# binaries on a version tag) so PRs never trigger the expensive
+# multi-platform/CUDA release matrix.
+#
+# beta-fix is listed alongside main so this workflow can be verified end to
+# end before it's relied on - the coverage badge/history commit step further
+# below still only fires on main, not on beta-fix.
+on:
+  push:
+    branches: ["main", "beta-fix"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Linux CPU only, per the beta-readiness review: it's enough to gate
+    # merges, and avoids paying for CUDA/Windows/macOS runners on every push.
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.1.5
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    # `contents: write` is only used by the last step (committing the
+    # coverage badge/history back to `main`) - everything else only reads.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64-test
+
+      - name: Download native dependencies (JRE, Bio-Formats, libtorch CPU)
+        # The `ai` (libtorch) feature is force-enabled workspace-wide - see
+        # the comment on `evanalyzer_core` in the root Cargo.toml - so a
+        # plain `cargo test` needs libtorch present even though this job
+        # never asks for `--features ai` explicitly. DuckDB does not need a
+        # download on Linux: crates/core/Cargo.toml enables its `bundled`
+        # feature for `cfg(target_os = "linux")`, so it's compiled from
+        # source instead.
+        run: ./libs/download.sh linux-cpu
+
+      - name: Unzip libtorch
+        run: unzip -q "libs/libtorch-"*.zip -d libs
+
+      - name: Unzip JRE for tests
+        # evanalyzer_core resolves the bundled JVM relative to the *crate's*
+        # own directory at runtime (crates/core/src/image/java.rs::set_path
+        # hardcodes "java/jre_linux"), and that's also `cargo test`'s working
+        # directory for evanalyzer_core's test binary - unlike release
+        # packaging, which unzips the same archive to dist/java/jre_linux.
+        run: unzip -q libs/jre_linux.zip -d crates/core/java/jre_linux
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run tests with coverage instrumentation
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/libs/libtorch/lib
+        run: cargo llvm-cov --workspace --no-report
+
+      - name: Generate coverage reports
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov report --html
+          cargo llvm-cov report --summary-only | tee coverage-summary.txt
+
+      - name: Publish coverage to the job summary
+        run: |
+          {
+            echo "## Code coverage"
+            echo
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            lcov.info
+            target/llvm-cov/html/
+
+      - name: Update coverage badge & history (push to main only)
+        # Pull requests only get the job summary above - the badge/history
+        # commit is reserved for main so a PR's own coverage run never
+        # pushes to the branch it's testing.
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          # Line coverage is the 10th whitespace-separated field of the
+          # TOTAL row (header: Regions/Missed/Cover, Functions/Missed/Exec,
+          # Lines/Missed/Cover, Branches/Missed/Cover).
+          PCT=$(awk '/^TOTAL/ {print $10}' coverage-summary.txt | tr -d '%')
+          bash .github/scripts/update_coverage_badge.sh "${PCT}" "$(git rev-parse --short HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/coverage-badge.svg docs/coverage-history.csv
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update coverage badge [skip ci]"
+            git push
+          else
+            echo "Coverage unchanged - nothing to commit."
+          fi
