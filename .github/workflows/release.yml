@@ -2,7 +2,10 @@ name: Build & Package
 
 on:
   push:
-    tags: ["v*"]
+    # Matches version tags with or without a "v" prefix (v0.1.1 and 0.1.1
+    # both trigger a release build) - anything starting with a digit or
+    # "v<digit>" followed by anything else.
+    tags: ["v[0-9]+.*", "[0-9]+.*"]
     branches: ["pipeline_start"]
   workflow_dispatch:
 
@@ -24,8 +27,9 @@ jobs:
 
       - name: Set version
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
           else
             VERSION="0.0.0-dev"
           fi
@@ -78,8 +82,9 @@ jobs:
 
       - name: Set version
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
           else
             VERSION="0.0.0-dev"
           fi
@@ -167,8 +172,9 @@ jobs:
 
       - name: Set version
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
           else
             VERSION="0.0.0-dev"
           fi
@@ -227,8 +233,9 @@ jobs:
 
       - name: Set version
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
           else
             VERSION="0.0.0-dev"
           fi
@@ -323,8 +330,9 @@ jobs:
 
       - name: Set version
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
           else
             VERSION="0.0.0-dev"
           fi
@@ -420,8 +428,9 @@ jobs:
   release:
     needs: [build-linux, build-windows, build-linux-cuda, build-windows-cuda, build-macos]
     runs-on: ubuntu-latest
-    # Only publish a GitHub release when triggered by a version tag
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Only publish a GitHub release when triggered by a version tag (with or
+    # without a "v" prefix - see the tag filters at the top of this file).
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
