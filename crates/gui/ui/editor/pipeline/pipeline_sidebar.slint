@@ -64,9 +64,15 @@ export component PipelineSidebar inherits Rectangle {
         Rectangle {
             background: Theme.sidebar-list;
             border-radius: 4px;
-            height: 200px; // Fixed height for the list
-            
+            // Grows with the number of pipelines, but caps out so a long list
+            // can't squeeze the steps section below - beyond the cap it
+            // scrolls instead (ScrollView below).
+            height: min(pipelines.length * 32px + 10px, 200px);
+
             ScrollView {
+                width: 100%;
+                height: 100%;
+
                 VerticalLayout {
                     alignment: start;
                     padding: 5px;
@@ -96,7 +102,11 @@ export component PipelineSidebar inherits Rectangle {
         }
 
         // 3. STEP SELECTION (Command List)
+        // Takes whatever space the (now content-sized) pipeline list above
+        // leaves it, and scrolls internally if a pipeline has many steps -
+        // so it always has room instead of being squeezed.
         if (selected-pipeline-idx >= 0): VerticalLayout {
+            vertical-stretch: 1;
             spacing: 8px;
 
             Text {
@@ -105,36 +115,46 @@ export component PipelineSidebar inherits Rectangle {
                 color: Theme.text-mute;
             }
 
-            // The "Step-by-Step" Command List
-            for step[j] in pipelines[selected-pipeline-idx].steps: Rectangle {
-                height: 32px;
-                background: active-step-idx == j ? Theme.sidebar-step-active : Theme.sidebar-step-idle;
-                //border-left-width: active-step-idx == j ? 4px : 0px;
-                //border-left-color: #4A90E2;
+            ScrollView {
+                width: 100%;
+                vertical-stretch: 1;
 
-                HorizontalLayout {
-                    padding: 10px;
-                    spacing: 10px;
+                VerticalLayout {
+                    alignment: start;
+                    spacing: 8px;
 
-                    // Status Circle
-                    Rectangle {
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 6px;
-                        background: step.completed ? Theme.status-done : Theme.status-idle;
-                        y: 7px; // manual centering
-                    }
+                    // The "Step-by-Step" Command List
+                    for step[j] in pipelines[selected-pipeline-idx].steps: Rectangle {
+                        height: 32px;
+                        background: active-step-idx == j ? Theme.sidebar-step-active : Theme.sidebar-step-idle;
+                        //border-left-width: active-step-idx == j ? 4px : 0px;
+                        //border-left-color: #4A90E2;
 
-                    Text {
-                        text: (j + 1) + ". " + step.name;
-                        color: active-step-idx == j ? Theme.text-bright : Theme.text-dim;
-                        vertical-alignment: center;
-                    }
-                }
+                        HorizontalLayout {
+                            padding: 10px;
+                            spacing: 10px;
 
-                TouchArea {
-                    clicked => {
-                        active-step-idx = j;
+                            // Status Circle
+                            Rectangle {
+                                width: 12px;
+                                height: 12px;
+                                border-radius: 6px;
+                                background: step.completed ? Theme.status-done : Theme.status-idle;
+                                y: 7px; // manual centering
+                            }
+
+                            Text {
+                                text: (j + 1) + ". " + step.name;
+                                color: active-step-idx == j ? Theme.text-bright : Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        TouchArea {
+                            clicked => {
+                                active-step-idx = j;
+                            }
+                        }
                     }
                 }
             }
