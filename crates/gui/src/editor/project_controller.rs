@@ -398,11 +398,15 @@ impl ProjectController {
         {
             let in_thread = self.clone();
             std::thread::spawn(move || {
-                match in_thread
-                    .app_state
-                    .get_project_write()
-                    .save_project_as(&path)
-                {
+                // Bind to an owned `Result` first so the write guard from
+                // `get_project_write()` is dropped at this `let` (not kept
+                // alive across the match arms below, which - as a `match`
+                // scrutinee temporary - it otherwise would be). `clear_dirty()`
+                // calls `set_window_title()`, which takes a *read* lock on the
+                // same project `RwLock`; still holding the write guard there
+                // deadlocks the thread against itself.
+                let result = in_thread.app_state.get_project_write().save_project_as(&path);
+                match result {
                     Ok(_) => {
                         info!("Project saved as: {}", path.display());
                         in_thread.app_state.clear_dirty();
@@ -425,11 +429,12 @@ impl ProjectController {
             {
                 let in_thread = self.clone();
                 std::thread::spawn(move || {
-                    match in_thread
-                        .app_state
-                        .get_project_write()
-                        .save_project_as(&path)
-                    {
+                    // See the comment in `save_project_as_handler` above -
+                    // same fix: drop the write guard at this `let` instead of
+                    // holding it across the match arms, where `clear_dirty()`
+                    // would deadlock trying to re-acquire it for reading.
+                    let result = in_thread.app_state.get_project_write().save_project_as(&path);
+                    match result {
                         Ok(_) => {
                             info!("Project saved: {}", path.display());
                             in_thread.app_state.clear_dirty();
