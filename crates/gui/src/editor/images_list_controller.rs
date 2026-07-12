@@ -248,9 +248,20 @@ impl ImagesListController {
         let manager = self.clone();
 
         std::thread::spawn(move || {
-            {
-                let mut project = manager.app_state.get_project_write();
-                project.scan_image_folder_and_add();
+            // Scan the filesystem without holding the project lock - opening
+            // an `ImageReader` per file can take seconds on a plate-sized
+            // folder, and holding the write guard for that long stalls every
+            // other thread that needs the project (viewport render, ROI
+            // edits, dirty-tracking). Only the fast in-memory apply step
+            // below needs the lock.
+            let root_folder = manager.app_state.get_project().images.root.clone();
+            if let Some(root_folder) = root_folder {
+                let found_images =
+                    evanalyzer_app::extensions::project_ext::collect_images_at_root(&root_folder);
+                manager
+                    .app_state
+                    .get_project_write()
+                    .apply_scanned_images(found_images);
             }
 
             manager.sync_image_list_to_slint();

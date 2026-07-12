@@ -7,6 +7,7 @@ use crate::ProjectTemplateDef;
 use crate::ProjectTemplateState;
 use crate::ToolbarState;
 use crate::UiState;
+use crate::UnsavedChangesState;
 use crate::WarningState;
 use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
@@ -27,6 +28,16 @@ use slint::{ModelRc, VecModel};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// An action that would discard the current project's unsaved changes if run
+/// immediately - gated behind [`ProjectController::guard_discard`], which
+/// runs it right away if the project is clean, or stashes it and prompts the
+/// user (Save / Discard / Cancel) if it isn't.
+enum PendingAction {
+    OpenProject(PathBuf),
+    ImportLegacy(PathBuf),
+    Quit,
+}
+
 pub struct ProjectController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
@@ -39,6 +50,9 @@ pub struct ProjectController {
     /// Project templates currently shown in the "New from Project Template"
     /// dialog. Reloaded from disk whenever the dialog is opened.
     project_templates: Mutex<Vec<ProjectTemplate>>,
+    /// The open/import/quit action waiting on the unsaved-changes dialog's
+    /// answer, if any (see [`PendingAction`]).
+    pending_action: Mutex<Option<PendingAction>>,
 }
 
 impl ProjectController {
@@ -62,6 +76,7 @@ impl ProjectController {
             results_list_controller,
             template_controller,
             project_templates: Mutex::new(Vec::new()),
+            pending_action: Mutex::new(None),
         }
     }
 
@@ -82,6 +97,10 @@ impl ProjectController {
     pub fn open_new_project(self: Arc<Self>, project_path: &PathBuf) {
         if let Err(e) = self.app_state.load_project(&project_path) {
             warn!("Could not open project {:?}: {}", project_path, e);
+            self.show_warning(
+                "Cannot open project",
+                &format!("Failed to open '{}': {e}", project_path.display()),
+            );
             return;
         }
 
@@ -151,9 +170,13 @@ impl ProjectController {
             });
 
         if let Some(root) = &image_root_dir {
+            // Scan off-lock (see `images_list_controller::scan_image_root_for_images`
+            // for why) - only the fast in-memory apply below needs the write guard.
+            let found_images =
+                evanalyzer_app::extensions::project_ext::collect_images_at_root(root);
             let mut project = self.app_state.get_project_write();
             project.images.root = Some(root.clone());
-            project.scan_image_folder_and_add();
+            project.apply_scanned_images(found_images);
         }
 
         // Do all the project load tasks here, mirroring `open_new_project`.
@@ -330,6 +353,53 @@ impl ProjectController {
                         .spawn();
                 });
             });
+
+            // Unsaved-changes dialog: "Save" - save first, then only run the
+            // pending action (if any) once the save actually succeeded. If
+            // the user cancels the save-as file picker, or the save fails,
+            // the pending action is left in place and nothing is discarded.
+            let manager = Arc::clone(self);
+            ui.global::<UnsavedChangesState>().on_save(move || {
+                let manager = Arc::clone(&manager);
+                manager.clone().save_project_then(move |saved| {
+                    if saved {
+                        if let Some(action) = manager.pending_action.lock().expect("Poisoned").take() {
+                            manager.run_pending_action(action);
+                        }
+                    }
+                });
+            });
+
+            // Unsaved-changes dialog: "Discard changes" - drop the pending
+            // action's guard and run it, losing the unsaved edits.
+            let manager = Arc::clone(self);
+            ui.global::<UnsavedChangesState>().on_discard(move || {
+                if let Some(action) = manager.pending_action.lock().expect("Poisoned").take() {
+                    manager.run_pending_action(action);
+                }
+            });
+
+            // Unsaved-changes dialog: "Cancel" - drop the pending action,
+            // leave the current project open untouched.
+            let manager = Arc::clone(self);
+            ui.global::<UnsavedChangesState>().on_cancel(move || {
+                *manager.pending_action.lock().expect("Poisoned") = None;
+            });
+
+            // Closing the window: if there are unsaved changes, keep the
+            // window open and route the close through the same
+            // Save/Discard/Cancel guard as opening another project - the
+            // default behaviour (silently hide the window) would otherwise
+            // discard unsaved work with no confirmation.
+            let manager = Arc::clone(self);
+            ui.window().on_close_requested(move || {
+                if manager.app_state.is_dirty() {
+                    manager.guard_discard(PendingAction::Quit);
+                    slint::CloseRequestResponse::KeepWindowShown
+                } else {
+                    slint::CloseRequestResponse::HideWindow
+                }
+            });
         }
     }
 
@@ -365,9 +435,9 @@ impl ProjectController {
                 let ext = path.extension().and_then(|ext| ext.to_str());
 
                 if ext == Some(PROJECT_FILE_EXTENSIONS) {
-                    manager.open_new_project(&path);
+                    manager.guard_discard(PendingAction::OpenProject(path));
                 } else if ext == Some(LEGACY_PROJECT_FILE_EXTENSION) {
-                    manager.import_legacy_project_file(&path);
+                    manager.guard_discard(PendingAction::ImportLegacy(path));
                 } else {
                     manager.image_list_controller.open_new_image(&path);
                 }
@@ -420,9 +490,30 @@ impl ProjectController {
     }
 
     fn save_project(self: &Arc<Self>) {
-        let result = self.app_state.get_project_write().save_project();
+        self.save_project_then(|_saved| {});
+    }
 
-        if result == SaveProjectActions::PleaseSelectFile {
+    /// Saves the project (prompting for a path first if none is set yet,
+    /// same as [`Self::save_project_as_handler`]) and calls `on_done(true)`
+    /// once the save actually succeeded, or `on_done(false)` if it failed or
+    /// the user cancelled the file picker. Used both for the plain "Save"
+    /// button and to resume a guarded action after the user picks "Save" on
+    /// the unsaved-changes dialog.
+    ///
+    /// # Threading
+    /// The path check below is a cheap in-memory read; everything that
+    /// touches disk (serialization, the write, and - if needed - the file
+    /// picker's blocking dialog) runs on a background thread so the UI
+    /// thread never blocks on save I/O, mirroring `save_project_as_handler`.
+    fn save_project_then(self: &Arc<Self>, on_done: impl FnOnce(bool) + Send + 'static) {
+        let has_path = self
+            .app_state
+            .get_project()
+            .tmp_settings
+            .current_project
+            .is_some();
+
+        if !has_path {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Project files", &[PROJECT_FILE_EXTENSIONS])
                 .save_file()
@@ -434,6 +525,7 @@ impl ProjectController {
                     // holding it across the match arms, where `clear_dirty()`
                     // would deadlock trying to re-acquire it for reading.
                     let result = in_thread.app_state.get_project_write().save_project_as(&path);
+                    let ok = result.is_ok();
                     match result {
                         Ok(_) => {
                             info!("Project saved: {}", path.display());
@@ -442,14 +534,81 @@ impl ProjectController {
                         Err(msg) => {
                             warn!("Project not saved: {}", msg);
                         }
-                    };
+                    }
+                    on_done(ok);
                 });
+            } else {
+                on_done(false);
             }
-        } else if result == SaveProjectActions::Success {
-            info!("Project saved");
-            self.app_state.clear_dirty();
-        } else {
-            warn!("Could not save project");
+            return;
+        }
+
+        let in_thread = self.clone();
+        std::thread::spawn(move || {
+            // Same deadlock-avoidance shape as above: `result` is an owned
+            // value, so the write guard from `get_project_write()` is
+            // dropped at this `let`, before `clear_dirty()` (which takes a
+            // read lock) runs in the match arm below.
+            let result = in_thread.app_state.get_project_write().save_project();
+            let ok = result == SaveProjectActions::Success;
+            match result {
+                SaveProjectActions::Success => {
+                    info!("Project saved");
+                    in_thread.app_state.clear_dirty();
+                }
+                SaveProjectActions::PleaseSelectFile => {
+                    warn!("Project has no path to save to");
+                }
+                SaveProjectActions::Error => {
+                    warn!("Could not save project");
+                }
+            }
+            on_done(ok);
+        });
+    }
+
+    /// Runs `action` immediately if the project has no unsaved changes;
+    /// otherwise stashes it and shows the unsaved-changes confirmation
+    /// dialog, whose Save/Discard/Cancel buttons resolve it (wired in
+    /// [`Self::attach_callbacks`]).
+    fn guard_discard(self: &Arc<Self>, action: PendingAction) {
+        if !self.app_state.is_dirty() {
+            self.run_pending_action(action);
+            return;
+        }
+        *self.pending_action.lock().expect("Poisoned") = Some(action);
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::UnsavedChangesConfirm);
+            }
+        })
+        .ok();
+    }
+
+    /// Executes a [`PendingAction`], safe to call from either the UI thread
+    /// or a background thread: I/O-bound actions dispatch their own
+    /// background thread, `Quit` dispatches onto the UI event loop.
+    fn run_pending_action(self: &Arc<Self>, action: PendingAction) {
+        match action {
+            PendingAction::OpenProject(path) => {
+                let manager = self.clone();
+                std::thread::spawn(move || manager.open_new_project(&path));
+            }
+            PendingAction::ImportLegacy(path) => {
+                let manager = self.clone();
+                std::thread::spawn(move || manager.import_legacy_project_file(&path));
+            }
+            PendingAction::Quit => {
+                let ui_weak = self.ui.clone();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let _ = ui.window().hide();
+                    }
+                })
+                .ok();
+            }
         }
     }
 

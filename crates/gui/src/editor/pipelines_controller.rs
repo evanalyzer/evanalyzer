@@ -1065,6 +1065,7 @@ impl PipelinesController {
         let mut list = indexmap::IndexMap::with_capacity(1);
         list.insert(image_path, image_settings);
         ProjectSettings {
+            schema_version: project.schema_version,
             metadata: project.metadata.clone(),
             classification: project.classification.clone(),
             plate: project.plate.clone(),

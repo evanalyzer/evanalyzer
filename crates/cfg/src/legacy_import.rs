@@ -79,6 +79,9 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
     images.settings = convert_global_image_settings(&old.image_setup);
 
     ProjectSettings {
+        // Built fresh from the current-shape fields below, so it's already
+        // current - no migration needed, unlike a file loaded from disk.
+        schema_version: crate::CURRENT_PROJECT_SCHEMA_VERSION,
         metadata: convert_metadata(old),
         classification: convert_classification(&old.project_settings.classification, warnings),
         plate: convert_plate(&old.project_settings, warnings),

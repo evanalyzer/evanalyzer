@@ -156,6 +156,7 @@ pub trait ProjectExt {
     fn add_image(&mut self, absolute_path: &Path, image_meta: &ImageMeta) -> ProjectAction;
     fn add_image_to_list(&mut self, rel_path: &Path, abs_path: &Path, image_meta: &ImageMeta);
     fn scan_image_folder_and_add(&mut self);
+    fn apply_scanned_images(&mut self, found_images: Vec<(PathBuf, ImageMeta)>);
     fn collect_images_parallel(&self, dir: &Path) -> Vec<(PathBuf, ImageMeta)>;
     fn is_supported_image(&self, path: &Path) -> bool;
 
@@ -1007,76 +1008,40 @@ impl ProjectExt for ProjectWithRuntime {
     ///
     fn scan_image_folder_and_add(&mut self) {
         if let Some(root_folder) = self.settings.images.root.clone() {
-            // 1. Clear current list
-            self.images.list.clear();
-
-            // 2. Collect all valid image paths in parallel
-            let mut found_images: Vec<(PathBuf, ImageMeta)> =
-                self.collect_images_parallel(&root_folder);
-
-            // Natural sort
-            found_images.sort_by(|a, b| {
-                let path_a = a.0.to_string_lossy();
-                let path_b = b.0.to_string_lossy();
-                compare(&path_a, &path_b)
-            });
-
-            // 3. Batch insert into your state (Single lock at the end)
-            let start = Instant::now();
-            for (path, meta) in found_images {
-                // Call your internal add logic here
-                // Note: Ensure your add_image logic is split so you can
-                // insert pre-computed metadata without re-calculating.
-                self.add_image(&mut &path, &meta);
-            }
-            let duration = start.elapsed();
-            info!("Added images {:?}", duration);
+            let found_images = collect_images_at_root(&root_folder);
+            self.apply_scanned_images(found_images);
         }
+    }
+
+    /// Replaces the project's image list with `found_images` (as returned by
+    /// the free function [`collect_images_at_root`]). Unlike
+    /// `scan_image_folder_and_add`, this does no filesystem I/O itself, so
+    /// callers that already scanned off-lock only need to hold the project
+    /// write guard for this call, not for the scan that produced its input.
+    fn apply_scanned_images(&mut self, mut found_images: Vec<(PathBuf, ImageMeta)>) {
+        self.images.list.clear();
+
+        // Natural sort
+        found_images.sort_by(|a, b| {
+            let path_a = a.0.to_string_lossy();
+            let path_b = b.0.to_string_lossy();
+            compare(&path_a, &path_b)
+        });
+
+        let start = Instant::now();
+        for (path, meta) in found_images {
+            self.add_image(&mut &path, &meta);
+        }
+        let duration = start.elapsed();
+        info!("Added images {:?}", duration);
     }
 
     fn collect_images_parallel(&self, dir: &Path) -> Vec<(PathBuf, ImageMeta)> {
-        // 1. Check if the current directory itself is named "results"
-        if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
-            if name.eq_ignore_ascii_case("results") {
-                return vec![]; // Skip this folder and everything inside it
-            }
-        }
-
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return vec![];
-        };
-
-        entries
-            .flatten()
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            .flat_map(|entry| {
-                let path = entry.path();
-
-                if path.is_dir() {
-                    // The check happens again here for subdirectories
-                    self.collect_images_parallel(&path)
-                } else if self.is_supported_image(&path) {
-                    if let Ok(reader) = ImageReader::new(&path, ReadMode::SplitChannels) {
-                        vec![(path, (*reader.get_image_meta()).clone())]
-                    } else {
-                        vec![]
-                    }
-                } else {
-                    vec![]
-                }
-            })
-            .collect()
+        collect_images_at_root(dir)
     }
 
     fn is_supported_image(&self, path: &Path) -> bool {
-        path.extension()
-            .and_then(|ext| ext.to_str()) // Convert OsStr to &str
-            .map(|ext_str| {
-                let ext_lower = ext_str.to_lowercase();
-                SUPPORTED_IMAGE_FORMATS.iter().any(|&fmt| fmt == ext_lower)
-            })
-            .unwrap_or(false) // Return false if no extension exists
+        is_supported_image_path(path)
     }
 
     fn save_project(&mut self) -> SaveProjectActions {
@@ -1099,6 +1064,12 @@ impl ProjectExt for ProjectWithRuntime {
         if final_path.extension().and_then(|s| s.to_str()) != Some(PROJECT_FILE_EXTENSIONS) {
             final_path.set_extension(PROJECT_FILE_EXTENSIONS);
         }
+
+        // Every file written by this build is stamped with the current
+        // format version, regardless of what version it was loaded at (or
+        // whether it was ever loaded from disk at all - e.g. a brand-new
+        // project still has `schema_version: 0` from `Default`).
+        self.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
 
         let json = serde_json::to_string_pretty(&self.settings)
             .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
@@ -1313,10 +1284,76 @@ impl ProjectExt for ProjectWithRuntime {
     }
 }
 
+/// Recursively scans `dir` in parallel for supported image files and reads
+/// each one's metadata. Pure filesystem I/O - takes no project reference and
+/// holds no lock, so callers on a project shared behind an `RwLock` (the GUI)
+/// should run this *before* taking the write guard, then commit the result
+/// with `ProjectExt::apply_scanned_images` - keeping the lock held only for
+/// the fast in-memory part instead of for the whole scan (which opens an
+/// `ImageReader` per file and can take seconds on a plate-sized folder).
+pub fn collect_images_at_root(dir: &Path) -> Vec<(PathBuf, ImageMeta)> {
+    // 1. Check if the current directory itself is named "results"
+    if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
+        if name.eq_ignore_ascii_case("results") {
+            return vec![]; // Skip this folder and everything inside it
+        }
+    }
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
+
+    entries
+        .flatten()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .flat_map(|entry| {
+            let path = entry.path();
+
+            if path.is_dir() {
+                // The check happens again here for subdirectories
+                collect_images_at_root(&path)
+            } else if is_supported_image_path(&path) {
+                if let Ok(reader) = ImageReader::new(&path, ReadMode::SplitChannels) {
+                    vec![(path, (*reader.get_image_meta()).clone())]
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            }
+        })
+        .collect()
+}
+
+fn is_supported_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str()) // Convert OsStr to &str
+        .map(|ext_str| {
+            let ext_lower = ext_str.to_lowercase();
+            SUPPORTED_IMAGE_FORMATS.iter().any(|&fmt| fmt == ext_lower)
+        })
+        .unwrap_or(false) // Return false if no extension exists
+}
+
 pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors> {
     let data = fs::read_to_string(path.clone())?;
-    let inner: ProjectSettings =
+    let mut inner: ProjectSettings =
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
+
+    // A file from a *newer* build may rely on fields/variants this build
+    // doesn't know about yet - serde would have silently dropped them rather
+    // than erroring, so proceeding could quietly discard part of the user's
+    // project on the next save. Refuse instead of guessing.
+    if inner.schema_version > evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION {
+        return Err(InternalErrors::ParseError(format!(
+            "this project was saved by a newer version of EVAnalyzer (format version {}, this build supports up to version {}) - update EVAnalyzer to open it",
+            inner.schema_version,
+            evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION
+        )));
+    }
+    inner.migrate();
+
     let mut project = ProjectWithRuntime {
         settings: inner,
         tmp_settings: ProjectTmpSettings::default(),
