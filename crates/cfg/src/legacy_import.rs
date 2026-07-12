@@ -96,7 +96,10 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
     let name = if !m.name.is_empty() {
         m.name.clone()
     } else {
-        old.project_settings.experiment_settings.experiment_name.clone()
+        old.project_settings
+            .experiment_settings
+            .experiment_name
+            .clone()
     };
     let description = if !m.notes.is_empty() {
         m.notes.clone()
@@ -109,7 +112,8 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
-    let (author_first_name, author_last_name) = split_author_name(m.author.as_deref().unwrap_or(""));
+    let (author_first_name, author_last_name) =
+        split_author_name(m.author.as_deref().unwrap_or(""));
 
     MetaData {
         name,
@@ -180,12 +184,22 @@ fn convert_classification(
     warnings: &mut Vec<String>,
 ) -> ClassificationSettings {
     ClassificationSettings {
-        classes: old.classes.iter().map(|c| convert_class(c, warnings)).collect(),
+        classes: old
+            .classes
+            .iter()
+            .map(|c| convert_class(c, warnings))
+            .collect(),
     }
 }
 
 fn convert_class(old: &LegacyClass, warnings: &mut Vec<String>) -> Class {
-    let id = resolve_class(&old.class_id, ObjectClass::Unset, "classification", "classId", warnings);
+    let id = resolve_class(
+        &old.class_id,
+        ObjectClass::Unset,
+        "classification",
+        "classId",
+        warnings,
+    );
     let color = parse_hex_color(&old.color).unwrap_or(0x9933FF);
     let measure = convert_measure(&old.default_measurements, &old.name, warnings);
     Class {
@@ -268,7 +282,10 @@ fn convert_measure(
 
 /// Old projects predating the singular `plate` field only populated the legacy
 /// `plates` list. Falls back to its first entry in that case.
-fn resolve_plate<'a>(old: &'a LegacyProjectSettings, warnings: &mut Vec<String>) -> &'a LegacyPlate {
+fn resolve_plate<'a>(
+    old: &'a LegacyProjectSettings,
+    warnings: &mut Vec<String>,
+) -> &'a LegacyPlate {
     if !old.plate.image_folder.is_empty() {
         return &old.plate;
     }
@@ -378,7 +395,10 @@ fn convert_global_image_settings(old: &LegacyProjectImageSetup) -> GlobalImageSe
 // Pipelines
 // ---------------------------------------------------------------------------
 
-fn convert_pipelines(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> Vec<PipelineSettings> {
+fn convert_pipelines(
+    old: &LegacyAnalyzeSettings,
+    warnings: &mut Vec<String>,
+) -> Vec<PipelineSettings> {
     old.pipelines
         .iter()
         .enumerate()
@@ -394,8 +414,13 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
     };
     let context = format!("pipeline '{display_name}'");
 
-    let pipeline_default_class =
-        resolve_class(&old.pipeline_setup.default_class_id, ObjectClass::Unset, &context, "defaultClassId", warnings);
+    let pipeline_default_class = resolve_class(
+        &old.pipeline_setup.default_class_id,
+        ObjectClass::Unset,
+        &context,
+        "defaultClassId",
+        warnings,
+    );
 
     let image_source = if old.pipeline_setup.source == "FromFile" {
         ImageAddress::Channel(old.pipeline_setup.c_stack_index)
@@ -443,7 +468,9 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
 fn push_segmentation_followup(steps: &mut Vec<PipelineStepSettings>) {
     steps.push(PipelineStepSettings {
         enabled: true,
-        command: PipelineCommand::ConnectedComponents(ConnectedComponentsSettings {}),
+        command: PipelineCommand::ConnectedComponents(ConnectedComponentsSettings {
+            min_size_px: 0,
+        }),
     });
     steps.push(PipelineStepSettings {
         enabled: true,
@@ -509,7 +536,12 @@ fn convert_step(
         return vec![convert_watershed(s)];
     }
     if let Some(s) = &step.voronoi {
-        return vec![convert_voronoi(s, pipeline_default_class, context, warnings)];
+        return vec![convert_voronoi(
+            s,
+            pipeline_default_class,
+            context,
+            warnings,
+        )];
     }
     if let Some(s) = &step.classify {
         return convert_classifier(s, context, warnings);
@@ -556,7 +588,11 @@ fn warn_unsupported_step(step: &LegacyPipelineStep, context: &str, warnings: &mu
 
 // ---- image-level filters ----
 
-fn convert_blur(s: &LegacyBlurSettings, context: &str, warnings: &mut Vec<String>) -> PipelineCommand {
+fn convert_blur(
+    s: &LegacyBlurSettings,
+    context: &str,
+    warnings: &mut Vec<String>,
+) -> PipelineCommand {
     if s.mode == "GaussianBlur" {
         // Old had no explicit sigma for Gaussian blur (it derived one from the
         // kernel size internally); approximate via the standard kernel<->sigma
@@ -631,13 +667,19 @@ fn convert_enhance_contrast(s: &LegacyEnhanceContrastSettings) -> PipelineComman
     })
 }
 
-fn convert_hessian(s: &LegacyHessianSettings, context: &str, warnings: &mut Vec<String>) -> PipelineCommand {
+fn convert_hessian(
+    s: &LegacyHessianSettings,
+    context: &str,
+    warnings: &mut Vec<String>,
+) -> PipelineCommand {
     let mode = match s.mode.as_str() {
         "EigenvaluesX" => FiltersHessianHessianModeSettings::EigenvaluesX,
         "EigenvaluesY" => FiltersHessianHessianModeSettings::EigenvaluesY,
         "Determinant" => FiltersHessianHessianModeSettings::Determinant,
         other => {
-            warnings.push(format!("{context}: '$hessian' mode '{other}' unrecognized - defaulted to Determinant"));
+            warnings.push(format!(
+                "{context}: '$hessian' mode '{other}' unrecognized - defaulted to Determinant"
+            ));
             FiltersHessianHessianModeSettings::Determinant
         }
     };
@@ -675,7 +717,11 @@ fn convert_weighted_deviation(s: &LegacyWeightedDeviationSettings) -> PipelineCo
     })
 }
 
-fn convert_rank_filter(s: &LegacyRankFilterSettings, context: &str, warnings: &mut Vec<String>) -> PipelineCommand {
+fn convert_rank_filter(
+    s: &LegacyRankFilterSettings,
+    context: &str,
+    warnings: &mut Vec<String>,
+) -> PipelineCommand {
     let filter_type = match s.mode.as_str() {
         "Mean" => FiltersRankFilterRankFilterTypeSettings::Mean,
         "Min" => FiltersRankFilterRankFilterTypeSettings::Min,
@@ -695,7 +741,11 @@ fn convert_rank_filter(s: &LegacyRankFilterSettings, context: &str, warnings: &m
     })
 }
 
-fn convert_laplacian(s: &LegacyLaplacianSettings, context: &str, warnings: &mut Vec<String>) -> PipelineCommand {
+fn convert_laplacian(
+    s: &LegacyLaplacianSettings,
+    context: &str,
+    warnings: &mut Vec<String>,
+) -> PipelineCommand {
     let _ = (context, warnings); // `repeat` (if != 1) is silently dropped; not worth a warning per-step.
     PipelineCommand::Laplacian(LaplacianSettings {
         kernel_size: s.kernel_size.max(1) as usize,
@@ -724,12 +774,14 @@ fn convert_morphological(
         "Ellipse" => MorphologyMorphologicalTransformationKernelShapesSettings::Ellipse,
         _ => MorphologyMorphologicalTransformationKernelShapesSettings::Box,
     };
-    vec![PipelineCommand::MorphologicalCommand(MorphologicalCommandSettings {
-        op,
-        kernel_size: s.kernel_size.max(1) as usize,
-        kernel_shape,
-        use_grayscale: false,
-    })]
+    vec![PipelineCommand::MorphologicalCommand(
+        MorphologicalCommandSettings {
+            op,
+            kernel_size: s.kernel_size.max(1) as usize,
+            kernel_shape,
+            use_grayscale: false,
+        },
+    )]
 }
 
 fn convert_color_filter(
@@ -749,16 +801,18 @@ fn convert_color_filter(
     // Old hue is on a [0, 255] scale (255 == 360deg); sat/val are [0, 255] -> [0.0, 1.0].
     let to_degrees = |h: i32| h as f32 * 360.0 / 255.0;
     let to_unit = |v: i32| (v as f32 / 255.0).clamp(0.0, 1.0);
-    vec![PipelineCommand::ColorFilterCommand(ColorFilterCommandSettings {
-        range: HsvRangeSettings {
-            min_h: to_degrees(first.color_range_from.hue),
-            max_h: to_degrees(first.color_range_to.hue),
-            min_s: to_unit(first.color_range_from.sat),
-            max_s: to_unit(first.color_range_to.sat),
-            min_v: to_unit(first.color_range_from.val),
-            max_v: to_unit(first.color_range_to.val),
+    vec![PipelineCommand::ColorFilterCommand(
+        ColorFilterCommandSettings {
+            range: HsvRangeSettings {
+                min_h: to_degrees(first.color_range_from.hue),
+                max_h: to_degrees(first.color_range_to.hue),
+                min_s: to_unit(first.color_range_from.sat),
+                max_s: to_unit(first.color_range_to.sat),
+                min_v: to_unit(first.color_range_from.val),
+                max_v: to_unit(first.color_range_to.val),
+            },
         },
-    })]
+    )]
 }
 
 fn convert_intensity_transform(
@@ -811,7 +865,11 @@ fn map_threshold_method(old: &str) -> SegmentationThresholdThresholdMethodSettin
     }
 }
 
-fn convert_threshold(s: &LegacyThresholdSettings, context: &str, warnings: &mut Vec<String>) -> Vec<PipelineCommand> {
+fn convert_threshold(
+    s: &LegacyThresholdSettings,
+    context: &str,
+    warnings: &mut Vec<String>,
+) -> Vec<PipelineCommand> {
     if s.model_classes.is_empty() {
         return vec![];
     }
@@ -821,7 +879,8 @@ fn convert_threshold(s: &LegacyThresholdSettings, context: &str, warnings: &mut 
         .map(|t| {
             if t.method == "" {
                 // empty string is the "NONE" sentinel, not an error.
-            } else if map_threshold_method(&t.method) == SegmentationThresholdThresholdMethodSettings::None
+            } else if map_threshold_method(&t.method)
+                == SegmentationThresholdThresholdMethodSettings::None
                 && t.method != "None"
             {
                 warnings.push(format!(
@@ -865,10 +924,26 @@ fn convert_voronoi(
     let mut points = s.input_classes_points.iter();
     let centers = points
         .next()
-        .map(|c| resolve_class(c, pipeline_default_class, context, "voronoi centers", warnings))
+        .map(|c| {
+            resolve_class(
+                c,
+                pipeline_default_class,
+                context,
+                "voronoi centers",
+                warnings,
+            )
+        })
         .unwrap_or(ObjectClass::Unset);
     let center_filter_classes: Vec<ObjectClass> = points
-        .map(|c| resolve_class(c, pipeline_default_class, context, "voronoi centers (extra)", warnings))
+        .map(|c| {
+            resolve_class(
+                c,
+                pipeline_default_class,
+                context,
+                "voronoi centers (extra)",
+                warnings,
+            )
+        })
         .collect();
     if !center_filter_classes.is_empty() {
         warnings.push(format!(
@@ -883,7 +958,15 @@ fn convert_voronoi(
         .map(|c| resolve_class(c, pipeline_default_class, context, "voronoi mask", warnings))
         .unwrap_or(ObjectClass::Unset);
     let mask_filter_classes: Vec<ObjectClass> = masks
-        .map(|c| resolve_class(c, pipeline_default_class, context, "voronoi mask (extra)", warnings))
+        .map(|c| {
+            resolve_class(
+                c,
+                pipeline_default_class,
+                context,
+                "voronoi mask (extra)",
+                warnings,
+            )
+        })
         .collect();
 
     let output_class = resolve_class(
@@ -914,7 +997,9 @@ fn convert_classifier(
 ) -> Vec<PipelineCommand> {
     let mut out = Vec::new();
     for model_class in &s.model_classes {
-        if model_class.output_class_no_match != "Undefined" && !model_class.output_class_no_match.is_empty() {
+        if model_class.output_class_no_match != "Undefined"
+            && !model_class.output_class_no_match.is_empty()
+        {
             warnings.push(format!(
                 "{context}: '$classify' 'no match' class assignment has no equivalent - only 'match' classification was imported"
             ));
@@ -933,9 +1018,12 @@ fn convert_classifier(
                 warnings,
             );
             out.push(PipelineCommand::ClassifyRois(ClassifyRoisSettings {
-                origin_segmentation: vec![SegmentationClass(model_class.pixel_class_id.max(0) as u32)],
+                origin_segmentation: vec![SegmentationClass(
+                    model_class.pixel_class_id.max(0) as u32
+                )],
                 input_classes: vec![],
-                match_handling: ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch,
+                match_handling:
+                    ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch,
                 output_class,
                 overlapping_with: ObjectClass::Unset,
                 min_intersection_area: 0.0,
@@ -969,8 +1057,20 @@ fn convert_object_transform(
     context: &str,
     warnings: &mut Vec<String>,
 ) -> Vec<PipelineCommand> {
-    let input_class = resolve_class(&s.input_classes, pipeline_default_class, context, "objectTransform input", warnings);
-    let output_class = resolve_class(&s.output_classes, pipeline_default_class, context, "objectTransform output", warnings);
+    let input_class = resolve_class(
+        &s.input_classes,
+        pipeline_default_class,
+        context,
+        "objectTransform input",
+        warnings,
+    );
+    let output_class = resolve_class(
+        &s.output_classes,
+        pipeline_default_class,
+        context,
+        "objectTransform output",
+        warnings,
+    );
 
     let function = match s.function.as_str() {
         "Scale" => ClassificationTransformRoisTransformFunctionSettings::Scale { factor: s.factor },
@@ -988,7 +1088,9 @@ fn convert_object_transform(
             diameter: s.factor * 2.0,
             unit: SizeUnits::Pixels,
         },
-        "FitEllipse" => ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale: 1.0 },
+        "FitEllipse" => {
+            ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale: 1.0 }
+        }
         other => {
             warnings.push(format!(
                 "{context}: '$objectTransform' function '{other}' unrecognized - step skipped"
@@ -1082,8 +1184,13 @@ mod tests {
         assert_eq!(p.classification.classes[0].color, 0x3399FF);
         assert_eq!(p.classification.classes[1].id, ObjectClass::Unset);
         assert_eq!(
-            p.classification.classes[0].measure.get(&MeasurementChannels::AreaSize),
-            Some(&vec![MeasurementStatistics::Avg, MeasurementStatistics::Sum])
+            p.classification.classes[0]
+                .measure
+                .get(&MeasurementChannels::AreaSize),
+            Some(&vec![
+                MeasurementStatistics::Avg,
+                MeasurementStatistics::Sum
+            ])
         );
 
         assert_eq!(p.plate.grouping_mode, GroupingMode::FolderName);
@@ -1099,7 +1206,12 @@ mod tests {
     #[test]
     fn imports_pixel_size_in_nanometers() {
         let outcome = import_legacy_project(&sample_project_json()).unwrap();
-        let px = outcome.project.images.settings.pixel_sizes.expect("pixel size set");
+        let px = outcome
+            .project
+            .images
+            .settings
+            .pixel_sizes
+            .expect("pixel size set");
         assert_eq!(px.x, 500.0); // 0.5 um -> 500 nm
         assert_eq!(px.y, 500.0);
     }
@@ -1160,7 +1272,10 @@ mod tests {
     fn reports_a_warning_for_unsupported_commands() {
         let outcome = import_legacy_project(&sample_project_json()).unwrap();
         assert!(
-            outcome.warnings.iter().any(|w| w.contains("$houghTransform")),
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("$houghTransform")),
             "expected a warning about the unsupported houghTransform step, got: {:#?}",
             outcome.warnings
         );
@@ -1234,7 +1349,9 @@ mod tests {
 
     #[test]
     fn gaussian_blur_mode_maps_to_the_gaussian_command_with_an_estimated_sigma() {
-        let json = pipeline_with_step(r#"{ "$blur": { "mode": "GaussianBlur", "kernelSize": 7, "repeat": 1 } }"#);
+        let json = pipeline_with_step(
+            r#"{ "$blur": { "mode": "GaussianBlur", "kernelSize": 7, "repeat": 1 } }"#,
+        );
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::GaussianBlur(s) => {
@@ -1244,12 +1361,18 @@ mod tests {
             }
             other => panic!("expected GaussianBlur, got {other:?}"),
         }
-        assert!(outcome.warnings.iter().any(|w| w.contains("estimated sigma")));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("estimated sigma"))
+        );
     }
 
     #[test]
     fn box_blur_mode_maps_to_the_plain_blur_command() {
-        let json = pipeline_with_step(r#"{ "$blur": { "mode": "Blur", "kernelSize": 5, "repeat": 1 } }"#);
+        let json =
+            pipeline_with_step(r#"{ "$blur": { "mode": "Blur", "kernelSize": 5, "repeat": 1 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::Blur(s) => assert_eq!(s.kernel_size, 5),
@@ -1269,8 +1392,14 @@ mod tests {
         match only_command(&outcome) {
             PipelineCommand::Threshold(s) => {
                 assert_eq!(s.thresholds.len(), 2);
-                assert_eq!(s.thresholds[0].method, SegmentationThresholdThresholdMethodSettings::Percentile);
-                assert_eq!(s.thresholds[1].method, SegmentationThresholdThresholdMethodSettings::RenyiEntropy);
+                assert_eq!(
+                    s.thresholds[0].method,
+                    SegmentationThresholdThresholdMethodSettings::Percentile
+                );
+                assert_eq!(
+                    s.thresholds[1].method,
+                    SegmentationThresholdThresholdMethodSettings::RenyiEntropy
+                );
             }
             other => panic!("expected Threshold, got {other:?}"),
         }
@@ -1313,7 +1442,12 @@ mod tests {
         let outcome = import_legacy_project(json).unwrap();
         assert_eq!(outcome.legacy_image_folder, Some("old_images".to_string()));
         assert_eq!(outcome.project.plate.grouping_mode, GroupingMode::FileName);
-        assert!(outcome.warnings.iter().any(|w| w.contains("legacy multi-plate list")));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("legacy multi-plate list"))
+        );
     }
 
     #[test]

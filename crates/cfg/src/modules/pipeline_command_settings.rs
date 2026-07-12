@@ -1181,10 +1181,33 @@ impl Default for UNetSettings {
 
 // ============ OBJECT ============
 
+fn _serde_default_connectedcomponents_min_size_px() -> i32 {
+    0i32
+}
 ///  Identifies and labels discrete objects within a binary or multi-class image.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectedComponentsSettings {}
+pub struct ConnectedComponentsSettings {
+    ///  Minimum object size, in pixels, an object must have to be kept.
+    ///
+    ///  After labeling, connected components with a pixel count below this
+    ///  threshold are discarded (their pixels are reset to background) and
+    ///  the remaining object IDs are re-compacted to a contiguous range.
+    ///  Useful for suppressing noise/speckle artifacts before they reach
+    ///  downstream measurement or classification steps. A value of 0 (the
+    ///  default) disables filtering.
+    #[schemars(range(min = 1))]
+    #[schemars(description = "unit: px²")]
+    #[serde(default = "_serde_default_connectedcomponents_min_size_px")]
+    pub min_size_px: i32,
+}
+
+impl Default for ConnectedComponentsSettings {
+    fn default() -> Self {
+        Self { min_size_px: 0i32 }
+    }
+}
 
 ///  A morphological segmentation algorithm that splits touching objects using distance topography.
 ///

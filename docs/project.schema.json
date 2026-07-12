@@ -711,7 +711,16 @@
     },
     "ConnectedComponentsSettings": {
       "description": "Identifies and labels discrete objects within a binary or multi-class image.",
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "minSizePx": {
+          "description": "unit: px²",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "minimum": 1
+        }
+      }
     },
     "DistanceTransformSettings": {
       "description": "A command that calculates the Euclidean Distance Map (EDM) of an f32 image.\n\n This algorithm identifies pixels below a threshold as \"background\" and\n calculates the distance of every \"foreground\" pixel to the nearest background pixel.",
