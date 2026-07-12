@@ -66,10 +66,16 @@ item you want implemented, and optionally add a note, then hand the file back.
   - **`job_generator.rs`** (7 tests): both `generate_preview_job_from_project_settings`/`generate_analyze_job_from_project_settings` against a real `tempfile::tempdir()` (real disk I/O, real DuckDB file for the analyze path) - missing image root is rejected, output directories/`.evadb` file are actually created, disabled pipelines and disabled steps within an enabled pipeline are both skipped, and the pixel-size override is forwarded (or left `None`) correctly.
   
   Full `evanalyzer_core --features ai` suite: 344 passed, 0 failed (up from 287 at the start of this pass). `algos_from_config.rs` and `maximum_finder.rs` (mentioned in the original finding) are still untested - not covered by this pass.
-- [ ] GUI jank likely visible on realistic images (4+ channels, 4K), not blockers but a rough first impression:
+- [x] GUI jank likely visible on realistic images (4+ channels, 4K), not blockers but a rough first impression:
   - O(pixels×channels²) `.contains()` in innermost compositing loop — [`viewport_worker.rs:557-577`](crates/gui/src/editor/viewport_worker.rs#L557)
   - Serial ~8M-iteration screen-space compositing loop per frame — [`viewport_worker.rs:387-406`](crates/gui/src/editor/viewport_worker.rs#L387)
   - Unthrottled mouse-move handler (per-move `slint::invoke_from_event_loop` + per-channel string formatting) — [`viewport_image_controller.rs:317-392`](crates/gui/src/editor/viewport_image_controller.rs#L317)
+  *Done:*
+  - **`.contains()` in the compositing loop** (`viewport_worker.rs`, `prepare_image_channels_for_slint`): resolved `visible_channels.contains(&ctx.channel_idx)` once, up front, into a `Vec<usize>` of visible channel indices (O(channels) instead of the previous O(pixels × channels) worth of linear scans - one per pixel per channel). The per-pixel loop now iterates only that visible subset directly (`for &c_idx in &visible_indices`) instead of walking every channel and skipping hidden ones one at a time. Same fix applied to the length-validation pass just above it. Output is bit-for-bit identical (same accumulation order per visible channel), just without the redundant scans.
+  - **Serial screen-space compositing loop** (`viewport_worker.rs`, the tile→viewport nearest-neighbor resample): each output row is independent (no cross-row state), so it's a clean fit for the `par_chunks_mut` pattern already used a few lines above in the same file for `prepare_image_channels_for_slint` - switched the `for sy in 0..vp_h` loop to `screen.par_chunks_mut(vp_w).enumerate().for_each(...)`, one row per parallel work item. Behavior (including the off-image → black-pixel fill) is unchanged.
+  - **Unthrottled mouse-move handler** (`viewport_image_controller.rs`): added a `sync_pixel_info_throttled()` wrapper around the existing `sync_actual_mouse_position_information_to_slint()` (project/viewport-state locks + a `format!()` per visible channel + an `invoke_from_event_loop` dispatch, previously run on every raw mouse-move event at the input device's full poll rate). It's a leading+trailing throttle at ~30 Hz (33ms): runs immediately if idle for the last 33ms (so a fresh hover feels instant), otherwise coalesces further moves into one trailing update via a dedicated `pixel_info_throttle_timer` once the window elapses (so the last position of a fast drag doesn't leave a stale readout). Kept as a separate timer/field from the existing `redraw_debounce_timer` so the two don't cancel each other.
+  
+  Verified against `evanalyzer_gui`'s test suite (92 tests) and a full `cargo build --workspace`, both run before an in-progress, concurrent edit to `crates/core/Cargo.toml`/`crates/gui/Cargo.toml` (migrating the `kornia-*` deps off git) landed in the working tree - not re-verified against that change, since it was still being iterated on.
 - [ ] `arc-swap` dependency declared but unused — all shared state goes through one coarse `Arc<RwLock<ProjectWithRuntime>>`, which is the structural root cause enabling the two lock-contention findings above. Wiring it up for read-mostly snapshots would fix both at once, more valuable than treating them as one-off patches.
 
 ---
@@ -77,7 +83,7 @@ item you want implemented, and optionally add a note, then hand the file back.
 ## Low priority / polish
 
 - [ ] Dead duplicate `libs/download-<target>.sh` one-liners (only fetch libtorch, missing JRE/duckdb/bioformats) — CI actually uses `libs/download.sh`, which is correct and covers all 5 targets including win-cuda. The per-target scripts are unreferenced and just a contributor-confusion risk.
-- [ ] Git dependency `kornia-rs` pinned only via `Cargo.lock`, no `rev`/`tag` in `Cargo.toml` — a future `cargo update` would silently pull unreviewed commits from an unpublished, pre-1.0 crate.
+- [x] Git dependency `kornia-rs` pinned only via `Cargo.lock`, no `rev`/`tag` in `Cargo.toml` — a future `cargo update` would silently pull unreviewed commits from an unpublished, pre-1.0 crate.
 - [ ] TODO item "Cy5 displayed in yellow" investigated: confirmed to be the known feature gap already tracked in `TODO` (channel colors are assigned purely by index, no fluorophore-name mapping exists) — not a hidden correctness bug. No action beyond what's already tracked.
 
 ---

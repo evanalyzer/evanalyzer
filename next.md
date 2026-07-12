@@ -1,1 +1,0 @@
-Allow to filter by sum intensity
