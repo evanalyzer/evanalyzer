@@ -20,7 +20,25 @@ use crate::{
 // Labelling usually exists to feed a splitter: suggest Object (Watershed) first,
 // while still allowing Measure for callers that don't need to split.
 #[cmdsmeta(category = "object", next = "object,measure")]
-pub struct ConnectedComponents;
+pub struct ConnectedComponents {
+    /// Minimum object size, in pixels, an object must have to be kept.
+    ///
+    /// After labeling, connected components with a pixel count below this
+    /// threshold are discarded (their pixels are reset to background) and
+    /// the remaining object IDs are re-compacted to a contiguous range.
+    /// Useful for suppressing noise/speckle artifacts before they reach
+    /// downstream measurement or classification steps. A value of 0 (the
+    /// default) disables filtering.
+    #[cmdsmeta(
+        min = 1,
+        step = 1,
+        default = 0,
+        unit = "px²",
+        optional = true,
+        visible = true
+    )]
+    pub min_size_px: i32,
+}
 
 impl ImageAlgorithm for ConnectedComponents {
     /// Identifies and labels discrete objects within a binary or multi-class image.
@@ -153,6 +171,38 @@ impl ConnectedComponents {
                 *val = lookup[*val as usize];
             }
         }
+
+        // Sizes are always >= 1, so min_size_px <= 1 can never filter anything out.
+        if self.min_size_px > 1 {
+            self.filter_small_objects(output, final_id);
+        }
+    }
+
+    /// Removes components with fewer than `min_size_px` pixels and re-compacts
+    /// the remaining IDs into a contiguous range starting at 1.
+    fn filter_small_objects(&self, output: &mut [u32], id_count: u32) {
+        let mut sizes = vec![0u32; id_count as usize];
+        for &val in output.iter() {
+            if val > 0 {
+                sizes[val as usize] += 1;
+            }
+        }
+
+        let min_size = self.min_size_px as u32;
+        let mut remap = vec![0u32; id_count as usize];
+        let mut next_id = 1;
+        for (id, &size) in sizes.iter().enumerate().skip(1) {
+            if size >= min_size {
+                remap[id] = next_id;
+                next_id += 1;
+            }
+        }
+
+        for val in output.iter_mut() {
+            if *val > 0 {
+                *val = remap[*val as usize];
+            }
+        }
     }
 
     fn find_root(&self, parent: &mut Vec<u32>, mut i: u32) -> u32 {
@@ -222,7 +272,7 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents;
+        let labeling = ConnectedComponents { min_size_px: 0 };
 
         // Execute
         let result = labeling.execute(&mut ctx, &mut cache);
@@ -309,7 +359,7 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents;
+        let labeling = ConnectedComponents { min_size_px: 0 };
 
         // Execute CCL
         labeling
@@ -406,7 +456,7 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents;
+        let labeling = ConnectedComponents { min_size_px: 0 };
 
         // Execute
         labeling.execute(&mut ctx, &mut cache).expect("CCL Failed");
@@ -436,5 +486,62 @@ mod tests {
             id_obj_c_part1, id_obj_c_part2,
             "CCL failed to merge pixels with the same label (3) that are touching"
         );
+    }
+
+    #[test]
+    fn test_ccl_min_size_filter_removes_small_objects_and_recompacts_ids() {
+        let size = ImageSize {
+            width: 10,
+            height: 10,
+        };
+        let mut data = vec![0u32; 100];
+        let w = size.width as usize;
+
+        // Small object (1 px) - discovered first by the raster scan, so it
+        // would normally receive the lowest ID.
+        data[1 * w + 1] = 1;
+
+        // Large object (2x2 = 4 px), discovered after the small one.
+        data[5 * w + 5] = 1;
+        data[5 * w + 6] = 1;
+        data[6 * w + 5] = 1;
+        data[6 * w + 6] = 1;
+
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.segmentation_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+
+        let mut cache = PipelineCache::default();
+        let labeling = ConnectedComponents { min_size_px: 4 };
+
+        labeling.execute(&mut ctx, &mut cache).expect("CCL Failed");
+
+        let output = ctx.get_instance_map().unwrap();
+        let out_slice = output.as_slice();
+
+        // The 1px object must be filtered out.
+        assert_eq!(
+            out_slice[1 * w + 1],
+            0,
+            "Object smaller than min_size_px was not removed"
+        );
+
+        // The 4px object must survive.
+        let id_large = out_slice[5 * w + 5];
+        assert!(id_large > 0, "Object at/above min_size_px was removed");
+        assert_eq!(
+            out_slice[5 * w + 6],
+            id_large,
+            "Large object pixels should share the same ID"
+        );
+        assert_eq!(out_slice[6 * w + 5], id_large);
+        assert_eq!(out_slice[6 * w + 6], id_large);
+
+        // Only one object should remain, and IDs must be re-compacted to
+        // start at 1 even though the removed object was discovered first.
+        use std::collections::HashSet;
+        let unique_ids: HashSet<_> = out_slice.iter().filter(|&&x| x > 0).collect();
+        assert_eq!(unique_ids.len(), 1, "Expected exactly one surviving object");
+        assert_eq!(id_large, 1, "Surviving object should be re-indexed to ID 1");
     }
 }
