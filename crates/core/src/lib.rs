@@ -19,6 +19,8 @@ pub use crate::init::init;
 pub use crate::resources::recommended_jvm_heap_bytes;
 pub use crate::resources::recommended_parallelism;
 pub use crate::resources::recommended_reader_pool_size;
+pub use crate::resources::system_diagnostics;
+pub use crate::resources::SystemDiagnostics;
 
 // Image reader
 pub use crate::image::ChannelInfo;

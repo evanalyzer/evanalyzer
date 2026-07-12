@@ -98,6 +98,41 @@ pub fn recommended_reader_pool_size() -> usize {
     cores.min(ram_capped).min(MAX_READER_POOL_SIZE).max(1)
 }
 
+/// Snapshot of host machine capabilities, surfaced read-only (e.g. in the
+/// About dialog's System tab). Not used for any sizing decision - see
+/// [`recommended_parallelism`]/[`recommended_jvm_heap_bytes`] for that.
+pub struct SystemDiagnostics {
+    pub cpu_cores: usize,
+    pub total_ram_bytes: u64,
+    pub cuda_available: bool,
+}
+
+/// Reads current host CPU/RAM/CUDA availability once, for display purposes.
+pub fn system_diagnostics() -> SystemDiagnostics {
+    let cpu_cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+
+    let mut sys = System::new();
+    sys.refresh_memory();
+
+    SystemDiagnostics {
+        cpu_cores,
+        total_ram_bytes: sys.total_memory(),
+        cuda_available: cuda_is_available(),
+    }
+}
+
+#[cfg(feature = "ai")]
+fn cuda_is_available() -> bool {
+    tch::Device::cuda_if_available().is_cuda()
+}
+
+#[cfg(not(feature = "ai"))]
+fn cuda_is_available() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +169,12 @@ mod tests {
     #[test]
     fn recommended_reader_pool_size_never_exceeds_the_hard_cap() {
         assert!(recommended_reader_pool_size() <= MAX_READER_POOL_SIZE);
+    }
+
+    #[test]
+    fn system_diagnostics_reports_at_least_one_core_and_nonzero_ram() {
+        let diag = system_diagnostics();
+        assert!(diag.cpu_cores >= 1);
+        assert!(diag.total_ram_bytes > 0);
     }
 }

@@ -14,6 +14,23 @@ export global GlobalAppState {
 }
 
 //
+// Static/host info shown in the About dialog. Set once from Rust at
+// startup (version from CARGO_PKG_VERSION, the rest from
+// evanalyzer_core::system_diagnostics()) - never mutated by the UI.
+//
+export global AppInfoState {
+    in-out property <string> version: "0.0.0-dev";
+    in-out property <int> cpu_cores: 1;
+    in-out property <string> ram_total: "-";
+    in-out property <bool> cuda_available: false;
+    // Split into paragraphs (rather than one giant string) so each Text
+    // element stays small - a single Text with the ~34KB full license blew
+    // past a size limit in the software-rendering fallback and rendered
+    // garbled/mis-scrolled content instead of an error.
+    in-out property <[string]> license_paragraphs: [];
+}
+
+//
 // Generic warning dialog state. Set `message` (and optionally `title`) then
 // switch GlobalAppState.active_dialog to DialogType.warning to show it.
 //
