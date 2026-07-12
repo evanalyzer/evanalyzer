@@ -157,18 +157,13 @@ impl ImageAlgorithm for UNet {
 
         let foreground_class = self.object_class_id.as_u32();
         let output_slice = segmentation_map.as_slice_mut();
-        for (i, out_pixel) in output_slice.iter_mut().enumerate() {
-            let is_foreground = probabilities[i] >= self.probability_threshold
-                && boundary
-                    .as_ref()
-                    .map(|b| b[i] < self.boundary_threshold)
-                    .unwrap_or(true);
-            *out_pixel = if is_foreground {
-                foreground_class
-            } else {
-                SegmentationClass::BACKGROUND.as_u32()
-            };
-        }
+        output_slice.copy_from_slice(&Self::classify_pixels(
+            &probabilities,
+            boundary.as_deref(),
+            self.probability_threshold,
+            self.boundary_threshold,
+            foreground_class,
+        ));
 
         Ok(())
     }
@@ -194,5 +189,100 @@ impl UNet {
                 Vec::try_from(&out)
                     .map_err(|e| InternalErrors::Generic(format!("U-Net inference failed: {e}")))
             })
+    }
+
+    /// Classifies each pixel as foreground/background from its probability
+    /// and, for boundary-aware models, its boundary probability: foreground
+    /// when the probability reaches `probability_threshold` and - if a
+    /// boundary map is given - the boundary probability stays below
+    /// `boundary_threshold`. This is the "carve thin gaps between touching
+    /// objects" behaviour the `boundary_channel` doc comment above describes;
+    /// it is the whole reason a boundary-aware model separates touching
+    /// nuclei where a plain mask-only model can't.
+    fn classify_pixels(
+        probabilities: &[f32],
+        boundary: Option<&[f32]>,
+        probability_threshold: f32,
+        boundary_threshold: f32,
+        foreground_class: u32,
+    ) -> Vec<u32> {
+        probabilities
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| {
+                let is_foreground =
+                    p >= probability_threshold && boundary.map(|b| b[i] < boundary_threshold).unwrap_or(true);
+                if is_foreground {
+                    foreground_class
+                } else {
+                    SegmentationClass::BACKGROUND.as_u32()
+                }
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FG: u32 = 7;
+    fn bg() -> u32 {
+        SegmentationClass::BACKGROUND.as_u32()
+    }
+
+    #[test]
+    fn classify_pixels_without_a_boundary_map_uses_probability_alone() {
+        let probs = [0.1, 0.5, 0.9];
+        let result = UNet::classify_pixels(&probs, None, 0.5, 0.5, FG);
+        assert_eq!(result, vec![bg(), FG, FG]);
+    }
+
+    #[test]
+    fn classify_pixels_threshold_comparison_is_inclusive() {
+        // Exactly at the probability threshold must count as foreground (`>=`).
+        let probs = [0.5];
+        let result = UNet::classify_pixels(&probs, None, 0.5, 0.5, FG);
+        assert_eq!(result, vec![FG]);
+    }
+
+    #[test]
+    fn classify_pixels_boundary_at_or_above_threshold_excludes_the_pixel() {
+        // High foreground probability, but the boundary probability is
+        // exactly at the boundary threshold - not *below* it, so it must be
+        // excluded (this is the exact carving behaviour boundary-aware
+        // models rely on to separate touching nuclei).
+        let probs = [0.9];
+        let boundary = [0.5];
+        let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
+        assert_eq!(result, vec![bg()]);
+    }
+
+    #[test]
+    fn classify_pixels_boundary_below_threshold_keeps_the_pixel_as_foreground() {
+        let probs = [0.9];
+        let boundary = [0.1];
+        let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
+        assert_eq!(result, vec![FG]);
+    }
+
+    #[test]
+    fn classify_pixels_low_probability_is_background_regardless_of_boundary() {
+        let probs = [0.1];
+        let boundary = [0.0]; // well below the boundary threshold
+        let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
+        assert_eq!(result, vec![bg()], "a low foreground probability must stay background even with an open boundary");
+    }
+
+    #[test]
+    fn classify_pixels_handles_a_mixed_row_pixel_by_pixel() {
+        let probs = [0.9, 0.9, 0.2, 0.9];
+        let boundary = [0.1, 0.9, 0.1, 0.5];
+        // px0: fg prob high, boundary open -> foreground
+        // px1: fg prob high, boundary closed (>= threshold) -> background
+        // px2: fg prob low -> background regardless of boundary
+        // px3: fg prob high, boundary exactly at threshold (not < ) -> background
+        let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
+        assert_eq!(result, vec![FG, bg(), bg(), bg()]);
     }
 }

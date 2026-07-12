@@ -1427,7 +1427,8 @@ mod tests {
         );
 
         let saver = SaveImage {
-            path: "/workspaces/evanalyzer/crates/core/tests/project_test/output/start.jpg".into(),
+            path: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/project_test/output/start.jpg")
+                .into(),
             source: ImageSource::Image,
         };
         pipeline.add_command(Box::new(saver));
@@ -1436,7 +1437,7 @@ mod tests {
         pipeline.add_command(Box::new(blur));
 
         let saver = SaveImage {
-            path: "/workspaces/evanalyzer/crates/core/tests/project_test/output/after_blur.jpg"
+            path: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/project_test/output/after_blur.jpg")
                 .into(),
             source: ImageSource::Image,
         };
@@ -1473,9 +1474,11 @@ mod tests {
         pipeline.add_command(Box::new(threshold));
 
         let saver = SaveImage {
-            path:
-                "/workspaces/evanalyzer/crates/core/tests/project_test/output/after_threshold.jpg"
-                    .into(),
+            path: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/project_test/output/after_threshold.jpg"
+            )
+            .into(),
             source: ImageSource::SegmentationMask,
         };
         pipeline.add_command(Box::new(saver));
@@ -1484,8 +1487,11 @@ mod tests {
         pipeline.add_command(Box::new(cco));
 
         let saver = SaveImage {
-            path: "/workspaces/evanalyzer/crates/core/tests/project_test/output/instance_map.jpg"
-                .into(),
+            path: concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/project_test/output/instance_map.jpg"
+            )
+            .into(),
             source: ImageSource::InstanceMap,
         };
         pipeline.add_command(Box::new(saver));
@@ -1510,7 +1516,7 @@ mod tests {
 
         // Create analyze job
         let mut analyze_job = JobExecutor::new(
-            "/workspaces/evanalyzer/crates/core/tests/project_test".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/project_test").into(),
             project.images.list,
             project.images.root.expect("No image root path set"),
             project.images.settings,

@@ -7,7 +7,7 @@ use crate::editor::viewport_controller::ViewportController;
 use crate::{
     CommandDef, CommandParameter, CommandPickerState, GlobalAppState, GroupItem, LeafParam,
     ParamType, Pipeline, PipelineCommand as SlintPipelineCommand, PipelineStatus,
-    PipelinesPanelState, StepCategory, UiState, WarningState,
+    PipelinesPanelState, RunAnalysisState, StepCategory, UiState, WarningState,
 };
 use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
@@ -138,10 +138,27 @@ impl PipelinesController {
                     manager.viewport_controller.set_show_breakpoint(show);
                 });
 
-            // Full run pipeline
+            // Full run pipeline - opens the job-name confirm dialog first
+            // rather than dispatching immediately (see `open_run_analysis_dialog`).
             let manager = self.clone();
             ui.global::<PipelinesPanelState>().on_run_all(move || {
-                manager.trigger_pipeline_full_run();
+                manager.open_run_analysis_dialog();
+            });
+
+            // Run-analysis dialog confirmed: read back the (optional) job
+            // name and actually dispatch the run.
+            let manager = self.clone();
+            ui.global::<RunAnalysisState>().on_confirm(move || {
+                manager.on_run_analysis_confirmed();
+            });
+
+            // Run-analysis dialog cancelled: just close it, nothing to run.
+            let manager = self.clone();
+            ui.global::<RunAnalysisState>().on_cancel(move || {
+                if let Some(ui) = manager.ui.upgrade() {
+                    ui.global::<GlobalAppState>()
+                        .set_active_dialog(DialogType::None);
+                }
             });
 
             // Selected pipeline
@@ -1065,6 +1082,7 @@ impl PipelinesController {
         let mut list = indexmap::IndexMap::with_capacity(1);
         list.insert(image_path, image_settings);
         ProjectSettings {
+            schema_version: project.schema_version,
             metadata: project.metadata.clone(),
             classification: project.classification.clone(),
             plate: project.plate.clone(),
@@ -1142,6 +1160,7 @@ impl PipelinesController {
                 .to_path_buf(),
             preview: true,
             breakpoint,
+            job_name: None,
         };
         drop(project);
 
@@ -1155,7 +1174,48 @@ impl PipelinesController {
         self.dispatch_worker_task(task);
     }
 
-    pub fn trigger_pipeline_full_run(&self) {
+    /// Opens the "Run Analysis" confirm dialog (job name, optional) before
+    /// actually starting a full run. Bails out immediately - same as the old
+    /// pre-dialog behavior - if there's no saved project to run against, so
+    /// the user isn't asked for a job name only to hit that error afterward.
+    pub fn open_run_analysis_dialog(self: &Arc<Self>) {
+        let has_project_path = self
+            .app_state
+            .get_project()
+            .tmp_settings
+            .current_project
+            .is_some();
+        if !has_project_path {
+            warn!("No project path set, please save project first!");
+            self.show_warning(
+                "No project is open. Please save the project first before starting an analysis.",
+            );
+            return;
+        }
+
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        ui.global::<RunAnalysisState>().set_job_name("".into());
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::RunAnalysisConfirm);
+    }
+
+    /// The "Run Analysis" dialog was confirmed: read back the (optional) job
+    /// name, close the dialog, and start the run.
+    fn on_run_analysis_confirmed(self: &Arc<Self>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let job_name = ui.global::<RunAnalysisState>().get_job_name().to_string();
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::None);
+
+        let job_name = (!job_name.trim().is_empty()).then_some(job_name);
+        self.trigger_pipeline_full_run(job_name);
+    }
+
+    fn trigger_pipeline_full_run(&self, job_name: Option<String>) {
         let project = self.app_state.get_project();
 
         let Some(current_project) = &project.tmp_settings.current_project else {
@@ -1174,6 +1234,7 @@ impl PipelinesController {
                 .to_path_buf(),
             preview: false,
             breakpoint: None,
+            job_name,
         };
         drop(project);
 

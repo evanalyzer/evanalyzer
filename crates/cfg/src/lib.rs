@@ -14,6 +14,14 @@ pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
 /// Project file extension used by the old (pre-rewrite) application.
 pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 
+/// Current on-disk format version for [`settings::project_settings::ProjectSettings`].
+/// Bump this and add a case to `ProjectSettings::migrate` whenever a change
+/// to `ProjectSettings` (or something it contains) would break
+/// deserialization of `.evaproj` files written by an older version of the
+/// app - e.g. a renamed field/enum variant that isn't just an additive
+/// `#[serde(default)]` field.
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 1;
+
 // Project Settings structs
 pub mod settings {
     pub use super::modules::*;

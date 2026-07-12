@@ -23,6 +23,13 @@
     },
     "plate": {
       "$ref": "#/$defs/PlateSettings"
+    },
+    "schemaVersion": {
+      "description": "On-disk format version of this project file. Absent on files written\nbefore versioning was introduced, which `serde(default)` reads as `0`\n- see [`CURRENT_PROJECT_SCHEMA_VERSION`] and [`ProjectSettings::migrate`].",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
     }
   },
   "required": [

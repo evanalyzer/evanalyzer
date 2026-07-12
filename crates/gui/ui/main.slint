@@ -88,6 +88,9 @@ import { PipelinesPanelState } from "editor/pipelines_panel.slint";
 import { PreviewRendering } from "dialogs/preview_rendering_dialog.slint";
 import { WarningDialog } from "dialogs/warning_dialog.slint";
 import { WarningState } from "state.slint";
+import { UnsavedChangesDialog } from "dialogs/unsaved_changes_dialog.slint";
+import { UnsavedChangesState } from "state.slint";
+import { RunAnalysisDialog, RunAnalysisState } from "dialogs/run_analysis_dialog.slint";
 import {
     ResultsWindow,
     ResultsState,
@@ -108,7 +111,7 @@ export {GlobalAppState,ProjectSettingsSlint, ProjectSettingsState,
         PipelineEditState, PipelineDeleteConfirmState, PipelineRunningState,
         TemplateMetaState, TemplateMetaSlint,
         ProjectTemplateState, ProjectTemplateDef,
-        ResultsListState, WarningState, AppInfoState,
+        ResultsListState, WarningState, AppInfoState, UnsavedChangesState, RunAnalysisState,
         ResultsWindow, ResultsState, ResultsColumnDef, ResultsRow, ResultsViewMode, ResultsChartKind  }
 
 
@@ -264,6 +267,14 @@ export component AppWindow inherits Window {
             height: 100%;
         }
         if (GlobalAppState.active_dialog == DialogType.project-template): ProjectTemplateDialog {
+            width: 100%;
+            height: 100%;
+        }
+        if (GlobalAppState.active_dialog == DialogType.unsaved-changes-confirm): UnsavedChangesDialog {
+            width: 100%;
+            height: 100%;
+        }
+        if (GlobalAppState.active_dialog == DialogType.run-analysis-confirm): RunAnalysisDialog {
             width: 100%;
             height: 100%;
         }

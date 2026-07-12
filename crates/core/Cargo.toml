@@ -8,16 +8,16 @@ license = { workspace = true }
 [dependencies]
 macros = { path = "./macros" }
 evanalyzer_cfg = { path = "../cfg" }
-kornia-tensor = { git = "https://github.com/kornia/kornia-rs" }
-kornia-tensor-ops = { git = "https://github.com/kornia/kornia-rs" }
-kornia-io = { git = "https://github.com/kornia/kornia-rs" }
-kornia-image = { git = "https://github.com/kornia/kornia-rs" }
-kornia-imgproc = { git = "https://github.com/kornia/kornia-rs" }
-kornia-3d = { git = "https://github.com/kornia/kornia-rs" }
-kornia-apriltag = { git = "https://github.com/kornia/kornia-rs" }
+kornia-tensor = { version = "0.1.14"}
+kornia-tensor-ops = { version = "0.1.14"}
+kornia-io = { version = "0.1.14"}
+kornia-image = { version = "0.1.14"}
+kornia-imgproc = { version = "0.1.14"}
+kornia-3d = { version = "0.1.14"}
+kornia-apriltag = { version = "0.1.10"}
 #kornia-vlm = "0.1"
-#kornia-nn = { git = "https://github.com/kornia/kornia-rs" }
-kornia-algebra = { git = "https://github.com/kornia/kornia-rs" }
+#kornia-nn = { version = "0.1.14"}
+kornia-algebra = { version = "0.1.14"}
 image = "0.24"   
 log = "0.4"        
 jni = {version = "0.21", features = ["invocation"]}

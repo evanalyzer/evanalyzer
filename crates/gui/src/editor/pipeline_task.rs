@@ -10,6 +10,9 @@ pub struct PipelineTask {
     pub preview: bool,
     /// Optional breakpoint: (pipeline_id, step_id, mode).
     pub breakpoint: Option<(PipelineId, i32, BreakpointMode)>,
+    /// Optional user-chosen name for a full (non-preview) run, forwarded to
+    /// `generate_analyze_job_from_project_settings`. Ignored for preview runs.
+    pub job_name: Option<String>,
 }
 
 impl Default for PipelineTask {
@@ -19,6 +22,7 @@ impl Default for PipelineTask {
             project_path: PathBuf::default(),
             preview: false,
             breakpoint: None,
+            job_name: None,
         }
     }
 }

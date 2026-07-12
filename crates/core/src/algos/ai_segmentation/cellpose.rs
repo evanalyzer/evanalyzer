@@ -371,3 +371,151 @@ impl Cellpose {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cellpose(min_object_size: i32) -> Cellpose {
+        Cellpose {
+            model_path: PathBuf::new(),
+            object_class_id: SegmentationClass(7),
+            input_channels: 2,
+            probability_threshold: 0.5,
+            flow_iterations: 10,
+            min_object_size,
+        }
+    }
+
+    // ---- follow_flows ----
+
+    #[test]
+    fn follow_flows_leaves_non_cell_pixels_at_their_own_index() {
+        let algo = cellpose(0);
+        let flow_y = vec![1.0; 9];
+        let flow_x = vec![1.0; 9];
+        let is_cell = vec![false; 9];
+        let final_pos = algo.follow_flows(&flow_y, &flow_x, &is_cell, 3, 3);
+        assert_eq!(final_pos, (0..9).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn follow_flows_converges_every_cell_pixel_to_a_single_sink() {
+        // 1D row of 5 pixels; the flow field points every pixel toward x=2 at
+        // exactly one pixel per Euler step (FLOW_SCALE cancels the /5 in
+        // follow_flows), so a handful of iterations is enough to converge
+        // from either end.
+        let algo = cellpose(0);
+        let flow_y = vec![0.0; 5];
+        let flow_x = vec![5.0, 5.0, 0.0, -5.0, -5.0];
+        let is_cell = vec![true; 5];
+        let final_pos = algo.follow_flows(&flow_y, &flow_x, &is_cell, 5, 1);
+        assert_eq!(final_pos, vec![2, 2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn follow_flows_clamps_trajectories_to_the_image_bounds() {
+        // Every pixel pushed hard off the right/bottom edge must clamp to the
+        // last valid row/column, not wrap or index out of bounds.
+        let algo = cellpose(0);
+        let flow_y = vec![100.0; 4];
+        let flow_x = vec![100.0; 4];
+        let is_cell = vec![true; 4];
+        let final_pos = algo.follow_flows(&flow_y, &flow_x, &is_cell, 2, 2);
+        // width=2, height=2 -> bottom-right pixel is index 1*2+1 = 3.
+        assert_eq!(final_pos, vec![3, 3, 3, 3]);
+    }
+
+    // ---- label_sinks ----
+
+    #[test]
+    fn label_sinks_gives_the_same_label_to_pixels_converging_to_adjacent_sinks() {
+        // Two adjacent (8-connected) sink cells merge into one connected
+        // component, so cell pixels converging to either must share a label.
+        let final_positions = vec![0, 1];
+        let is_cell = vec![true, true];
+        let labels = Cellpose::label_sinks(&final_positions, &is_cell, 2, 1);
+        assert_ne!(labels[0], 0);
+        assert_eq!(labels[0], labels[1]);
+    }
+
+    #[test]
+    fn label_sinks_gives_different_labels_to_far_apart_sinks() {
+        let final_positions = vec![0, 0, 2];
+        let is_cell = vec![true, true, true];
+        let labels = Cellpose::label_sinks(&final_positions, &is_cell, 3, 1);
+        assert_eq!(labels[0], labels[1]);
+        assert_ne!(labels[0], labels[2]);
+        assert_ne!(labels[2], 0);
+    }
+
+    #[test]
+    fn label_sinks_never_labels_a_non_cell_pixel() {
+        let final_positions = vec![1, 1, 1];
+        let is_cell = vec![false, true, true];
+        let labels = Cellpose::label_sinks(&final_positions, &is_cell, 3, 1);
+        assert_eq!(labels[0], 0, "non-cell pixels must stay unlabeled regardless of final_positions");
+        assert_ne!(labels[1], 0);
+        assert_eq!(labels[1], labels[2]);
+    }
+
+    #[test]
+    fn label_sinks_returns_all_zero_when_no_pixel_is_a_cell() {
+        let final_positions = vec![0, 1, 2, 3];
+        let is_cell = vec![false, false, false, false];
+        let labels = Cellpose::label_sinks(&final_positions, &is_cell, 2, 2);
+        assert_eq!(labels, vec![0, 0, 0, 0]);
+    }
+
+    // ---- write_instances ----
+
+    #[test]
+    fn write_instances_drops_objects_smaller_than_min_object_size() {
+        let algo = cellpose(2);
+        // label 1: 3 pixels (kept), label 2: 1 pixel (dropped).
+        let labels = vec![1, 1, 1, 2, 0, 0];
+        let mut seg = vec![0u32; 6];
+        let mut inst = vec![0u32; 6];
+        algo.write_instances(&labels, &mut seg, &mut inst);
+
+        assert_eq!(inst, vec![1, 1, 1, 0, 0, 0]);
+        assert_eq!(seg, vec![7, 7, 7, 0, 0, 0]);
+    }
+
+    #[test]
+    fn write_instances_renumbers_surviving_labels_to_contiguous_ids() {
+        let algo = cellpose(2);
+        // label 1 (3px) and label 3 (3px) survive; label 2 (1px) is dropped,
+        // so the surviving instance IDs must be 1 and 2, not 1 and 3.
+        let labels = vec![1, 1, 1, 2, 3, 3, 3];
+        let mut seg = vec![0u32; 7];
+        let mut inst = vec![0u32; 7];
+        algo.write_instances(&labels, &mut seg, &mut inst);
+
+        assert_eq!(inst, vec![1, 1, 1, 0, 2, 2, 2]);
+    }
+
+    #[test]
+    fn write_instances_is_a_noop_for_an_all_background_label_map() {
+        let algo = cellpose(0);
+        let labels = vec![0, 0, 0, 0];
+        let mut seg = vec![9u32; 4]; // pre-filled with a sentinel
+        let mut inst = vec![9u32; 4];
+        algo.write_instances(&labels, &mut seg, &mut inst);
+
+        assert_eq!(seg, vec![9, 9, 9, 9], "must not touch the slices when there is nothing to write");
+        assert_eq!(inst, vec![9, 9, 9, 9]);
+    }
+
+    #[test]
+    fn write_instances_min_object_size_zero_still_keeps_a_single_pixel_object() {
+        let algo = cellpose(0);
+        let labels = vec![1, 0, 0];
+        let mut seg = vec![0u32; 3];
+        let mut inst = vec![0u32; 3];
+        algo.write_instances(&labels, &mut seg, &mut inst);
+
+        assert_eq!(inst[0], 1, "min_object_size = 0 must disable the size filter, not drop everything");
+        assert_eq!(seg[0], 7);
+    }
+}
