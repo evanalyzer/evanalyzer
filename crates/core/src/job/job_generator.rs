@@ -38,10 +38,16 @@ pub fn generate_preview_job_from_project_settings(
     generate_job_from_project_settings_intenal(config, project_path, output_path, memory_storage)
 }
 
-/// Generates a job for a full analysis
+/// Generates a job for a full analysis.
+///
+/// `job_name` is used verbatim (after sanitizing for filesystem-illegal
+/// characters) as both the results-subdirectory suffix and the `.evadb`
+/// filename. Pass `None` (or an empty/whitespace-only string) to fall back to
+/// a randomly generated two-word name, as before this parameter existed.
 pub fn generate_analyze_job_from_project_settings(
     config: ProjectSettings,
     project_path: PathBuf,
+    job_name: Option<String>,
 ) -> Result<JobExecutor, InternalErrors> {
     let class_names: std::collections::HashMap<_, _> = config
         .classification
@@ -59,7 +65,13 @@ pub fn generate_analyze_job_from_project_settings(
 
     let now = Utc::now();
     let file_date = now.format("%Y%m%dT%H%M%SZ").to_string();
-    let job_name = petname::petname(2, "_").expect("Problem in random job name generator");
+    let job_name = job_name
+        .as_deref()
+        .map(sanitize_job_name)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| {
+            petname::petname(2, "_").expect("Problem in random job name generator")
+        });
     let output_path = project_path
         .join("results")
         .join(format!("{file_date}__{job_name}"));
@@ -82,6 +94,25 @@ pub fn generate_analyze_job_from_project_settings(
     };
 
     generate_job_from_project_settings_intenal(config, project_path, output_path, database_storage)
+}
+
+/// Replaces filesystem-illegal characters with `_` and trims whitespace, so a
+/// user-provided job name is always safe to use as a directory/file name.
+/// Returns an empty string if nothing usable remains (e.g. the input was
+/// blank or made up entirely of illegal characters) - the caller treats that
+/// the same as "no name given" and falls back to a random one.
+fn sanitize_job_name(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.chars().all(|c| c == '_') {
+        String::new()
+    } else {
+        cleaned
+    }
 }
 
 fn generate_job_from_project_settings_intenal(
@@ -298,6 +329,7 @@ mod tests {
         let job = generate_analyze_job_from_project_settings(
             project,
             project_dir.path().to_path_buf(),
+            None,
         )
         .expect("valid config with an image root must succeed");
 
@@ -317,5 +349,73 @@ mod tests {
             })
             .collect();
         assert_eq!(db_files.len(), 1, "exactly one .evadb file must be created");
+    }
+
+    #[test]
+    fn analyze_job_uses_the_provided_job_name_for_the_output_folder_and_database() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
+
+        let job = generate_analyze_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+            Some("dose_response_1".to_string()),
+        )
+        .unwrap();
+
+        let folder_name = job.output_path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            folder_name.ends_with("__dose_response_1"),
+            "the timestamp prefix must still be kept alongside the custom name, got {folder_name}"
+        );
+        assert!(job.output_path.join("dose_response_1.evadb").is_file());
+    }
+
+    #[test]
+    fn analyze_job_sanitizes_a_job_name_with_path_separators() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
+
+        let job = generate_analyze_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+            Some("../../etc/passwd".to_string()),
+        )
+        .unwrap();
+
+        // Must stay a single path segment directly under <project>/results,
+        // never escape it via the sanitized name.
+        assert_eq!(job.output_path.parent().unwrap(), project_dir.path().join("results"));
+    }
+
+    #[test]
+    fn analyze_job_falls_back_to_a_random_name_for_blank_or_illegal_only_input() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+
+        for blank in ["", "   ", "///"] {
+            let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
+            let job = generate_analyze_job_from_project_settings(
+                project,
+                project_dir.path().to_path_buf(),
+                Some(blank.to_string()),
+            )
+            .unwrap();
+            let folder_name = job.output_path.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(
+                !folder_name.ends_with("__"),
+                "blank/illegal-only input {blank:?} must fall back to a random name, got {folder_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_job_name_replaces_illegal_characters_and_trims() {
+        assert_eq!(sanitize_job_name("well A1/rep 2"), "well A1_rep 2");
+        assert_eq!(sanitize_job_name("  padded  "), "padded");
+        assert_eq!(sanitize_job_name("///"), "");
+        assert_eq!(sanitize_job_name(""), "");
     }
 }

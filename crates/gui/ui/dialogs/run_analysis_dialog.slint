@@ -1,0 +1,78 @@
+import { LineEdit } from "std-widgets.slint";
+import { BaseDialog } from "dialog_base.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { AppButton } from "../components/app_button.slint";
+import { Theme } from "../style.slint";
+
+export global RunAnalysisState {
+    in-out property <string> job_name: "";
+
+    callback confirm();
+    callback cancel();
+}
+
+export component RunAnalysisDialog inherits BaseDialog {
+    title-text: "Run Analysis";
+    icon: "▶";
+    main-height: 220px;
+    main-width: 440px;
+
+    VerticalLayout {
+        spacing: 12px;
+
+        VerticalLayout {
+            spacing: 5px;
+            Text {
+                text: "Job name (optional)";
+                font-size: 11px;
+                color: Theme.text-dim;
+            }
+
+            name-edit := LineEdit {
+                height: 30px;
+                text <=> RunAnalysisState.job_name;
+                placeholder-text: "e.g. sigmund_freud";
+                accepted => {
+                    RunAnalysisState.confirm();
+                }
+            }
+
+            Text {
+                text: "Leave blank to auto-generate a name.";
+                wrap: word-wrap;
+                color: Theme.text-dim;
+                font-size: 11px;
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: end;
+
+            AppButton {
+                text: "Cancel";
+                clicked => {
+                    RunAnalysisState.cancel();
+                }
+            }
+
+            AppButton {
+                text: "Run";
+                primary: true;
+                clicked => {
+                    RunAnalysisState.confirm();
+                }
+            }
+        }
+    }
+
+    // Focus the name field as soon as the dialog becomes visible so the user
+    // can start typing (or just hit Enter to run with an auto-generated name).
+    init => {
+        name-edit.focus();
+    }
+}
