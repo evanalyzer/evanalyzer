@@ -1,7 +1,7 @@
 //
 // Global app state
 //
-export enum DialogType { none, about, missing_images, project_settings, classification_confirm_delete,classification_confirm_auto_add_dialog, classification_edit_class_dialog, roi_confirm_delete, command_selection_dialog, pipeline_edit, pipeline_delete_confirm, pipeline_running, preview_rendering, warning, template_meta, project_template  }
+export enum DialogType { none, about, missing_images, project_settings, classification_confirm_delete,classification_confirm_auto_add_dialog, classification_edit_class_dialog, roi_confirm_delete, command_selection_dialog, pipeline_edit, pipeline_delete_confirm, pipeline_running, preview_rendering, warning, template_meta, project_template, unsaved_changes_confirm, run_analysis_confirm  }
 
 
 export global GlobalAppState {
@@ -40,6 +40,19 @@ export global WarningState {
     // When true the dialog shows an info icon instead of the warning sign
     // (e.g. for a successful import rather than an error).
     in-out property <bool> info: false;
+}
+
+//
+// Unsaved-changes confirmation, shown before an action that would discard
+// the current project (opening another project/image, or closing the
+// window) while there are unsaved edits. Rust decides when to show it
+// (switch GlobalAppState.active_dialog to DialogType.unsaved_changes_confirm)
+// and reacts to whichever button the dialog invokes.
+//
+export global UnsavedChangesState {
+    callback save();
+    callback discard();
+    callback cancel();
 }
 
 

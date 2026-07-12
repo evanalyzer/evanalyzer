@@ -37,6 +37,7 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     let job = evanalyzer_core::generate_analyze_job_from_project_settings(
         project.settings.clone(),
         project_dir,
+        args.job_name.clone(),
     )?;
     let output_path = job.output_path.clone();
 

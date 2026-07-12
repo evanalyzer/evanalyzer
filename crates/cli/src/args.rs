@@ -31,6 +31,11 @@ pub struct AnalyzeArgs {
     /// Number of images to process in parallel (default: number of CPUs minus 1)
     #[arg(long)]
     pub threads: Option<usize>,
+
+    /// Name for this analysis run, used for the results subfolder and the
+    /// .evadb filename. If omitted, a random two-word name is generated.
+    #[arg(long)]
+    pub job_name: Option<String>,
 }
 
 #[derive(Args)]

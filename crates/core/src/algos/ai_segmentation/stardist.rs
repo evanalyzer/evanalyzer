@@ -420,3 +420,202 @@ impl Stardist {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stardist(probability_threshold: f32, nms_threshold: f32) -> Stardist {
+        Stardist {
+            model_path: PathBuf::new(),
+            object_class_id: SegmentationClass(1),
+            probability_threshold,
+            nms_threshold,
+        }
+    }
+
+    fn square(min_x: i64, min_y: i64, side: i64, score: f32) -> Candidate {
+        let bbox = [min_x, min_y, min_x + side - 1, min_y + side - 1];
+        let w = side as usize;
+        Candidate { score, bbox, mask: vec![true; w * w], area: w * w }
+    }
+
+    // ---- rasterize_polygon ----
+
+    #[test]
+    fn rasterize_polygon_fills_a_simple_square() {
+        // A square strictly larger than the 4x4 bbox on every side, so every
+        // sampled pixel center (0.5..3.5) is unambiguously interior - corners
+        // landing exactly on a pixel-center sample line would instead
+        // exercise the scanline rounding convention, which isn't what this
+        // test is about.
+        let polygon = [(-1.0, -1.0), (5.0, -1.0), (5.0, 5.0), (-1.0, 5.0)];
+        let bbox = [0, 0, 3, 3];
+        let mask = Stardist::rasterize_polygon(&polygon, bbox);
+        assert_eq!(mask.len(), 16);
+        assert!(mask.iter().all(|&b| b), "every pixel center lies inside the square");
+    }
+
+    #[test]
+    fn rasterize_polygon_leaves_pixels_outside_a_triangle_unfilled() {
+        // Right triangle spanning a 4x4 bbox: only the lower-left half should fill.
+        let polygon = [(0.0, 0.0), (0.0, 4.0), (4.0, 4.0)];
+        let bbox = [0, 0, 3, 3];
+        let mask = Stardist::rasterize_polygon(&polygon, bbox);
+        let local_w = 4usize;
+        // Top-right corner pixel (row 0, col 3) is well outside the triangle.
+        assert!(!mask[0 * local_w + 3]);
+        // Bottom-left corner pixel (row 3, col 0) is well inside the triangle.
+        assert!(mask[3 * local_w + 0]);
+    }
+
+    // ---- build_candidate ----
+
+    #[test]
+    fn build_candidate_clips_bbox_to_image_bounds() {
+        let polygon = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
+        let candidate = Stardist::build_candidate(0.9, &polygon, 4, 4)
+            .expect("a large square overlapping the image must produce a candidate");
+        assert_eq!(candidate.bbox, [0, 0, 3, 3], "bbox must be clamped to the image dimensions");
+    }
+
+    #[test]
+    fn build_candidate_returns_none_for_a_zero_area_polygon() {
+        // All three points on one horizontal line - zero area, no scanline crossing pair.
+        let polygon = [(1.0, 1.0), (2.0, 1.0), (3.0, 1.0)];
+        assert!(Stardist::build_candidate(0.9, &polygon, 10, 10).is_none());
+    }
+
+    #[test]
+    fn build_candidate_returns_none_when_entirely_outside_the_image() {
+        let polygon = [(-10.0, -10.0), (-6.0, -10.0), (-6.0, -6.0), (-10.0, -6.0)];
+        assert!(Stardist::build_candidate(0.9, &polygon, 10, 10).is_none());
+    }
+
+    // ---- build_candidates ----
+
+    #[test]
+    fn build_candidates_only_keeps_grid_cells_above_the_probability_threshold() {
+        let algo = stardist(0.5, 0.3);
+        // 1x2 grid; only the second cell clears the threshold.
+        let prob_flat = [0.1, 0.9];
+        // 4 rays, both cells given the same modest radius.
+        let dist_flat = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        let candidates = algo.build_candidates(&prob_flat, &dist_flat, 1, 2, 4, 20, 10);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].score, 0.9);
+    }
+
+    #[test]
+    fn build_candidates_scales_ray_distance_by_the_grid_to_image_ratio() {
+        let algo = stardist(0.5, 0.3);
+        // 1x1 grid over a 10x10 image (scale factor 10 in both axes) with a
+        // unit ray distance - the resulting polygon should span roughly
+        // radius-10 around the image center, clipped to the image bounds.
+        let prob_flat = [1.0];
+        let n_rays = 8;
+        let dist_flat = vec![1.0f32; n_rays];
+        let candidates = algo.build_candidates(&prob_flat, &dist_flat, 1, 1, n_rays, 10, 10);
+        assert_eq!(candidates.len(), 1);
+        let bbox = candidates[0].bbox;
+        // The unscaled radius (1px) would collapse to a single pixel; scaled
+        // by ~10x it must span a large fraction of the 10x10 image instead.
+        assert!(bbox[2] - bbox[0] > 4, "bbox must reflect the scaled radius, not the raw 1px ray length");
+    }
+
+    // ---- bbox_overlaps ----
+
+    #[test]
+    fn bbox_overlaps_true_for_touching_boxes() {
+        assert!(Stardist::bbox_overlaps(&[0, 0, 3, 3], &[3, 3, 6, 6]));
+    }
+
+    #[test]
+    fn bbox_overlaps_false_for_disjoint_boxes() {
+        assert!(!Stardist::bbox_overlaps(&[0, 0, 3, 3], &[4, 4, 6, 6]));
+    }
+
+    // ---- iou ----
+
+    #[test]
+    fn iou_is_zero_for_disjoint_candidates() {
+        let a = square(0, 0, 4, 0.9);
+        let b = square(10, 10, 4, 0.5);
+        assert_eq!(Stardist::iou(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn iou_is_one_for_identical_candidates() {
+        let a = square(0, 0, 4, 0.9);
+        let b = square(0, 0, 4, 0.5);
+        assert_eq!(Stardist::iou(&a, &b), 1.0);
+    }
+
+    #[test]
+    fn iou_computes_the_intersection_over_union_ratio() {
+        // Two 4x4 squares (area 16 each) overlapping in a 2x4 strip (area 8).
+        // union = 16 + 16 - 8 = 24, iou = 8/24.
+        let a = square(0, 0, 4, 0.9);
+        let b = square(2, 0, 4, 0.5);
+        let iou = Stardist::iou(&a, &b);
+        assert!((iou - 8.0 / 24.0).abs() < 1e-6, "got {iou}");
+    }
+
+    // ---- non_max_suppress ----
+
+    #[test]
+    fn non_max_suppress_keeps_every_candidate_when_none_overlap() {
+        let candidates = vec![square(0, 0, 2, 0.9), square(10, 10, 2, 0.8), square(20, 20, 2, 0.7)];
+        let kept = Stardist::non_max_suppress(candidates, 0.3);
+        assert_eq!(kept.len(), 3);
+    }
+
+    #[test]
+    fn non_max_suppress_drops_the_lower_scoring_of_two_heavily_overlapping_candidates() {
+        // Identical boxes (iou = 1.0) - well above any positive threshold.
+        let candidates = vec![square(0, 0, 4, 0.4), square(0, 0, 4, 0.9)];
+        let kept = Stardist::non_max_suppress(candidates, 0.3);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].score, 0.9, "the higher-scoring candidate must survive");
+    }
+
+    #[test]
+    fn non_max_suppress_keeps_both_when_overlap_is_below_threshold() {
+        // 4x4 squares shifted by 3px overlap in a 1x4 strip: iou = 4/(16+16-4) = 4/28 ≈ 0.14.
+        let candidates = vec![square(0, 0, 4, 0.9), square(3, 0, 4, 0.8)];
+        let kept = Stardist::non_max_suppress(candidates, 0.3);
+        assert_eq!(kept.len(), 2, "0.14 overlap must not exceed a 0.3 suppression threshold");
+    }
+
+    #[test]
+    fn non_max_suppress_returns_candidates_sorted_by_descending_score() {
+        let candidates = vec![square(0, 0, 2, 0.3), square(50, 50, 2, 0.9), square(100, 100, 2, 0.6)];
+        let kept = Stardist::non_max_suppress(candidates, 0.3);
+        let scores: Vec<f32> = kept.iter().map(|c| c.score).collect();
+        assert_eq!(scores, vec![0.9, 0.6, 0.3]);
+    }
+
+    // ---- known-bug regression tests: NaN model output panics ----
+    //
+    // Tracked in BETA_REVIEW.md ("StarDist panics on NaN model output"): a
+    // degenerate/blank tile or an incompatible model export can make the
+    // TorchScript model emit NaN, and both sort call sites below use
+    // `partial_cmp(...).unwrap()`, which panics for NaN (`partial_cmp`
+    // returns `None`). These tests pin the *current* (buggy) behaviour so
+    // the fix - tracked separately, not applied here - has a clear
+    // before/after signal; update or remove them once it lands.
+
+    #[test]
+    #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
+    fn rasterize_polygon_panics_on_a_nan_vertex_known_bug() {
+        let polygon = [(0.0, 0.0), (f32::NAN, 4.0), (4.0, 4.0)];
+        let _ = Stardist::rasterize_polygon(&polygon, [0, 0, 3, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
+    fn non_max_suppress_panics_when_a_candidate_score_is_nan_known_bug() {
+        let candidates = vec![square(0, 0, 2, f32::NAN), square(10, 10, 2, 0.5)];
+        let _ = Stardist::non_max_suppress(candidates, 0.3);
+    }
+}

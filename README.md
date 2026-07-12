@@ -7,6 +7,8 @@
 [![EVAnalyzer Docs](https://img.shields.io/badge/docs-available-brightgreen?style=flat&color=009933)](https://evanalyzer.org)
 [![Image.sc forum](https://img.shields.io/badge/dynamic/json.svg?label=forum&url=https%3A%2F%2Fforum.image.sc%2Ftags%2Fevanalyzer.json&query=%24.topic_list.tags.0.topic_count&colorB=brightgreen&suffix=%20topics&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAABPklEQVR42m3SyyqFURTA8Y2BER0TDyExZ+aSPIKUlPIITFzKeQWXwhBlQrmFgUzMMFLKZeguBu5y+//17dP3nc5vuPdee6299gohUYYaDGOyyACq4JmQVoFujOMR77hNfOAGM+hBOQqB9TjHD36xhAa04RCuuXeKOvwHVWIKL9jCK2bRiV284QgL8MwEjAneeo9VNOEaBhzALGtoRy02cIcWhE34jj5YxgW+E5Z4iTPkMYpPLCNY3hdOYEfNbKYdmNngZ1jyEzw7h7AIb3fRTQ95OAZ6yQpGYHMMtOTgouktYwxuXsHgWLLl+4x++Kx1FJrjLTagA77bTPvYgw1rRqY56e+w7GNYsqX6JfPwi7aR+Y5SA+BXtKIRfkfJAYgj14tpOF6+I46c4/cAM3UhM3JxyKsxiOIhH0IO6SH/A1Kb1WBeUjbkAAAAAElFTkSuQmCC&style=flat&color=009933)](https://forum.image.sc/tag/evanalyzer)
 [![Build & Package](https://github.com/evanalyzer/evanalyzer/actions/workflows/release.yml/badge.svg)](https://github.com/evanalyzer/evanalyzer/actions/workflows/release.yml)
+[![CI](https://github.com/evanalyzer/evanalyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/evanalyzer/evanalyzer/actions/workflows/ci.yml)
+[![Coverage](docs/coverage-badge.svg)](docs/coverage-history.csv)
 [![GitHub Release](https://img.shields.io/github/v/release/evanalyzer/evanalyzer?include_prereleases)](https://github.com/evanalyzer/evanalyzer/releases/latest)
 [![License: AGPL-3.0 for non-commercial | Commercial license available](https://img.shields.io/badge/License-AGPL--3.0_%7C_Commercial-blue)](#license)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange?logo=rust)](https://www.rust-lang.org/)
@@ -376,6 +378,8 @@ cargo llvm-cov                                    # terminal report
 cargo llvm-cov --html                             # HTML report → target/llvm-cov/
 cargo llvm-cov --lcov --output-path lcov.info    # lcov format (e.g. VS Code Coverage Gutters)
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same `cargo llvm-cov` on every push to `main` and every pull request. The full lcov/HTML report is uploaded as a workflow artifact and a text summary is posted to the run's Job Summary; on `main` it also regenerates the badge above and appends a row to [`docs/coverage-history.csv`](docs/coverage-history.csv) (line coverage per commit) - both committed straight to the repo, no external coverage service involved.
 
 ### SBOM
 

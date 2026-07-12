@@ -16,8 +16,8 @@ copypasta = "0.10"
 log = "0.4"
 env_logger = "0.11"
 rayon = "1.10"
-kornia-image = { git = "https://github.com/kornia/kornia-rs" }
-kornia-imgproc = { git = "https://github.com/kornia/kornia-rs" }
+kornia-image = { version = "0.1.14"}
+kornia-imgproc = { version = "0.1.14"}
 bitflags = "2.11.0"
 enumset = "1.1.10"
 clru = "0.6.3"
@@ -47,6 +47,6 @@ features = [
 ]
 
 [dev-dependencies]
-kornia-apriltag = { git = "https://github.com/kornia/kornia-rs" }
+kornia-apriltag = {version = "0.1.10"}
 
 

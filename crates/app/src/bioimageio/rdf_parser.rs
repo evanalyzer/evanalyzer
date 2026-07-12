@@ -137,4 +137,52 @@ outputs:
         let yaml = "type: dataset\nname: foo\n";
         assert!(matches!(parse_str(yaml), Err(RdfError::NotAModel { .. })));
     }
+
+    #[test]
+    fn parse_str_errors_on_malformed_yaml() {
+        let err = parse_str("type: [unterminated").unwrap_err();
+        assert!(matches!(err, RdfError::Yaml(_)));
+    }
+
+    #[test]
+    fn parse_file_reads_and_parses_a_real_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rdf.yaml");
+        std::fs::write(&path, "type: dataset\nname: foo\n").unwrap();
+        // A well-formed but non-model RDF still exercises the disk-read path
+        // in `parse_file` before failing in `parse_str`'s `is_model` check.
+        assert!(matches!(parse_file(&path), Err(RdfError::NotAModel { .. })));
+    }
+
+    #[test]
+    fn parse_file_errors_for_a_missing_file() {
+        let err = parse_file(Path::new("/does/not/exist/rdf.yaml")).unwrap_err();
+        assert!(matches!(err, RdfError::Io(_)));
+    }
+
+    #[test]
+    fn rdf_error_display_messages() {
+        let io_err = RdfError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "nope"));
+        assert!(io_err.to_string().starts_with("failed to read RDF file:"));
+
+        let yaml_err = match parse_str("type: [unterminated") {
+            Err(RdfError::Yaml(e)) => RdfError::Yaml(e),
+            other => panic!("expected a Yaml error, got {other:?}"),
+        };
+        assert!(yaml_err.to_string().starts_with("failed to parse rdf.yaml:"));
+
+        let not_a_model = RdfError::NotAModel { kind: "dataset".into() };
+        assert_eq!(not_a_model.to_string(), "RDF describes a 'dataset', not a model");
+    }
+
+    #[test]
+    fn rdf_error_source_is_only_set_for_io_and_yaml_variants() {
+        use std::error::Error;
+
+        let io_err = RdfError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "nope"));
+        assert!(io_err.source().is_some());
+
+        let not_a_model = RdfError::NotAModel { kind: "dataset".into() };
+        assert!(not_a_model.source().is_none());
+    }
 }

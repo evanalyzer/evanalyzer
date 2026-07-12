@@ -16,13 +16,19 @@ use evanalyzer_core::ImageContainer;
 use log::warn;
 use slint::{ComponentHandle, Model, Timer, TimerMode};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub(crate) struct ViewportImageController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
     pub(crate) playback_timer: Timer,
     pub(crate) redraw_debounce_timer: Timer,
+    /// Trailing timer for the pixel-info HUD throttle (see
+    /// `sync_pixel_info_throttled`) - separate from `redraw_debounce_timer`
+    /// so the two don't cancel each other.
+    pub(crate) pixel_info_throttle_timer: Timer,
+    pub(crate) last_pixel_info_sync: Mutex<Instant>,
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) viewport_cache: Arc<ViewportCache>,
     pub(crate) histogram_controller: Arc<HistogramController>,
@@ -43,6 +49,8 @@ impl ViewportImageController {
             app_state,
             playback_timer: Timer::default(),
             redraw_debounce_timer: Timer::default(),
+            pixel_info_throttle_timer: Timer::default(),
+            last_pixel_info_sync: Mutex::new(Instant::now()),
             viewport_controller,
             viewport_cache,
             histogram_controller,
@@ -87,7 +95,7 @@ impl ViewportImageController {
             ui.global::<ViewportSlintState>()
                 .on_report_mouse_moved(move |x, y| {
                     manager.update_mouse_position_in_viewport_state(x, y);
-                    manager.sync_actual_mouse_position_information_to_slint();
+                    manager.sync_pixel_info_throttled();
                 });
 
             // Channel options changed
@@ -295,6 +303,49 @@ impl ViewportImageController {
             .expect("Failed to acquire write lock on viewport state");
         state.mouse_pos_x = x;
         state.mouse_pos_y = y;
+    }
+
+    /// Rate limit for `sync_actual_mouse_position_information_to_slint`: ~30
+    /// updates/sec is imperceptibly different from unthrottled for a pixel
+    /// value readout, but caps the per-move cost (project/viewport-state
+    /// locks, a `format!()` per visible channel, and an
+    /// `invoke_from_event_loop` dispatch) that raw mouse-move events would
+    /// otherwise trigger at the input device's full poll rate (commonly
+    /// 125-1000 Hz).
+    const PIXEL_INFO_THROTTLE: Duration = Duration::from_millis(33);
+
+    /// Throttled entry point for the mouse-move pixel-info HUD. Runs
+    /// immediately if nothing has run in the last [`Self::PIXEL_INFO_THROTTLE`]
+    /// (so the first move after the cursor was still feels instant), otherwise
+    /// coalesces further moves into a single trailing update once the window
+    /// elapses - so a fast drag doesn't leave a stale readout once it stops.
+    pub fn sync_pixel_info_throttled(self: &Arc<Self>) {
+        let now = Instant::now();
+        let should_run_now = {
+            let mut last = self.last_pixel_info_sync.lock().expect("Poisoned");
+            if now.duration_since(*last) >= Self::PIXEL_INFO_THROTTLE {
+                *last = now;
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_run_now {
+            self.pixel_info_throttle_timer.stop();
+            self.sync_actual_mouse_position_information_to_slint();
+        } else {
+            let self_in = self.clone();
+            self.pixel_info_throttle_timer.stop();
+            self.pixel_info_throttle_timer.start(
+                TimerMode::SingleShot,
+                Self::PIXEL_INFO_THROTTLE,
+                move || {
+                    *self_in.last_pixel_info_sync.lock().expect("Poisoned") = Instant::now();
+                    self_in.sync_actual_mouse_position_information_to_slint();
+                },
+            );
+        }
     }
 
     /// Synchronizes precise mouse interaction data and pixel-level information to the Slint UI.

@@ -2,6 +2,13 @@
 // source files resolve correctly against the build-script crate root.
 // We use include!(concat!(env!("CARGO_MANIFEST_DIR"), ...)) to produce
 // absolute paths, avoiding #[path = "../"] traversal through non-existent dirs.
+
+// Mirrors the constant of the same name in src/lib.rs - `project_settings.rs`
+// is include!()-d into this separate build-script crate root, so it needs its
+// own copy of anything from `crate::` that it references.
+#[allow(dead_code)]
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 1;
+
 mod utils {
     pub mod hex_colors {
         include!(concat!(

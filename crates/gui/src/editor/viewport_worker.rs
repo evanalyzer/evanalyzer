@@ -387,23 +387,29 @@ impl ViewportWorker {
                     let native = buffer_pool[pool_idx].as_slice();
                     let screen = screen_buffer.make_mut_slice();
                     let black = Rgb8Pixel { r: 0, g: 0, b: 0 };
-                    for sy in 0..vp_h {
+                    // Each output row is independent (nearest-neighbor resample,
+                    // no cross-row state), so this was a ~vp_w*vp_h-iteration
+                    // (up to ~8M for a 4K viewport) serial loop with no reason
+                    // to be single-threaded - split by row and run in parallel,
+                    // matching the `par_chunks_mut` pattern already used above
+                    // in `prepare_image_channels_for_slint`.
+                    use rayon::prelude::*;
+                    screen.par_chunks_mut(vp_w).enumerate().for_each(|(sy, row)| {
                         let ty = (sy as f32 - draw_y) * inv_scale_y;
-                        let row = sy * vp_w;
                         if ty < 0.0 || ty >= img_h as f32 {
-                            screen[row..row + vp_w].fill(black);
-                            continue;
+                            row.fill(black);
+                            return;
                         }
                         let ty_i = ty as usize * img_w;
-                        for sx in 0..vp_w {
+                        for (sx, out) in row.iter_mut().enumerate() {
                             let tx = (sx as f32 - draw_x) * inv_scale_x;
-                            screen[row + sx] = if tx >= 0.0 && tx < img_w as f32 {
+                            *out = if tx >= 0.0 && tx < img_w as f32 {
                                 native[ty_i + tx as usize]
                             } else {
                                 black
                             };
                         }
-                    }
+                    });
                 }
 
                 // Display geometry is now screen-space: full viewport at (0,0).
@@ -539,10 +545,22 @@ pub(crate) fn prepare_image_channels_for_slint(
     use rayon::prelude::*;
 
     let expected_len = dest_pixels.len();
-    for (i, ctx) in channels.iter().enumerate() {
-        if !visible_channels.contains(&ctx.channel_idx) {
-            continue;
-        }
+    // Resolved once, outside the pixel loop: which `channels` entries are
+    // actually visible. `visible_channels.contains(...)` used to be called
+    // per pixel per channel inside the hot loop below (O(pixels × channels²)
+    // for a linear-scan `.contains()` over up to `channels²` comparisons);
+    // this reduces that to one O(channels) pass up front, and the per-pixel
+    // loop then only visits the (usually much smaller) visible subset
+    // directly instead of walking every channel and skipping hidden ones.
+    let visible_indices: Vec<usize> = channels
+        .iter()
+        .enumerate()
+        .filter(|(_, ctx)| visible_channels.contains(&ctx.channel_idx))
+        .map(|(i, _)| i)
+        .collect();
+
+    for &i in &visible_indices {
+        let ctx = &channels[i];
         if ctx.image_data.len() != expected_len {
             panic!(
                 "Memory alignment error: channel {} has {} pixels but destination expects {}. \
@@ -571,11 +589,8 @@ pub(crate) fn prepare_image_channels_for_slint(
                 let mut g_acc = 0.0f32;
                 let mut b_acc = 0.0f32;
 
-                for (c_idx, ctx) in channels.iter().enumerate() {
-                    if !visible_channels.contains(&ctx.channel_idx) {
-                        continue;
-                    }
-
+                for &c_idx in &visible_indices {
+                    let ctx = &channels[c_idx];
                     let p = ctx.image_data[global_idx];
 
                     if create_histogram

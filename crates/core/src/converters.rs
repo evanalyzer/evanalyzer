@@ -104,7 +104,7 @@ pub fn wavelength_to_rgb_u32(wavelength: f32) -> u32 {
     let color = wavelength_to_rgb_float(wavelength);
     let ret_color: u32 = ((color[0] * 255.0) as u32) << 16
         | ((color[1] * 255.0) as u32) << 8
-        | (color[0] * 255.0) as u32;
+        | (color[2] * 255.0) as u32;
     ret_color
 }
 
@@ -179,5 +179,27 @@ mod tests {
             assert!(g >= 0.0 && g <= 1.0, "g out of range at {wl}");
             assert!(b >= 0.0 && b <= 1.0, "b out of range at {wl}");
         }
+    }
+
+    // ---- wavelength_to_rgb_u32 ----
+
+    #[test]
+    fn wavelength_to_rgb_u32_packs_each_channel_into_its_own_byte() {
+        // Regression test: the blue byte was previously packed from
+        // `color[0]` (red) instead of `color[2]` (blue), so a pure-blue
+        // wavelength rendered as black (0x000000) instead of 0x0000FF.
+        assert_eq!(wavelength_to_rgb_u32(635.0), 0x00FF0000, "pure red");
+        assert_eq!(wavelength_to_rgb_u32(532.0), 0x0000FF00, "pure green");
+        assert_eq!(wavelength_to_rgb_u32(450.0), 0x000000FF, "pure blue");
+    }
+
+    #[test]
+    fn wavelength_to_rgb_u32_white_for_a_zero_wavelength() {
+        assert_eq!(wavelength_to_rgb_u32(0.0), 0x00FFFFFF);
+    }
+
+    #[test]
+    fn wavelength_to_rgb_u32_black_outside_the_visible_spectrum() {
+        assert_eq!(wavelength_to_rgb_u32(300.0), 0x00000000);
     }
 }

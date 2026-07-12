@@ -7,6 +7,7 @@ use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::ImageReader;
 use slint::ComponentHandle;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
 
 mod editor;
@@ -23,6 +24,12 @@ pub struct UiState {
     pub app: AppHandle, // cloneable handle - no Arc needed, AppHandle is already Arc inside
     pub ui_handle: slint::Weak<AppWindow>,
     pub results_ui_handle: slint::Weak<ResultsWindow>,
+    /// Mirrors `ToolbarState.has_unsaved_changes`, but readable synchronously
+    /// from any thread (the Slint property can only be read/written on the
+    /// UI thread via `invoke_from_event_loop`) - lets background threads
+    /// (e.g. "open a project" before doing any I/O) check for unsaved
+    /// changes without a round trip through the event loop.
+    dirty: AtomicBool,
 }
 
 impl UiState {
@@ -35,6 +42,7 @@ impl UiState {
             app,
             ui_handle: handle,
             results_ui_handle: results_handle,
+            dirty: AtomicBool::new(false),
         }
     }
 
@@ -83,6 +91,7 @@ impl UiState {
 
     /// Marks the project as having unsaved changes.
     pub fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::Relaxed);
         let ui = self.ui_handle.clone();
         slint::invoke_from_event_loop(move || {
             if let Some(w) = ui.upgrade() {
@@ -95,6 +104,7 @@ impl UiState {
 
     /// Clears the unsaved-changes indicator.
     pub fn clear_dirty(&self) {
+        self.dirty.store(false, Ordering::Relaxed);
         let ui = self.ui_handle.clone();
         slint::invoke_from_event_loop(move || {
             if let Some(w) = ui.upgrade() {
@@ -103,6 +113,12 @@ impl UiState {
         })
         .ok();
         self.set_window_title(false);
+    }
+
+    /// Whether the project has unsaved changes. Safe to call from any
+    /// thread, unlike reading `ToolbarState.has_unsaved_changes` directly.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::Relaxed)
     }
 
     /// Recomputes and pushes the main window's title from the project's

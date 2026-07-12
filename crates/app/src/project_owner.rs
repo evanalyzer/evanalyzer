@@ -111,8 +111,7 @@ impl ProjectOwner {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project = crate::extensions::project_ext::load_project(path)
-            .map_err(|_| InternalErrors::Internal("Could not open project".into()))?;
+        let project = crate::extensions::project_ext::load_project(path)?;
         *self.project.write().expect("Poisoned") = project;
         *self.current_path.lock().unwrap() = Some(path.clone());
         Ok(())
@@ -120,7 +119,8 @@ impl ProjectOwner {
 
     /// Saves the current project to disk.
     pub fn save_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project = self.project.read().expect("Poisoned");
+        let mut project = self.project.write().expect("Poisoned");
+        project.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
         let content = serde_json::to_string_pretty(&project.settings)
             .map_err(|e| InternalErrors::Internal(e.to_string()))?;
         std::fs::write(path, content).map_err(|e| InternalErrors::Internal(e.to_string()))?;
@@ -189,8 +189,7 @@ impl AppHandle {
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let project = crate::extensions::project_ext::load_project(path)
-            .map_err(|_| InternalErrors::Internal("Could not open project".into()))?;
+        let project = crate::extensions::project_ext::load_project(path)?;
         *self.project.write().expect("Poisoned") = project;
         Ok(())
     }

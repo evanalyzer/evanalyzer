@@ -62,6 +62,7 @@ impl PipelineWorker {
                 evanalyzer_core::generate_analyze_job_from_project_settings(
                     task.project_settings,
                     task.project_path,
+                    task.job_name,
                 )
             };
 
