@@ -240,7 +240,14 @@ impl<'a> JobExecutor {
                                 path: rel_path.clone(),
                             })
                             .ok();
-                        Err(e)
+                        // Name the failing image in the propagated error - the
+                        // caller (GUI/CLI) only sees this string, not the
+                        // ImageFailed event above, so without the path the
+                        // user has no way to tell which file broke a batch.
+                        Err(InternalErrors::Internal(format!(
+                            "{}: {e}",
+                            rel_path.display()
+                        )))
                     }
                 }
             } else {
@@ -277,7 +284,13 @@ impl<'a> JobExecutor {
                                         path: rel_path.clone(),
                                     })
                                     .ok();
-                                Err(e)
+                                // See the single-image branch above: name the
+                                // failing image so the caller's error message
+                                // doesn't just say *something* broke.
+                                Err(InternalErrors::Internal(format!(
+                                    "{}: {e}",
+                                    rel_path.display()
+                                )))
                             }
                         }
                     })
