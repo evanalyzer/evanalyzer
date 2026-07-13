@@ -2104,4 +2104,310 @@ mod tests {
         assert!(project.get_current_image_path_cloned().is_none());
         assert!(project.get_current_image_settings().is_none());
     }
+
+    #[test]
+    fn current_image_settings_are_none_when_the_selected_path_is_not_in_the_list() {
+        let mut project = project_with_one_image();
+        project.set_current_image_path(&PathBuf::from("ghost.tif"));
+        assert!(project.get_current_image_settings().is_none());
+        assert!(project.get_current_image_settings_mut().is_none());
+        assert!(project.with_current_image_mut(|_| ()).is_none());
+    }
+
+    #[test]
+    fn with_current_series_mut_returns_none_when_the_selected_series_is_missing() {
+        let mut project = project_with_one_image();
+        project.set_active_series(&99);
+        assert!(project.with_current_series_mut(|series| series.image_width).is_none());
+    }
+
+    // -- get_reference_roi --------------------------------------------------
+
+    #[test]
+    fn get_reference_roi_generates_a_grid_of_circular_rois() {
+        let project = ProjectWithRuntime::default();
+        let rois = project.get_reference_roi().expect("always returns Some");
+        assert_eq!(rois.len(), 30000);
+
+        let first = &rois[0];
+        assert_eq!(first.id, ObjectId(1));
+        assert_eq!(first.area, 31415);
+        assert_eq!(first.mask_data.len(), 5 * 5, "a 5x5 mask per ROI");
+        assert_eq!(first.bbox[2] - first.bbox[0], 5, "bbox width matches the ROI width");
+        assert_eq!(first.bbox[3] - first.bbox[1], 5, "bbox height matches the ROI height");
+        assert_eq!(first.segmentation_class, SegmentationClass(1));
+
+        let last = &rois[rois.len() - 1];
+        assert_eq!(last.id, ObjectId(30000));
+    }
+
+    // -- get_selected_series_idx --------------------------------------------
+
+    #[test]
+    fn get_selected_series_idx_defaults_to_zero_without_a_current_image() {
+        let project = ProjectWithRuntime::default();
+        assert_eq!(project.get_selected_series_idx(), 0);
+    }
+
+    #[test]
+    fn get_selected_series_idx_reflects_the_current_images_selected_series() {
+        let mut project = project_with_one_image();
+        project.with_current_image_mut(|img| {
+            img.series.insert(1, img.series[&0].clone());
+        });
+        project.set_active_series(&1);
+        assert_eq!(project.get_selected_series_idx(), 1);
+    }
+
+    // -- add_image_and_read_meta (JVM-free branch only) ----------------------
+
+    #[test]
+    fn add_image_and_read_meta_rejects_an_unsupported_extension_without_touching_the_jvm() {
+        let mut project = ProjectWithRuntime::default();
+        let action = project.add_image_and_read_meta(Path::new("notes.txt"));
+        assert_eq!(action, ProjectAction::Failure("Unsupported device".into()));
+        assert!(project.images.list.is_empty());
+    }
+
+    // -- is_supported_image / is_supported_image_path ------------------------
+
+    #[test]
+    fn is_supported_image_checks_the_extension_case_insensitively() {
+        let project = ProjectWithRuntime::default();
+        assert!(project.is_supported_image(Path::new("a.tif")));
+        assert!(project.is_supported_image(Path::new("a.TIF")));
+        assert!(!project.is_supported_image(Path::new("a.txt")));
+        assert!(!project.is_supported_image(Path::new("no_extension")));
+    }
+
+    #[test]
+    fn is_supported_image_path_matches_against_the_supported_formats_list() {
+        assert!(is_supported_image_path(Path::new("scan.czi")));
+        assert!(is_supported_image_path(Path::new("scan.CZI")));
+        assert!(!is_supported_image_path(Path::new("scan.pdf")));
+        assert!(!is_supported_image_path(Path::new("no_extension")));
+    }
+
+    // -- collect_images_at_root / collect_images_parallel --------------------
+
+    #[test]
+    fn collect_images_at_root_skips_a_folder_named_results_case_insensitively() {
+        // The "results" check happens before any filesystem access, so this
+        // is safe to call on paths that don't even exist.
+        assert!(collect_images_at_root(Path::new("/any/path/Results")).is_empty());
+        assert!(collect_images_at_root(Path::new("/any/path/RESULTS")).is_empty());
+    }
+
+    #[test]
+    fn collect_images_at_root_returns_empty_for_a_missing_directory() {
+        assert!(collect_images_at_root(Path::new("/definitely/does/not/exist/anywhere")).is_empty());
+    }
+
+    #[test]
+    fn collect_images_at_root_recurses_and_skips_unsupported_files_and_results_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"not an image").unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("doc.docx"), b"not an image").unwrap();
+        let results = dir.path().join("results");
+        std::fs::create_dir(&results).unwrap();
+        // Even a supported extension inside "results" must never be opened -
+        // if it were, this would fail trying to actually parse the file.
+        std::fs::write(results.join("fake.tif"), b"not a real tiff").unwrap();
+
+        assert!(collect_images_at_root(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn collect_images_parallel_delegates_to_collect_images_at_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"nope").unwrap();
+        let project = ProjectWithRuntime::default();
+        assert!(project.collect_images_parallel(dir.path()).is_empty());
+    }
+
+    // -- scan_image_folder_and_add / apply_scanned_images --------------------
+
+    #[test]
+    fn scan_image_folder_and_add_is_a_noop_without_a_root() {
+        let mut project = ProjectWithRuntime::default();
+        project.scan_image_folder_and_add();
+        assert!(project.images.list.is_empty());
+    }
+
+    #[test]
+    fn scan_image_folder_and_add_finds_no_images_in_an_empty_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = ProjectWithRuntime::default();
+        project.images.root = Some(dir.path().to_path_buf());
+        project.scan_image_folder_and_add();
+        assert!(project.images.list.is_empty());
+    }
+
+    #[test]
+    fn apply_scanned_images_clears_the_old_list_and_inserts_in_natural_sort_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = project_with_one_image();
+        let meta = sample_image_meta("Ch0", 400.0);
+        let found = vec![
+            (dir.path().join("img10.tif"), meta.clone()),
+            (dir.path().join("img2.tif"), meta),
+        ];
+        project.apply_scanned_images(found);
+
+        assert!(
+            !project.images.list.contains_key(Path::new("img.tif")),
+            "the previous list must be cleared"
+        );
+        let keys: Vec<_> = project.images.list.keys().cloned().collect();
+        assert_eq!(
+            keys,
+            vec![PathBuf::from("img2.tif"), PathBuf::from("img10.tif")],
+            "natural sort orders img2 before img10"
+        );
+    }
+
+    // -- save_project_as_template / save_pipeline_as_template -----------------
+
+    #[test]
+    fn save_project_as_template_writes_classification_plate_and_pipelines() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = ProjectWithRuntime::default();
+        project.classification.classes.push(class(1, "A"));
+        let mut p = pipeline(1);
+        p.name = Some("MyPipe".into());
+        project.add_pipeline(p);
+
+        let meta = evanalyzer_cfg::settings::meta_data::MetaData { name: "Tmpl".into(), ..Default::default() };
+        let path = dir.path().join("out");
+        project.save_project_as_template(meta, &path).expect("save should succeed");
+
+        let expected = dir.path().join(format!("out.{}", PROJECT_FILE_TEMPLATE_EXTENSIONS));
+        assert!(expected.exists());
+        let content = std::fs::read_to_string(&expected).unwrap();
+        let parsed: ProjectTemplate = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.classification.classes.len(), 1);
+        assert_eq!(parsed.classification.classes[0].name, "A");
+        assert_eq!(parsed.pipelines.len(), 1);
+        assert_eq!(parsed.pipelines[0].meta.name, "MyPipe");
+    }
+
+    #[test]
+    fn save_pipeline_as_template_writes_only_the_selected_pipelines_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = ProjectWithRuntime::default();
+        let mut p = pipeline(1);
+        p.steps = vec![PipelineStepSettings { enabled: true, command: PipelineCommand::Blur(Default::default()) }];
+        project.add_pipeline(p);
+        project.add_pipeline(pipeline(2));
+
+        let meta = evanalyzer_cfg::settings::meta_data::MetaData { name: "StepTmpl".into(), ..Default::default() };
+        let path = dir.path().join("pipe");
+        project.save_pipeline_as_template(meta, PipelineId(1), &path).expect("save should succeed");
+
+        let expected = dir.path().join(format!("pipe.{}", PIPELINE_EXTENSIONS));
+        assert!(expected.exists());
+        let content = std::fs::read_to_string(&expected).unwrap();
+        let parsed: PipelineTemplate = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.pipeline_steps.len(), 1);
+    }
+
+    #[test]
+    fn save_pipeline_as_template_errors_for_an_unknown_pipeline_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = ProjectWithRuntime::default();
+        project.add_pipeline(pipeline(1));
+
+        let meta = evanalyzer_cfg::settings::meta_data::MetaData::default();
+        let path = dir.path().join("pipe");
+        let result = project.save_pipeline_as_template(meta, PipelineId(99), &path);
+        assert!(result.is_err());
+        assert!(!path.with_extension(PIPELINE_EXTENSIONS).exists());
+    }
+
+    // -- new / new_project ----------------------------------------------------
+
+    #[test]
+    fn new_returns_an_arc_wrapped_default_project() {
+        let project = ProjectWithRuntime::default();
+        let fresh = project.new();
+        assert!(fresh.classification.classes.is_empty());
+        assert!(fresh.images.list.is_empty());
+    }
+
+    #[test]
+    fn new_project_creates_and_persists_a_fresh_default_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = ProjectWithRuntime::default();
+        let path = dir.path().join("newproj");
+
+        let created = project.new_project(&path).expect("should succeed");
+
+        let expected = dir.path().join(format!("newproj.{}", PROJECT_FILE_EXTENSIONS));
+        assert!(expected.exists());
+        assert_eq!(created.tmp_settings.current_project, Some(expected));
+        assert!(created.classification.classes.is_empty());
+    }
+
+    // -- load_project schema version check ------------------------------------
+
+    #[test]
+    fn load_project_rejects_a_file_written_by_a_newer_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("future.evaproj");
+
+        let settings = ProjectSettings::default();
+        let mut value = serde_json::to_value(&settings).unwrap();
+        value["schemaVersion"] = serde_json::json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION + 1);
+        std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+        match load_project(&path) {
+            Err(err) => assert!(err.to_string().contains("newer version")),
+            Ok(_) => panic!("a newer schema version must be rejected"),
+        }
+    }
+
+    // -- import_legacy_project (module-level wrapper) -------------------------
+
+    fn minimal_legacy_project_json() -> String {
+        r##"{
+            "meta": { "name": "Legacy Demo" },
+            "projectSettings": {
+                "classification": { "classes": [] },
+                "plate": { "imageFolder": "images" }
+            },
+            "imageSetup": {},
+            "pipelines": []
+        }"##
+        .to_string()
+    }
+
+    #[test]
+    fn import_legacy_project_converts_a_valid_file_and_leaves_current_project_path_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.icproj");
+        std::fs::write(&path, minimal_legacy_project_json()).unwrap();
+
+        let (project, _warnings, legacy_image_folder) =
+            import_legacy_project(&path).expect("should parse");
+        assert_eq!(project.metadata.name, "Legacy Demo");
+        assert_eq!(legacy_image_folder, Some("images".to_string()));
+        assert!(project.tmp_settings.current_project.is_none());
+    }
+
+    #[test]
+    fn import_legacy_project_errors_for_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.icproj");
+        std::fs::write(&path, "{ not json").unwrap();
+
+        assert!(import_legacy_project(&path).is_err());
+    }
+
+    #[test]
+    fn import_legacy_project_errors_for_a_missing_file() {
+        let result = import_legacy_project(&PathBuf::from("/does/not/exist.icproj"));
+        assert!(result.is_err());
+    }
 }

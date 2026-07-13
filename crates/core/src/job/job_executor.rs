@@ -240,7 +240,14 @@ impl<'a> JobExecutor {
                                 path: rel_path.clone(),
                             })
                             .ok();
-                        Err(e)
+                        // Name the failing image in the propagated error - the
+                        // caller (GUI/CLI) only sees this string, not the
+                        // ImageFailed event above, so without the path the
+                        // user has no way to tell which file broke a batch.
+                        Err(InternalErrors::Internal(format!(
+                            "{}: {e}",
+                            rel_path.display()
+                        )))
                     }
                 }
             } else {
@@ -277,7 +284,13 @@ impl<'a> JobExecutor {
                                         path: rel_path.clone(),
                                     })
                                     .ok();
-                                Err(e)
+                                // See the single-image branch above: name the
+                                // failing image so the caller's error message
+                                // doesn't just say *something* broke.
+                                Err(InternalErrors::Internal(format!(
+                                    "{}: {e}",
+                                    rel_path.display()
+                                )))
                             }
                         }
                     })
@@ -1302,6 +1315,95 @@ mod z_t_stack_precedence_tests {
 
         assert_eq!(range, 3..=3);
     }
+
+    #[test]
+    fn t_all_stacks_with_single_frame_image_yields_single_element_range() {
+        let job = make_job_executor(
+            None,
+            Some(TStackSettings {
+                stack_handling: TStackHandling::AllStacks,
+                playback_speed: 1.0,
+                t_stack: 0,
+            }),
+        );
+        let entry = make_image_entry_with_default_series();
+        let image_info = ImageInfo {
+            nr_t_stacks: 1,
+            ..Default::default()
+        };
+
+        let range = job.prepare_t_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 0..=0);
+    }
+
+    #[test]
+    fn t_single_stack_ignores_total_frame_count() {
+        let job = make_job_executor(
+            None,
+            Some(TStackSettings {
+                stack_handling: TStackHandling::SingleStack,
+                playback_speed: 1.0,
+                t_stack: 7,
+            }),
+        );
+        let entry = make_image_entry_with_default_series();
+        let image_info = ImageInfo {
+            nr_t_stacks: 100,
+            ..Default::default()
+        };
+
+        let range = job.prepare_t_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 7..=7);
+    }
+
+    #[test]
+    fn missing_series_entry_falls_back_to_global_z_setting() {
+        let job = make_job_executor(
+            Some(ZStackSettings {
+                z_projection: ZStackHandling::MaxIntensity,
+                z_range: None,
+            }),
+            None,
+        );
+        let entry = ImageEntry {
+            rel_path: std::path::PathBuf::new(),
+            file_size: 0,
+            selected_series: 0,
+            series: BTreeMap::new(),
+        };
+
+        let resolved = job.get_z_stack_settings(&entry);
+
+        assert_eq!(resolved.z_projection, ZStackHandling::MaxIntensity);
+    }
+
+    #[test]
+    fn missing_series_entry_falls_back_to_global_t_setting() {
+        let job = make_job_executor(
+            None,
+            Some(TStackSettings {
+                stack_handling: TStackHandling::AllStacks,
+                playback_speed: 1.0,
+                t_stack: 0,
+            }),
+        );
+        let entry = ImageEntry {
+            rel_path: std::path::PathBuf::new(),
+            file_size: 0,
+            selected_series: 0,
+            series: BTreeMap::new(),
+        };
+        let image_info = ImageInfo {
+            nr_t_stacks: 4,
+            ..Default::default()
+        };
+
+        let range = job.prepare_t_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 0..=3);
+    }
 }
 
 #[cfg(test)]
@@ -1387,6 +1489,507 @@ mod preview_visible_tile_count_tests {
             visible > 4,
             "expected a fully zoomed-out whole-slide view to exceed a 4-tile budget, got {visible}"
         );
+    }
+}
+
+#[cfg(test)]
+mod preview_tile_size_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use std::sync::{Arc, Mutex};
+
+    fn make_job(zoom: Option<f32>) -> JobExecutor {
+        let mut job = JobExecutor::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+            IndexMap::new(),
+            std::path::PathBuf::new(),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter {
+                out_rois: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        );
+        job.preview_tile_settings = zoom.map(|zoom| PreviewTileSettings {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            viewport_width: 0.0,
+            viewport_height: 0.0,
+            zoom,
+            process_all_tiles: false,
+        });
+        job
+    }
+
+    #[test]
+    fn no_preview_settings_uses_base_tile_size() {
+        assert_eq!(make_job(None).preview_tile_size(), 4096);
+    }
+
+    #[test]
+    fn zoom_just_below_2_uses_base_tile_size() {
+        assert_eq!(make_job(Some(1.99)).preview_tile_size(), 4096);
+    }
+
+    #[test]
+    fn zoom_exactly_2_shrinks_tile_to_2048() {
+        assert_eq!(make_job(Some(2.0)).preview_tile_size(), 2048);
+    }
+
+    #[test]
+    fn zoom_just_below_4_stays_at_2048() {
+        assert_eq!(make_job(Some(3.99)).preview_tile_size(), 2048);
+    }
+
+    #[test]
+    fn zoom_exactly_4_shrinks_tile_to_1024() {
+        assert_eq!(make_job(Some(4.0)).preview_tile_size(), 1024);
+    }
+
+    #[test]
+    fn zoom_just_below_8_stays_at_1024() {
+        assert_eq!(make_job(Some(7.99)).preview_tile_size(), 1024);
+    }
+
+    #[test]
+    fn zoom_exactly_8_shrinks_tile_to_512() {
+        assert_eq!(make_job(Some(8.0)).preview_tile_size(), 512);
+    }
+
+    #[test]
+    fn zoom_far_beyond_8_still_clamps_to_512() {
+        assert_eq!(make_job(Some(100.0)).preview_tile_size(), 512);
+    }
+}
+
+#[cfg(test)]
+mod tile_iterator_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use std::sync::{Arc, Mutex};
+
+    fn make_job() -> JobExecutor {
+        JobExecutor::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+            IndexMap::new(),
+            std::path::PathBuf::new(),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter {
+                out_rois: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        )
+    }
+
+    #[test]
+    fn image_smaller_than_tile_size_yields_single_full_size_tile() {
+        let job = make_job();
+        let tiles: Vec<_> = job.prepare_tile_iterator(100, 200, 4096).collect();
+
+        assert_eq!(tiles.len(), 1);
+        assert_eq!(tiles[0].offset_x, 0);
+        assert_eq!(tiles[0].offset_y, 0);
+        assert_eq!(tiles[0].width, 100);
+        assert_eq!(tiles[0].height, 200);
+    }
+
+    #[test]
+    fn image_exact_multiple_of_tile_size_yields_uniform_tiles() {
+        let job = make_job();
+        let tiles: Vec<_> = job.prepare_tile_iterator(8192, 8192, 4096).collect();
+
+        assert_eq!(tiles.len(), 4);
+        assert!(tiles.iter().all(|t| t.width == 4096 && t.height == 4096));
+    }
+
+    #[test]
+    fn image_not_multiple_of_tile_size_yields_remainder_tile() {
+        let job = make_job();
+        let tiles: Vec<_> = job.prepare_tile_iterator(5000, 3000, 4096).collect();
+
+        assert_eq!(tiles.len(), 2);
+        assert_eq!(tiles[0].width, 4096);
+        assert_eq!(tiles[1].offset_x, 4096);
+        assert_eq!(tiles[1].width, 5000 - 4096);
+        assert!(tiles.iter().all(|t| t.height == 3000));
+    }
+
+    #[test]
+    fn tiles_are_generated_in_row_major_order() {
+        let job = make_job();
+        let tiles: Vec<_> = job.prepare_tile_iterator(9000, 9000, 4096).collect();
+        let offsets: Vec<(usize, usize)> = tiles.iter().map(|t| (t.offset_x, t.offset_y)).collect();
+
+        assert_eq!(
+            offsets,
+            vec![
+                (0, 0),
+                (4096, 0),
+                (8192, 0),
+                (0, 4096),
+                (4096, 4096),
+                (8192, 4096),
+                (0, 8192),
+                (4096, 8192),
+                (8192, 8192),
+            ]
+        );
+    }
+
+    #[test]
+    fn zero_sized_image_yields_no_tiles() {
+        let job = make_job();
+        let tiles: Vec<_> = job.prepare_tile_iterator(0, 0, 4096).collect();
+
+        assert!(tiles.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tile_visibility_tests {
+    use super::*;
+
+    fn tile(offset_x: usize, offset_y: usize, width: usize, height: usize) -> ImageTile {
+        ImageTile {
+            offset_x,
+            offset_y,
+            width,
+            height,
+        }
+    }
+
+    fn settings(offset_x: f32, offset_y: f32, zoom: f32) -> PreviewTileSettings {
+        PreviewTileSettings {
+            offset_x,
+            offset_y,
+            viewport_width: 1000.0,
+            viewport_height: 1000.0,
+            zoom,
+            process_all_tiles: false,
+        }
+    }
+
+    #[test]
+    fn tile_fully_inside_viewport_is_visible() {
+        let s = settings(0.0, 0.0, 1.0);
+        assert!(s.is_tile_visible(&tile(0, 0, 500, 500)));
+    }
+
+    #[test]
+    fn tile_starting_exactly_at_viewport_right_edge_is_not_visible() {
+        let s = settings(0.0, 0.0, 1.0);
+        assert!(!s.is_tile_visible(&tile(1000, 0, 500, 500)));
+    }
+
+    #[test]
+    fn tile_ending_exactly_at_viewport_left_edge_is_not_visible() {
+        // Panned so the tile's right edge lands exactly at screen x = 0:
+        // x2 = 500 * 1.0 + (-500.0) = 0.0, and the check requires x2 > 0.0.
+        let s = settings(-500.0, 0.0, 1.0);
+        assert!(!s.is_tile_visible(&tile(0, 0, 500, 500)));
+    }
+
+    #[test]
+    fn tile_starting_exactly_at_viewport_bottom_edge_is_not_visible() {
+        let s = settings(0.0, 0.0, 1.0);
+        assert!(!s.is_tile_visible(&tile(0, 1000, 500, 500)));
+    }
+
+    #[test]
+    fn tile_ending_exactly_at_viewport_top_edge_is_not_visible() {
+        let s = settings(0.0, -500.0, 1.0);
+        assert!(!s.is_tile_visible(&tile(0, 0, 500, 500)));
+    }
+
+    #[test]
+    fn tile_partially_overlapping_viewport_is_visible() {
+        let s = settings(-800.0, 0.0, 1.0);
+        assert!(s.is_tile_visible(&tile(0, 0, 1000, 500)));
+    }
+
+    #[test]
+    fn tile_far_outside_viewport_is_not_visible() {
+        let s = settings(0.0, 0.0, 1.0);
+        assert!(!s.is_tile_visible(&tile(50_000, 50_000, 500, 500)));
+    }
+}
+
+#[cfg(test)]
+mod z_stack_iterator_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use evanalyzer_cfg::settings::images_settings::SeriesSettings;
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    fn make_job_executor(global_z: Option<ZStackSettings>) -> JobExecutor {
+        let global_image_settings = GlobalImageSettings {
+            z_stack: global_z,
+            ..Default::default()
+        };
+
+        JobExecutor::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+            IndexMap::new(),
+            std::path::PathBuf::new(),
+            global_image_settings,
+            Arc::new(Mutex::new(MemoryExporter {
+                out_rois: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        )
+    }
+
+    fn make_image_entry() -> ImageEntry {
+        let mut series = BTreeMap::new();
+        series.insert(0, SeriesSettings::default());
+        ImageEntry {
+            rel_path: std::path::PathBuf::new(),
+            file_size: 0,
+            selected_series: 0,
+            series,
+        }
+    }
+
+    #[test]
+    fn single_stack_without_explicit_range_defaults_to_first_slice() {
+        let job = make_job_executor(Some(ZStackSettings {
+            z_projection: ZStackHandling::SingleStack,
+            z_range: None,
+        }));
+        let entry = make_image_entry();
+        let image_info = ImageInfo {
+            nr_z_stacks: 10,
+            ..Default::default()
+        };
+
+        let (projection, handling, range) = job.prepare_z_stack_iterator(&image_info, &entry);
+
+        assert_eq!(projection, ZProjection::None);
+        assert_eq!(handling, ZStackHandling::SingleStack);
+        assert_eq!(range, 0..=0);
+    }
+
+    #[test]
+    fn single_stack_with_explicit_range_is_honored() {
+        let job = make_job_executor(Some(ZStackSettings {
+            z_projection: ZStackHandling::SingleStack,
+            z_range: Some(2..=5),
+        }));
+        let entry = make_image_entry();
+        let image_info = ImageInfo {
+            nr_z_stacks: 10,
+            ..Default::default()
+        };
+
+        let (_, _, range) = job.prepare_z_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 2..=5);
+    }
+
+    #[test]
+    fn all_stacks_covers_full_range() {
+        let job = make_job_executor(Some(ZStackSettings {
+            z_projection: ZStackHandling::AllStacks,
+            z_range: None,
+        }));
+        let entry = make_image_entry();
+        let image_info = ImageInfo {
+            nr_z_stacks: 7,
+            ..Default::default()
+        };
+
+        let (projection, handling, range) = job.prepare_z_stack_iterator(&image_info, &entry);
+
+        assert_eq!(projection, ZProjection::None);
+        assert_eq!(handling, ZStackHandling::AllStacks);
+        assert_eq!(range, 0..=6);
+    }
+
+    #[test]
+    fn all_stacks_with_single_z_stack_yields_single_element_range() {
+        let job = make_job_executor(Some(ZStackSettings {
+            z_projection: ZStackHandling::AllStacks,
+            z_range: None,
+        }));
+        let entry = make_image_entry();
+        let image_info = ImageInfo {
+            nr_z_stacks: 1,
+            ..Default::default()
+        };
+
+        let (_, _, range) = job.prepare_z_stack_iterator(&image_info, &entry);
+
+        assert_eq!(range, 0..=0);
+    }
+
+    #[test]
+    fn each_projection_mode_maps_to_matching_z_projection_and_collapses_to_single_slice() {
+        let cases = [
+            (ZStackHandling::MaxIntensity, ZProjection::MaxIntensity),
+            (ZStackHandling::MinIntensity, ZProjection::MinIntensity),
+            (ZStackHandling::AvgIntensity, ZProjection::AvgIntensity),
+            (ZStackHandling::SumIntensity, ZProjection::SumIntensity),
+            (ZStackHandling::TakeTheMiddle, ZProjection::TakeTheMiddle),
+        ];
+
+        for (handling, expected_projection) in cases {
+            let job = make_job_executor(Some(ZStackSettings {
+                z_projection: handling.clone(),
+                z_range: None,
+            }));
+            let entry = make_image_entry();
+            let image_info = ImageInfo {
+                nr_z_stacks: 10,
+                ..Default::default()
+            };
+
+            let (projection, out_handling, range) =
+                job.prepare_z_stack_iterator(&image_info, &entry);
+
+            assert_eq!(
+                projection, expected_projection,
+                "wrong projection for handling {handling:?}"
+            );
+            assert_eq!(out_handling, handling);
+            assert_eq!(range, 0..=0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod execution_order_tests {
+    use super::*;
+    use crate::pipeline::pipeline::CorePipelineSettings;
+    use crate::storage::memory::MemoryExporter;
+    use std::sync::{Arc, Mutex};
+
+    fn make_job_executor() -> JobExecutor {
+        JobExecutor::new(
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+            IndexMap::new(),
+            std::path::PathBuf::new(),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter {
+                out_rois: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        )
+    }
+
+    fn make_pipeline(id: u32, dependencies: &[u32]) -> Pipeline {
+        let mut p = Pipeline::new(
+            PipelineId(id),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        for dep in dependencies {
+            p.add_dependency(PipelineId(*dep));
+        }
+        p
+    }
+
+    #[test]
+    fn pipelines_without_dependencies_preserve_insertion_order() {
+        let mut job = make_job_executor();
+        job.add_pipeline(make_pipeline(1, &[]));
+        job.add_pipeline(make_pipeline(2, &[]));
+        job.add_pipeline(make_pipeline(3, &[]));
+
+        let order = job.get_execution_order();
+
+        assert_eq!(order, vec![PipelineId(1), PipelineId(2), PipelineId(3)]);
+    }
+
+    #[test]
+    fn dependency_runs_before_dependent() {
+        let mut job = make_job_executor();
+        job.add_pipeline(make_pipeline(1, &[2]));
+        job.add_pipeline(make_pipeline(2, &[]));
+
+        let order = job.get_execution_order();
+
+        assert_eq!(order, vec![PipelineId(2), PipelineId(1)]);
+    }
+
+    #[test]
+    fn transitive_dependency_chain_is_fully_ordered() {
+        let mut job = make_job_executor();
+        job.add_pipeline(make_pipeline(1, &[2]));
+        job.add_pipeline(make_pipeline(2, &[3]));
+        job.add_pipeline(make_pipeline(3, &[]));
+
+        let order = job.get_execution_order();
+
+        assert_eq!(order, vec![PipelineId(3), PipelineId(2), PipelineId(1)]);
+    }
+
+    #[test]
+    fn diamond_dependency_orders_shared_dependency_first() {
+        let mut job = make_job_executor();
+        job.add_pipeline(make_pipeline(1, &[])); // A
+        job.add_pipeline(make_pipeline(2, &[1])); // B depends on A
+        job.add_pipeline(make_pipeline(3, &[1])); // C depends on A
+        job.add_pipeline(make_pipeline(4, &[2, 3])); // D depends on B, C
+
+        let order = job.get_execution_order();
+        let pos = |id: u32| order.iter().position(|x| *x == PipelineId(id)).unwrap();
+
+        assert!(pos(1) < pos(2));
+        assert!(pos(1) < pos(3));
+        assert!(pos(2) < pos(4));
+        assert!(pos(3) < pos(4));
+    }
+
+    #[test]
+    fn dependency_on_unregistered_pipeline_is_still_included_in_order() {
+        let mut job = make_job_executor();
+        job.add_pipeline(make_pipeline(1, &[99]));
+
+        let order = job.get_execution_order();
+
+        assert_eq!(order, vec![PipelineId(99), PipelineId(1)]);
+    }
+
+    #[test]
+    fn job_with_no_pipelines_yields_empty_order() {
+        let job = make_job_executor();
+
+        assert!(job.get_execution_order().is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "Circular dependency detected!")]
+    fn direct_circular_dependency_panics() {
+        let mut job = make_job_executor();
+        job.add_pipeline(make_pipeline(1, &[2]));
+        job.add_pipeline(make_pipeline(2, &[1]));
+
+        job.get_execution_order();
+    }
+
+    #[test]
+    #[should_panic(expected = "Circular dependency detected!")]
+    fn self_dependency_panics() {
+        let mut job = make_job_executor();
+        job.add_pipeline(make_pipeline(1, &[1]));
+
+        job.get_execution_order();
+    }
+
+    #[test]
+    #[should_panic(expected = "Circular dependency detected!")]
+    fn transitive_circular_dependency_panics() {
+        let mut job = make_job_executor();
+        job.add_pipeline(make_pipeline(1, &[2]));
+        job.add_pipeline(make_pipeline(2, &[3]));
+        job.add_pipeline(make_pipeline(3, &[1]));
+
+        job.get_execution_order();
     }
 }
 

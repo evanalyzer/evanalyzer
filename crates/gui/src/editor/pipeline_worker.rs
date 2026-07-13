@@ -43,7 +43,11 @@ impl PipelineWorker {
         let self_handle = Arc::clone(self);
         std::thread::Builder::new()
             .name("PipelineWorker".into())
-            .spawn(move || self_handle.run_worker_loop())
+            .spawn(move || {
+                crate::helper::worker_supervisor::run_supervised("PipelineWorker", || {
+                    self_handle.run_worker_loop()
+                })
+            })
             .expect("Failed to spawn pipeline worker thread");
     }
 
@@ -279,8 +283,23 @@ impl PipelineWorker {
                     }
                 }
             }
-            let (status_message, is_error) = match handle.join().expect("pipeline thread panicked")
-            {
+            // A panic inside the spawned job thread (e.g. a malformed tile at
+            // the image edge) used to re-panic here via `.expect()`, which
+            // killed this worker thread too and left the UI stuck showing
+            // "running" forever, since the status-update code below never
+            // ran. Treat it as a normal job error instead so the user sees
+            // it and the worker survives to run the next job.
+            let job_result = match handle.join() {
+                Ok(result) => result,
+                Err(panic_payload) => {
+                    let msg = crate::helper::worker_supervisor::panic_message(&panic_payload);
+                    error!("Pipeline job thread panicked: {msg}");
+                    Err(InternalErrors::Internal(format!(
+                        "Pipeline worker crashed: {msg}"
+                    )))
+                }
+            };
+            let (status_message, is_error) = match job_result {
                 Err(InternalErrors::Cancelled) => {
                     info!("Pipeline cancelled by user");
                     ("Cancelled by user.".to_string(), false)

@@ -1632,4 +1632,826 @@ mod tests {
         assert_eq!(map_threshold_method("Otsu"), M::Otsu);
         assert_eq!(map_threshold_method("SomethingUnknown"), M::None);
     }
+
+    // ---- metadata fallbacks ----
+
+    #[test]
+    fn metadata_falls_back_to_experiment_name_and_notes_when_meta_fields_are_empty() {
+        let json = r##"{
+            "meta": {},
+            "projectSettings": {
+                "experimentSettings": { "experimentName": "Fallback Name", "notes": "fallback notes" },
+                "classification": { "classes": [] },
+                "plate": {}
+            },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert_eq!(outcome.project.metadata.name, "Fallback Name");
+        assert_eq!(outcome.project.metadata.description, "fallback notes");
+        assert_eq!(outcome.project.metadata.author_first_name, "");
+        assert_eq!(outcome.project.metadata.author_last_name, "");
+        assert_eq!(outcome.project.metadata.author_organization, "");
+    }
+
+    #[test]
+    fn metadata_parses_a_valid_rfc3339_modified_at_timestamp() {
+        let json = r##"{
+            "meta": { "name": "X", "modifiedAt": "2020-01-02T03:04:05Z" },
+            "projectSettings": { "classification": { "classes": [] }, "plate": {} },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        let expected = chrono::DateTime::parse_from_rfc3339("2020-01-02T03:04:05Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(outcome.project.metadata.creation_time, expected);
+    }
+
+    #[test]
+    fn metadata_falls_back_to_now_for_an_unparseable_modified_at() {
+        let json = r##"{
+            "meta": { "name": "X", "modifiedAt": "not-a-date" },
+            "projectSettings": { "classification": { "classes": [] }, "plate": {} },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let before = chrono::Utc::now();
+        let outcome = import_legacy_project(json).unwrap();
+        let after = chrono::Utc::now();
+        assert!(outcome.project.metadata.creation_time >= before);
+        assert!(outcome.project.metadata.creation_time <= after);
+    }
+
+    // ---- classification edge cases ----
+
+    #[test]
+    fn class_color_falls_back_to_a_default_when_unparseable() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": {
+                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "not-a-color", "notes": "" } ] },
+                "plate": {}
+            },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert_eq!(outcome.project.classification.classes[0].color, 0x9933FF);
+    }
+
+    #[test]
+    fn measure_channel_with_no_new_equivalent_is_dropped_with_a_warning() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": {
+                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
+                    "defaultMeasurements": [ { "measureChannel": "SomeOldOne", "stats": ["Avg"] } ] } ] },
+                "plate": {}
+            },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert!(outcome.project.classification.classes[0].measure.is_empty());
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("SomeOldOne") && w.contains("no equivalent"))
+        );
+    }
+
+    #[test]
+    fn measure_channel_with_only_dropped_stats_is_not_inserted() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": {
+                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
+                    "defaultMeasurements": [ { "measureChannel": "AreaSize", "stats": ["Off", "Cnt"] } ] } ] },
+                "plate": {}
+            },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert!(outcome.project.classification.classes[0].measure.is_empty());
+    }
+
+    #[test]
+    fn empty_or_none_measure_channel_is_dropped_without_a_warning() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": {
+                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
+                    "defaultMeasurements": [ { "measureChannel": "None", "stats": [] }, { "measureChannel": "", "stats": [] } ] } ] },
+                "plate": {}
+            },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert!(outcome.project.classification.classes[0].measure.is_empty());
+        assert!(outcome.warnings.is_empty());
+    }
+
+    // ---- plate edge cases ----
+
+    #[test]
+    fn plate_group_by_off_falls_back_to_no_grouping() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": { "classification": { "classes": [] },
+                "plate": { "imageFolder": "img", "groupBy": "Off" } },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert_eq!(outcome.project.plate.grouping_mode, GroupingMode::NoGrouping);
+    }
+
+    #[test]
+    fn plate_well_dimensions_fall_back_to_defaults_when_unset() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": { "classification": { "classes": [] },
+                "plate": { "imageFolder": "img" } },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        let default = PlateSettings::default();
+        assert_eq!(outcome.project.plate.well_cols, default.well_cols);
+        assert_eq!(outcome.project.plate.well_rows, default.well_rows);
+        assert_eq!(
+            outcome.project.plate.well_image_order,
+            default.well_image_order
+        );
+    }
+
+    #[test]
+    fn no_plate_configured_at_all_yields_no_image_folder_and_no_warning() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": { "classification": { "classes": [] }, "plate": {} },
+            "imageSetup": {},
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert_eq!(outcome.legacy_image_folder, None);
+        assert!(outcome.warnings.is_empty());
+    }
+
+    // ---- image setup edge cases ----
+
+    #[test]
+    fn automatic_pixel_size_mode_leaves_pixel_sizes_unset() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": { "classification": { "classes": [] }, "plate": {} },
+            "imageSetup": { "imagePixelSizeSettings": { "mode": "Automatic", "pixelSizeUnit": "um", "pixelWidth": 1.0, "pixelHeight": 1.0 } },
+            "pipelines": []
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert!(outcome.project.images.settings.pixel_sizes.is_none());
+    }
+
+    // ---- pipeline-level edge cases ----
+
+    #[test]
+    fn pipeline_without_a_name_uses_a_numbered_placeholder_in_warning_context() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": { "classification": { "classes": [] }, "plate": {} },
+            "imageSetup": {},
+            "pipelines": [ { "pipelineSetup": { "source": "FromMemory", "defaultClassId": "1" },
+                "pipelineSteps": [ { "$houghTransform": {} } ] } ]
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert_eq!(outcome.project.pipelines[0].name, None);
+        assert!(outcome.warnings.iter().any(|w| w.contains("pipeline #0")));
+    }
+
+    #[test]
+    fn disabled_pipeline_and_disabled_step_are_carried_over() {
+        let json = r##"{
+            "meta": { "name": "X" },
+            "projectSettings": { "classification": { "classes": [] }, "plate": {} },
+            "imageSetup": {},
+            "pipelines": [ { "meta": { "name": "P" }, "disabled": true,
+                "pipelineSetup": { "source": "FromMemory", "defaultClassId": "1" },
+                "pipelineSteps": [ { "disabled": true, "$laplacian": { "kernelSize": 3 } } ] } ]
+        }"##;
+        let outcome = import_legacy_project(json).unwrap();
+        assert!(!outcome.project.pipelines[0].enabled);
+        assert!(!outcome.project.pipelines[0].steps[0].enabled);
+    }
+
+    // ---- previously-untested filter/segmentation/object converters ----
+
+    #[test]
+    fn canny_converts_kernel_size_and_normalizes_thresholds_to_the_unit_range() {
+        let json = pipeline_with_step(
+            r#"{ "$canny": { "kernelSize": 5, "thresholdMin": 51.0, "thresholdMax": 204.0 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::EdgeDetectionCanny(s) => {
+                assert_eq!(s.kernel_size, 5);
+                assert!((s.threshold_min - 0.2).abs() < 1e-6);
+                assert!((s.threshold_max - 0.8).abs() < 1e-6);
+            }
+            other => panic!("expected EdgeDetectionCanny, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sobel_keeps_only_the_kernel_size_and_warns_about_dropped_fields() {
+        let json = pipeline_with_step(r#"{ "$sobel": { "kernelSize": 3 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::EdgeDetectionSobel(s) => assert_eq!(s.kernel_size, 3),
+            other => panic!("expected EdgeDetectionSobel, got {other:?}"),
+        }
+        assert!(outcome.warnings.iter().any(|w| w.contains("$sobel")));
+    }
+
+    #[test]
+    fn rolling_ball_defaults_to_the_ball_type_for_a_ball_value() {
+        let json = pipeline_with_step(r#"{ "$rollingBall": { "ballType": "Ball", "ballSize": 10 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::RollingBall(s) => {
+                assert_eq!(s.ball_type, FiltersRollingBallBallTypeSettings::Ball);
+                assert_eq!(s.radius, 10.0);
+                assert!(!s.pre_smooth);
+            }
+            other => panic!("expected RollingBall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn median_subtract_converts_kernel_diameter_to_radius() {
+        let json = pipeline_with_step(r#"{ "$medianSubtract": { "kernelSize": 5 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::MedianSubtract(s) => assert_eq!(s.radius, 2.0),
+            other => panic!("expected MedianSubtract, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn median_subtract_clamps_radius_to_zero_for_a_small_kernel() {
+        let json = pipeline_with_step(r#"{ "$medianSubtract": { "kernelSize": 0 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::MedianSubtract(s) => assert_eq!(s.radius, 0.0),
+            other => panic!("expected MedianSubtract, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enhance_contrast_fields_pass_through_unchanged() {
+        let json = pipeline_with_step(
+            r#"{ "$enhanceContrast": { "saturatedPixels": 0.35, "normalize": true, "equalizeHistogram": false } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::EnhanceContrast(s) => {
+                assert_eq!(s.saturated_pixels, 0.35);
+                assert!(s.normalize);
+                assert!(!s.equalize_histogram);
+            }
+            other => panic!("expected EnhanceContrast, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hessian_maps_every_documented_mode() {
+        let cases = [
+            ("EigenvaluesX", FiltersHessianHessianModeSettings::EigenvaluesX),
+            ("EigenvaluesY", FiltersHessianHessianModeSettings::EigenvaluesY),
+            ("Determinant", FiltersHessianHessianModeSettings::Determinant),
+        ];
+        for (legacy, expected) in cases {
+            let json = pipeline_with_step(&format!(r#"{{ "$hessian": {{ "mode": "{legacy}" }} }}"#));
+            let outcome = import_legacy_project(&json).unwrap();
+            match only_command(&outcome) {
+                PipelineCommand::Hessian(s) => assert_eq!(s.mode, expected, "mode {legacy}"),
+                other => panic!("expected Hessian, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn hessian_defaults_to_determinant_for_an_unrecognized_mode_with_a_warning() {
+        let json = pipeline_with_step(r#"{ "$hessian": { "mode": "Bogus" } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::Hessian(s) => {
+                assert_eq!(s.mode, FiltersHessianHessianModeSettings::Determinant)
+            }
+            other => panic!("expected Hessian, got {other:?}"),
+        }
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("$hessian") && w.contains("Bogus"))
+        );
+    }
+
+    #[test]
+    fn structure_tensor_maps_every_documented_mode_and_keeps_kernel_size() {
+        let cases = [
+            (
+                "EigenvaluesX",
+                FiltersStructureTensorTensorModeSettings::EigenvaluesX,
+            ),
+            (
+                "EigenvaluesY",
+                FiltersStructureTensorTensorModeSettings::EigenvaluesY,
+            ),
+            (
+                "Coherence",
+                FiltersStructureTensorTensorModeSettings::Coherence,
+            ),
+        ];
+        for (legacy, expected) in cases {
+            let json = pipeline_with_step(&format!(
+                r#"{{ "$structureTensor": {{ "mode": "{legacy}", "kernelSize": 7 }} }}"#
+            ));
+            let outcome = import_legacy_project(&json).unwrap();
+            match only_command(&outcome) {
+                PipelineCommand::StructureTensor(s) => {
+                    assert_eq!(s.mode, expected, "mode {legacy}");
+                    assert_eq!(s.kernel_size, 7);
+                    assert_eq!(s.sigma, 1.5);
+                }
+                other => panic!("expected StructureTensor, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn structure_tensor_defaults_to_coherence_for_an_unrecognized_mode_with_a_warning() {
+        let json = pipeline_with_step(r#"{ "$structureTensor": { "mode": "Bogus", "kernelSize": 3 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::StructureTensor(s) => {
+                assert_eq!(s.mode, FiltersStructureTensorTensorModeSettings::Coherence)
+            }
+            other => panic!("expected StructureTensor, got {other:?}"),
+        }
+        assert!(outcome.warnings.iter().any(|w| w.contains("$structureTensor")));
+    }
+
+    #[test]
+    fn gaussian_weighted_deviation_keeps_kernel_size_and_sigma() {
+        let json = pipeline_with_step(r#"{ "$gaussianWeightedDev": { "kernelSize": 9, "sigma": 2.5 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::WeightedDeviation(s) => {
+                assert_eq!(s.kernel_size, 9);
+                assert!((s.sigma - 2.5).abs() < 1e-6);
+            }
+            other => panic!("expected WeightedDeviation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rank_filter_maps_every_documented_mode() {
+        let cases = [
+            ("Mean", FiltersRankFilterRankFilterTypeSettings::Mean),
+            ("Min", FiltersRankFilterRankFilterTypeSettings::Min),
+            ("Max", FiltersRankFilterRankFilterTypeSettings::Max),
+            ("Median", FiltersRankFilterRankFilterTypeSettings::Median),
+        ];
+        for (legacy, expected) in cases {
+            let json = pipeline_with_step(&format!(
+                r#"{{ "$rank": {{ "mode": "{legacy}", "radius": 3.0 }} }}"#
+            ));
+            let outcome = import_legacy_project(&json).unwrap();
+            match only_command(&outcome) {
+                PipelineCommand::RankFilter(s) => {
+                    assert_eq!(s.filter_type, expected, "mode {legacy}");
+                    assert_eq!(s.radius, 3.0);
+                }
+                other => panic!("expected RankFilter, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rank_filter_outliers_mode_gets_a_default_threshold() {
+        let json = pipeline_with_step(r#"{ "$rank": { "mode": "Outliers", "radius": 2.0 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::RankFilter(s) => assert_eq!(
+                s.filter_type,
+                FiltersRankFilterRankFilterTypeSettings::Outliers(50.0)
+            ),
+            other => panic!("expected RankFilter, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rank_filter_defaults_to_median_for_an_unrecognized_mode_with_a_warning() {
+        let json = pipeline_with_step(r#"{ "$rank": { "mode": "Variance", "radius": 1.0 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::RankFilter(s) => {
+                assert_eq!(s.filter_type, FiltersRankFilterRankFilterTypeSettings::Median)
+            }
+            other => panic!("expected RankFilter, got {other:?}"),
+        }
+        assert!(outcome.warnings.iter().any(|w| w.contains("$rank")));
+    }
+
+    #[test]
+    fn laplacian_keeps_the_kernel_size() {
+        let json = pipeline_with_step(r#"{ "$laplacian": { "kernelSize": 3 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::Laplacian(s) => assert_eq!(s.kernel_size, 3),
+            other => panic!("expected Laplacian, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn morphological_transform_maps_every_documented_function_and_shape() {
+        let cases = [
+            (
+                "Dilate",
+                MorphologyMorphologicalTransformationMorphOpsSettings::Dilate,
+            ),
+            (
+                "Erode",
+                MorphologyMorphologicalTransformationMorphOpsSettings::Erode,
+            ),
+            (
+                "Open",
+                MorphologyMorphologicalTransformationMorphOpsSettings::Open,
+            ),
+            (
+                "Close",
+                MorphologyMorphologicalTransformationMorphOpsSettings::Close,
+            ),
+        ];
+        for (legacy, expected) in cases {
+            let json = pipeline_with_step(&format!(
+                r#"{{ "$morphologicalTransform": {{ "function": "{legacy}", "shape": "Cross", "kernelSize": 5 }} }}"#
+            ));
+            let outcome = import_legacy_project(&json).unwrap();
+            match only_command(&outcome) {
+                PipelineCommand::MorphologicalCommand(s) => {
+                    assert_eq!(s.op, expected, "function {legacy}");
+                    assert_eq!(
+                        s.kernel_shape,
+                        MorphologyMorphologicalTransformationKernelShapesSettings::Cross
+                    );
+                    assert_eq!(s.kernel_size, 5);
+                    assert!(!s.use_grayscale);
+                }
+                other => panic!("expected MorphologicalCommand, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn morphological_transform_shape_falls_back_to_box_for_rectangle_or_unknown() {
+        let json = pipeline_with_step(
+            r#"{ "$morphologicalTransform": { "function": "Erode", "shape": "Rectangle", "kernelSize": 3 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::MorphologicalCommand(s) => assert_eq!(
+                s.kernel_shape,
+                MorphologyMorphologicalTransformationKernelShapesSettings::Box
+            ),
+            other => panic!("expected MorphologicalCommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn morphological_transform_unrecognized_function_is_skipped_with_a_warning() {
+        let json = pipeline_with_step(
+            r#"{ "$morphologicalTransform": { "function": "Gradient", "shape": "Box", "kernelSize": 3 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        assert!(outcome.project.pipelines[0].steps.is_empty());
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("$morphologicalTransform") && w.contains("Gradient"))
+        );
+    }
+
+    #[test]
+    fn intensity_transform_automatic_mode_scales_brightness_into_the_unit_range() {
+        let json = pipeline_with_step(
+            r#"{ "$intensityTransform": { "mode": "Automatic", "contrast": 1.5, "brightness": 32767, "gamma": 0 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::IntensityTransformation(s) => {
+                assert_eq!(
+                    s.mode,
+                    FiltersIntensityTransformIntensityTransformModeSettings::Automatic
+                );
+                assert_eq!(s.contrast, 1.5);
+                assert!((s.brightness - 0.5).abs() < 1e-3);
+            }
+            other => panic!("expected IntensityTransformation, got {other:?}"),
+        }
+        assert!(outcome.warnings.is_empty());
+    }
+
+    #[test]
+    fn intensity_transform_manual_mode_and_gamma_warning() {
+        let json = pipeline_with_step(
+            r#"{ "$intensityTransform": { "mode": "Manual", "contrast": 1.0, "brightness": 0, "gamma": 2 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::IntensityTransformation(s) => assert_eq!(
+                s.mode,
+                FiltersIntensityTransformIntensityTransformModeSettings::Manual
+            ),
+            other => panic!("expected IntensityTransformation, got {other:?}"),
+        }
+        assert!(outcome.warnings.iter().any(|w| w.contains("gamma")));
+    }
+
+    #[test]
+    fn voronoi_uses_the_first_center_and_mask_class_and_carries_the_rest_as_filters() {
+        let json = pipeline_with_step(
+            r#"{ "$voronoi": {
+                "inputClassesPoints": ["1", "2"],
+                "outputClassVoronoi": "3",
+                "inputClassesMask": ["4", "5"],
+                "excludeAreasWithoutPoint": true,
+                "excludeAreasAtTheEdge": false,
+                "maxRadius": 12.5
+            } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::Voronoi(s) => {
+                assert_eq!(s.centers, ObjectClass::Valid(1));
+                assert_eq!(s.center_filter_classes, vec![ObjectClass::Valid(2)]);
+                assert_eq!(s.mask, ObjectClass::Valid(4));
+                assert_eq!(s.mask_filter_classes, vec![ObjectClass::Valid(5)]);
+                assert_eq!(s.output_class, ObjectClass::Valid(3));
+                assert_eq!(s.max_radius, 12.5);
+                assert!(s.exclude_areas_with_no_center);
+                assert!(!s.exclude_areas_at_the_edges);
+            }
+            other => panic!("expected Voronoi, got {other:?}"),
+        }
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("$voronoi") && w.contains("2 center classes"))
+        );
+    }
+
+    #[test]
+    fn voronoi_with_a_single_center_and_no_mask_has_no_extra_center_warning() {
+        let json = pipeline_with_step(
+            r#"{ "$voronoi": { "inputClassesPoints": ["1"], "outputClassVoronoi": "2", "inputClassesMask": [] } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::Voronoi(s) => {
+                assert_eq!(s.mask, ObjectClass::Unset);
+                assert!(s.mask_filter_classes.is_empty());
+            }
+            other => panic!("expected Voronoi, got {other:?}"),
+        }
+        assert!(!outcome.warnings.iter().any(|w| w.contains("center classes")));
+    }
+
+    #[test]
+    fn color_filter_with_multiple_ranges_keeps_only_the_first_and_warns() {
+        let json = pipeline_with_step(
+            r#"{ "$colorFilter": { "filter": [
+                { "colorRangeFrom": {"hue": 0, "sat": 0, "val": 0}, "colorRangeTo": {"hue": 128, "sat": 128, "val": 128} },
+                { "colorRangeFrom": {"hue": 10, "sat": 10, "val": 10}, "colorRangeTo": {"hue": 20, "sat": 20, "val": 20} }
+            ] } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        assert!(outcome.warnings.iter().any(|w| w.contains("2 color ranges")));
+    }
+
+    #[test]
+    fn color_filter_with_no_ranges_produces_no_command() {
+        let json = pipeline_with_step(r#"{ "$colorFilter": { "filter": [] } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        assert!(outcome.project.pipelines[0].steps.is_empty());
+    }
+
+    #[test]
+    fn box_blur_with_a_repeat_other_than_one_is_applied_once_with_a_warning() {
+        let json = pipeline_with_step(r#"{ "$blur": { "mode": "Blur", "kernelSize": 3, "repeat": 3 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::Blur(s) => assert_eq!(s.kernel_size, 3),
+            other => panic!("expected Blur, got {other:?}"),
+        }
+        assert!(outcome.warnings.iter().any(|w| w.contains("repeat=3")));
+    }
+
+    #[test]
+    fn threshold_with_no_model_classes_produces_no_threshold_command_but_still_extracts_rois() {
+        let json = pipeline_with_step(r#"{ "$threshold": { "modelClasses": [] } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        let steps = &outcome.project.pipelines[0].steps;
+        assert_eq!(steps.len(), 2);
+        assert!(matches!(
+            steps[0].command,
+            PipelineCommand::ConnectedComponents(_)
+        ));
+        assert!(matches!(steps[1].command, PipelineCommand::ExtractRois(_)));
+    }
+
+    #[test]
+    fn threshold_empty_or_none_method_is_the_none_sentinel_without_a_warning() {
+        let json = pipeline_with_step(
+            r#"{ "$threshold": { "modelClasses": [
+                { "method": "", "thresholdMin": 1, "thresholdMax": 2, "pixelClassId": 1 },
+                { "method": "None", "thresholdMin": 1, "thresholdMax": 2, "pixelClassId": 2 }
+            ] } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match &outcome.project.pipelines[0].steps[0].command {
+            PipelineCommand::Threshold(s) => {
+                assert!(
+                    s.thresholds
+                        .iter()
+                        .all(|t| t.method == SegmentationThresholdThresholdMethodSettings::None)
+                );
+            }
+            other => panic!("expected Threshold, got {other:?}"),
+        }
+        assert!(!outcome.warnings.iter().any(|w| w.contains("unrecognized")));
+    }
+
+    #[test]
+    fn threshold_unrecognized_nonempty_method_warns_and_defaults_to_none() {
+        let json = pipeline_with_step(
+            r#"{ "$threshold": { "modelClasses": [
+                { "method": "Bogus", "thresholdMin": 1, "thresholdMax": 2, "pixelClassId": 1 }
+            ] } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("Bogus") && w.contains("unrecognized"))
+        );
+    }
+
+    #[test]
+    fn watershed_tolerance_is_clamped_to_a_minimum_of_0_1() {
+        let json = pipeline_with_step(r#"{ "$watershed": { "maximumFinderTolerance": 0.0 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match &outcome.project.pipelines[0].steps[0].command {
+            PipelineCommand::Watershed(s) => assert_eq!(s.maximum_finder_tolerance, 0.1),
+            other => panic!("expected Watershed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn watershed_tolerance_above_the_minimum_is_kept_as_is() {
+        let json = pipeline_with_step(r#"{ "$watershed": { "maximumFinderTolerance": 5.0 } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match &outcome.project.pipelines[0].steps[0].command {
+            PipelineCommand::Watershed(s) => assert_eq!(s.maximum_finder_tolerance, 5.0),
+            other => panic!("expected Watershed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_warns_about_no_match_class_and_intensity_filters() {
+        let json = pipeline_with_step(
+            r#"{ "$classify": { "modelClasses": [ {
+                "filters": [ { "outputClass": "2", "intensity": {"minIntensity": 5, "maxIntensity": -1}, "metrics": { "minParticleSize": 1, "maxParticleSize": -1, "minCircularity": -1, "excludeObjectsAtTheEdge": false } } ],
+                "outputClassNoMatch": "3",
+                "pixelClassId": 1
+            } ] } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        assert!(outcome.warnings.iter().any(|w| w.contains("no match")));
+        assert!(outcome.warnings.iter().any(|w| w.contains("intensity filter")));
+    }
+
+    #[test]
+    fn object_transform_maps_snap_area_and_circle_functions() {
+        let json = pipeline_with_step(
+            r#"{ "$objectTransform": { "function": "SnapArea", "inputClasses": "1", "outputClasses": "2", "factor": 3.0 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::TransformRois(s) => assert_eq!(
+                s.function,
+                ClassificationTransformRoisTransformFunctionSettings::SnapArea {
+                    extra_size: 3.0,
+                    unit: SizeUnits::Pixels,
+                }
+            ),
+            other => panic!("expected TransformRois, got {other:?}"),
+        }
+
+        let json = pipeline_with_step(
+            r#"{ "$objectTransform": { "function": "CircleMin", "inputClasses": "1", "outputClasses": "2", "factor": 3.0 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::TransformRois(s) => assert_eq!(
+                s.function,
+                ClassificationTransformRoisTransformFunctionSettings::MinCircle {
+                    min_diameter: 6.0,
+                    unit: SizeUnits::Pixels,
+                }
+            ),
+            other => panic!("expected TransformRois, got {other:?}"),
+        }
+
+        let json = pipeline_with_step(
+            r#"{ "$objectTransform": { "function": "Circle", "inputClasses": "1", "outputClasses": "2", "factor": 3.0 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::TransformRois(s) => assert_eq!(
+                s.function,
+                ClassificationTransformRoisTransformFunctionSettings::DrawCircle {
+                    diameter: 6.0,
+                    unit: SizeUnits::Pixels,
+                }
+            ),
+            other => panic!("expected TransformRois, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_transform_maps_fit_ellipse_with_a_fixed_scale() {
+        let json = pipeline_with_step(
+            r#"{ "$objectTransform": { "function": "FitEllipse", "inputClasses": "1", "outputClasses": "2", "factor": 9.0 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::TransformRois(s) => assert_eq!(
+                s.function,
+                ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale: 1.0 }
+            ),
+            other => panic!("expected TransformRois, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_transform_unrecognized_function_is_skipped_with_a_warning() {
+        let json = pipeline_with_step(
+            r#"{ "$objectTransform": { "function": "Bogus", "inputClasses": "1", "outputClasses": "2", "factor": 1.0 } }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        assert!(outcome.project.pipelines[0].steps.is_empty());
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("$objectTransform") && w.contains("Bogus"))
+        );
+    }
+
+    #[test]
+    fn save_image_falls_back_to_a_default_name_when_the_path_has_no_file_stem() {
+        let json = pipeline_with_step(r#"{ "$saveImage": { "path": "" } }"#);
+        let outcome = import_legacy_project(&json).unwrap();
+        match only_command(&outcome) {
+            PipelineCommand::SaveImage(s) => assert_eq!(s.name, "image"),
+            other => panic!("expected SaveImage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn warn_unsupported_step_reports_every_unsupported_command_present() {
+        let json = pipeline_with_step(
+            r#"{ "$crop": {}, "$fillHoles": {}, "$nop": {}, "$aiClassify": {}, "$colocalization": {} }"#,
+        );
+        let outcome = import_legacy_project(&json).unwrap();
+        assert!(outcome.project.pipelines[0].steps.is_empty());
+        for name in ["$crop", "$fillHoles", "$nop", "$aiClassify", "$colocalization"] {
+            assert!(
+                outcome.warnings.iter().any(|w| w.contains(name)),
+                "missing warning for {name}, got: {:#?}",
+                outcome.warnings
+            );
+        }
+    }
 }

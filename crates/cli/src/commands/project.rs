@@ -111,3 +111,76 @@ pub fn run_validate(args: ValidateArgs) -> Result<(), InternalErrors> {
         missing.len()
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::test_support::TempProjectFile;
+    use evanalyzer_cfg::settings::images_settings::ImageEntry;
+    use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+
+    #[test]
+    fn run_reports_ok_on_a_freshly_default_project() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+
+        let result = run(ProjectInfoArgs {
+            project: file.path.clone(),
+            json: false,
+        });
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_json_reports_ok_on_a_freshly_default_project() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+
+        let result = run(ProjectInfoArgs {
+            project: file.path.clone(),
+            json: true,
+        });
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_errors_when_the_project_file_does_not_exist() {
+        let result = run(ProjectInfoArgs {
+            project: std::path::PathBuf::from("/nonexistent/does_not_exist.evaproj"),
+            json: false,
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_validate_succeeds_when_the_project_has_no_images() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+
+        let result = run_validate(ValidateArgs {
+            project: file.path.clone(),
+        });
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_validate_fails_and_lists_missing_images() {
+        let mut settings = ProjectSettings::default();
+        settings.images.list.insert(
+            std::path::PathBuf::from("does_not_exist.tif"),
+            ImageEntry::default(),
+        );
+        let file = TempProjectFile::new(&settings);
+
+        let result = run_validate(ValidateArgs {
+            project: file.path.clone(),
+        });
+
+        let err = result.expect_err("expected the missing image to be reported as an error");
+        let InternalErrors::InvalidArgument(msg) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(msg.contains("1 of 1"));
+    }
+}
