@@ -139,7 +139,7 @@ impl UiState {
             .map(|f| f.to_string_lossy().into_owned());
         let name = filename.unwrap_or_else(|| "Untitled".to_string());
         let title = if dirty {
-            format!("● {name} — EVAnalyzer")
+            format!("*{name} — EVAnalyzer")
         } else {
             format!("{name} — EVAnalyzer")
         };
