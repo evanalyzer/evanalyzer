@@ -65,7 +65,11 @@ impl ViewportWorker {
             let self_handle = Arc::clone(self);
             std::thread::Builder::new()
                 .name(name.into())
-                .spawn(move || self_handle.run_worker_loop(dispatch))
+                .spawn(move || {
+                    crate::helper::worker_supervisor::run_supervised(name, || {
+                        self_handle.run_worker_loop(dispatch)
+                    })
+                })
                 .expect("Failed to spawn viewport worker thread");
         }
     }
