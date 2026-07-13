@@ -161,19 +161,21 @@ export component CustomMenuBar inherits Rectangle {
                 y: parent.height;
                 width: 160px;
                 MenuContainer {
+
                     MenuItem {
-                        text: "About";
-                        icon: @image-url("icons/duotone-black/info-duotone.svg");
+                        text: "evanalyzer.org";
+                        icon: @image-url("icons/regular-blue/question-mark.svg");
                         clicked => {
-                            GlobalAppState.active-dialog = DialogType.about;
+                            ToolbarState.open_website();
                             help-menu.close();
                         }
                     }
 
                     MenuItem {
-                        text: "evanalyzer.org";
+                        text: "About";
+                        icon: @image-url("icons/regular-black/info.svg");
                         clicked => {
-                            ToolbarState.open_website();
+                            GlobalAppState.active-dialog = DialogType.about;
                             help-menu.close();
                         }
                     }

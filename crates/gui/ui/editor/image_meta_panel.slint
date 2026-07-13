@@ -7,6 +7,16 @@ import {
 import { Theme } from "../style.slint";
 import { ChannelState } from "../state.slint";
 
+// One entry per series: its index plus the dimensions of its first
+// (full/native) resolution level, so pickers can show "Series 2 · 2048x2048"
+// instead of a bare index - the only way to tell series apart at a glance
+// when a file has several (e.g. a whole-slide overview + detail scenes).
+export struct SeriesInfo {
+    idx: int,
+    width: int,
+    height: int,
+}
+
 // ----------------------------------------------------------
 export global ImageMetaData {
     in property <string> image_name: "No image opened";
@@ -26,12 +36,10 @@ export global ImageMetaData {
 
     in property <string> pixel_type: "";
     in property <int> nr_series: 0;
-    in property <string> nr_series_str: "";
-    in-out property <int> selected_series: 0;
+    in property <[SeriesInfo]> series_list: [];
 
     callback reset_pixel_sizes();
     callback pixel_size_changed(float, float, float);
-    callback series_selected(int);
 }
 
 // ----------------------------------------------------------
@@ -185,7 +193,7 @@ export component ImageMetaPanel inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             Text {
-                                text: "Series " + ImageMetaData.selected_series + " of " + (ImageMetaData.nr_series - 1);
+                                text: "Series " + ChannelState.selected_series + " of " + (ImageMetaData.nr_series - 1);
                                 font-size: 11px;
                                 color: Theme.text-dim;
                                 vertical-alignment: center;
@@ -223,9 +231,9 @@ export component ImageMetaPanel inherits Rectangle {
                                 prev_ta := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => {
-                                        if (ImageMetaData.selected_series > 0) {
-                                            ImageMetaData.selected_series -= 1;
-                                            ImageMetaData.series_selected(ImageMetaData.selected_series);
+                                        if (ChannelState.selected_series > 0) {
+                                            ChannelState.selected_series -= 1;
+                                            ChannelState.trigger_active_series_changed();
                                         }
                                     }
                                 }
@@ -250,9 +258,9 @@ export component ImageMetaPanel inherits Rectangle {
                                 next_ta := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => {
-                                        if (ImageMetaData.selected_series < ImageMetaData.nr_series - 1) {
-                                            ImageMetaData.selected_series += 1;
-                                            ImageMetaData.series_selected(ImageMetaData.selected_series);
+                                        if (ChannelState.selected_series < ImageMetaData.nr_series - 1) {
+                                            ChannelState.selected_series += 1;
+                                            ChannelState.trigger_active_series_changed();
                                         }
                                     }
                                 }
