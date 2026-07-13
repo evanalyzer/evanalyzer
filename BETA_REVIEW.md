@@ -82,9 +82,9 @@ item you want implemented, and optionally add a note, then hand the file back.
 
 ## Low priority / polish
 
-- [ ] Dead duplicate `libs/download-<target>.sh` one-liners (only fetch libtorch, missing JRE/duckdb/bioformats) — CI actually uses `libs/download.sh`, which is correct and covers all 5 targets including win-cuda. The per-target scripts are unreferenced and just a contributor-confusion risk.
+- [x] Dead duplicate `libs/download-<target>.sh` one-liners (only fetch libtorch, missing JRE/duckdb/bioformats) — CI actually uses `libs/download.sh`, which is correct and covers all 5 targets including win-cuda. The per-target scripts are unreferenced and just a contributor-confusion risk.
 - [x] Git dependency `kornia-rs` pinned only via `Cargo.lock`, no `rev`/`tag` in `Cargo.toml` — a future `cargo update` would silently pull unreviewed commits from an unpublished, pre-1.0 crate.
-- [ ] TODO item "Cy5 displayed in yellow" investigated: confirmed to be the known feature gap already tracked in `TODO` (channel colors are assigned purely by index, no fluorophore-name mapping exists) — not a hidden correctness bug. No action beyond what's already tracked.
+- [x] TODO item "Cy5 displayed in yellow" investigated: confirmed to be the known feature gap already tracked in `TODO` (channel colors are assigned purely by index, no fluorophore-name mapping exists) — not a hidden correctness bug. No action beyond what's already tracked.
 
 ---
 
