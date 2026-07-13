@@ -92,3 +92,40 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     println!("Results database written under: {}", output_path.display());
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::test_support::TempProjectFile;
+    use evanalyzer_cfg::settings::project_settings::ProjectSettings;
+
+    #[test]
+    fn run_rejects_a_project_with_no_images_and_no_images_dir_override() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+
+        let result = run(AnalyzeArgs {
+            project: file.path.clone(),
+            images: None,
+            threads: None,
+            job_name: None,
+        });
+
+        let err = result.expect_err("expected an empty project to be rejected before any job runs");
+        let InternalErrors::InvalidArgument(msg) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(msg.contains("no images"));
+    }
+
+    #[test]
+    fn run_errors_when_the_project_file_does_not_exist() {
+        let result = run(AnalyzeArgs {
+            project: std::path::PathBuf::from("/nonexistent/does_not_exist.evaproj"),
+            images: None,
+            threads: None,
+            job_name: None,
+        });
+
+        assert!(result.is_err());
+    }
+}

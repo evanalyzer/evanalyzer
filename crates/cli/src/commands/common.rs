@@ -68,3 +68,131 @@ pub fn discover_columns(loader: &ResultsLoader) -> Result<Vec<ColumnSpec>, Inter
     let coloc_partner_classes = loader.get_coloc_partner_class_names()?;
     Ok(build_column_specs(&channels, &coloc_partner_classes))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::args::GroupByKind;
+
+    #[test]
+    fn database_filter_leaves_image_and_class_filters_unset_when_args_are_empty() {
+        let filter = build_database_filter(&FilterArgs::default(), true, 2, 50);
+
+        assert_eq!(filter.image_filter, None);
+        assert_eq!(filter.class_filter, None);
+        assert_eq!(filter.coloc_filter, None);
+        assert_eq!(filter.page, 2);
+        assert_eq!(filter.page_size, 50);
+        assert!(filter.needs_intensities);
+    }
+
+    #[test]
+    fn database_filter_forwards_image_and_class_lists_when_present() {
+        let args = FilterArgs {
+            images: vec!["a.tif".to_string(), "b.tif".to_string()],
+            classes: vec!["Nucleus".to_string()],
+            colocalized: None,
+        };
+
+        let filter = build_database_filter(&args, false, 0, 0);
+
+        assert_eq!(
+            filter.image_filter,
+            Some(vec!["a.tif".to_string(), "b.tif".to_string()])
+        );
+        assert_eq!(filter.class_filter, Some(vec!["Nucleus".to_string()]));
+        assert!(!filter.needs_intensities);
+    }
+
+    #[test]
+    fn database_filter_translates_colocalized_true_and_false_to_yes_no_strings() {
+        let yes = FilterArgs {
+            colocalized: Some(true),
+            ..Default::default()
+        };
+        let no = FilterArgs {
+            colocalized: Some(false),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            build_database_filter(&yes, true, 0, 0).coloc_filter,
+            Some(vec!["Yes".to_string()])
+        );
+        assert_eq!(
+            build_database_filter(&no, true, 0, 0).coloc_filter,
+            Some(vec!["No".to_string()])
+        );
+    }
+
+    #[test]
+    fn group_config_defaults_to_group_by_none_and_avg_when_no_agg_given() {
+        let config = build_group_config(&GroupArgs::default());
+
+        assert_eq!(config.group_by, GroupBy::None);
+        assert_eq!(config.aggs, vec![AggFunc::Avg]);
+        assert_eq!(config.regex, "");
+        assert!(!config.split_colocalized);
+        assert!(!config.group_by_class);
+    }
+
+    #[test]
+    fn group_config_maps_every_group_by_kind_to_its_groupby_variant() {
+        let by = |kind| {
+            build_group_config(&GroupArgs {
+                group_by: Some(kind),
+                ..Default::default()
+            })
+            .group_by
+        };
+
+        assert_eq!(by(GroupByKind::Image), GroupBy::Image);
+        assert_eq!(by(GroupByKind::Folder), GroupBy::Folder);
+        assert_eq!(by(GroupByKind::Regex), GroupBy::Regex);
+    }
+
+    #[test]
+    fn group_config_maps_every_agg_kind_and_preserves_given_order() {
+        let args = GroupArgs {
+            agg: vec![
+                AggKind::Min,
+                AggKind::Max,
+                AggKind::Avg,
+                AggKind::Median,
+                AggKind::Stdev,
+                AggKind::Sum,
+            ],
+            ..Default::default()
+        };
+
+        let config = build_group_config(&args);
+
+        assert_eq!(
+            config.aggs,
+            vec![
+                AggFunc::Min,
+                AggFunc::Max,
+                AggFunc::Avg,
+                AggFunc::Median,
+                AggFunc::Stdev,
+                AggFunc::Sum,
+            ]
+        );
+    }
+
+    #[test]
+    fn group_config_forwards_regex_and_split_and_group_by_class_flags() {
+        let args = GroupArgs {
+            group_regex: Some("well_(\\w+)".to_string()),
+            split_colocalized: true,
+            group_by_class: true,
+            ..Default::default()
+        };
+
+        let config = build_group_config(&args);
+
+        assert_eq!(config.regex, "well_(\\w+)");
+        assert!(config.split_colocalized);
+        assert!(config.group_by_class);
+    }
+}

@@ -218,7 +218,8 @@ impl PipelineContext {
         if !matches!(self.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)) {
             let size = self.image.size();
             self.scratch_pad = Arc::new(ImageContainer::F32Rgb(ManagedImage {
-                data: Image::new(size, vec![0.0; size.width * size.height], CpuAllocator).unwrap(),
+                data: Image::new(size, vec![0.0; size.width * size.height * 3], CpuAllocator)
+                    .unwrap(),
                 tile_offset: self.image.tile_offset(),
                 plane: self.image.plane(),
             }));
@@ -574,14 +575,16 @@ impl PipelineContext {
     }
 
     pub fn does_segmentation_map_exist(&self) -> bool {
-        return self.segmentation_map.is_none();
+        return self.segmentation_map.is_some();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ImageContainer, image::PixelSizes, pipeline::pipeline_context::PipelineContext};
+    use crate::{
+        F32Gray, F32Rgb, ImageContainer, image::PixelSizes, pipeline::pipeline_context::PipelineContext,
+    };
 
     impl PipelineContext {
         pub fn new_from_image_test(
@@ -830,5 +833,298 @@ mod tests {
                 plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
             })
         }
+    }
+
+    fn test_image_meta(size: ImageSize) -> PipelineImageMeta {
+        PipelineImageMeta {
+            image_tile_info: crate::ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
+            full_image_width: size,
+            is_rgb: false,
+            nr_of_bits: 8,
+            pixel_sizes: PixelSizes {
+                px_size_x: 1.0,
+                px_size_y: 1.0,
+                px_size_z: 1.0,
+            },
+        }
+    }
+
+    #[test]
+    fn new_allocates_image_scratch_pad_and_zeroed_maps_of_the_requested_size() {
+        let size = ImageSize {
+            width: 4,
+            height: 3,
+        };
+        let ctx = PipelineContext::new::<F32Gray>(
+            PathBuf::from("/tmp/out"),
+            size,
+            Point2d { x: 1, y: 2 },
+            ImagePlane { z: 0, c: 0, t: 0 },
+            test_image_meta(size),
+        )
+        .unwrap();
+
+        assert_eq!(ctx.output_path, Some(PathBuf::from("/tmp/out")));
+        assert!(matches!(ctx.image.as_ref(), ImageContainer::F32Gray(_)));
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+        assert_eq!(ctx.get_image_size(), size);
+        assert_eq!(ctx.get_image_tile_offset(), Point2d { x: 1, y: 2 });
+
+        let segmentation_map = ctx.get_segmentation_map().unwrap();
+        assert_eq!(segmentation_map.size(), size);
+        assert!(segmentation_map.as_slice().iter().all(|&v| v == 0));
+
+        let instance_map = ctx.get_instance_map().unwrap();
+        assert_eq!(instance_map.size(), size);
+        assert!(instance_map.as_slice().iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn get_f32_gray_image_and_prep_scratch_replaces_an_incompatible_scratch_pad() {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let input_img = Image::<f32, 1, CpuAllocator>::new(
+            size,
+            vec![1.0, 2.0, 3.0, 4.0],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        // Freshly constructed via `new_from_image_test`, so the scratch pad
+        // starts out as an F32Gray clone of the main image (not F32Rgb).
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+
+        let (input, scratch) = ctx.get_f32_gray_image_and_prep_scratch::<F32Rgb>().unwrap();
+        assert_eq!(input.as_slice(), &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(scratch.data.size(), size);
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)));
+    }
+
+    #[test]
+    fn get_f32_gray_image_and_prep_scratch_reuses_an_already_compatible_scratch_pad() {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let input_img =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![0.0, 0.0, 0.0, 0.0], CpuAllocator)
+                .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+
+        // First call replaces the scratch pad with an F32Rgb buffer.
+        ctx.get_f32_gray_image_and_prep_scratch::<F32Rgb>().unwrap();
+        let scratch_pad_ptr_before = Arc::as_ptr(&ctx.scratch_pad);
+
+        // Second call with the same marker/size finds it already compatible,
+        // so it must not reallocate.
+        ctx.get_f32_gray_image_and_prep_scratch::<F32Rgb>().unwrap();
+        assert_eq!(Arc::as_ptr(&ctx.scratch_pad), scratch_pad_ptr_before);
+    }
+
+    #[test]
+    fn get_scratch_as_f32_gray_replaces_a_mismatched_scratch_and_reuses_a_matching_one() {
+        let img = Image::<f32, 3, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![0.0; 12],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)));
+
+        {
+            let gray = ctx.get_scratch_as_f32_gray();
+            assert_eq!(gray.as_slice(), &[0.0, 0.0, 0.0, 0.0]);
+        }
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+
+        let scratch_pad_ptr_before = Arc::as_ptr(&ctx.scratch_pad);
+        ctx.get_scratch_as_f32_gray();
+        assert_eq!(Arc::as_ptr(&ctx.scratch_pad), scratch_pad_ptr_before);
+    }
+
+    #[test]
+    fn get_scratch_as_f32_rgb_replaces_a_mismatched_scratch_and_reuses_a_matching_one() {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![0.0; 4],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+
+        {
+            let rgb = ctx.get_scratch_as_f32_rgb();
+            assert_eq!(rgb.as_slice(), &[0.0; 4 * 3]);
+        }
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)));
+
+        let scratch_pad_ptr_before = Arc::as_ptr(&ctx.scratch_pad);
+        ctx.get_scratch_as_f32_rgb();
+        assert_eq!(Arc::as_ptr(&ctx.scratch_pad), scratch_pad_ptr_before);
+    }
+
+    #[test]
+    fn get_scratch_as_u32_replaces_a_mismatched_scratch_and_reuses_a_matching_one() {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![0.0; 4],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+
+        {
+            let u32_scratch = ctx.get_scratch_as_u32();
+            assert_eq!(u32_scratch.as_slice(), &[0u32, 0, 0, 0]);
+        }
+        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::U32(_)));
+
+        let scratch_pad_ptr_before = Arc::as_ptr(&ctx.scratch_pad);
+        ctx.get_scratch_as_u32();
+        assert_eq!(Arc::as_ptr(&ctx.scratch_pad), scratch_pad_ptr_before);
+    }
+
+    #[test]
+    fn prepare_segmentation_map_creates_a_zeroed_map_only_when_none_exists() {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![0.0; 4],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        ctx.segmentation_map = None;
+
+        ctx.prepare_segmentation_map().unwrap();
+        let segmentation_map = ctx.segmentation_map.as_ref().unwrap();
+        assert_eq!(
+            segmentation_map.size(),
+            ImageSize {
+                width: 2,
+                height: 2
+            }
+        );
+        assert!(segmentation_map.as_slice().iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn get_f32_gray_segmentation_and_instances_mut_lazily_creates_missing_maps() {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![5.0; 4],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        ctx.segmentation_map = None;
+        ctx.instance_map = None;
+
+        let (image, segmentation, instances) =
+            ctx.get_f32_gray_segmentation_and_instances_mut().unwrap();
+        assert_eq!(image.as_slice(), &[5.0, 5.0, 5.0, 5.0]);
+        assert!(segmentation.as_slice().iter().all(|&v| v == 0));
+        assert!(instances.as_slice().iter().all(|&v| v == 0));
+
+        assert!(ctx.segmentation_map.is_some());
+        assert!(ctx.instance_map.is_some());
+    }
+
+    #[test]
+    fn get_f32_gray_segmentation_and_instances_mut_fails_for_a_non_gray_image() {
+        let img = Image::<f32, 3, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![0.0; 12],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
+
+        let result = ctx.get_f32_gray_segmentation_and_instances_mut();
+        assert!(matches!(result, Err(InternalErrors::FormatMismatch { .. })));
+    }
+
+    #[test]
+    fn get_segmentation_and_instances_mut_creates_a_segmentation_map_when_requested() {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![0.0; 4],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        ctx.segmentation_map = None;
+        ctx.instance_map = None;
+
+        let (segmentation, instances) = ctx.get_segmentation_and_instances_mut(true).unwrap();
+        assert!(segmentation.as_slice().iter().all(|&v| v == 0));
+        assert!(instances.as_slice().iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn get_segmentation_and_instances_mut_errors_when_segmentation_missing_and_not_allowed_to_create()
+     {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![0.0; 4],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        ctx.segmentation_map = None;
+
+        let result = ctx.get_segmentation_and_instances_mut(false);
+        assert!(matches!(result, Err(InternalErrors::FormatMismatch { .. })));
+    }
+
+    #[test]
+    fn does_segmentation_map_exist_reflects_presence_of_the_segmentation_buffer() {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            vec![0.0; 4],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        assert!(ctx.does_segmentation_map_exist());
+
+        ctx.segmentation_map = None;
+        assert!(!ctx.does_segmentation_map_exist());
     }
 }
