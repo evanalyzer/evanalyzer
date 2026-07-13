@@ -2024,23 +2024,83 @@ export component PipelinesPanel inherits Rectangle {
                 height: 38px;
                 HorizontalLayout {
                     padding-left: 14px;
-                    padding-right: 14px;
+                    padding-right: 10px;
                     alignment: space-between;
 
-                    Text {
-                        text: "Pipelines";
-                        font-size: 14px;
-                        font-weight: 600;
-                        color: Theme.text;
-                        vertical-alignment: center;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+
+                        Text {
+                            text: "Pipelines";
+                            font-size: 14px;
+                            font-weight: 600;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: PipelinesPanelState.enabled-pipeline-count + " / " + PipelinesPanelState.pipelines.length;
+                            font-size: 11px;
+                            font-family: Theme.font-mono;
+                            color: Theme.text-mute;
+                            vertical-alignment: center;
+                        }
                     }
 
-                    Text {
-                        text: PipelinesPanelState.enabled-pipeline-count + " / " + PipelinesPanelState.pipelines.length;
-                        font-size: 11px;
-                        font-family: Theme.font-mono;
-                        color: Theme.text-mute;
-                        vertical-alignment: center;
+                    // New pipeline - moved up onto the header row (was a
+                    // full-width bar below the pipeline-tab list, permanently
+                    // costing ~46px of sidebar height that's better spent on
+                    // visible pipeline steps). Same compact-pill style as the
+                    // "Auto-scale" button next to the histogram title.
+                    //
+                    // Wrapped in a VerticalLayout so the fixed-height pill is
+                    // centered against the row's other (auto-stretched) text,
+                    // instead of defaulting to the top - same reason the icon
+                    // inside it gets its own centering VerticalLayout below,
+                    // matching the "Duplicate"/"Remove" buttons further down
+                    // in this file.
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            height: 24px;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            background: np-ta.has-hover ? Theme.raised.brighter(0.06) : Theme.raised;
+                            animate background { duration: 80ms; }
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 4px;
+                                alignment: center;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: @image-url("../icons/regular-white/plus.svg");
+                                        width: 10px;
+                                        height: 10px;
+                                        colorize: Theme.text;
+                                    }
+                                }
+
+                                Text {
+                                    text: "New pipeline";
+                                    color: Theme.text;
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            np-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    PipelinesPanelState.new-pipeline();
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2082,54 +2142,6 @@ export component PipelinesPanel inherits Rectangle {
                             }
                             more-clicked => {
                                 PipelinesPanelState.pipeline-more(p.id);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // New pipeline button - fixed below the (scrollable) list above,
-            // so it's always reachable without scrolling.
-            Rectangle {
-                height: 46px;
-
-                VerticalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    padding-top: 6px;
-                    padding-bottom: 10px;
-
-                    Rectangle {
-                        height: 36px;
-                        border-radius: 8px;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        background: np-ta.has-hover ? Theme.raised.brighter(0.06) : Theme.raised;
-                        animate background { duration: 80ms; }
-                        HorizontalLayout {
-                            alignment: center;
-                            spacing: 6px;
-                            Image {
-                                source: @image-url("../icons/regular-white/plus.svg");
-                                width: 12px;
-                                height: 12px;
-                                colorize: Theme.text;
-                                y: 12px;
-                            }
-
-                            Text {
-                                text: "New pipeline";
-                                color: Theme.text;
-                                font-size: 13px;
-                                font-weight: 600;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        np-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                PipelinesPanelState.new-pipeline();
                             }
                         }
                     }

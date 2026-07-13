@@ -34,6 +34,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Trust the checked-out workspace
+        # The toolchain image runs workflow steps as a different user than
+        # the one actions/checkout ran as on the host, so git's ownership
+        # check (safe.directory) refuses every git command in this job -
+        # including `git rev-parse --short HEAD` in the coverage-badge step
+        # below, which then silently produces an empty SHA. Needed in every
+        # job that uses this container, not just this one.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Cache Cargo registry & build artifacts
         uses: Swatinem/rust-cache@v2
         with:

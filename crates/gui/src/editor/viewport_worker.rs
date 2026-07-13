@@ -144,7 +144,7 @@ impl ViewportWorker {
             };
 
             if !has_image {
-                debug!("No current image");
+                //debug!("No current image");
                 continue;
             }
 
@@ -394,22 +394,25 @@ impl ViewportWorker {
                     // matching the `par_chunks_mut` pattern already used above
                     // in `prepare_image_channels_for_slint`.
                     use rayon::prelude::*;
-                    screen.par_chunks_mut(vp_w).enumerate().for_each(|(sy, row)| {
-                        let ty = (sy as f32 - draw_y) * inv_scale_y;
-                        if ty < 0.0 || ty >= img_h as f32 {
-                            row.fill(black);
-                            return;
-                        }
-                        let ty_i = ty as usize * img_w;
-                        for (sx, out) in row.iter_mut().enumerate() {
-                            let tx = (sx as f32 - draw_x) * inv_scale_x;
-                            *out = if tx >= 0.0 && tx < img_w as f32 {
-                                native[ty_i + tx as usize]
-                            } else {
-                                black
-                            };
-                        }
-                    });
+                    screen
+                        .par_chunks_mut(vp_w)
+                        .enumerate()
+                        .for_each(|(sy, row)| {
+                            let ty = (sy as f32 - draw_y) * inv_scale_y;
+                            if ty < 0.0 || ty >= img_h as f32 {
+                                row.fill(black);
+                                return;
+                            }
+                            let ty_i = ty as usize * img_w;
+                            for (sx, out) in row.iter_mut().enumerate() {
+                                let tx = (sx as f32 - draw_x) * inv_scale_x;
+                                *out = if tx >= 0.0 && tx < img_w as f32 {
+                                    native[ty_i + tx as usize]
+                                } else {
+                                    black
+                                };
+                            }
+                        });
                 }
 
                 // Display geometry is now screen-space: full viewport at (0,0).

@@ -2,10 +2,32 @@ import { ScrollView } from "std-widgets.slint";
 import {
     ImageMetaPanel,
     ImageMetaData,
+    SeriesInfo,
 } from "../editor/image_meta_panel.slint";
 import { Theme } from "../style.slint";
 import { ChannelState } from "../state.slint";
 
+global SeriesHelper {
+    // "Series N  ·  WxH", or just "Series N" if no resolution is known for
+    // it (e.g. the model hasn't been populated yet). `series_list` is built
+    // in ascending idx order starting at 0, so its array index equals the
+    // series idx directly - no search needed.
+    //
+    // `idx`/`SeriesInfo.idx` are always the real, 0-based series index (what
+    // gets sent back to Rust) - the +1 here is purely a display convention,
+    // matching the "SERIES N OF total" line above it (1-based, like a page
+    // number) instead of exposing the internal 0-based index to the user.
+    pure public function label(idx: int) -> string {
+        if idx < 0 || idx >= ImageMetaData.series_list.length {
+            return "Series \{idx + 1}";
+        }
+        return SeriesHelper.label-for(ImageMetaData.series_list[idx]);
+    }
+
+    pure public function label-for(s: SeriesInfo) -> string {
+        s.width > 0 && s.height > 0 ? "Series \{s.idx + 1}  ·  \{s.width}×\{s.height}" : "Series \{s.idx + 1}"
+    }
+}
 
 export component SeriesComboBox {
     // We wrap it in a TouchArea so clicking it opens the dropdown
@@ -38,10 +60,11 @@ export component SeriesComboBox {
                     }
 
                     Text {
-                        text: "Series \{ChannelState.selected_series}";
+                        text: SeriesHelper.label(ChannelState.selected_series);
                         font-size: 12px;
                         font-weight: 500;
                         color: Theme.text;
+                        overflow: elide;
                     }
                 }
 
@@ -75,12 +98,13 @@ export component SeriesComboBox {
                     padding: 4px;
                     spacing: 2px;
 
-                    // Loop over your series array to fill the menu options
-                    // Slint uses conditional loops over numbers or models
-                    for index in ImageMetaData.nr_series: item-ta := TouchArea {
+                    // One row per series, each showing its own resolution -
+                    // the whole point being to tell series apart at a
+                    // glance instead of by number alone.
+                    for s in ImageMetaData.series_list: item-ta := TouchArea {
                         height: 40px;
                         clicked => {
-                            ChannelState.selected_series = index;
+                            ChannelState.selected_series = s.idx;
                             ChannelState.trigger_active_series_changed();
                             popup.close();
                         }
@@ -96,16 +120,17 @@ export component SeriesComboBox {
                                 spacing: 1px;
 
                                 Text {
-                                    text: "SERIES \{index + 1} OF \{ImageMetaData.nr_series}";
+                                    text: "SERIES \{s.idx + 1} OF \{ImageMetaData.nr_series}";
                                     font-size: 8.5px;
                                     letter-spacing: 0.5px;
                                     color: Theme.text-mute;
                                 }
 
                                 Text {
-                                    text: "Series \{index}";
+                                    text: SeriesHelper.label-for(s);
                                     font-size: 11px;
                                     color: Theme.text;
+                                    overflow: elide;
                                 }
                             }
                         }

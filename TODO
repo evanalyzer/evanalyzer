@@ -7,7 +7,7 @@
 
 ## Results
 
-- [ ] Export R
+- [ ] Export Well formed in matrix view
 
 ## Algorithms
 - [ ] Add measure distance command
@@ -16,10 +16,3 @@
 ## Other
 
 - [ ] Add open recent files
-- [ ] Add application icon/logo
-- [ ] Display filename of actual opened project in Title Bar
-- [ ] Rework if About dialog
-  - [ ] Add License
-  - [ ] Add open sourcr licenses and list
-  - [ ] Add other contributors
-  - [ ] Show Version and system resources
