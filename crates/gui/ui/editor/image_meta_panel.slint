@@ -193,7 +193,7 @@ export component ImageMetaPanel inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             Text {
-                                text: "Series " + ChannelState.selected_series + " of " + (ImageMetaData.nr_series - 1);
+                                text: "Series " + (ChannelState.selected_series + 1) + " of " + ImageMetaData.nr_series;
                                 font-size: 11px;
                                 color: Theme.text-dim;
                                 vertical-alignment: center;

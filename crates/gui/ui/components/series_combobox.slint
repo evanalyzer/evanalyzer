@@ -12,15 +12,20 @@ global SeriesHelper {
     // it (e.g. the model hasn't been populated yet). `series_list` is built
     // in ascending idx order starting at 0, so its array index equals the
     // series idx directly - no search needed.
+    //
+    // `idx`/`SeriesInfo.idx` are always the real, 0-based series index (what
+    // gets sent back to Rust) - the +1 here is purely a display convention,
+    // matching the "SERIES N OF total" line above it (1-based, like a page
+    // number) instead of exposing the internal 0-based index to the user.
     pure public function label(idx: int) -> string {
         if idx < 0 || idx >= ImageMetaData.series_list.length {
-            return "Series \{idx}";
+            return "Series \{idx + 1}";
         }
         return SeriesHelper.label-for(ImageMetaData.series_list[idx]);
     }
 
     pure public function label-for(s: SeriesInfo) -> string {
-        s.width > 0 && s.height > 0 ? "Series \{s.idx}  ·  \{s.width}×\{s.height}" : "Series \{s.idx}"
+        s.width > 0 && s.height > 0 ? "Series \{s.idx + 1}  ·  \{s.width}×\{s.height}" : "Series \{s.idx + 1}"
     }
 }
 
