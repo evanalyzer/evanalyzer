@@ -110,3 +110,69 @@ impl TrackId {
         tmp
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_id_default_is_pipeline_context_slot_one() {
+        assert_eq!(MemoryId::default(), MemoryId::PipelineContext(1));
+    }
+
+    #[test]
+    fn image_address_default_is_memory_pipeline_context_slot_one() {
+        assert_eq!(
+            ImageAddress::default(),
+            ImageAddress::Memory(MemoryId::PipelineContext(1))
+        );
+    }
+
+    #[test]
+    fn pipeline_id_display_wraps_the_number() {
+        assert_eq!(PipelineId(42).to_string(), "Pipeline(42)");
+    }
+
+    #[test]
+    fn pipeline_id_default_is_zero() {
+        assert_eq!(PipelineId::default(), PipelineId(0));
+    }
+
+    #[test]
+    fn object_id_next_generates_distinct_ids() {
+        let a = ObjectId::next();
+        let b = ObjectId::next();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn object_id_display_formats_as_a_uuid() {
+        // 0x0123456789abcdef0123456789abcdef split into the standard
+        // 8-4-4-4-12 hex groups.
+        let id = ObjectId(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
+        assert_eq!(id.to_string(), "01234567-89ab-cdef-0123-456789abcdef");
+    }
+
+    #[test]
+    fn object_id_default_is_zero() {
+        assert_eq!(ObjectId::default(), ObjectId(0));
+    }
+
+    #[test]
+    fn track_id_next_increments_and_stays_distinct_across_calls() {
+        let a = TrackId::next();
+        let b = TrackId::next();
+        assert_ne!(a.0, b.0);
+        assert!(b.0 > a.0);
+    }
+
+    #[test]
+    fn track_id_to_string_formats_the_inner_value() {
+        assert_eq!(TrackId(7).to_string(), "7");
+    }
+
+    #[test]
+    fn track_id_default_is_zero() {
+        assert_eq!(TrackId::default(), TrackId(0));
+    }
+}

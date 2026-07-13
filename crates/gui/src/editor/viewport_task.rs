@@ -1,4 +1,4 @@
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum TaskDispatch {
     HighRes,
     LowRes,

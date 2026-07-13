@@ -107,3 +107,29 @@ fn column_not_found_error(column: &str, db: &std::path::Path) -> InternalErrors 
         db.display()
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_color_by_maps_every_kind_to_its_matching_variant() {
+        assert!(matches!(to_color_by(ColorByKind::None), ColorBy::None));
+        assert!(matches!(to_color_by(ColorByKind::Class), ColorBy::Class));
+        assert!(matches!(
+            to_color_by(ColorByKind::Colocalized),
+            ColorBy::Colocalized
+        ));
+    }
+
+    #[test]
+    fn column_not_found_error_names_the_column_and_db_path_in_the_message() {
+        let err = column_not_found_error("area", std::path::Path::new("/tmp/results.evadb"));
+
+        let InternalErrors::InvalidArgument(msg) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(msg.contains("area"));
+        assert!(msg.contains("/tmp/results.evadb"));
+    }
+}

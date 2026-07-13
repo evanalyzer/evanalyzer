@@ -119,3 +119,30 @@ fn summarize(names: &[String]) -> String {
         names.len() - MAX_SHOWN
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("img{i}")).collect()
+    }
+
+    #[test]
+    fn summarize_empty_list_is_an_empty_string() {
+        assert_eq!(summarize(&[]), "");
+    }
+
+    #[test]
+    fn summarize_lists_every_name_up_to_the_shown_limit() {
+        assert_eq!(summarize(&names(6)), "img0, img1, img2, img3, img4, img5");
+    }
+
+    #[test]
+    fn summarize_truncates_and_counts_the_remainder_past_the_limit() {
+        assert_eq!(
+            summarize(&names(9)),
+            "img0, img1, img2, img3, img4, img5, ... +3 more"
+        );
+    }
+}

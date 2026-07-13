@@ -126,7 +126,6 @@ fn main() {
     println!("cargo:rerun-if-changed=src/types/classes.rs");
     println!("cargo:rerun-if-changed=src/types/ids.rs");
     println!("cargo:rerun-if-changed=src/types/units.rs");
-    println!("cargo:rerun-if-changed=src/modules/experimant_meta_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/classification_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/roi_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/images_settings.rs");

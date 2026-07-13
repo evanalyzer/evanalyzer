@@ -10,8 +10,31 @@
 //! `all_command_meta`/`default_command` in a loop instead.
 
 use evanalyzer_cfg::settings::pipeline_command::{
-    all_command_meta, default_command, CommandCategory,
+    all_command_meta, default_command, CommandCategory, PipelineCommand,
 };
+
+fn param_value(cmd: &PipelineCommand, name: &str) -> String {
+    cmd.to_parameters()
+        .into_iter()
+        .find(|p| p.name == name)
+        .unwrap_or_else(|| panic!("missing parameter '{name}'"))
+        .value
+}
+
+fn param_value_nested(cmd: &PipelineCommand, group_name: &str, idx: usize, field: &str) -> String {
+    cmd.to_parameters()
+        .into_iter()
+        .find(|p| p.name == group_name)
+        .unwrap_or_else(|| panic!("missing group parameter '{group_name}'"))
+        .groups
+        .get(idx)
+        .unwrap_or_else(|| panic!("missing group row {idx} in '{group_name}'"))
+        .iter()
+        .find(|p| p.name == field)
+        .unwrap_or_else(|| panic!("missing field '{field}' in group row {idx}"))
+        .value
+        .clone()
+}
 
 #[test]
 fn all_command_meta_ids_are_contiguous_and_match_default_command() {
@@ -189,4 +212,490 @@ fn command_category_helpers_cover_every_variant() {
         let _ = cat.allowed_after();
         let _ = cat.suggested_next();
     }
+}
+
+// ---------------------------------------------------------------------
+// The tests above exercise every variant generically by round-tripping
+// each parameter's *own current default value* back through
+// `apply_param_change`. That's enough to prove the getter/setter for a
+// field agree and don't panic, but for fields backed by a multi-arm
+// match (dropdowns), an `Option`-like class field (`ObjClass`), or a
+// list field (`MultiObjClass`), the *default* value only ever exercises
+// one arm/branch. The tests below feed genuinely different values (and,
+// for numeric fields, deliberately unparsable ones) to reach the
+// remaining arms/branches of `apply_param_change`/`to_parameters`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn command_category_display_order_is_sequential_by_pipeline_stage() {
+    assert_eq!(CommandCategory::Preprocess.display_order(), 0);
+    assert_eq!(CommandCategory::Segment.display_order(), 1);
+    assert_eq!(CommandCategory::Object.display_order(), 2);
+    assert_eq!(CommandCategory::Measure.display_order(), 3);
+    assert_eq!(CommandCategory::Classify.display_order(), 4);
+}
+
+#[test]
+fn command_category_allowed_after_matches_expected_predecessors() {
+    assert_eq!(CommandCategory::Preprocess.allowed_after(), &[CommandCategory::Preprocess]);
+    assert_eq!(
+        CommandCategory::Segment.allowed_after(),
+        &[CommandCategory::Preprocess, CommandCategory::Segment]
+    );
+    assert_eq!(
+        CommandCategory::Object.allowed_after(),
+        &[CommandCategory::Segment, CommandCategory::Object]
+    );
+    assert_eq!(
+        CommandCategory::Measure.allowed_after(),
+        &[CommandCategory::Object, CommandCategory::Measure]
+    );
+    assert_eq!(
+        CommandCategory::Classify.allowed_after(),
+        &[CommandCategory::Measure, CommandCategory::Classify]
+    );
+}
+
+#[test]
+fn command_category_suggested_next_advances_and_terminates_at_classify() {
+    assert_eq!(CommandCategory::Preprocess.suggested_next(), CommandCategory::Segment);
+    assert_eq!(CommandCategory::Segment.suggested_next(), CommandCategory::Object);
+    assert_eq!(CommandCategory::Object.suggested_next(), CommandCategory::Measure);
+    assert_eq!(CommandCategory::Measure.suggested_next(), CommandCategory::Classify);
+    // Classify is the terminal stage: it suggests itself rather than looping
+    // back or panicking.
+    assert_eq!(CommandCategory::Classify.suggested_next(), CommandCategory::Classify);
+}
+
+#[test]
+fn allowed_next_returns_expected_categories_for_every_variant() {
+    use CommandCategory::*;
+    let expected: [(&str, &[CommandCategory]); 31] = [
+        ("Blur", &[Segment, Preprocess]),
+        ("AI Cellpose Segmentation", &[Measure]),
+        ("ClassifyRois", &[Classify]),
+        ("Colocalization", &[Classify]),
+        ("ColorFilterCommand", &[Segment, Preprocess]),
+        ("ConnectedComponents", &[Object, Measure]),
+        ("DistanceTransform", &[Segment, Preprocess]),
+        ("EdgeDetectionCanny", &[Segment, Preprocess]),
+        ("EdgeDetectionSobel", &[Segment, Preprocess]),
+        ("EnhanceContrast", &[Segment, Preprocess]),
+        ("ExtractRois", &[Classify]),
+        ("GaussianBlur", &[Segment, Preprocess]),
+        ("Hessian", &[Segment, Preprocess]),
+        ("ImageCache", &[Segment, Preprocess]),
+        ("ImageMath", &[Segment, Preprocess]),
+        ("IntensityTransformation", &[Segment, Preprocess]),
+        ("Laplacian", &[Segment, Preprocess]),
+        ("MedianSubtract", &[Segment, Preprocess]),
+        ("MorphologicalCommand", &[Segment, Preprocess]),
+        ("RankFilter", &[Segment, Preprocess]),
+        ("RoiMath", &[Classify]),
+        ("RollingBall", &[Segment, Preprocess]),
+        ("SaveImage", &[Segment, Preprocess]),
+        ("AI Stardist Segmentation", &[Measure]),
+        ("StructureTensor", &[Segment, Preprocess]),
+        ("Threshold", &[Object]),
+        ("TransformRois", &[Classify]),
+        ("AI UNet Segmentation", &[Object]),
+        ("Voronoi", &[Classify]),
+        ("Watershed", &[Measure]),
+        ("WeightedDeviation", &[Segment, Preprocess]),
+    ];
+    for (id, (name, categories)) in expected.iter().enumerate() {
+        let cmd = default_command(id as i32).unwrap();
+        assert_eq!(cmd.name(), *name, "id {id} name mismatch (test table is out of sync)");
+        assert_eq!(cmd.allowed_next(), *categories, "id {id} ({name}): unexpected allowed_next()");
+    }
+}
+
+#[test]
+fn to_summary_is_empty_for_variants_without_a_custom_summary() {
+    for id in [1, 5, 13, 22, 25, 29] {
+        let cmd = default_command(id).unwrap();
+        assert_eq!(cmd.to_summary(), "", "id {id} ({})", cmd.name());
+    }
+}
+
+#[test]
+fn to_summary_formats_blur_kernel_size() {
+    // `kernel_size` is a `usize`; `{:.3}` precision formatting has no effect
+    // on integers (only on floats), so the summary is deliberately unpadded.
+    let mut cmd = default_command(0).unwrap();
+    cmd.apply_param_change("kernel_size", "5");
+    assert_eq!(cmd.to_summary(), "Kernel size: 5");
+}
+
+#[test]
+fn to_summary_formats_gaussian_blur_kernel_and_sigma() {
+    let mut cmd = default_command(11).unwrap();
+    cmd.apply_param_change("kernel_size", "7");
+    cmd.apply_param_change("sigma", "1.5");
+    assert_eq!(cmd.to_summary(), "Kernel Size: 7 · Sigma: 1.500");
+}
+
+#[test]
+fn to_summary_formats_classify_rois_criteria() {
+    let mut cmd = default_command(2).unwrap();
+    cmd.apply_param_change("min_area", "10");
+    cmd.apply_param_change("min_eccentricity", "0.1");
+    cmd.apply_param_change("max_eccentricity", "0.9");
+    cmd.apply_param_change("allow_edge_touching", "true");
+    assert_eq!(
+        cmd.to_summary(),
+        "Min Area: 10.000 · Min Eccentricity: 0.100 · Max Eccentricity: 0.900 · Allow Edge Touching: true"
+    );
+}
+
+#[test]
+fn to_summary_formats_roi_math_operation() {
+    let mut cmd = default_command(20).unwrap();
+    cmd.apply_param_change("operation", "Xor");
+    assert_eq!(cmd.to_summary(), "Operation: Xor");
+}
+
+#[test]
+fn to_summary_formats_transform_rois_function() {
+    let mut cmd = default_command(26).unwrap();
+    cmd.apply_param_change("function", "Shrink");
+    assert_eq!(cmd.to_summary(), "Function: Shrink");
+}
+
+#[test]
+fn apply_param_change_dropdown_fields_cycle_through_every_option() {
+    // Every dropdown/enum-valued top-level field, driven straight from
+    // `to_parameters()`'s own `options` list so this doesn't drift from the
+    // generated code. Exercises every match arm, not just whichever one the
+    // default settings happen to start on.
+    let dropdown_fields: &[(i32, &str)] = &[
+        (12, "mode"),           // Hessian
+        (13, "mode"),           // ImageCache
+        (14, "operand"),        // ImageMath
+        (15, "mode"),           // IntensityTransformation
+        (18, "op"),             // MorphologicalCommand
+        (18, "kernel_shape"),   // MorphologicalCommand
+        // RankFilter's `filter_type` is deliberately excluded here: its
+        // options include "Outliers", a data-carrying arm that
+        // `apply_param_change` can't reconstruct from a bare string (see
+        // `apply_param_change_rank_filter_ignores_unknown_filter_type_value`
+        // below), so cycling through every option would fail here.
+        (20, "operation"),      // RoiMath
+        (21, "ball_type"),      // RollingBall
+        (22, "source"),         // SaveImage
+        (24, "mode"),           // StructureTensor
+        (2, "match_handling"),  // ClassifyRois
+        (26, "function"),       // TransformRois
+        (27, "output_mode"),    // UNet
+    ];
+    for &(id, field) in dropdown_fields {
+        let mut cmd = default_command(id).unwrap();
+        let options = cmd
+            .to_parameters()
+            .into_iter()
+            .find(|p| p.name == field)
+            .unwrap_or_else(|| panic!("id {id}: missing parameter '{field}'"))
+            .options;
+        assert!(!options.is_empty(), "id {id}: '{field}' has no options to cycle through");
+        for option in &options {
+            cmd.apply_param_change(field, option);
+            assert_eq!(
+                param_value(&cmd, field),
+                *option,
+                "id {id} ({}): setting '{field}' to {option:?} didn't stick",
+                cmd.name()
+            );
+        }
+    }
+}
+
+#[test]
+fn apply_param_change_unit_fields_toggle_both_variants() {
+    // SizeUnits fields.
+    for (id, field) in [
+        (2, "size_unit"),   // ClassifyRois
+        (3, "size_unit"),   // Colocalization
+        (20, "size_unit"),  // RoiMath
+        (28, "unit"),       // Voronoi
+    ] {
+        let mut cmd = default_command(id).unwrap();
+        cmd.apply_param_change(field, "nm");
+        assert_eq!(param_value(&cmd, field), "nm", "id {id}: {field}=nm");
+        cmd.apply_param_change(field, "px");
+        assert_eq!(param_value(&cmd, field), "px", "id {id}: {field}=px");
+    }
+
+    // PixelUnits, nested inside a Threshold group entry.
+    let mut cmd = default_command(25).unwrap();
+    cmd.add_group_item("thresholds");
+    for unit in ["bit", "%", "rel"] {
+        cmd.apply_param_change("thresholds.0.unit", unit);
+        let params = cmd.to_parameters();
+        let nested = &params.iter().find(|p| p.name == "thresholds").unwrap().groups[0];
+        let value = &nested.iter().find(|p| p.name == "unit").unwrap().value;
+        assert_eq!(value, unit);
+    }
+}
+
+#[test]
+fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
+    // One ObjClass field from each variant that has one, covering the
+    // `"-1"` (Unset) branch and the `value.parse::<u32>()` (Valid) branch.
+    let obj_class_fields: &[(i32, &str)] = &[
+        (2, "output_class"),      // ClassifyRois
+        (2, "overlapping_with"),  // ClassifyRois
+        (3, "class_for_overlapping_areas"), // Colocalization
+        (20, "input_class"),      // RoiMath
+        (20, "other_class"),      // RoiMath
+        (20, "output_class"),     // RoiMath
+        (26, "input_class"),      // TransformRois
+        (26, "output_class"),     // TransformRois
+        (28, "centers"),          // Voronoi
+        (28, "mask"),             // Voronoi
+        (28, "output_class"),     // Voronoi
+    ];
+    for &(id, field) in obj_class_fields {
+        let mut cmd = default_command(id).unwrap();
+        cmd.apply_param_change(field, "7");
+        assert_eq!(param_value(&cmd, field), "7", "id {id}: {field}=7");
+        cmd.apply_param_change(field, "-1");
+        assert_eq!(param_value(&cmd, field), "-1", "id {id}: {field}=-1 (Unset)");
+        // A value that doesn't parse as u32 must leave the field untouched.
+        cmd.apply_param_change(field, "-1");
+        cmd.apply_param_change(field, "not_a_number");
+        assert_eq!(param_value(&cmd, field), "-1", "id {id}: {field} garbage input should be a no-op");
+    }
+}
+
+#[test]
+fn apply_param_change_multi_obj_class_fields_support_comma_lists_and_toggle() {
+    let multi_obj_class_fields: &[(i32, &str)] = &[
+        (2, "input_classes"),          // ClassifyRois
+        (3, "classes_to_coloc"),       // Colocalization
+        (3, "filter_classes"),         // Colocalization
+        (3, "exclude_classes"),        // Colocalization
+        (20, "other_filter_classes"),  // RoiMath
+        (28, "center_filter_classes"), // Voronoi
+        (28, "mask_filter_classes"),   // Voronoi
+    ];
+    for &(id, field) in multi_obj_class_fields {
+        let mut cmd = default_command(id).unwrap();
+
+        // Comma-separated list, including a blank and a non-numeric entry
+        // that must be silently dropped.
+        cmd.apply_param_change(field, "1,,x,2,3");
+        assert_eq!(param_value(&cmd, field), "1,2,3", "id {id}: {field} comma list");
+
+        // `toggle:` removes an id already present...
+        cmd.apply_param_change(field, "toggle:2");
+        assert_eq!(param_value(&cmd, field), "1,3", "id {id}: {field} toggle off");
+
+        // ...and adds one that's absent.
+        cmd.apply_param_change(field, "toggle:9");
+        assert_eq!(param_value(&cmd, field), "1,3,9", "id {id}: {field} toggle on");
+    }
+}
+
+#[test]
+fn apply_param_change_transform_rois_switches_through_every_function_kind() {
+    let mut cmd = default_command(26).unwrap(); // TransformRois
+
+    cmd.apply_param_change("function", "Scale");
+    cmd.apply_param_change("function.factor", "2.5");
+    assert_eq!(param_value(&cmd, "function.factor"), "2.5");
+
+    cmd.apply_param_change("function", "Snap Area");
+    cmd.apply_param_change("function.extra_size", "4");
+    cmd.apply_param_change("function.unit", "nm");
+    assert_eq!(param_value(&cmd, "function.extra_size"), "4");
+    assert_eq!(param_value(&cmd, "function.unit"), "nm");
+    cmd.apply_param_change("function.unit", "px");
+    assert_eq!(param_value(&cmd, "function.unit"), "px");
+
+    cmd.apply_param_change("function", "Min Circle");
+    cmd.apply_param_change("function.min_diameter", "6");
+    cmd.apply_param_change("function.unit", "nm");
+    assert_eq!(param_value(&cmd, "function.min_diameter"), "6");
+    assert_eq!(param_value(&cmd, "function.unit"), "nm");
+    cmd.apply_param_change("function.unit", "px");
+    assert_eq!(param_value(&cmd, "function.unit"), "px");
+
+    cmd.apply_param_change("function", "Draw Circle");
+    cmd.apply_param_change("function.diameter", "12");
+    cmd.apply_param_change("function.unit", "nm");
+    assert_eq!(param_value(&cmd, "function.diameter"), "12");
+    assert_eq!(param_value(&cmd, "function.unit"), "nm");
+    cmd.apply_param_change("function.unit", "px");
+    assert_eq!(param_value(&cmd, "function.unit"), "px");
+
+    cmd.apply_param_change("function", "Fitting Ellipse");
+    cmd.apply_param_change("function.scale", "1.8");
+    assert_eq!(param_value(&cmd, "function.scale"), "1.8");
+
+    cmd.apply_param_change("function", "Expand");
+    cmd.apply_param_change("function.margin", "3");
+    cmd.apply_param_change("function.unit", "nm");
+    assert_eq!(param_value(&cmd, "function.margin"), "3");
+    assert_eq!(param_value(&cmd, "function.unit"), "nm");
+    cmd.apply_param_change("function.unit", "px");
+    assert_eq!(param_value(&cmd, "function.unit"), "px");
+
+    cmd.apply_param_change("function", "Shrink");
+    cmd.apply_param_change("function.margin", "1.5");
+    cmd.apply_param_change("function.unit", "nm");
+    assert_eq!(param_value(&cmd, "function.margin"), "1.5");
+    assert_eq!(param_value(&cmd, "function.unit"), "nm");
+    cmd.apply_param_change("function.unit", "px");
+    assert_eq!(param_value(&cmd, "function.unit"), "px");
+
+    // An unrecognized function name must leave the current variant as-is.
+    cmd.apply_param_change("function", "not-a-real-function");
+    assert_eq!(param_value(&cmd, "function"), "Shrink");
+}
+
+#[test]
+fn apply_param_change_dropdown_fields_ignore_unknown_values() {
+    // The flip side of `apply_param_change_dropdown_fields_cycle_through_every_option`:
+    // an unrecognized value must fall through to the match's `_ => s.field.clone()`
+    // arm and leave the field untouched, for every dropdown field that has one.
+    let dropdown_fields: &[(i32, &str, &str)] = &[
+        (12, "mode", "Determinant"),          // Hessian
+        (13, "mode", "Store"),                // ImageCache
+        (14, "operand", "Add"),               // ImageMath
+        (15, "mode", "Manual"),               // IntensityTransformation
+        (18, "op", "Erode"),                  // MorphologicalCommand
+        (18, "kernel_shape", "Ellipse"),      // MorphologicalCommand
+        (20, "operation", "Or"),              // RoiMath
+        (21, "ball_type", "Paraboloid"),      // RollingBall
+        (22, "source", "Instance Map"),       // SaveImage
+        (24, "mode", "Coherence"),            // StructureTensor
+        (27, "output_mode", "Independent Channels"), // UNet
+    ];
+    for &(id, field, known_value) in dropdown_fields {
+        let mut cmd = default_command(id).unwrap();
+        cmd.apply_param_change(field, known_value);
+        assert_eq!(param_value(&cmd, field), known_value, "id {id}: {field} setup");
+        cmd.apply_param_change(field, "this-is-not-a-real-option");
+        assert_eq!(
+            param_value(&cmd, field),
+            known_value,
+            "id {id} ({}): unknown '{field}' value should be a no-op",
+            cmd.name()
+        );
+    }
+}
+
+#[test]
+fn threshold_add_group_item_clones_the_previous_entry_instead_of_resetting_to_default() {
+    let mut cmd = default_command(25).unwrap(); // Threshold
+
+    // First call on an empty list falls back to a fresh default entry.
+    cmd.add_group_item("thresholds");
+    cmd.apply_param_change("thresholds.0.min_threshold", "77");
+
+    // A second call, with a non-empty list, clones the *last* entry rather
+    // than pushing another default - so the new row inherits "77" too.
+    cmd.add_group_item("thresholds");
+    let params = cmd.to_parameters();
+    let thresholds_param = params.iter().find(|p| p.name == "thresholds").unwrap();
+    assert_eq!(thresholds_param.groups.len(), 2);
+    let second_row_min = thresholds_param.groups[1]
+        .iter()
+        .find(|p| p.name == "min_threshold")
+        .unwrap();
+    assert_eq!(second_row_min.value, "77", "new row should clone the previous entry's values");
+}
+
+#[test]
+fn apply_param_change_threshold_entry_cycles_through_method_options() {
+    let mut cmd = default_command(25).unwrap(); // Threshold
+    cmd.add_group_item("thresholds");
+    let methods = {
+        let params = cmd.to_parameters();
+        let nested = &params.iter().find(|p| p.name == "thresholds").unwrap().groups[0];
+        nested.iter().find(|p| p.name == "method").unwrap().options.clone()
+    };
+    assert!(methods.len() > 5, "expected many threshold methods, got {methods:?}");
+    for method in &methods {
+        cmd.apply_param_change("thresholds.0.method", method);
+        let params = cmd.to_parameters();
+        let nested = &params.iter().find(|p| p.name == "thresholds").unwrap().groups[0];
+        let value = &nested.iter().find(|p| p.name == "method").unwrap().value;
+        assert_eq!(value, method);
+    }
+}
+
+#[test]
+fn apply_param_change_threshold_entry_ignores_malformed_or_out_of_range_paths() {
+    // The `thresholds.{idx}.{field}` dotted path is parsed by hand (split on
+    // '.', then `idx.parse::<usize>()`, then `Vec::get_mut(idx)`); malformed
+    // or out-of-range paths must be silently ignored rather than panicking.
+    let mut cmd = default_command(25).unwrap(); // Threshold
+    cmd.add_group_item("thresholds");
+    cmd.apply_param_change("thresholds.0.min_threshold", "5");
+    assert_eq!(param_value_nested(&cmd, "thresholds", 0, "min_threshold"), "5");
+
+    // Out-of-range index.
+    cmd.apply_param_change("thresholds.99.min_threshold", "999");
+    // Unparsable index.
+    cmd.apply_param_change("thresholds.not_a_number.min_threshold", "999");
+    // Missing nested field name (no second '.' segment).
+    cmd.apply_param_change("thresholds.0", "999");
+
+    assert_eq!(
+        param_value_nested(&cmd, "thresholds", 0, "min_threshold"),
+        "5",
+        "malformed/out-of-range threshold paths must not mutate any entry"
+    );
+}
+
+#[test]
+fn apply_param_change_rank_filter_ignores_unknown_filter_type_value() {
+    // "Outliers" carries data (`Outliers(f32)`) that can't be reconstructed
+    // from a bare string, so `apply_param_change` intentionally doesn't
+    // recognize it as a target value - the field is left unchanged rather
+    // than panicking. This documents that (deliberate) gap rather than
+    // treating it as a bug.
+    let mut cmd = default_command(19).unwrap(); // RankFilter
+    cmd.apply_param_change("filter_type", "Median");
+    assert_eq!(param_value(&cmd, "filter_type"), "Median");
+    cmd.apply_param_change("filter_type", "Outliers");
+    assert_eq!(param_value(&cmd, "filter_type"), "Median");
+}
+
+#[test]
+fn apply_param_change_numeric_fields_ignore_unparsable_values() {
+    // One numeric field per distinct parse target type (usize/i32/f32/f64)
+    // to reach the `Err` side of `apply_param_change`'s `if let Ok(v) = ...`
+    // guards, which a same-value round trip can never hit.
+    let mut cmd = default_command(0).unwrap(); // Blur.kernel_size: usize
+    cmd.apply_param_change("kernel_size", "9");
+    cmd.apply_param_change("kernel_size", "not_a_number");
+    assert_eq!(param_value(&cmd, "kernel_size"), "9");
+
+    let mut cmd = default_command(5).unwrap(); // ConnectedComponents.min_size_px: i32
+    cmd.apply_param_change("min_size_px", "15");
+    cmd.apply_param_change("min_size_px", "not_a_number");
+    assert_eq!(param_value(&cmd, "min_size_px"), "15");
+
+    let mut cmd = default_command(6).unwrap(); // DistanceTransform.threshold: f32
+    cmd.apply_param_change("threshold", "0.3");
+    cmd.apply_param_change("threshold", "not_a_number");
+    assert_eq!(param_value(&cmd, "threshold"), "0.3");
+
+    let mut cmd = default_command(17).unwrap(); // MedianSubtract.radius: f64
+    cmd.apply_param_change("radius", "12.5");
+    cmd.apply_param_change("radius", "not_a_number");
+    assert_eq!(param_value(&cmd, "radius"), "12.5");
+}
+
+#[test]
+fn apply_param_change_text_and_path_fields_accept_arbitrary_strings() {
+    let mut cmd = default_command(22).unwrap(); // SaveImage.name: Text
+    cmd.apply_param_change("name", "output_cell");
+    assert_eq!(param_value(&cmd, "name"), "output_cell");
+
+    let mut cmd = default_command(1).unwrap(); // Cellpose.model_path: FilePath
+    cmd.apply_param_change("model_path", "/models/cellpose.pt");
+    assert_eq!(param_value(&cmd, "model_path"), "/models/cellpose.pt");
 }

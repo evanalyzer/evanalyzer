@@ -1,1 +1,0 @@
-wget https://download.pytorch.org/libtorch/cpu/libtorch-macos-arm64-2.11.0.zip

@@ -186,6 +186,37 @@ pub struct ImageChannel {
     pub is_rgb: bool,
 }
 
+/// Computes the byte size of a `width x height` tile buffer, checking for
+/// overflow along the way.
+///
+/// `width`/`height`/`color_channels` ultimately come from file-declared
+/// metadata (`PyramidInfo`'s fields are read straight from whatever the
+/// image file/BioFormats reports) - a corrupted or malicious file can claim
+/// dimensions large enough to overflow a plain `width * height * channels *
+/// bytes_per_pixel` multiplication. Wrapping silently there would compute an
+/// undersized buffer that the JNI call still fills with the *real*
+/// width*height tile - i.e. a heap buffer overflow, not just a bad error
+/// message - so every step is checked and any overflow is turned into a
+/// clean error instead.
+fn checked_tile_buffer_size(
+    width: usize,
+    height: usize,
+    color_channels: u8,
+    nr_bytes_per_channel: usize,
+) -> Result<usize, InternalErrors> {
+    width
+        .checked_mul(height)
+        .and_then(|v| v.checked_mul(color_channels as usize))
+        .and_then(|v| v.checked_mul(nr_bytes_per_channel))
+        .ok_or_else(|| {
+            InternalErrors::ImageReadError(format!(
+                "Tile size overflow: {width}x{height}, {color_channels}ch, \
+                 {nr_bytes_per_channel}B/px exceeds the maximum representable buffer size - \
+                 the file's declared dimensions are likely corrupt"
+            ))
+        })
+}
+
 pub struct ImageReader {
     // pub(crate) (rather than private) so sibling modules - e.g.
     // image_ome_parser's tests, which construct a JVM-free `ImageReader` via
@@ -496,7 +527,8 @@ impl ImageReader {
 
         // Prepare Buffer - Use Boxed Slice for more stable heap allocation
         let nr_bytes = (pyramid_info.nr_bits as f32 / 8.0).ceil() as usize;
-        let buffer_size: usize = width * height * (pyramid_info.color_channels as usize) * nr_bytes;
+        let buffer_size: usize =
+            checked_tile_buffer_size(width, height, pyramid_info.color_channels, nr_bytes)?;
 
         // Check if JAVA VM has enough reserved memory for loading the image
         let required_bytes = buffer_size as u64;
@@ -1135,6 +1167,28 @@ mod tests {
     use crate::init_java_wrapper;
     use approx::relative_eq;
     use std::fs;
+
+    #[test]
+    fn checked_tile_buffer_size_computes_the_plain_product_for_ordinary_dimensions() {
+        let size = checked_tile_buffer_size(1920, 1080, 3, 1).unwrap();
+        assert_eq!(size, 1920 * 1080 * 3);
+    }
+
+    #[test]
+    fn checked_tile_buffer_size_errors_instead_of_wrapping_on_overflow() {
+        // Emulates a corrupt file declaring an astronomically large tile -
+        // the naive `width * height * channels * bytes` would silently wrap
+        // to a small number here instead of erroring.
+        let result = checked_tile_buffer_size(usize::MAX / 2, 3, 4, 1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn checked_tile_buffer_size_errors_at_exactly_usize_max_plus_one() {
+        assert!(checked_tile_buffer_size(usize::MAX, 2, 1, 1).is_err());
+        // One below the overflow boundary still succeeds.
+        assert!(checked_tile_buffer_size(usize::MAX, 1, 1, 1).is_ok());
+    }
 
     fn read_raw_data(path: &str, bits: i32) -> Vec<f32> {
         let reference_data_u8 = fs::read(path).unwrap();
