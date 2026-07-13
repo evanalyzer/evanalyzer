@@ -2,7 +2,7 @@ use crate::UiState;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::color_generators::color_from_rgb;
 use crate::helper::size_formater::format_bits;
-use crate::{AppWindow, ChannelInfo, ChannelState, ImageMetaData, IntensityProjection};
+use crate::{AppWindow, ChannelInfo, ChannelState, ImageMetaData, IntensityProjection, SeriesInfo};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::extensions::utils::wavelength_to_rgb_float;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -139,21 +139,23 @@ impl ImageMetaController {
                 return;
             };
 
-            // --- Series info string ---
-            let mut series_info_str = String::new();
-            for i in 0..image_meta.series.len() as i32 {
-                let Some(series_info) = image_meta.series.get(&i) else {
-                    return;
-                };
-                let Some(pyramid_info) = series_info.resolutions.get(&0) else {
-                    return;
-                };
-                series_info_str.push_str(&format!(
-                    "{}: {}x{}\n",
-                    i, pyramid_info.width, pyramid_info.height
-                ));
-            }
-            series_info_str.truncate(series_info_str.trim_end_matches('\n').len());
+            // --- Per-series info (idx + first-resolution dimensions), for
+            // the series picker dropdown. Built with filter_map rather than
+            // the previous early-`return`-on-missing-entry loop, which used
+            // to abort this whole closure (silently skipping every UI update
+            // below it, not just the series list) the moment one series
+            // lacked a resolution-0 entry.
+            let series_list: Vec<SeriesInfo> = image_meta
+                .series
+                .iter()
+                .filter_map(|(&idx, series_info)| {
+                    series_info.resolutions.get(&0).map(|pyramid_info| SeriesInfo {
+                        idx,
+                        width: pyramid_info.width as i32,
+                        height: pyramid_info.height as i32,
+                    })
+                })
+                .collect();
 
             // --- Selected series ---
             let Some(series_info) = image_meta.series.get(&selected_series) else {
@@ -211,7 +213,7 @@ impl ImageMetaController {
             image_meta_ui.set_nr_t_stacks(series_info.nr_t_stacks);
             image_meta_ui.set_nr_z_stacks(series_info.nr_z_stacks);
             image_meta_ui.set_nr_series(image_meta.series.len() as i32);
-            image_meta_ui.set_nr_series_str(series_info_str.into());
+            image_meta_ui.set_series_list(std::rc::Rc::new(slint::VecModel::from(series_list)).into());
 
             let bits = pyramid_info.width
                 * pyramid_info.height
