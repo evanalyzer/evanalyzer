@@ -12,7 +12,6 @@ evanalyzer_cfg = { path = "../cfg" }
 log = "0.4"
 env_logger = "0.11"
 indexmap = "2.13.0"
-arc-swap = "1.9.0"
 bitvec = "1.0.1"
 pathdiff = "0.2.3"
 rayon = "1.12.0"
