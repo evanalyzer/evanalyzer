@@ -11,6 +11,7 @@ export component ToolToggleButton inherits Rectangle {
     width: 36px;
     height: 36px;
     border-radius: 6px;
+    opacity: root.enabled ? 1.0 : 0.35;
 
     // 1. DYNAMIC BACKGROUND
     background: root.checked ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.bg);

@@ -98,4 +98,13 @@ export global ViewportRoiState {
         { x: 0px, y: 0px },
         { x: 0px, y: 0px },
     ];
+
+    // Switching tools mid-draw (e.g. clicking a different paint tool before
+    // finishing a rectangle) must abandon the in-progress shape - otherwise
+    // the next click on any paint tool finalizes an ROI from the stale
+    // `polygon_points`/`poly_idx` left over from the abandoned one.
+    changed act_tool_state => {
+        self.is_drawing = false;
+        self.poly_idx = 0;
+    }
 }

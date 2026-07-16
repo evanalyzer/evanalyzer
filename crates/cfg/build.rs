@@ -103,12 +103,10 @@ mod modules {
 mod settings {
     pub use crate::modules::classification_settings;
     pub use crate::modules::images_settings;
-    pub use crate::modules::meta_data;
     pub use crate::modules::pipeline_command;
     pub use crate::modules::pipeline_settings;
     pub use crate::modules::plate_settings;
     pub use crate::modules::roi_settings;
-    pub use crate::modules::templates;
 }
 
 #[path = "build/pipeline_commands_generator.rs"]

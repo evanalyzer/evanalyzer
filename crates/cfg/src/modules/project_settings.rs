@@ -1,6 +1,3 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
 use crate::{
     CURRENT_PROJECT_SCHEMA_VERSION,
     modules::meta_data::MetaData,
@@ -9,6 +6,8 @@ use crate::{
         pipeline_settings::PipelineSettings, plate_settings::PlateSettings,
     },
 };
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +49,12 @@ impl ProjectSettings {
     ///     // migrate version 0/1 data into the version-2 shape
     /// }
     /// ```
+    // `build.rs` `include!()`s this file into a second, build-script-only
+    // module tree so it can call `schema_for!(ProjectSettings)` - that tree
+    // compiles as a binary, where `pub` gets no "public API" exemption, and
+    // nothing there calls `migrate`, only the real lib crate (via
+    // `ProjectWithRuntime::load_project`) does.
+    #[allow(dead_code)]
     pub fn migrate(&mut self) {
         self.schema_version = CURRENT_PROJECT_SCHEMA_VERSION;
     }

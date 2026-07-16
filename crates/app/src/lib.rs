@@ -3,6 +3,7 @@ pub mod extensions;
 pub mod frontend;
 mod project_owner;
 mod results;
+pub mod settings;
 pub mod templates;
 
 pub use frontend::Frontend;

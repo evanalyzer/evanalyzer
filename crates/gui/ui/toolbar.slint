@@ -2,7 +2,7 @@ import { Button, HorizontalBox, Slider } from "std-widgets.slint";
 import { GlobalAppState } from "state.slint";
 import { VerticalDivider } from "components/divider.slint";
 import { ToolToggleButton } from "components/toggle_button.slint";
-import { Theme } from "style.slint";
+import { Theme, Appearance } from "style.slint";
 import { ViewportState } from "editor/viewport_state.slint";
 import { DialogType } from "state.slint";
 import {
@@ -22,7 +22,11 @@ export global ToolbarState {
     callback save_as_file_clicked();
     callback save_project_as_template_clicked();
     callback open_website();
+    callback undo_clicked();
+    callback redo_clicked();
     in-out property <bool> has_unsaved_changes: false;
+    in-out property <bool> can_undo: false;
+    in-out property <bool> can_redo: false;
 }
 
 export component Toolbar inherits Rectangle {
@@ -59,7 +63,25 @@ export component Toolbar inherits Rectangle {
                 width: 7px;
                 height: 7px;
                 border-radius: 3.5px;
-                background: #ff4444;
+                background: Theme.err;
+            }
+        }
+
+        VerticalDivider { }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/arrow-counter-clockwise.svg");
+            enabled: ToolbarState.can_undo;
+            clicked => {
+                ToolbarState.undo_clicked();
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/arrow-clockwise.svg");
+            enabled: ToolbarState.can_redo;
+            clicked => {
+                ToolbarState.redo_clicked();
             }
         }
 
@@ -175,6 +197,21 @@ export component Toolbar inherits Rectangle {
             text: "Zoom: \{round(ViewportState.zoom_factor * 100)}%";
             vertical-alignment: center;
             font-size: 14px;
+        }
+
+        VerticalDivider { }
+
+        ToolToggleButton {
+            icon: Theme.dark-mode ? @image-url("icons/regular-black/sun.svg") : @image-url("icons/regular-black/moon.svg");
+            checked: Theme.dark-mode;
+            clicked => {
+                // Read `Theme.dark-mode` before either call - `apply()` flips
+                // `Palette.color-scheme`, which `Theme.dark-mode` is bound to,
+                // so evaluating `!Theme.dark-mode` again afterwards would
+                // double-negate and report the stale, pre-click value.
+                Appearance.dark-mode-toggled(!Theme.dark-mode);
+                Appearance.apply(!Theme.dark-mode);
+            }
         }
     }
 }

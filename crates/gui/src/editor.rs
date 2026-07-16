@@ -9,6 +9,7 @@ use crate::{
         results_list_controller::ResultsListController,
         results_table_controller::ResultsTableController, roi_list_controller::RoiListController,
         template_controller::TemplateController,
+        undo_redo_controller::UndoRedoController,
         viewport_controller::ViewportController,
         viewport_image_controller::ViewportImageController,
         viewport_roi_controller::ViewPortRoiController,
@@ -29,6 +30,7 @@ pub mod results_list_controller;
 pub mod results_table_controller;
 pub mod roi_list_controller;
 pub mod template_controller;
+pub mod undo_redo_controller;
 pub mod viewport_cache;
 pub mod viewport_controller;
 pub mod viewport_image_controller;
@@ -52,6 +54,7 @@ pub struct Editor {
     results_table_controller: Arc<ResultsTableController>,
     results_list_controller: Arc<ResultsListController>,
     template_controller: Arc<TemplateController>,
+    undo_redo_controller: Arc<UndoRedoController>,
 }
 
 impl Editor {
@@ -171,6 +174,17 @@ impl Editor {
             results_list_controller.clone(),
         ));
 
+        let undo_redo_controller = Arc::new(UndoRedoController::new(
+            ui.clone(),
+            app_state.clone(),
+            image_list_controller.clone(),
+            project_settings_controller.clone(),
+            classification_controller.clone(),
+            pipelines_controller.clone(),
+            roi_list_controller.clone(),
+            viewport_controller.clone(),
+        ));
+
         Self {
             image_list_controller,
             project_controller,
@@ -187,6 +201,7 @@ impl Editor {
             results_table_controller,
             results_list_controller,
             template_controller,
+            undo_redo_controller,
         }
     }
 
@@ -204,6 +219,7 @@ impl Editor {
         self.results_table_controller.attach_callbacks();
         self.results_list_controller.attach_callbacks();
         self.template_controller.attach_callbacks();
+        self.undo_redo_controller.attach_callbacks();
 
         self.viewport_worker.start_worker();
         self.pipeline_worker.start_worker();

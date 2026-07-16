@@ -1,4 +1,4 @@
-import { Palette, ScrollView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ToolToggleButton } from "../components/toggle_button.slint";
 import { VerticalDivider } from "../components/divider.slint";
@@ -1596,9 +1596,9 @@ export component ResultsWindow inherits Window {
     min-height: 300px;
     background: Theme.bg;
 
-    init => {
-        Palette.color-scheme = ColorScheme.light;
-    }
+    // Initial color scheme is applied from Rust (`Appearance.apply`) right
+    // after this window is constructed, using the persisted preference -
+    // see `evanalyzer_gui::run`.
 
     VerticalLayout {
         padding: 0;
