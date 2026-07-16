@@ -22,7 +22,11 @@ export global ToolbarState {
     callback save_as_file_clicked();
     callback save_project_as_template_clicked();
     callback open_website();
+    callback undo_clicked();
+    callback redo_clicked();
     in-out property <bool> has_unsaved_changes: false;
+    in-out property <bool> can_undo: false;
+    in-out property <bool> can_redo: false;
 }
 
 export component Toolbar inherits Rectangle {
@@ -60,6 +64,24 @@ export component Toolbar inherits Rectangle {
                 height: 7px;
                 border-radius: 3.5px;
                 background: Theme.err;
+            }
+        }
+
+        VerticalDivider { }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/arrow-counter-clockwise.svg");
+            enabled: ToolbarState.can_undo;
+            clicked => {
+                ToolbarState.undo_clicked();
+            }
+        }
+
+        ToolToggleButton {
+            icon: @image-url("icons/regular-black/arrow-clockwise.svg");
+            enabled: ToolbarState.can_redo;
+            clicked => {
+                ToolbarState.redo_clicked();
             }
         }
 
