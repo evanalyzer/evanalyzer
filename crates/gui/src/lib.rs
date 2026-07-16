@@ -4,11 +4,26 @@ pub use evanalyzer_gui_slint::*;
 
 use evanalyzer_app::{AppHandle, Frontend, ProjectOwner, ProjectWithRuntime, ReaderPool};
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::settings::project_settings::ProjectSettings;
 use evanalyzer_core::ImageReader;
 use slint::ComponentHandle;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, RwLockReadGuard, RwLockWriteGuard};
+use std::time::{Duration, Instant};
+
+/// How many steps of undo/redo history to keep - `ProjectSettings` is small
+/// (metadata/geometry only, no pixel buffers - see the doc comment on
+/// `UiState::undo_stack`), so this is a memory non-issue; it just bounds
+/// how far back a very long editing session can rewind.
+const UNDO_STACK_LIMIT: usize = 100;
+
+/// Edits that land within this long of the last checkpoint are coalesced into
+/// the same undo step instead of each getting their own - otherwise dragging
+/// an ROI or typing into a text field would push dozens of near-identical
+/// snapshots and "Undo" would barely seem to do anything per click.
+const UNDO_COALESCE_WINDOW: Duration = Duration::from_millis(600);
 
 mod editor;
 mod helper;
@@ -30,6 +45,30 @@ pub struct UiState {
     /// (e.g. "open a project" before doing any I/O) check for unsaved
     /// changes without a round trip through the event loop.
     dirty: AtomicBool,
+    /// Snapshots of `ProjectWithRuntime::settings` taken right before a
+    /// mutation, oldest first. `ProjectSettings` holds only metadata/geometry
+    /// (paths, IDs, ROI polygons, pipeline params - no pixel buffers), so
+    /// cloning the whole struct per checkpoint is cheap even for large
+    /// projects. Populated by `get_project_write` (see `maybe_checkpoint_undo`)
+    /// so every mutation chokepoint gets undo coverage for free, rather than
+    /// having to thread checkpoint calls through every one of the ~60 call
+    /// sites across the editor controllers.
+    undo_stack: Mutex<VecDeque<ProjectSettings>>,
+    /// Snapshots popped off `undo_stack` by `undo()`, so `redo()` can restore
+    /// them. Cleared whenever a new checkpoint is pushed (a fresh edit after
+    /// an undo invalidates the redone-away future).
+    redo_stack: Mutex<VecDeque<ProjectSettings>>,
+    /// When the most recent undo checkpoint was taken - drives the
+    /// `UNDO_COALESCE_WINDOW` grouping in `maybe_checkpoint_undo`.
+    last_checkpoint_at: Mutex<Instant>,
+    /// Set by `undo`/`redo` to force the *next* `get_project_write` call to
+    /// take a checkpoint regardless of `UNDO_COALESCE_WINDOW` timing.
+    /// Without this, an edit landing within the coalesce window right after
+    /// an undo would be silently merged into the pre-undo checkpoint instead
+    /// of starting a new one - which would skip clearing `redo_stack`, so
+    /// "Redo" could later resurrect a state that no longer follows from what
+    /// the user just did.
+    force_next_checkpoint: AtomicBool,
 }
 
 impl UiState {
@@ -43,6 +82,10 @@ impl UiState {
             ui_handle: handle,
             results_ui_handle: results_handle,
             dirty: AtomicBool::new(false),
+            undo_stack: Mutex::new(VecDeque::new()),
+            redo_stack: Mutex::new(VecDeque::new()),
+            last_checkpoint_at: Mutex::new(Instant::now()),
+            force_next_checkpoint: AtomicBool::new(false),
         }
     }
 
@@ -55,7 +98,115 @@ impl UiState {
     /// Acquire a write guard for the project.
     /// Exclusive - never hold a read guard on the same thread when calling this.
     pub fn get_project_write(&self) -> RwLockWriteGuard<'_, ProjectWithRuntime> {
+        self.maybe_checkpoint_undo();
         self.app.get_project_write()
+    }
+
+    /// Takes an undo snapshot of the current `settings` if enough time has
+    /// passed since the last one (see `UNDO_COALESCE_WINDOW`), then calls
+    /// `get_project_write` for real. Must run *before* the write guard below
+    /// is acquired - it briefly takes its own read guard to clone the
+    /// pre-mutation state, which would deadlock (std `RwLock` isn't
+    /// reentrant) if taken while a write guard from this same call were
+    /// already held.
+    fn maybe_checkpoint_undo(&self) {
+        let mut last = self.last_checkpoint_at.lock().expect("Poisoned");
+        let now = Instant::now();
+        let should_checkpoint = self.force_next_checkpoint.swap(false, Ordering::Relaxed)
+            || now.duration_since(*last) >= UNDO_COALESCE_WINDOW
+            || {
+                let stack = self.undo_stack.lock().expect("Poisoned");
+                stack.is_empty()
+            };
+        *last = now;
+        drop(last);
+
+        if !should_checkpoint {
+            return;
+        }
+
+        let snapshot = self.app.get_project().settings.clone();
+        let mut undo_stack = self.undo_stack.lock().expect("Poisoned");
+        undo_stack.push_back(snapshot);
+        if undo_stack.len() > UNDO_STACK_LIMIT {
+            undo_stack.pop_front();
+        }
+        drop(undo_stack);
+        self.redo_stack.lock().expect("Poisoned").clear();
+        self.push_undo_redo_state_to_ui();
+    }
+
+    /// Restores the most recent undo checkpoint, if any. Returns whether
+    /// there was one to restore - the caller is responsible for refreshing
+    /// every panel from the restored `settings` afterwards (there's no single
+    /// "refresh everything" entry point - see `UndoRedoController`).
+    pub fn undo(&self) -> bool {
+        let Some(prev) = self.undo_stack.lock().expect("Poisoned").pop_back() else {
+            return false;
+        };
+
+        let current = self.app.get_project().settings.clone();
+        let mut redo_stack = self.redo_stack.lock().expect("Poisoned");
+        redo_stack.push_back(current);
+        if redo_stack.len() > UNDO_STACK_LIMIT {
+            redo_stack.pop_front();
+        }
+        drop(redo_stack);
+
+        {
+            let mut project = self.app.get_project_write();
+            project.settings = prev;
+            // The restored settings may no longer contain the previously
+            // selected ROI (or contain a different one reusing the same
+            // list position) - drop the selection rather than risk it
+            // pointing at the wrong object.
+            project.set_selected_roi(None);
+        }
+        self.force_next_checkpoint.store(true, Ordering::Relaxed);
+        self.push_undo_redo_state_to_ui();
+        self.mark_dirty();
+        true
+    }
+
+    /// Re-applies the most recently undone checkpoint, if any. Same
+    /// refresh-after-restore contract as `undo()`.
+    pub fn redo(&self) -> bool {
+        let Some(next) = self.redo_stack.lock().expect("Poisoned").pop_back() else {
+            return false;
+        };
+
+        let current = self.app.get_project().settings.clone();
+        let mut undo_stack = self.undo_stack.lock().expect("Poisoned");
+        undo_stack.push_back(current);
+        if undo_stack.len() > UNDO_STACK_LIMIT {
+            undo_stack.pop_front();
+        }
+        drop(undo_stack);
+
+        {
+            let mut project = self.app.get_project_write();
+            project.settings = next;
+            project.set_selected_roi(None);
+        }
+        self.force_next_checkpoint.store(true, Ordering::Relaxed);
+        self.push_undo_redo_state_to_ui();
+        self.mark_dirty();
+        true
+    }
+
+    /// Pushes `ToolbarState.can_undo`/`can_redo` to the UI thread so the
+    /// toolbar buttons enable/disable themselves.
+    fn push_undo_redo_state_to_ui(&self) {
+        let can_undo = !self.undo_stack.lock().expect("Poisoned").is_empty();
+        let can_redo = !self.redo_stack.lock().expect("Poisoned").is_empty();
+        let ui = self.ui_handle.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(w) = ui.upgrade() {
+                w.global::<ToolbarState>().set_can_undo(can_undo);
+                w.global::<ToolbarState>().set_can_redo(can_redo);
+            }
+        })
+        .ok();
     }
 
     /// Returns or creates a cached image reader for the given path.
@@ -187,32 +338,12 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
 
     let ui = AppWindow::new()?;
     let ui_handle = ui.as_weak();
-
-    // About dialog content: version comes from the crate version (which the
-    // release CI patches to the git tag before building), the rest is read
-    // from the host machine once at startup - none of it changes at runtime.
-    {
-        let diagnostics = evanalyzer_core::system_diagnostics();
-        let info = ui.global::<AppInfoState>();
-        info.set_version(env!("CARGO_PKG_VERSION").into());
-        info.set_cpu_cores(diagnostics.cpu_cores as i32);
-        info.set_ram_total(
-            format!(
-                "{:.1} GB",
-                diagnostics.total_ram_bytes as f64 / 1_073_741_824.0
-            )
-            .into(),
-        );
-        info.set_cuda_available(diagnostics.cuda_available);
-        let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
-            .split("\n\n")
-            .map(|p| p.into())
-            .collect();
-        info.set_license_paragraphs(slint::ModelRc::new(slint::VecModel::from(paragraphs)));
-    }
-
     let results_ui = ResultsWindow::new()?;
     let results_ui_handle = results_ui.as_weak();
+
+    // Load and apply settings
+    load_about_dialog_information(&ui);
+    load_user_settings(&ui, &results_ui);
 
     // Build AppHandle from owner - shares the same Arc<RwLock<ProjectSettings>>
     let app_handle = owner.handle();
@@ -239,4 +370,49 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     editor.attach_callbacks();
 
     ui.run()
+}
+
+/// About dialog content: version comes from the crate version (which the
+/// release CI patches to the git tag before building), the rest is read
+/// from the host machine once at startup - none of it changes at runtime.
+fn load_about_dialog_information(ui: &AppWindow) {
+    let diagnostics = evanalyzer_core::system_diagnostics();
+    let info = ui.global::<AppInfoState>();
+    info.set_version(env!("CARGO_PKG_VERSION").into());
+    info.set_cpu_cores(diagnostics.cpu_cores as i32);
+    info.set_ram_total(
+        format!(
+            "{:.1} GB",
+            diagnostics.total_ram_bytes as f64 / 1_073_741_824.0
+        )
+        .into(),
+    );
+    info.set_cuda_available(diagnostics.cuda_available);
+    let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
+        .split("\n\n")
+        .map(|p| p.into())
+        .collect();
+    info.set_license_paragraphs(slint::ModelRc::new(slint::VecModel::from(paragraphs)));
+}
+
+/// Apply the persisted dark/light preference to both windows. Each window
+/// owns its own `Appearance`/`Palette` instance, so this has to be done
+/// for both explicitly - see the comment on `Appearance` in style.slint.
+fn load_user_settings(ui: &AppWindow, results_ui: &ResultsWindow) {
+    let settings = evanalyzer_app::settings::load_app_settings();
+    let results_ui_handle = results_ui.as_weak();
+    ui.global::<Appearance>().invoke_apply(settings.dark_mode);
+    results_ui
+        .global::<Appearance>()
+        .invoke_apply(settings.dark_mode);
+
+    let results_ui_handle = results_ui_handle.clone();
+    ui.global::<Appearance>().on_dark_mode_toggled(move |dark| {
+        evanalyzer_app::settings::save_app_settings(&evanalyzer_app::settings::AppSettings {
+            dark_mode: dark,
+        });
+        if let Some(results_ui) = results_ui_handle.upgrade() {
+            results_ui.global::<Appearance>().invoke_apply(dark);
+        }
+    });
 }

@@ -177,6 +177,7 @@ export component TemplateMetaDialog inherits Rectangle {
                 AppButton {
                     text: "Next…";
                     primary: true;
+                    enabled: TemplateMetaState.meta.name != "";
                     clicked => {
                         TemplateMetaState.confirm();
                     }

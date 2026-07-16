@@ -12,6 +12,67 @@
 - [ ] Add measure distance command
 - [ ] Allow to train pixel classifier
 
+## GUI review (Slint/gui crate)
+
+- [x] **Dark mode is fully implemented but forced off, with no toggle in the UI** — fixed: added a sun/moon `ToolToggleButton` in the toolbar ([`crates/gui/ui/toolbar.slint`](crates/gui/ui/toolbar.slint)) bound to `Theme.dark-mode`, backed by a new `Appearance` global ([`crates/gui/ui/style.slint`](crates/gui/ui/style.slint)) whose `apply()` function sets `Palette.color-scheme` in each window (`AppWindow`/`ResultsWindow` each own a private instance, so both are updated explicitly). The forced `Palette.color-scheme = ColorScheme.light` inits in `main.slint`/`results_window.slint` are gone, replaced by Rust applying the persisted preference right after each window is constructed. The preference is saved to `<user folder>/settings.json` via new `evanalyzer_app::settings::{AppSettings, load_app_settings, save_app_settings}`, backed by a new `evanalyzer_app::templates::get_user_folder()`.
+
+- [ ] **Deleting/classifying a preview ROI silently no-ops** — [`crates/gui/src/editor/roi_list_controller.rs:76-126`](crates/gui/src/editor/roi_list_controller.rs#L76-L126)
+  `on_roi_add_class`, `on_roi_remove_class`, and `on_roi_delete` resolve `roi_id` via `project.get_rois().get((roi_id-1) as usize)` only — i.e. the manual ROI list. But the row list shown in the panel is `manual ++ preview` (see `on_roi_selected` at line 60, which correctly branches on `manual_len`). Clicking Delete/Add Class/Remove Class on a row that's a live pipeline-preview ROI does nothing, with no error shown.
+  *Fix:* reuse the `manual_len` branch from `on_roi_selected` in the other three handlers.
+
+- [x] **Switching ROI-paint tools mid-draw commits a stale, wrong-location shape** — [`crates/gui/ui/editor/viewport.slint:349-376`](crates/gui/ui/editor/viewport.slint#L349-L376)
+  fixed: added `changed act_tool_state => { self.is_drawing = false; self.poly_idx = 0; }` to `ViewportRoiState` ([`crates/gui/ui/editor/viewport_state.slint`](crates/gui/ui/editor/viewport_state.slint)), so switching tools mid-draw abandons the in-progress shape instead of leaving stale `polygon_points`/`poly_idx` for the next paint click to finalize.
+
+- [x] Pipeline-progress dialog derives its success/error text color from a literal string match (`status-message == "Analysis completed successfully."`) instead of the `has-error` flag already computed for it — [`crates/gui/ui/dialogs/pipeline_running_dialog.slint:108`](crates/gui/ui/dialogs/pipeline_running_dialog.slint#L108). fixed: `color: PipelineRunningState.done && !PipelineRunningState.has-error ? Theme.accent : Theme.text-dim;`
+- [ ] Almost no dialog supports Escape-to-close — `BaseDialog` (`crates/gui/ui/dialogs/dialog_base.slint`) has no `FocusScope`/key handling, so every dialog built on it (classification edit/confirm, project settings, ROI/class delete confirms, warning, unsaved-changes, run-analysis, template-meta, images-missing, pipeline-edit, about) can only be dismissed by mouse-clicking Cancel/✕. Only `command_selection_dialog.slint` and `project_template_dialog.slint` handle `Key.Escape`. *Fix:* add Escape handling once in `BaseDialog`.
+- [x] `ToolToggleButton` ([`crates/gui/ui/components/toggle_button.slint:15-28`](crates/gui/ui/components/toggle_button.slint#L15-L28)) never dims its background/border/icon when `enabled: false` — fixed: added `opacity: root.enabled ? 1.0 : 0.35;` on the root `Rectangle`, matching the disabled-state pattern already used by `classification_panel.slint`/`roi_list_panel.slint`; cascades to the background, border, and icon together.
+- [x] `CustomLineEdit` has a static `border-color: Theme.bg;` that never reflects keyboard focus (`crates/gui/ui/components/custom_line_edit.slint:14-16`) — fixed: `border-color: input.has-focus ? Theme.accent : Theme.border;` with a 100ms animation, matching the border-color animation convention already used by `tool_button.slint`/`pipelines_panel.slint`.
+- [x] "Save as Template" dialog lets Name be submitted empty — the "Next…" button has no `enabled` gating and there's no inline validation ([`crates/gui/ui/dialogs/template_meta_dialog.slint:170-183`](crates/gui/ui/dialogs/template_meta_dialog.slint#L170-L183)); the template gets saved with an empty `meta.name`, showing up blank in template lists later.
+  fixed: `AppButton` ([`crates/gui/ui/components/app_button.slint`](crates/gui/ui/components/app_button.slint)) gained an `enabled` property (dims to 0.5 opacity, disables its `TouchArea`, cursor reverts to default) - previously it had none at all. "Next…" now sets `enabled: TemplateMetaState.meta.name != "";`.
+- [x] Toolbar's unsaved-changes dot hardcodes `#ff4444` instead of `Theme.err` ([`crates/gui/ui/toolbar.slint:62`](crates/gui/ui/toolbar.slint#L62)) — fixed: now `background: Theme.err;`.
+- [x] No keyboard accelerators anywhere (Save/Open/Undo etc. have no bound shortcuts, `crates/gui/ui/menu_bar.slint`) — every action requires the mouse.
+  fixed: added `Ctrl+S`/`Ctrl+Shift+S`/`Ctrl+O`/`Ctrl+Z`/`Ctrl+Shift+Z`/`Ctrl+Y` via a `FocusScope` wrapping the main `VerticalBox` in [`crates/gui/ui/main.slint`](crates/gui/ui/main.slint) (wrapping rather than a sibling `FocusScope`, so it's an ancestor of every panel's text fields and unhandled keys bubble up to it instead of only firing when nothing has focus; gated on `GlobalAppState.active_dialog == DialogType.none`). Undo/Redo didn't exist at all before this, so also implemented: `UiState` ([`crates/gui/src/lib.rs`](crates/gui/src/lib.rs)) now keeps bounded undo/redo stacks of `ProjectSettings` snapshots (cheap to clone - metadata/geometry only, no pixel buffers), taken automatically inside `get_project_write` - the one chokepoint all ~60 mutation call sites already go through - and coalesced within a 600ms window so a drag/typing burst is one undo step, not dozens. New `UndoRedoController` ([`crates/gui/src/editor/undo_redo_controller.rs`](crates/gui/src/editor/undo_redo_controller.rs)) wires the toolbar's new Undo/Redo buttons ([`crates/gui/ui/toolbar.slint`](crates/gui/ui/toolbar.slint), enabled via new `ToolbarState.can_undo`/`can_redo`) and refreshes every affected panel after a restore. Not tested interactively (no display in this environment) - only verified via `cargo build -p evanalyzer_gui`.
+
 ## Other
 
 - [ ] Add open recent files
+- [ ] **Image decoder can panic on real files, not just corrupt ones** — [`crates/core/src/image/image_reader.rs:970-984,1034-1036`](crates/core/src/image/image_reader.rs#L970-L1036)
+  If per-resolution metadata omits `BitsPerPixel` (plausible for pyramid sub-levels in real-world files), `nr_bits` defaults to 0 (`image_meta.rs:13` / `image_ome_parser.rs:251-254`). The decode path then calls `buffer.par_chunks_exact(0)` (panics unconditionally) or divides by `bytes_per_sample * source_planes` (divide-by-zero) — hard panic on open.
+  *Fix:* validate `nr_bits != 0` after metadata parsing, fall back or return a clean `InternalErrors` instead of reaching the decode path.
+
+- [ ] **StarDist panics on NaN model output** — [`crates/core/src/algos/ai_segmentation/stardist.rs:341,395`](crates/core/src/algos/ai_segmentation/stardist.rs#L341)
+  `partial_cmp().unwrap()` in both the polygon scanline x-crossing sort and NMS score sort will panic if the model emits NaN (degenerate/blank tile, incompatible model export) — kills the whole segmentation job. Zero test coverage on this file.
+  *Fix:* use `partial_cmp(...).unwrap_or(Ordering::Equal)` or filter NaN candidates before sorting; add tests.
+
+- [ ] **No crash visibility for beta users** — `crates/bin/src/main.rs:4-24`
+  Logging is `env_logger`→stderr only; nothing when double-clicked as a packaged app. No `std::panic::set_hook` anywhere in `gui`/`app`/`bin`. Combined with the next item, a crash is completely silent and unreportable — beta feedback will be "it just closed" with no way to diagnose it.
+  *Fix:* add a file log sink and a panic hook that writes the panic message/backtrace to a log file the user can attach to a bug report.
+
+  - [ ] `ImageMath` silently truncates output on mismatched cached-image sizes (`.zip()`s two differently-sized slices with no check) instead of erroring — silent wrong output, not a crash — [`crates/core/src/algos/math/image_math.rs`](crates/core/src/algos/math/image_math.rs).
+
+  ## Performance
+
+- [ ] **Canny is unparallelized and over-allocates** — [`edge_detection_canny.rs:106-156`](crates/core/src/algos/filters/edge_detection_canny.rs#L106)
+  4 fresh full-frame buffers allocated per call; every stage (except hysteresis DFS) is per-pixel parallel but runs single-threaded.
+  *Fix:* reusable scratch buffers, `par_iter_mut` for magnitude/direction/threshold, row-wise parallel NMS.
+
+- [ ] **Hessian wastes half its compute and is unparallelized** — [`hessian.rs:113-164`](crates/core/src/algos/filters/hessian.rs#L113)
+  Calls the gradient function 4 times; 3 outputs are discarded immediately (~half the convolution work wasted). Final eigenvalue loop is sequential, unlike the near-identical code in `structure_tensor.rs` which already uses `par_iter_mut`.
+
+- [ ] RGBA→RGB strip allocates a second full buffer via `flat_map`/`collect` instead of in-place compaction — [`image_reader.rs:823-828`](crates/core/src/image/image_reader.rs#L823).
+- [ ] `sync_channel::<PipelineCache>(4)` in job executor is a flat buffer count, not scaled to tile size — could hold several hundred MB extra in flight for large tiles. [`job_executor.rs:502,757`](crates/core/src/job/job_executor.rs#L502)
+- [ ] `pipeline_cache.rs` `Scratchpad` allocates a fresh zero-filled buffer on every request instead of reusing one — [`pipeline_cache.rs:76-119`](crates/core/src/pipeline/pipeline_cache.rs#L76)
+- [ ] Sequential per-pixel passes not using rayon, unlike sibling filters that already do:
+  - [`color_filter.rs:126-157`](crates/core/src/algos/filters/color_filter.rs#L126) (RGB→HSV via bounds-checked `get_pixel`/`set_pixel`)
+  - [`enhance_contrast.rs:206-286`](crates/core/src/algos/filters/enhance_contrast.rs#L206) and [`intensity_transform.rs:130-152`](crates/core/src/algos/filters/intensity_transform.rs#L130) (histogram + LUT passes)
+  - [`rolling_ball.rs:99-190`](crates/core/src/algos/filters/rolling_ball.rs#L99) (erosion/dilation passes, row-independent)
+- [ ] `cellpose.rs` `follow_flows` per-pixel Euler integration (up to 1000 iterations) is unparallelized despite independent pixel trajectories — [`cellpose.rs:252-269`](crates/core/src/algos/ai_segmentation/cellpose.rs#L252)
+- [ ] `stardist.rs` non-max-suppression is O(n²) candidate comparisons — could reuse the spatial-grid approach already implemented in `voronoi.rs` — [`stardist.rs:368-411`](crates/core/src/algos/ai_segmentation/stardist.rs#L368)
+- [x] GUI: `visible_channels.contains()` checked inside the innermost per-pixel loop, turning O(pixels×channels) into O(pixels×channels²) — [`viewport_worker.rs:557-577`](crates/gui/src/editor/viewport_worker.rs#L557)
+- [x] GUI: screen-space compositing loop is a serial ~8M-iteration loop per 4K frame while neighboring code uses rayon — [`viewport_worker.rs:387-406`](crates/gui/src/editor/viewport_worker.rs#L387)
+- [ ] GUI: `composite_roi_instances` allocates a full viewport-sized buffer and always runs a full border scan even when no ROIs are visible — [`viewport_controller.rs:435-507,824-844`](crates/gui/src/editor/viewport_controller.rs#L435)
+
+- [ ] `rank_filter.rs` median/outlier filter uses naive per-pixel sorting instead of a sliding histogram; has an unimplemented `// For parallel loop` hook — [`rank_filter.rs:149-218`](crates/core/src/algos/filters/rank_filter.rs#L149)
+- [ ] `Roi::measure_intensities`/`overlaps` are scalar nested loops, not parallelized (low severity — ROI bboxes are usually small) — [`roi.rs:634-755`](crates/core/src/roi.rs#L634)
+- [ ] GUI: command-picker filter rebuilds 5 `Vec`s on every keystroke with no debounce — low impact while the command list stays small — [`pipelines_controller.rs:1465-1502`](crates/gui/src/editor/pipelines_controller.rs#L1465)
+- [ ] `save_image.rs` full-buffer `map().collect()` per save call is sequential — low severity, debug/checkpoint path only — [`save_image.rs:78-158`](crates/core/src/algos/math/save_image.rs#L78)

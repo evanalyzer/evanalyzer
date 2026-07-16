@@ -94,3 +94,20 @@ export global Theme {
     out property <string> font-sans: "IBM Plex Sans";
     out property <string> font-mono: "IBM Plex Mono";
 }
+
+// Drives `Palette.color-scheme` explicitly (instead of leaving it at the
+// default `Unknown`, which lets the OS theme leak into std-widgets controls
+// while `Theme.dark-mode` above stays literally light/dark) so the whole
+// window - our own `Theme` colors and std-widgets alike - always agrees.
+// Each top-level window (`AppWindow`, `ResultsWindow`) gets its own instance
+// of this global, so Rust calls `apply()` on both after construction and on
+// every toggle to keep them in sync.
+export global Appearance {
+    // Fired whenever the user flips the toggle, so Rust can persist the
+    // choice and push it into the other window.
+    callback dark-mode-toggled(bool);
+
+    public function apply(dark: bool) {
+        Palette.color-scheme = dark ? ColorScheme.dark : ColorScheme.light;
+    }
+}

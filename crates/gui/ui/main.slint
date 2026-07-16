@@ -24,8 +24,7 @@ import { AboutDialog } from "dialogs/about.slint";
 import { CustomMenuBar } from "menu_bar.slint";
 import { SidebarRight } from "sidebar_right.slint";
 import { ImageMetaData } from "editor/image_meta_panel.slint";
-import { Palette } from "std-widgets.slint";
-import { Theme } from "style.slint";
+import { Theme, Appearance } from "style.slint";
 import { ImageMissingDialog } from "dialogs/images_missing_dialog.slint";
 import { GlobalAppState, DialogType, AppInfoState } from "state.slint";
 import {
@@ -112,7 +111,8 @@ export {GlobalAppState,ProjectSettingsSlint, ProjectSettingsState,
         TemplateMetaState, TemplateMetaSlint,
         ProjectTemplateState, ProjectTemplateDef,
         ResultsListState, WarningState, AppInfoState, UnsavedChangesState, RunAnalysisState,
-        ResultsWindow, ResultsState, ResultsColumnDef, ResultsRow, ResultsViewMode, ResultsChartKind  }
+        ResultsWindow, ResultsState, ResultsColumnDef, ResultsRow, ResultsViewMode, ResultsChartKind,
+        Appearance }
 
 
 export component AppWindow inherits Window {
@@ -136,53 +136,92 @@ export component AppWindow inherits Window {
     in property <image> ghost_image;
     in property <image> roi_image;
 
-    init => {
-        Palette.color-scheme = ColorScheme.light;
-    }
+    // Initial color scheme is applied from Rust (`Appearance.apply`) right
+    // after this window is constructed, using the persisted preference -
+    // see `evanalyzer_gui::run`.
 
-    VerticalBox {
-        padding: 0;
-        spacing: 0;
-
-        CustomMenuBar { }
-
-        Toolbar { }
-
-        Rectangle {
-            height: 1px;
-            background: Theme.border;
+    // Global keyboard accelerators for the main editing surface (Save/Open/
+    // Undo/Redo). Wrapping the `VerticalBox` (rather than adding a sibling
+    // `FocusScope`, the pattern the modal dialogs use) makes `kbd` an
+    // ancestor of every focusable widget inside it - e.g. a `LineEdit` in a
+    // sidebar panel - so an unhandled key press there bubbles up to this
+    // handler instead of only firing when nothing has focus. Gated on no
+    // dialog being open; dialogs live outside this subtree (see the
+    // "Overlay Manager" below) and have no bubble path back here anyway, but
+    // the guard is kept as a defensive belt-and-braces check.
+    forward-focus: kbd;
+    kbd := FocusScope {
+        key-pressed(e) => {
+            if (GlobalAppState.active_dialog != DialogType.none) {
+                return reject;
+            }
+            if (e.modifiers.control && e.text == "s") {
+                if (e.modifiers.shift) {
+                    ToolbarState.save_as_file_clicked();
+                } else {
+                    ToolbarState.save_file_clicked();
+                }
+                return accept;
+            }
+            if (e.modifiers.control && e.text == "o") {
+                ToolbarState.open_file_clicked();
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "z" || e.text == "y")) {
+                if (e.text == "y" || e.modifiers.shift) {
+                    ToolbarState.redo_clicked();
+                } else {
+                    ToolbarState.undo_clicked();
+                }
+                return accept;
+            }
+            return reject;
         }
 
-        HorizontalBox {
-            spacing: 0;
+        VerticalBox {
             padding: 0;
+            spacing: 0;
+
+            CustomMenuBar { }
+
+            Toolbar { }
+
             Rectangle {
-                width: 364px;
-                SidebarLeft { }
+                height: 1px;
+                background: Theme.border;
             }
 
-            Viewport {
-                display_image: root.display_image;
-                ghost_image: root.ghost_image;
-                roi_image: root.roi_image;
-                horizontal-stretch: 1;
-                enabled: GlobalAppState.active_dialog == DialogType.none;
-            }
-
-            // Image tools sidebar
-            if (GlobalAppState.show_image_tools): Rectangle {
-                width: 400px;
-                animate width {
-                    duration: 200ms;
-                    easing: ease-in-out;
+            HorizontalBox {
+                spacing: 0;
+                padding: 0;
+                Rectangle {
+                    width: 364px;
+                    SidebarLeft { }
                 }
 
-                SidebarRight { }
-            }
-        }
+                Viewport {
+                    display_image: root.display_image;
+                    ghost_image: root.ghost_image;
+                    roi_image: root.roi_image;
+                    horizontal-stretch: 1;
+                    enabled: GlobalAppState.active_dialog == DialogType.none;
+                }
 
-        // Status Bar
-        StatusBar { }
+                // Image tools sidebar
+                if (GlobalAppState.show_image_tools): Rectangle {
+                    width: 400px;
+                    animate width {
+                        duration: 200ms;
+                        easing: ease-in-out;
+                    }
+
+                    SidebarRight { }
+                }
+            }
+
+            // Status Bar
+            StatusBar { }
+        }
     }
 
     // The "Overlay Manager"
