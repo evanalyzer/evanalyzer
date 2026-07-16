@@ -24,8 +24,7 @@ import { AboutDialog } from "dialogs/about.slint";
 import { CustomMenuBar } from "menu_bar.slint";
 import { SidebarRight } from "sidebar_right.slint";
 import { ImageMetaData } from "editor/image_meta_panel.slint";
-import { Palette } from "std-widgets.slint";
-import { Theme } from "style.slint";
+import { Theme, Appearance } from "style.slint";
 import { ImageMissingDialog } from "dialogs/images_missing_dialog.slint";
 import { GlobalAppState, DialogType, AppInfoState } from "state.slint";
 import {
@@ -112,7 +111,8 @@ export {GlobalAppState,ProjectSettingsSlint, ProjectSettingsState,
         TemplateMetaState, TemplateMetaSlint,
         ProjectTemplateState, ProjectTemplateDef,
         ResultsListState, WarningState, AppInfoState, UnsavedChangesState, RunAnalysisState,
-        ResultsWindow, ResultsState, ResultsColumnDef, ResultsRow, ResultsViewMode, ResultsChartKind  }
+        ResultsWindow, ResultsState, ResultsColumnDef, ResultsRow, ResultsViewMode, ResultsChartKind,
+        Appearance }
 
 
 export component AppWindow inherits Window {
@@ -136,9 +136,9 @@ export component AppWindow inherits Window {
     in property <image> ghost_image;
     in property <image> roi_image;
 
-    init => {
-        Palette.color-scheme = ColorScheme.light;
-    }
+    // Initial color scheme is applied from Rust (`Appearance.apply`) right
+    // after this window is constructed, using the persisted preference -
+    // see `evanalyzer_gui::run`.
 
     VerticalBox {
         padding: 0;

@@ -50,6 +50,7 @@ impl ProjectSettings {
     ///     // migrate version 0/1 data into the version-2 shape
     /// }
     /// ```
+    #[warn(dead_code)]
     pub fn migrate(&mut self) {
         self.schema_version = CURRENT_PROJECT_SCHEMA_VERSION;
     }

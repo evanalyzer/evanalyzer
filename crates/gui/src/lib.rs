@@ -187,32 +187,12 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
 
     let ui = AppWindow::new()?;
     let ui_handle = ui.as_weak();
-
-    // About dialog content: version comes from the crate version (which the
-    // release CI patches to the git tag before building), the rest is read
-    // from the host machine once at startup - none of it changes at runtime.
-    {
-        let diagnostics = evanalyzer_core::system_diagnostics();
-        let info = ui.global::<AppInfoState>();
-        info.set_version(env!("CARGO_PKG_VERSION").into());
-        info.set_cpu_cores(diagnostics.cpu_cores as i32);
-        info.set_ram_total(
-            format!(
-                "{:.1} GB",
-                diagnostics.total_ram_bytes as f64 / 1_073_741_824.0
-            )
-            .into(),
-        );
-        info.set_cuda_available(diagnostics.cuda_available);
-        let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
-            .split("\n\n")
-            .map(|p| p.into())
-            .collect();
-        info.set_license_paragraphs(slint::ModelRc::new(slint::VecModel::from(paragraphs)));
-    }
-
     let results_ui = ResultsWindow::new()?;
     let results_ui_handle = results_ui.as_weak();
+
+    // Load and apply settings
+    load_about_dialog_information(&ui);
+    load_user_settings(&ui, &results_ui);
 
     // Build AppHandle from owner - shares the same Arc<RwLock<ProjectSettings>>
     let app_handle = owner.handle();
@@ -239,4 +219,49 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     editor.attach_callbacks();
 
     ui.run()
+}
+
+/// About dialog content: version comes from the crate version (which the
+/// release CI patches to the git tag before building), the rest is read
+/// from the host machine once at startup - none of it changes at runtime.
+fn load_about_dialog_information(ui: &AppWindow) {
+    let diagnostics = evanalyzer_core::system_diagnostics();
+    let info = ui.global::<AppInfoState>();
+    info.set_version(env!("CARGO_PKG_VERSION").into());
+    info.set_cpu_cores(diagnostics.cpu_cores as i32);
+    info.set_ram_total(
+        format!(
+            "{:.1} GB",
+            diagnostics.total_ram_bytes as f64 / 1_073_741_824.0
+        )
+        .into(),
+    );
+    info.set_cuda_available(diagnostics.cuda_available);
+    let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
+        .split("\n\n")
+        .map(|p| p.into())
+        .collect();
+    info.set_license_paragraphs(slint::ModelRc::new(slint::VecModel::from(paragraphs)));
+}
+
+/// Apply the persisted dark/light preference to both windows. Each window
+/// owns its own `Appearance`/`Palette` instance, so this has to be done
+/// for both explicitly - see the comment on `Appearance` in style.slint.
+fn load_user_settings(ui: &AppWindow, results_ui: &ResultsWindow) {
+    let settings = evanalyzer_app::settings::load_app_settings();
+    let results_ui_handle = results_ui.as_weak();
+    ui.global::<Appearance>().invoke_apply(settings.dark_mode);
+    results_ui
+        .global::<Appearance>()
+        .invoke_apply(settings.dark_mode);
+
+    let results_ui_handle = results_ui_handle.clone();
+    ui.global::<Appearance>().on_dark_mode_toggled(move |dark| {
+        evanalyzer_app::settings::save_app_settings(&evanalyzer_app::settings::AppSettings {
+            dark_mode: dark,
+        });
+        if let Some(results_ui) = results_ui_handle.upgrade() {
+            results_ui.global::<Appearance>().invoke_apply(dark);
+        }
+    });
 }

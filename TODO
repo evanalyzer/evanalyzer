@@ -12,6 +12,26 @@
 - [ ] Add measure distance command
 - [ ] Allow to train pixel classifier
 
+## GUI review (Slint/gui crate)
+
+- [x] **Dark mode is fully implemented but forced off, with no toggle in the UI** — fixed: added a sun/moon `ToolToggleButton` in the toolbar ([`crates/gui/ui/toolbar.slint`](crates/gui/ui/toolbar.slint)) bound to `Theme.dark-mode`, backed by a new `Appearance` global ([`crates/gui/ui/style.slint`](crates/gui/ui/style.slint)) whose `apply()` function sets `Palette.color-scheme` in each window (`AppWindow`/`ResultsWindow` each own a private instance, so both are updated explicitly). The forced `Palette.color-scheme = ColorScheme.light` inits in `main.slint`/`results_window.slint` are gone, replaced by Rust applying the persisted preference right after each window is constructed. The preference is saved to `<user folder>/settings.json` via new `evanalyzer_app::settings::{AppSettings, load_app_settings, save_app_settings}`, backed by a new `evanalyzer_app::templates::get_user_folder()`.
+
+- [ ] **Deleting/classifying a preview ROI silently no-ops** — [`crates/gui/src/editor/roi_list_controller.rs:76-126`](crates/gui/src/editor/roi_list_controller.rs#L76-L126)
+  `on_roi_add_class`, `on_roi_remove_class`, and `on_roi_delete` resolve `roi_id` via `project.get_rois().get((roi_id-1) as usize)` only — i.e. the manual ROI list. But the row list shown in the panel is `manual ++ preview` (see `on_roi_selected` at line 60, which correctly branches on `manual_len`). Clicking Delete/Add Class/Remove Class on a row that's a live pipeline-preview ROI does nothing, with no error shown.
+  *Fix:* reuse the `manual_len` branch from `on_roi_selected` in the other three handlers.
+
+- [ ] **Switching ROI-paint tools mid-draw commits a stale, wrong-location shape** — [`crates/gui/ui/editor/viewport.slint:349-376`](crates/gui/ui/editor/viewport.slint#L349-L376)
+  `ViewportRoiState.is_drawing`/`poly_idx` aren't reset when `act_tool_state` changes via the toolbar (`toolbar.slint:93-137` only assigns the enum). Start drawing a rectangle, then click a different tool before finishing — the next click on any paint tool finalizes the ROI using the stale cached points from the abandoned shape.
+  *Fix:* reset `is_drawing = false; poly_idx = 0;` on `changed act_tool_state` in `ViewportRoiState`.
+
+- [ ] Pipeline-progress dialog derives its success/error text color from a literal string match (`status-message == "Analysis completed successfully."`) instead of the `has-error` flag already computed for it — [`crates/gui/ui/dialogs/pipeline_running_dialog.slint:108`](crates/gui/ui/dialogs/pipeline_running_dialog.slint#L108). `pipeline_worker.rs:302-337` sets `has-error` correctly and the sibling `preview_rendering_dialog.slint` already keys off it; this dialog will silently break (wrong color, no compile error) the moment the message text changes. *Fix:* `color: PipelineRunningState.done && !PipelineRunningState.has-error ? Theme.accent : Theme.text-dim;`
+- [ ] Almost no dialog supports Escape-to-close — `BaseDialog` (`crates/gui/ui/dialogs/dialog_base.slint`) has no `FocusScope`/key handling, so every dialog built on it (classification edit/confirm, project settings, ROI/class delete confirms, warning, unsaved-changes, run-analysis, template-meta, images-missing, pipeline-edit, about) can only be dismissed by mouse-clicking Cancel/✕. Only `command_selection_dialog.slint` and `project_template_dialog.slint` handle `Key.Escape`. *Fix:* add Escape handling once in `BaseDialog`.
+- [ ] `ToolToggleButton` ([`crates/gui/ui/components/toggle_button.slint:15-28`](crates/gui/ui/components/toggle_button.slint#L15-L28)) never dims its background/border/icon when `enabled: false` — only the `TouchArea` is gated. The permanently-disabled logo button in `toolbar.slint` renders indistinguishable from a clickable tool, inviting users to click a dead button.
+- [ ] `CustomLineEdit` has a static `border-color: Theme.bg;` that never reflects keyboard focus (`crates/gui/ui/components/custom_line_edit.slint:14-16`) — unlike every other themed input, tabbing into it gives no visual confirmation it's focused.
+- [ ] "Save as Template" dialog lets Name be submitted empty — the "Next…" button has no `enabled` gating and there's no inline validation ([`crates/gui/ui/dialogs/template_meta_dialog.slint:170-183`](crates/gui/ui/dialogs/template_meta_dialog.slint#L170-L183)); the template gets saved with an empty `meta.name`, showing up blank in template lists later.
+- [ ] Toolbar's unsaved-changes dot hardcodes `#ff4444` instead of `Theme.err` ([`crates/gui/ui/toolbar.slint:62`](crates/gui/ui/toolbar.slint#L62)) — same semantic meaning, different shade than everywhere else, and won't track future theme/dark-mode tuning.
+- [ ] No keyboard accelerators anywhere (Save/Open/Undo etc. have no bound shortcuts, `crates/gui/ui/menu_bar.slint`) — every action requires the mouse. Larger effort; worth a `FocusScope` in `main.slint` eventually.
+
 ## Other
 
 - [ ] Add open recent files
