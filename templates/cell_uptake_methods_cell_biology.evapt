@@ -6,7 +6,13 @@
     "authorFirstName": "Melanie",
     "authorLastName": "Schuerz, Anna Dlugosch",
     "authorOrganization": "LBI NVPM",
-    "creationTime": "2026-06-11T00:00:00Z"
+    "creationTime": "2026-06-11T00:00:00Z",
+    "category": "Cell Biology / Uptake",
+    "tags": [
+      "uptake-assay",
+      "course",
+      "teaching"
+    ]
   },
   "classification": {
     "classes": [

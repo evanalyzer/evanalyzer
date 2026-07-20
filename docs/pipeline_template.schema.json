@@ -1100,6 +1100,11 @@
           "description": "Author organization",
           "type": "string"
         },
+        "category": {
+          "description": "Category used to group templates in pickers (e.g. \"Cell Biology / Uptake\")",
+          "type": "string",
+          "default": ""
+        },
         "creationTime": {
           "description": "Creation time",
           "type": "string",
@@ -1116,6 +1121,14 @@
         "shortDescription": {
           "description": "A short one line description of the module",
           "type": "string"
+        },
+        "tags": {
+          "description": "Free-form keywords used to search/filter templates",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [

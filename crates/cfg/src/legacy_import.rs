@@ -126,6 +126,8 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         author_last_name,
         author_organization: m.organization.clone().unwrap_or_default(),
         creation_time,
+        category: String::new(),
+        tags: Vec::new(),
     }
 }
 

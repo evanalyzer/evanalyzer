@@ -6,7 +6,9 @@
     "authorFirstName": "Melanie",
     "authorLastName": "Schuerz",
     "authorOrganization": "University of Salzburg",
-    "creationTime": "2026-06-11T00:00:00Z"
+    "creationTime": "2026-06-11T00:00:00Z",
+    "category": "Cell Biology / Uptake",
+    "tags": ["uptake-assay", "colocalization", "brightfield", "2-channel"]
   },
   "classification": {
     "classes": [
