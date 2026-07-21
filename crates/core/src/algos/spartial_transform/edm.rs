@@ -327,4 +327,82 @@ mod tests {
 
         Ok(())
     }
+
+    /// Golden-data regression for the `edges_are_background` port bug: a disc
+    /// (r=4) flush against the LEFT image border. Expected values are the exact
+    /// output of the reference `Edm::makeFloatEDM(binary8, 0, /*edgesAreBackground=*/false)`
+    /// (`docs/watershed/edm.cpp`), run through a standalone harness built against
+    /// that file. `Watershed::execute` in the C++ reference
+    /// (`docs/watershed/watershed.hpp:56`) always passes `edgesAreBackground=false`
+    /// - the image edge is not an implicit background wall. With
+    /// `edges_are_background: true` (the bug this test caught), the whole left
+    /// half of the disc collapses to ~1.0 instead of growing up to ~4.12 at its
+    /// centre.
+    #[test]
+    fn test_distance_transform_matches_cpp_reference_border_touching_disc() -> Result<(), Box<dyn std::error::Error>>
+    {
+        const MASK: &[&str] = &[
+            "............",
+            "#...........",
+            "###.........",
+            "####........",
+            "####........",
+            "#####.......",
+            "####........",
+            "####........",
+            "###.........",
+            "#...........",
+        ];
+        let width = MASK[0].len();
+        let height = MASK.len();
+        let data: Vec<f32> = MASK
+            .iter()
+            .flat_map(|row| row.chars().map(|c| if c == '#' { 1.0 } else { 0.0 }))
+            .collect();
+
+        #[rustfmt::skip]
+        const EXPECTED: &[f32] = &[
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.41421, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            2.23607, 2.0, 1.41421, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            3.16228, 2.82843, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            4.12311, 3.16228, 2.23607, 1.41421, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            3.16228, 2.82843, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            2.23607, 2.0, 1.41421, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.41421, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize { width, height },
+            data,
+            CpuAllocator,
+        )?;
+        let mut ctx = PipelineContext::new_from_image_test(img)?;
+        let mut cache = PipelineCache::default();
+
+        let edm = DistanceTransform {
+            threshold: 0.0,
+            edges_are_background: false,
+        };
+        edm.execute(&mut ctx, &mut cache)?;
+
+        let result_container = ctx.image;
+        let ImageContainer::F32Gray(res_img) = result_container.as_ref() else {
+            panic!("Output was not F32Gray");
+        };
+        let actual = res_img.as_slice();
+
+        for (i, (&a, &e)) in actual.iter().zip(EXPECTED.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-4,
+                "pixel {} (x={}, y={}): got {a}, expected {e} (C++ reference)",
+                i,
+                i % width,
+                i / width
+            );
+        }
+        Ok(())
+    }
 }
