@@ -1970,6 +1970,9 @@ export global PipelinesPanelState {
     in-out property <bool> show-breakpoint-image: false;
     // True once a breakpoint image has been captured (enables the toggle).
     in-out property <bool> has-breakpoint-image: false;
+    // Which buffer the breakpoint preview renders: 0 = processed image,
+    // 1 = segmentation map, 2 = instance map.
+    in-out property <int> breakpoint-view-mode: 0;
     // True once auto preview is enabled
     in-out property <bool> auto-preview-enabled: false;
 
@@ -1980,6 +1983,9 @@ export global PipelinesPanelState {
     // Fired whenever the breakpoint-image toggle changes so Rust can
     // switch the viewport worker between original and breakpoint rendering.
     callback show-breakpoint-image-changed(bool);
+    // Fired whenever the breakpoint view-mode dropdown changes (see
+    // breakpoint-view-mode above for the value meaning).
+    callback breakpoint-view-mode-changed(int);
         callback select-pipeline(int);
         callback toggle-pipeline(int);
         callback move-pipeline-up(int);
@@ -2460,7 +2466,7 @@ export component PipelinesPanel inherits Rectangle {
 
             // --- 6. Run bar ---
         Rectangle {
-                height: PipelinesPanelState.has-breakpoint-image ? 114px : 76px;
+                height: PipelinesPanelState.show-breakpoint-image ? 148px : (PipelinesPanelState.has-breakpoint-image ? 114px : 76px);
 
                 // Top hairline
             Rectangle {
@@ -2539,6 +2545,90 @@ export component PipelinesPanel inherits Rectangle {
                             clicked => {
                                 PipelinesPanelState.show-breakpoint-image = !PipelinesPanelState.show-breakpoint-image;
                                 PipelinesPanelState.show-breakpoint-image-changed(PipelinesPanelState.show-breakpoint-image);
+                            }
+                        }
+                    }
+
+                    // Breakpoint buffer picker (image / segmentation / instances) -
+                    // only meaningful while the breakpoint image is actually shown.
+                    if PipelinesPanelState.has-breakpoint-image && PipelinesPanelState.show-breakpoint-image: bp-mode-ta := TouchArea {
+                        height: 26px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            bp-mode-popup.show();
+                        }
+
+                        Rectangle {
+                            background: bp-mode-ta.has-hover ? Theme.hover : Theme.raised;
+                            border-color: Theme.border;
+                            border-width: 1px;
+                            border-radius: 5px;
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                alignment: space-between;
+
+                                Text {
+                                    text: PipelinesPanelState.breakpoint-view-mode == 1 ? "Segmentation" : PipelinesPanelState.breakpoint-view-mode == 2 ? "Instances" : "Processed image";
+                                    font-size: 11px;
+                                    color: Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "▼";
+                                    font-size: 9px;
+                                    color: Theme.text-mute;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        bp-mode-popup := PopupWindow {
+                            x: 0;
+                            y: bp-mode-ta.height + 4px;
+                            width: bp-mode-ta.width;
+                            height: 3 * 32px;
+
+                            Rectangle {
+                                background: Theme.raised;
+                                border-color: Theme.border;
+                                border-width: 1px;
+                                border-radius: 4px;
+
+                                VerticalLayout {
+                                    padding: 4px;
+                                    spacing: 2px;
+
+                                    for entry[i] in [
+                                        { label: "Processed image", value: 0 },
+                                        { label: "Segmentation", value: 1 },
+                                        { label: "Instances", value: 2 },
+                                    ]: item-ta := TouchArea {
+                                        height: 28px;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            PipelinesPanelState.breakpoint-view-mode = entry.value;
+                                            PipelinesPanelState.breakpoint-view-mode-changed(entry.value);
+                                            bp-mode-popup.close();
+                                        }
+
+                                        Rectangle {
+                                            background: item-ta.has-hover ? Theme.hover : (PipelinesPanelState.breakpoint-view-mode == entry.value ? Theme.border-soft : transparent);
+                                            border-radius: 2px;
+
+                                            Text {
+                                                text: entry.label;
+                                                font-size: 11px;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                                horizontal-alignment: left;
+                                                x: 8px;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

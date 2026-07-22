@@ -60,6 +60,15 @@
     },
     {
       "enabled": true,
+      "command":{
+        "type": "rollingBall",
+        "ballType": "BALL",
+        "preSmooth": false,
+        "radius": 4
+      }
+    },
+    {
+      "enabled": true,
       "command": {
         "type": "threshold",
         "thresholds": [
