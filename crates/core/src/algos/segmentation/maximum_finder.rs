@@ -104,22 +104,13 @@ impl MaximumFinder {
         // probe it for every pixel and again for several of its neighbors -
         // precomputing it once turns that repeated, branch-heavy recomputation
         // into a single array lookup at each call site.
-        let t = std::time::Instant::now();
         let true_heights = self.compute_true_heights(ip);
-        eprintln!("  compute_true_heights: {:?}", t.elapsed());
 
-        let t = std::time::Instant::now();
         let max_points =
             self.get_sorted_max_points(ip, &true_heights, &mut types, global_min, global_max);
-        eprintln!(
-            "  get_sorted_max_points: {:?} ({} maxima)",
-            t.elapsed(),
-            max_points.len()
-        );
 
         // For float EDMs the integer-encoded sort order may be off by this much.
         let max_sorting_error = 1.1 * (SQRT2 / 2.0);
-        let t = std::time::Instant::now();
         self.analyze_and_mark_maxima(
             ip,
             &true_heights,
@@ -129,20 +120,11 @@ impl MaximumFinder {
             tolerance,
             max_sorting_error,
         );
-        eprintln!("  analyze_and_mark_maxima: {:?}", t.elapsed());
 
-        let t = std::time::Instant::now();
         let mut out = self.make8bit(ip, &types, global_max);
-        eprintln!("  make8bit: {:?}", t.elapsed());
-        let t = std::time::Instant::now();
         self.cleanup_maxima(&mut out, &mut types, &max_points);
-        eprintln!("  cleanup_maxima: {:?}", t.elapsed());
-        let t = std::time::Instant::now();
         self.watershed_segment(&mut out);
-        eprintln!("  watershed_segment: {:?}", t.elapsed());
-        let t = std::time::Instant::now();
         self.watershed_post_process(&mut out);
-        eprintln!("  watershed_post_process: {:?}", t.elapsed());
         out
     }
 
