@@ -33,7 +33,7 @@
             "minThreshold": 0.0,
             "maxThreshold": 65535.0,
             "unit": "bit",
-            "objectClassId": 1
+            "objectClassId": 3
           }
         ]
       }
@@ -63,15 +63,21 @@
     {
       "enabled": true,
       "command": {
+        "type": ""
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
         "type": "classifyRois",
-        "originSegmentation": [
-          1
+        "inputClasses": [
+          {
+            "VALID": 3
+          }
         ],
-        "inputClasses": [],
-        "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-        "outputClass": {
-          "VALID": 1
-        },
+        "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+        "originSegmentation": [],
+        "outputClass": "UNSET",
         "overlappingWith": "UNSET",
         "minIntersectionArea": 0.0,
         "sizeUnit": "px",

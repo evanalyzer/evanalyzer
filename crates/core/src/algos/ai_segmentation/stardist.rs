@@ -130,28 +130,13 @@ impl ImageAlgorithm for Stardist {
         let kept = Self::non_max_suppress(candidates, self.nms_threshold);
 
         let foreground_class = self.object_class_id.as_u32();
-        let seg_slice = segmentation_map.as_slice_mut();
-        let inst_slice = instance_map.as_slice_mut();
-
-        for (instance_id, candidate) in (1u32..).zip(kept.iter()) {
-            let [min_x, min_y, max_x, max_y] = candidate.bbox;
-            let local_w = (max_x - min_x + 1) as usize;
-            for y in min_y..=max_y {
-                for x in min_x..=max_x {
-                    let local_idx = (y - min_y) as usize * local_w + (x - min_x) as usize;
-                    if !candidate.mask[local_idx] {
-                        continue;
-                    }
-                    let global_idx = y as usize * width + x as usize;
-                    // First (highest-scoring) candidate to claim a pixel wins.
-                    if inst_slice[global_idx] != 0 {
-                        continue;
-                    }
-                    inst_slice[global_idx] = instance_id;
-                    seg_slice[global_idx] = foreground_class;
-                }
-            }
-        }
+        Self::write_instances(
+            &kept,
+            width,
+            foreground_class,
+            segmentation_map.as_slice_mut(),
+            instance_map.as_slice_mut(),
+        );
 
         Ok(())
     }
@@ -419,6 +404,44 @@ impl Stardist {
             .map(|i| slots[i].take().unwrap())
             .collect()
     }
+
+    /// Rasterizes the kept candidates into `seg_slice`/`inst_slice`.
+    ///
+    /// `seg_slice`/`inst_slice` may be reused buffers carrying stale labels
+    /// from an earlier segmentation pass in the same pipeline, so every pixel
+    /// not covered by a surviving candidate is explicitly reset to
+    /// background (0) up front - the per-candidate loop below only ever
+    /// writes pixels it actually claims.
+    fn write_instances(
+        kept: &[Candidate],
+        width: usize,
+        foreground_class: u32,
+        seg_slice: &mut [u32],
+        inst_slice: &mut [u32],
+    ) {
+        seg_slice.fill(0);
+        inst_slice.fill(0);
+
+        for (instance_id, candidate) in (1u32..).zip(kept.iter()) {
+            let [min_x, min_y, max_x, max_y] = candidate.bbox;
+            let local_w = (max_x - min_x + 1) as usize;
+            for y in min_y..=max_y {
+                for x in min_x..=max_x {
+                    let local_idx = (y - min_y) as usize * local_w + (x - min_x) as usize;
+                    if !candidate.mask[local_idx] {
+                        continue;
+                    }
+                    let global_idx = y as usize * width + x as usize;
+                    // First (highest-scoring) candidate to claim a pixel wins.
+                    if inst_slice[global_idx] != 0 {
+                        continue;
+                    }
+                    inst_slice[global_idx] = instance_id;
+                    seg_slice[global_idx] = foreground_class;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -593,6 +616,44 @@ mod tests {
         let kept = Stardist::non_max_suppress(candidates, 0.3);
         let scores: Vec<f32> = kept.iter().map(|c| c.score).collect();
         assert_eq!(scores, vec![0.9, 0.6, 0.3]);
+    }
+
+    // ---- write_instances ----
+
+    #[test]
+    fn write_instances_resets_stale_buffers_when_no_candidates_survive() {
+        // Regression: `seg_slice`/`inst_slice` may be reused buffers from an
+        // earlier segmentation pass. Finding zero surviving candidates must
+        // still reset them to background, not preserve stale labels.
+        let mut seg = vec![9u32; 9]; // stale sentinel, 3x3 image
+        let mut inst = vec![9u32; 9];
+        Stardist::write_instances(&[], 3, 7, &mut seg, &mut inst);
+        assert_eq!(seg, vec![0; 9]);
+        assert_eq!(inst, vec![0; 9]);
+    }
+
+    #[test]
+    fn write_instances_resets_stale_pixels_outside_every_surviving_candidate() {
+        // A single 2x2 candidate in the top-left corner of a 4x4 image;
+        // every other pixel must end up reset to background even though it
+        // starts out with a stale nonzero sentinel.
+        let candidates = vec![square(0, 0, 2, 0.9)];
+        let mut seg = vec![9u32; 16];
+        let mut inst = vec![9u32; 16];
+        Stardist::write_instances(&candidates, 4, 7, &mut seg, &mut inst);
+
+        for y in 0..4 {
+            for x in 0..4 {
+                let idx = y * 4 + x;
+                if x < 2 && y < 2 {
+                    assert_eq!(inst[idx], 1, "pixel ({x},{y}) should belong to instance 1");
+                    assert_eq!(seg[idx], 7, "pixel ({x},{y}) should carry the foreground class");
+                } else {
+                    assert_eq!(inst[idx], 0, "pixel ({x},{y}) should be reset to background");
+                    assert_eq!(seg[idx], 0, "pixel ({x},{y}) should be reset to background");
+                }
+            }
+        }
     }
 
     // ---- known-bug regression tests: NaN model output panics ----

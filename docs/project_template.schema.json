@@ -678,7 +678,7 @@
       "description": "Identifies and labels discrete objects within a binary or multi-class image.",
       "type": "object",
       "properties": {
-        "minSizePx": {
+        "minSize": {
           "description": "unit: px²",
           "type": "integer",
           "format": "int32",
@@ -1264,6 +1264,11 @@
           "description": "Author organization",
           "type": "string"
         },
+        "category": {
+          "description": "Category used to group templates in pickers (e.g. \"Cell Biology / Uptake\")",
+          "type": "string",
+          "default": ""
+        },
         "creationTime": {
           "description": "Creation time",
           "type": "string",
@@ -1280,6 +1285,14 @@
         "shortDescription": {
           "description": "A short one line description of the module",
           "type": "string"
+        },
+        "tags": {
+          "description": "Free-form keywords used to search/filter templates",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [

@@ -138,6 +138,14 @@ impl PipelinesController {
                     manager.viewport_controller.set_show_breakpoint(show);
                 });
 
+            // Breakpoint buffer picker: 0 = processed image, 1 = segmentation,
+            // 2 = instances.
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_breakpoint_view_mode_changed(move |mode| {
+                    manager.viewport_controller.set_breakpoint_view_mode(mode);
+                });
+
             // Full run pipeline - opens the job-name confirm dialog first
             // rather than dispatching immediately (see `open_run_analysis_dialog`).
             let manager = self.clone();

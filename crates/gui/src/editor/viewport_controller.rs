@@ -6,8 +6,28 @@ use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_core::ImageContainer;
 use slint::{Color, ComponentHandle, VecModel};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+
+/// Which buffer the breakpoint preview renders. Mirrors the `int` values
+/// used on the Slint side (`PipelinesPanelState.breakpoint-view-mode`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum BreakpointViewMode {
+    #[default]
+    Image = 0,
+    Segmentation = 1,
+    Instances = 2,
+}
+
+impl BreakpointViewMode {
+    pub fn from_i32(v: i32) -> Self {
+        match v {
+            1 => Self::Segmentation,
+            2 => Self::Instances,
+            _ => Self::Image,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ViewportState {
@@ -28,6 +48,13 @@ pub struct ViewportOverlayState {
 /// Raw breakpoint image data retained for re-rendering when histogram settings change.
 pub struct BreakpointChannelData {
     pub image: Arc<ImageContainer>,
+    /// Segmentation/instance label maps captured at the same breakpoint
+    /// step, if the pipeline had produced them by then. `None` before
+    /// `Threshold`/`ConnectedComponents`/`Watershed` respectively - the
+    /// render loop falls back to `image` when the buffer the current
+    /// `BreakpointViewMode` wants isn't available yet.
+    pub segmentation: Option<Arc<ImageContainer>>,
+    pub instances: Option<Arc<ImageContainer>>,
     pub tile_offset_x: usize,
     pub tile_offset_y: usize,
     pub tile_width: usize,
@@ -35,6 +62,11 @@ pub struct BreakpointChannelData {
     /// Original image bit depth — forwarded to `ReadContext.bit_depth` so the
     /// pixel-value HUD scales values correctly (e.g. ×65535 for 16-bit).
     pub nr_bits: u8,
+    /// The channel the breakpointed pipeline actually started from, so
+    /// rendering can look up *that* channel's histogram/LUT settings
+    /// instead of an unrelated one. `None` when the pipeline didn't start
+    /// from a plain channel address; falls back to channel 0 for rendering.
+    pub channel_idx: Option<i32>,
 }
 
 pub struct DrawingTaskContainer {
@@ -59,6 +91,9 @@ pub struct ViewportController {
     /// When `true` the HighRes viewport worker renders `breakpoint_channel`
     /// instead of loading from disk.
     pub(crate) show_breakpoint: Arc<AtomicBool>,
+    /// Which of `breakpoint_channel`'s buffers to render (image/segmentation/
+    /// instances). Stored as the raw `BreakpointViewMode` discriminant.
+    pub(crate) breakpoint_view_mode: Arc<AtomicU8>,
     pub(crate) high_res_posted_count: Arc<AtomicU64>,
     pub(crate) high_res_last_count_at_false: Arc<AtomicU64>,
     pub(crate) high_res_is_ready: AtomicBool,
@@ -119,6 +154,7 @@ impl ViewportController {
             drawing_tasks,
             breakpoint_channel: Arc::new(RwLock::new(None)),
             show_breakpoint: Arc::new(AtomicBool::new(false)),
+            breakpoint_view_mode: Arc::new(AtomicU8::new(BreakpointViewMode::default() as u8)),
             high_res_posted_count: Arc::new(AtomicU64::new(0)),
             high_res_last_count_at_false: Arc::new(AtomicU64::new(0)),
             high_res_is_ready: AtomicBool::new(false),
@@ -316,24 +352,31 @@ impl ViewportController {
     ///
     /// If the breakpoint toggle is already active a high-res redraw is triggered
     /// immediately so the new image appears without requiring a pan or zoom.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_breakpoint_channel(
         &self,
         image: ImageContainer,
+        segmentation: Option<ImageContainer>,
+        instances: Option<ImageContainer>,
         tile_offset_x: usize,
         tile_offset_y: usize,
         tile_width: usize,
         tile_height: usize,
         nr_bits: u8,
+        channel_idx: Option<i32>,
     ) {
         {
             let mut ch = self.breakpoint_channel.write().unwrap();
             *ch = Some(BreakpointChannelData {
                 image: Arc::new(image),
+                segmentation: segmentation.map(Arc::new),
+                instances: instances.map(Arc::new),
                 tile_offset_x,
                 tile_offset_y,
                 tile_width,
                 tile_height,
                 nr_bits,
+                channel_idx,
             });
         }
         let ui_weak = self.ui.clone();
@@ -357,6 +400,22 @@ impl ViewportController {
     pub fn set_show_breakpoint(&self, show: bool) {
         self.show_breakpoint.store(show, Ordering::Relaxed);
         self.trigger_image_redraw();
+    }
+
+    /// Reads the currently selected breakpoint view mode (image/segmentation/
+    /// instances).
+    pub fn breakpoint_view_mode(&self) -> BreakpointViewMode {
+        BreakpointViewMode::from_i32(self.breakpoint_view_mode.load(Ordering::Relaxed) as i32)
+    }
+
+    /// Sets which buffer the breakpoint preview renders, then triggers a
+    /// redraw if the breakpoint view is currently active.
+    pub fn set_breakpoint_view_mode(&self, mode: i32) {
+        self.breakpoint_view_mode
+            .store(BreakpointViewMode::from_i32(mode) as u8, Ordering::Relaxed);
+        if self.show_breakpoint.load(Ordering::Relaxed) {
+            self.trigger_image_redraw();
+        }
     }
 
     pub fn sync_high_res_ready_to_slint(&self, ready: bool) {

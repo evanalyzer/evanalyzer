@@ -9,6 +9,8 @@ export struct TemplateMetaSlint {
     description: string,
     author_name: string,
     author_organization: string,
+    category: string,
+    tags: string,
 }
 
 export global TemplateMetaState {
@@ -19,7 +21,11 @@ export global TemplateMetaState {
         description: "",
         author_name: "",
         author_organization: "",
+        category: "",
+        tags: "",
     };
+    // Suggested categories from templates already on disk, shown as quick-pick chips.
+    in property <[string]> known-categories;
 
     callback confirm();
     callback cancel();
@@ -164,6 +170,65 @@ export component TemplateMetaDialog inherits Rectangle {
                 }
             }
 
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Category";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    height: 30px;
+                    text <=> TemplateMetaState.meta.category;
+                    placeholder-text: "e.g. Cell Biology / Uptake";
+                }
+
+                if TemplateMetaState.known-categories.length > 0: HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    for c in TemplateMetaState.known-categories: Rectangle {
+                        height: 20px;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.border-soft;
+                        background: cat-ta.has-hover ? Theme.raised : transparent;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            Text {
+                                text: c;
+                                font-size: 10px;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        cat-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                TemplateMetaState.meta.category = c;
+                            }
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                Text {
+                    text: "Tags";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                }
+
+                LineEdit {
+                    height: 30px;
+                    text <=> TemplateMetaState.meta.tags;
+                    placeholder-text: "Comma separated, e.g. colocalization, uptake-assay";
+                }
+            }
+
             HorizontalLayout {
                 spacing: 8px;
                 alignment: end;
@@ -177,7 +242,7 @@ export component TemplateMetaDialog inherits Rectangle {
                 AppButton {
                     text: "Next…";
                     primary: true;
-                    enabled: TemplateMetaState.meta.name != "";
+                    enabled: TemplateMetaState.meta.name != "" && TemplateMetaState.meta.category != "" && TemplateMetaState.meta.tags != "";
                     clicked => {
                         TemplateMetaState.confirm();
                     }

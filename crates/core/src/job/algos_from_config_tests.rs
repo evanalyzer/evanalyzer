@@ -6,11 +6,13 @@
 //! would be silently wiped the next time that generator runs. This file is
 //! untouched by the generator and still gets full access to `algos_from_config`'s
 //! private items because it's a sibling module under the same parent (`job`).
+use super::algos_from_config::into_algorithm;
 use crate::algos::*;
-use evanalyzer_cfg::core_types::{ImageAddress, ObjectClass, PixelUnits, SegmentationClass, SizeUnits};
+use evanalyzer_cfg::core_types::{
+    ImageAddress, ObjectClass, PixelUnits, SegmentationClass, SizeUnits,
+};
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::*;
-use super::algos_from_config::into_algorithm;
 use std::path::PathBuf;
 
 // ---- Enum conversions --------------------------------------------
@@ -31,14 +33,16 @@ fn ball_type_paraboloid_setting_converts_to_balltype_paraboloid() {
 fn classify_match_handling_first_variant_converts() {
     let result: ClassifyMatchHandling =
         ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch.into();
-    assert!(matches!(result, ClassifyMatchHandling::AddOutputClassIfMatch));
+    assert!(matches!(
+        result,
+        ClassifyMatchHandling::AddOutputClassIfMatch
+    ));
 }
 
 #[test]
 fn classify_match_handling_middle_variant_converts() {
     let result: ClassifyMatchHandling =
-        ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch
-            .into();
+        ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch.into();
     assert!(matches!(
         result,
         ClassifyMatchHandling::RemoveAllClassesIfMatch
@@ -218,8 +222,7 @@ fn roi_set_operation_xor_setting_converts() {
 
 #[test]
 fn roi_set_operation_subtract_setting_converts() {
-    let result: RoiSetOperation =
-        ClassificationMathRoiRoiSetOperationSettings::Subtract.into();
+    let result: RoiSetOperation = ClassificationMathRoiRoiSetOperationSettings::Subtract.into();
     assert!(matches!(result, RoiSetOperation::Subtract));
 }
 
@@ -262,8 +265,7 @@ fn threshold_method_yen_setting_converts() {
 #[test]
 fn transform_function_scale_setting_converts_and_clamps_factor() {
     let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::Scale { factor: 999999.0 }
-            .into();
+        ClassificationTransformRoisTransformFunctionSettings::Scale { factor: 999999.0 }.into();
     match result {
         TransformFunction::Scale { factor } => assert_eq!(factor, 65535.0),
         _ => panic!("expected Scale variant"),
@@ -334,8 +336,7 @@ fn transform_function_draw_circle_setting_converts() {
 #[test]
 fn transform_function_fitting_ellipse_setting_converts() {
     let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale: 2.0 }
-            .into();
+        ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale: 2.0 }.into();
     match result {
         TransformFunction::FittingEllipse { scale } => assert_eq!(scale, 2.0),
         _ => panic!("expected FittingEllipse variant"),
@@ -344,12 +345,11 @@ fn transform_function_fitting_ellipse_setting_converts() {
 
 #[test]
 fn transform_function_expand_setting_converts() {
-    let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::Expand {
-            margin: 3.0,
-            unit: SizeUnits::NanoMeter,
-        }
-        .into();
+    let result: TransformFunction = ClassificationTransformRoisTransformFunctionSettings::Expand {
+        margin: 3.0,
+        unit: SizeUnits::NanoMeter,
+    }
+    .into();
     match result {
         TransformFunction::Expand { margin, unit } => {
             assert_eq!(margin, 3.0);
@@ -361,12 +361,11 @@ fn transform_function_expand_setting_converts() {
 
 #[test]
 fn transform_function_shrink_setting_converts() {
-    let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::Shrink {
-            margin: 4.0,
-            unit: SizeUnits::Pixels,
-        }
-        .into();
+    let result: TransformFunction = ClassificationTransformRoisTransformFunctionSettings::Shrink {
+        margin: 4.0,
+        unit: SizeUnits::Pixels,
+    }
+    .into();
     match result {
         TransformFunction::Shrink { margin, unit } => {
             assert_eq!(margin, 4.0);
@@ -379,8 +378,7 @@ fn transform_function_shrink_setting_converts() {
 #[cfg(feature = "ai")]
 #[test]
 fn unet_output_mode_softmax_classes_setting_converts() {
-    let result: UNetOutputMode =
-        AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses.into();
+    let result: UNetOutputMode = AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses.into();
     assert!(matches!(result, UNetOutputMode::SoftmaxClasses));
 }
 
@@ -517,9 +515,9 @@ fn color_filter_command_settings_convert_nested_hsv_range() {
 
 #[test]
 fn connected_components_settings_convert_min_size_px() {
-    let settings = ConnectedComponentsSettings { min_size_px: 42 };
+    let settings = ConnectedComponentsSettings { min_size: 42 };
     let result = ConnectedComponents::from(settings);
-    assert_eq!(result.min_size_px, 42);
+    assert_eq!(result.min_size, 42);
 }
 
 #[test]

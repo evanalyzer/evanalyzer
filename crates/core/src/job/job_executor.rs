@@ -62,6 +62,11 @@ pub enum ProgressEvent {
     /// intermediate image so the UI can display it in the viewport.
     BreakpointReached {
         image: crate::image::ImageContainer,
+        /// The segmentation/instance label maps captured at the same step,
+        /// if the pipeline had produced them by then (`None` before
+        /// `Threshold`/`ConnectedComponents`/`Watershed` respectively).
+        segmentation: Option<crate::image::ImageContainer>,
+        instances: Option<crate::image::ImageContainer>,
         /// Tile origin in image-pixel coordinates.
         tile_offset_x: usize,
         tile_offset_y: usize,
@@ -70,6 +75,12 @@ pub enum ProgressEvent {
         /// Original image bit depth (e.g. 8, 12, 16) — used for the
         /// pixel-value HUD so values are scaled to the real range.
         nr_bits: u8,
+        /// The channel the breakpointed pipeline actually started from
+        /// (`ImageAddress::Channel(n)`), so the UI can look up *that*
+        /// channel's histogram/LUT settings instead of guessing. `None`
+        /// when the pipeline starts from something other than a plain
+        /// channel address (e.g. scratchpad or a memory slot).
+        channel_idx: Option<i32>,
     },
 }
 
@@ -818,10 +829,17 @@ impl<'a> JobExecutor {
                 pixel_sizes.clone(),
             )?;
 
-            let mut stop_image: Option<std::sync::Arc<crate::image::ImageContainer>> = None;
-            let mut snapshot_image: Option<std::sync::Arc<crate::image::ImageContainer>> = None;
+            let mut stop_capture: Option<crate::pipeline::pipeline::BreakpointCapture> = None;
+            let mut snapshot_capture: Option<crate::pipeline::pipeline::BreakpointCapture> = None;
+            // The channel the breakpointed pipeline actually started from, so
+            // the UI can look up that channel's histogram/LUT settings
+            // instead of guessing (previously hardcoded to channel 0 on the
+            // GUI side, which showed the wrong - often black, since it read
+            // an unrelated channel's histogram range - image whenever the
+            // pipeline didn't start from channel 0).
+            let mut breakpoint_channel_idx: Option<i32> = None;
             for pipe_id in order {
-                if stop_image.is_some() {
+                if stop_capture.is_some() {
                     break;
                 }
                 if let Some(p) = self.pipelines.get(pipe_id) {
@@ -833,42 +851,54 @@ impl<'a> JobExecutor {
                         .unwrap_or((None, false));
                     let result = p.run(self.output_path.clone(), cache, bp_step, snapshot_mode)?;
                     if result.breakpoint_hit {
-                        stop_image = Some(result.image);
-                    } else if let Some(snap) = result.breakpoint_snapshot {
-                        snapshot_image = Some(snap);
+                        stop_capture = result.breakpoint_capture;
+                        if let ImageAddress::Channel(idx) = p.settings.start_image {
+                            breakpoint_channel_idx = Some(idx);
+                        }
+                    } else if let Some(capture) = result.breakpoint_capture {
+                        snapshot_capture = Some(capture);
+                        if let ImageAddress::Channel(idx) = p.settings.start_image {
+                            breakpoint_channel_idx = Some(idx);
+                        }
                     }
                     cache = result.cache;
                 }
             }
 
-            // Snapshot: send the captured image but continue to DB write.
-            if let Some(image) = snapshot_image {
+            // Snapshot: send the captured buffers but continue to DB write.
+            if let Some(capture) = snapshot_capture {
                 if is_bp_target {
                     sender
                         .send(ProgressEvent::BreakpointReached {
-                            image: (*image).clone(),
+                            image: (*capture.image).clone(),
+                            segmentation: capture.segmentation.map(|s| (*s).clone()),
+                            instances: capture.instances.map(|i| (*i).clone()),
                             tile_offset_x: tile.offset_x,
                             tile_offset_y: tile.offset_y,
                             tile_width: tile.width,
                             tile_height: tile.height,
                             nr_bits,
+                            channel_idx: breakpoint_channel_idx,
                         })
                         .ok();
                 }
                 // fall through — the full pipeline ran, write results normally.
             }
 
-            // Stop: send the image and skip DB write.
-            if let Some(image) = stop_image {
+            // Stop: send the buffers and skip DB write.
+            if let Some(capture) = stop_capture {
                 if is_bp_target {
                     sender
                         .send(ProgressEvent::BreakpointReached {
-                            image: (*image).clone(),
+                            image: (*capture.image).clone(),
+                            segmentation: capture.segmentation.map(|s| (*s).clone()),
+                            instances: capture.instances.map(|i| (*i).clone()),
                             tile_offset_x: tile.offset_x,
                             tile_offset_y: tile.offset_y,
                             tile_width: tile.width,
                             tile_height: tile.height,
                             nr_bits,
+                            channel_idx: breakpoint_channel_idx,
                         })
                         .ok();
                 }

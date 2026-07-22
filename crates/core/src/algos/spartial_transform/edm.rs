@@ -67,15 +67,19 @@ impl ImageAlgorithm for DistanceTransform {
         let input_slice = input.as_slice();
 
         //  Initialize result buffer
+        //
+        // `scratch` may be a reused buffer carrying stale data from a previous
+        // pipeline step (e.g. `ctx.swap()` moving the prior image into the
+        // scratch slot), so background pixels MUST be explicitly zeroed here -
+        // leaving them untouched previously caused the EDM to inherit random
+        // non-zero background noise, which in turn produced huge numbers of
+        // spurious local maxima downstream in Watershed.
         for (out_pixel, &in_pixel) in scratch.as_slice_mut().iter_mut().zip(input_slice.iter()) {
-            // This turns into a 'conditional move' or 'mask' in assembly
-            let mask = (in_pixel > self.threshold) as u32;
-            // If mask is 1, we get f32::MAX. If 0, we get 0.0 (or keep original).
-            // Note: This specific math depends on if you want to clear
-            // the other pixels or keep them.
-            if mask == 1 {
-                *out_pixel = f32::MAX;
-            }
+            *out_pixel = if in_pixel > self.threshold {
+                f32::MAX
+            } else {
+                0.0
+            };
         }
 
         // Setup point buffers for coordinate tracking
@@ -268,6 +272,7 @@ mod tests {
     use crate::image::{ImageContainer, ImageDebugExt};
     use crate::pipeline::pipeline_context::PipelineContext;
     use kornia_image::ImageSize;
+    use std::sync::Arc;
 
     #[test]
     fn test_distance_transform_basic() -> Result<(), Box<dyn std::error::Error>> {
@@ -325,6 +330,156 @@ mod tests {
             panic!("Output was not F32Gray");
         }
 
+        Ok(())
+    }
+
+    /// Regression for a bug where background pixels inherited stale,
+    /// non-zero data from a reused scratch buffer instead of being reset to
+    /// 0.0. In the real pipeline, `ctx.scratch_pad` is not freshly allocated
+    /// before `DistanceTransform` runs - `Watershed::execute` reuses it
+    /// (`prepare_f32_gray_scratch` only allocates if the container isn't
+    /// already `F32Gray`) and `ctx.swap()` moves the previous step's leftover
+    /// image data into it. The old init loop only wrote foreground pixels
+    /// (`f32::MAX`) and left background pixels untouched, so they kept
+    /// whatever garbage was already there. Downstream, thousands of
+    /// near-zero-but-not-exactly-zero "background" pixels each looked like a
+    /// local maximum, turning a ~1s Watershed run into 200+ seconds on real
+    /// data (828 maxima found instead of ~87,000 spurious ones).
+    #[test]
+    fn test_distance_transform_zeroes_stale_scratch_background(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let size = ImageSize {
+            width: 4,
+            height: 4,
+        };
+        // Foreground disc in the middle two columns of the middle two rows;
+        // everything else is background.
+        let mut data = vec![0.0f32; 16];
+        for &p in &[1 * 4 + 1, 1 * 4 + 2, 2 * 4 + 1, 2 * 4 + 2] {
+            data[p] = 1.0;
+        }
+        let img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
+
+        let mut ctx = PipelineContext::new_from_image_test(img)?;
+        let mut cache = PipelineCache::default();
+
+        // Simulate a scratch_pad reused from a previous pipeline step: same
+        // container type and size, but full of non-zero garbage instead of
+        // freshly-zeroed memory.
+        ctx.scratch_pad = Arc::new(ImageContainer::F32Gray(
+            crate::image::ManagedImage {
+                data: Image::<f32, 1, CpuAllocator>::new(
+                    size,
+                    vec![123.456f32; 16],
+                    CpuAllocator,
+                )?,
+                tile_offset: ctx.scratch_pad.tile_offset(),
+                plane: ctx.scratch_pad.plane(),
+            },
+        ));
+
+        let edm = DistanceTransform {
+            threshold: 0.5,
+            edges_are_background: false,
+        };
+        edm.execute(&mut ctx, &mut cache)?;
+
+        let ImageContainer::F32Gray(res_img) = ctx.image.as_ref() else {
+            panic!("Output was not F32Gray");
+        };
+        let res_slice = res_img.as_slice();
+
+        // Every background pixel (original value 0.0) must be exactly 0.0 in
+        // the EDM output, regardless of the stale scratch data it started
+        // from.
+        for p in 0..16 {
+            let is_background = ![1 * 4 + 1, 1 * 4 + 2, 2 * 4 + 1, 2 * 4 + 2].contains(&p);
+            if is_background {
+                assert_eq!(
+                    res_slice[p], 0.0,
+                    "background pixel {p} was not zeroed (stale scratch leaked through)"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Golden-data regression for the `edges_are_background` port bug: a disc
+    /// (r=4) flush against the LEFT image border. Expected values are the exact
+    /// output of the reference `Edm::makeFloatEDM(binary8, 0, /*edgesAreBackground=*/false)`
+    /// (`docs/watershed/edm.cpp`), run through a standalone harness built against
+    /// that file. `Watershed::execute` in the C++ reference
+    /// (`docs/watershed/watershed.hpp:56`) always passes `edgesAreBackground=false`
+    /// - the image edge is not an implicit background wall. With
+    /// `edges_are_background: true` (the bug this test caught), the whole left
+    /// half of the disc collapses to ~1.0 instead of growing up to ~4.12 at its
+    /// centre.
+    #[test]
+    fn test_distance_transform_matches_cpp_reference_border_touching_disc() -> Result<(), Box<dyn std::error::Error>>
+    {
+        const MASK: &[&str] = &[
+            "............",
+            "#...........",
+            "###.........",
+            "####........",
+            "####........",
+            "#####.......",
+            "####........",
+            "####........",
+            "###.........",
+            "#...........",
+        ];
+        let width = MASK[0].len();
+        let height = MASK.len();
+        let data: Vec<f32> = MASK
+            .iter()
+            .flat_map(|row| row.chars().map(|c| if c == '#' { 1.0 } else { 0.0 }))
+            .collect();
+
+        #[rustfmt::skip]
+        const EXPECTED: &[f32] = &[
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.41421, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            2.23607, 2.0, 1.41421, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            3.16228, 2.82843, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            4.12311, 3.16228, 2.23607, 1.41421, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            3.16228, 2.82843, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            2.23607, 2.0, 1.41421, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.41421, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize { width, height },
+            data,
+            CpuAllocator,
+        )?;
+        let mut ctx = PipelineContext::new_from_image_test(img)?;
+        let mut cache = PipelineCache::default();
+
+        let edm = DistanceTransform {
+            threshold: 0.0,
+            edges_are_background: false,
+        };
+        edm.execute(&mut ctx, &mut cache)?;
+
+        let result_container = ctx.image;
+        let ImageContainer::F32Gray(res_img) = result_container.as_ref() else {
+            panic!("Output was not F32Gray");
+        };
+        let actual = res_img.as_slice();
+
+        for (i, (&a, &e)) in actual.iter().zip(EXPECTED.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-4,
+                "pixel {} (x={}, y={}): got {a}, expected {e} (C++ reference)",
+                i,
+                i % width,
+                i / width
+            );
+        }
         Ok(())
     }
 }

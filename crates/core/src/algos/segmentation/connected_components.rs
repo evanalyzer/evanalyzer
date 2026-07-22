@@ -35,9 +35,10 @@ pub struct ConnectedComponents {
         default = 0,
         unit = "px²",
         optional = true,
-        visible = true
+        visible = true,
+        summary = true
     )]
-    pub min_size_px: i32,
+    pub min_size: i32,
 }
 
 impl ImageAlgorithm for ConnectedComponents {
@@ -79,7 +80,6 @@ impl ImageAlgorithm for ConnectedComponents {
             segmentation.size().height,
         );
 
-        ctx.swap()?;
         Ok(())
     }
 
@@ -99,6 +99,15 @@ impl ConnectedComponents {
                 let idx = y * width + x;
                 let class_id = input[idx];
                 if class_id == 0 {
+                    // `output` (the instance map) may be a reused buffer
+                    // carrying stale nonzero IDs from an earlier labeling
+                    // pass in the same pipeline (e.g. a prior
+                    // ConnectedComponents/Watershed run) - background
+                    // pixels must be explicitly reset, not just skipped,
+                    // or a stale ID can outlive this pass's much smaller
+                    // `lookup` table and panic with an out-of-bounds index
+                    // in the re-indexing pass below.
+                    output[idx] = 0;
                     continue;
                 }
 
@@ -172,13 +181,13 @@ impl ConnectedComponents {
             }
         }
 
-        // Sizes are always >= 1, so min_size_px <= 1 can never filter anything out.
-        if self.min_size_px > 1 {
+        // Sizes are always >= 1, so min_size <= 1 can never filter anything out.
+        if self.min_size > 1 {
             self.filter_small_objects(output, final_id);
         }
     }
 
-    /// Removes components with fewer than `min_size_px` pixels and re-compacts
+    /// Removes components with fewer than `min_size` pixels and re-compacts
     /// the remaining IDs into a contiguous range starting at 1.
     fn filter_small_objects(&self, output: &mut [u32], id_count: u32) {
         let mut sizes = vec![0u32; id_count as usize];
@@ -188,7 +197,7 @@ impl ConnectedComponents {
             }
         }
 
-        let min_size = self.min_size_px as u32;
+        let min_size = self.min_size as u32;
         let mut remap = vec![0u32; id_count as usize];
         let mut next_id = 1;
         for (id, &size) in sizes.iter().enumerate().skip(1) {
@@ -272,13 +281,12 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents { min_size_px: 0 };
+        let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute
         let result = labeling.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
-        // Get results from ctx.image (because of ctx.swap())
         let output = ctx.get_instance_map().unwrap();
         output.print_window();
         let out_slice = output.as_slice();
@@ -359,7 +367,7 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents { min_size_px: 0 };
+        let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute CCL
         labeling
@@ -456,7 +464,7 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents { min_size_px: 0 };
+        let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute
         labeling.execute(&mut ctx, &mut cache).expect("CCL Failed");
@@ -512,7 +520,7 @@ mod tests {
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents { min_size_px: 4 };
+        let labeling = ConnectedComponents { min_size: 4 };
 
         labeling.execute(&mut ctx, &mut cache).expect("CCL Failed");
 
@@ -523,12 +531,12 @@ mod tests {
         assert_eq!(
             out_slice[1 * w + 1],
             0,
-            "Object smaller than min_size_px was not removed"
+            "Object smaller than min_size was not removed"
         );
 
         // The 4px object must survive.
         let id_large = out_slice[5 * w + 5];
-        assert!(id_large > 0, "Object at/above min_size_px was removed");
+        assert!(id_large > 0, "Object at/above min_size was removed");
         assert_eq!(
             out_slice[5 * w + 6],
             id_large,
@@ -543,5 +551,94 @@ mod tests {
         let unique_ids: HashSet<_> = out_slice.iter().filter(|&&x| x > 0).collect();
         assert_eq!(unique_ids.len(), 1, "Expected exactly one surviving object");
         assert_eq!(id_large, 1, "Surviving object should be re-indexed to ID 1");
+    }
+
+    /// `ConnectedComponents` labels via `segmentation_map` -> `instance_map`;
+    /// it has no business touching `ctx.image`/`ctx.scratch_pad` at all. A
+    /// stray `ctx.swap()` call used to run after `compute_ccl` anyway
+    /// (probably copy-pasted from a command that actually uses the
+    /// image/scratch-pad pair, like `Blur`), silently replacing `ctx.image`
+    /// with whatever stale content happened to be sitting in the scratch
+    /// pad from an earlier step. Anything reading `ctx.image` afterwards -
+    /// notably preview breakpoints - would see that stale buffer instead of
+    /// the real processed image.
+    #[test]
+    fn test_ccl_repro_stale_instance_map_leaks_into_new_background() {
+        let size = ImageSize {
+            width: 4,
+            height: 4,
+        };
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+
+        // Simulate an instance_map left over from an earlier labeling pass
+        // in the same pipeline (e.g. a prior ConnectedComponents/Watershed
+        // run): every pixel already carries a nonzero ID, including ones
+        // that are background in the CURRENT segmentation.
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, vec![7u32; 16], CpuAllocator).unwrap());
+
+        // Current segmentation: only pixel (1,1) [index 5] is foreground.
+        let mut seg_data = vec![0u32; 16];
+        seg_data[5] = 1;
+        ctx.segmentation_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
+
+        let mut cache = PipelineCache::default();
+        ConnectedComponents { min_size: 0 }
+            .execute(&mut ctx, &mut cache)
+            .expect("CCL failed");
+
+        let out_slice = ctx.get_instance_map().unwrap().as_slice();
+        for (i, &v) in out_slice.iter().enumerate() {
+            if i == 5 {
+                assert!(v > 0, "the single foreground pixel should be labeled");
+            } else {
+                assert_eq!(
+                    v, 0,
+                    "pixel {i} is background in the current segmentation but kept a \
+                     stale instance ID ({v}) from a previous labeling pass"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ccl_does_not_touch_ctx_image() {
+        use crate::image::ImageContainer;
+        use std::sync::Arc;
+
+        let size = ImageSize {
+            width: 4,
+            height: 4,
+        };
+        let real_image_marker = 42.0f32;
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        if let ImageContainer::F32Gray(img) = Arc::make_mut(&mut ctx.image) {
+            img.as_slice_mut().fill(real_image_marker);
+        }
+        // Distinctive stale content, standing in for leftover data from an
+        // earlier scratch-pad-using step.
+        let stale_marker = -999.0f32;
+        if let ImageContainer::F32Gray(scratch) = Arc::make_mut(&mut ctx.scratch_pad) {
+            scratch.as_slice_mut().fill(stale_marker);
+        }
+
+        let mut seg_data = vec![0u32; 16];
+        seg_data[5] = 1;
+        ctx.segmentation_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
+
+        let mut cache = PipelineCache::default();
+        ConnectedComponents { min_size: 0 }
+            .execute(&mut ctx, &mut cache)
+            .expect("CCL failed");
+
+        let ImageContainer::F32Gray(img) = ctx.image.as_ref() else {
+            panic!("expected F32Gray");
+        };
+        assert!(
+            img.as_slice().iter().all(|&v| v == real_image_marker),
+            "ConnectedComponents::execute must not mutate ctx.image"
+        );
     }
 }
