@@ -35,9 +35,10 @@ pub struct ConnectedComponents {
         default = 0,
         unit = "px²",
         optional = true,
-        visible = true
+        visible = true,
+        summary = true
     )]
-    pub min_size_px: i32,
+    pub min_size: i32,
 }
 
 impl ImageAlgorithm for ConnectedComponents {
@@ -180,13 +181,13 @@ impl ConnectedComponents {
             }
         }
 
-        // Sizes are always >= 1, so min_size_px <= 1 can never filter anything out.
-        if self.min_size_px > 1 {
+        // Sizes are always >= 1, so min_size <= 1 can never filter anything out.
+        if self.min_size > 1 {
             self.filter_small_objects(output, final_id);
         }
     }
 
-    /// Removes components with fewer than `min_size_px` pixels and re-compacts
+    /// Removes components with fewer than `min_size` pixels and re-compacts
     /// the remaining IDs into a contiguous range starting at 1.
     fn filter_small_objects(&self, output: &mut [u32], id_count: u32) {
         let mut sizes = vec![0u32; id_count as usize];
@@ -196,7 +197,7 @@ impl ConnectedComponents {
             }
         }
 
-        let min_size = self.min_size_px as u32;
+        let min_size = self.min_size as u32;
         let mut remap = vec![0u32; id_count as usize];
         let mut next_id = 1;
         for (id, &size) in sizes.iter().enumerate().skip(1) {
@@ -280,7 +281,7 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents { min_size_px: 0 };
+        let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute
         let result = labeling.execute(&mut ctx, &mut cache);
@@ -366,7 +367,7 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents { min_size_px: 0 };
+        let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute CCL
         labeling
@@ -463,7 +464,7 @@ mod tests {
         ctx.get_segmentation_map().unwrap().print_window();
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents { min_size_px: 0 };
+        let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute
         labeling.execute(&mut ctx, &mut cache).expect("CCL Failed");
@@ -519,7 +520,7 @@ mod tests {
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
 
         let mut cache = PipelineCache::default();
-        let labeling = ConnectedComponents { min_size_px: 4 };
+        let labeling = ConnectedComponents { min_size: 4 };
 
         labeling.execute(&mut ctx, &mut cache).expect("CCL Failed");
 
@@ -530,12 +531,12 @@ mod tests {
         assert_eq!(
             out_slice[1 * w + 1],
             0,
-            "Object smaller than min_size_px was not removed"
+            "Object smaller than min_size was not removed"
         );
 
         // The 4px object must survive.
         let id_large = out_slice[5 * w + 5];
-        assert!(id_large > 0, "Object at/above min_size_px was removed");
+        assert!(id_large > 0, "Object at/above min_size was removed");
         assert_eq!(
             out_slice[5 * w + 6],
             id_large,
@@ -583,7 +584,7 @@ mod tests {
             Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
 
         let mut cache = PipelineCache::default();
-        ConnectedComponents { min_size_px: 0 }
+        ConnectedComponents { min_size: 0 }
             .execute(&mut ctx, &mut cache)
             .expect("CCL failed");
 
@@ -628,7 +629,7 @@ mod tests {
             Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
 
         let mut cache = PipelineCache::default();
-        ConnectedComponents { min_size_px: 0 }
+        ConnectedComponents { min_size: 0 }
             .execute(&mut ctx, &mut cache)
             .expect("CCL failed");
 

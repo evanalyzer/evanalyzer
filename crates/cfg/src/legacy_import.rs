@@ -473,9 +473,7 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
 fn push_segmentation_followup(steps: &mut Vec<PipelineStepSettings>) {
     steps.push(PipelineStepSettings {
         enabled: true,
-        command: PipelineCommand::ConnectedComponents(ConnectedComponentsSettings {
-            min_size_px: 0,
-        }),
+        command: PipelineCommand::ConnectedComponents(ConnectedComponentsSettings { min_size: 0 }),
     });
     steps.push(PipelineStepSettings {
         enabled: true,
@@ -1484,23 +1482,40 @@ mod tests {
 
     #[test]
     fn split_author_name_splits_on_the_first_space() {
-        assert_eq!(split_author_name("Ada Lovelace"), ("Ada".to_string(), "Lovelace".to_string()));
+        assert_eq!(
+            split_author_name("Ada Lovelace"),
+            ("Ada".to_string(), "Lovelace".to_string())
+        );
         // Extra words all land in the last-name half.
-        assert_eq!(split_author_name("Mary Wollstonecraft Shelley"), ("Mary".to_string(), "Wollstonecraft Shelley".to_string()));
+        assert_eq!(
+            split_author_name("Mary Wollstonecraft Shelley"),
+            ("Mary".to_string(), "Wollstonecraft Shelley".to_string())
+        );
     }
 
     #[test]
     fn split_author_name_handles_a_single_word_and_empty_input() {
-        assert_eq!(split_author_name("Cher"), ("Cher".to_string(), String::new()));
+        assert_eq!(
+            split_author_name("Cher"),
+            ("Cher".to_string(), String::new())
+        );
         assert_eq!(split_author_name(""), (String::new(), String::new()));
-        assert_eq!(split_author_name("   "), (String::new(), String::new()), "must trim whitespace-only input to empty");
+        assert_eq!(
+            split_author_name("   "),
+            (String::new(), String::new()),
+            "must trim whitespace-only input to empty"
+        );
     }
 
     #[test]
     fn parse_numeric_class_id_accepts_plain_digits_and_rejects_everything_else() {
         assert_eq!(parse_numeric_class_id("7"), Some(7));
         assert_eq!(parse_numeric_class_id("0"), Some(0));
-        assert_eq!(parse_numeric_class_id("M01"), None, "temp-class ids have no numeric equivalent");
+        assert_eq!(
+            parse_numeric_class_id("M01"),
+            None,
+            "temp-class ids have no numeric equivalent"
+        );
         assert_eq!(parse_numeric_class_id("$"), None);
         assert_eq!(parse_numeric_class_id(""), None);
     }
@@ -1517,7 +1532,10 @@ mod tests {
     fn resolve_class_treats_none_undefined_and_empty_as_unset_without_a_warning() {
         let mut warnings = Vec::new();
         for s in ["", "None", "Undefined"] {
-            assert_eq!(resolve_class(s, ObjectClass::Valid(5), "ctx", "field", &mut warnings), ObjectClass::Unset);
+            assert_eq!(
+                resolve_class(s, ObjectClass::Valid(5), "ctx", "field", &mut warnings),
+                ObjectClass::Unset
+            );
         }
         assert!(warnings.is_empty());
     }
@@ -1525,14 +1543,23 @@ mod tests {
     #[test]
     fn resolve_class_parses_a_plain_number_directly() {
         let mut warnings = Vec::new();
-        assert_eq!(resolve_class("12", ObjectClass::Valid(5), "ctx", "field", &mut warnings), ObjectClass::Valid(12));
+        assert_eq!(
+            resolve_class("12", ObjectClass::Valid(5), "ctx", "field", &mut warnings),
+            ObjectClass::Valid(12)
+        );
         assert!(warnings.is_empty());
     }
 
     #[test]
     fn resolve_class_warns_and_falls_back_to_unset_for_an_unsupported_temp_class_id() {
         let mut warnings = Vec::new();
-        let resolved = resolve_class("M01", ObjectClass::Valid(5), "my-context", "my-field", &mut warnings);
+        let resolved = resolve_class(
+            "M01",
+            ObjectClass::Valid(5),
+            "my-context",
+            "my-field",
+            &mut warnings,
+        );
         assert_eq!(resolved, ObjectClass::Unset);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("my-context"));
@@ -1544,7 +1571,11 @@ mod tests {
     fn parse_hex_color_accepts_a_leading_hash_or_bare_hex() {
         assert_eq!(parse_hex_color("#ff0000"), Some(0xff0000));
         assert_eq!(parse_hex_color("00ff00"), Some(0x00ff00));
-        assert_eq!(parse_hex_color("#0000FF"), Some(0x0000ff), "hex parsing must be case-insensitive");
+        assert_eq!(
+            parse_hex_color("#0000FF"),
+            Some(0x0000ff),
+            "hex parsing must be case-insensitive"
+        );
     }
 
     #[test]
@@ -1575,7 +1606,11 @@ mod tests {
             ("DistanceSurfaceToSurfaceMax", DistanceSurfaceToSurfaceMax),
         ];
         for (legacy, expected) in cases {
-            assert_eq!(map_measure_channel(legacy), Some(expected), "mapping {legacy}");
+            assert_eq!(
+                map_measure_channel(legacy),
+                Some(expected),
+                "mapping {legacy}"
+            );
         }
     }
 
@@ -1618,12 +1653,27 @@ mod tests {
 
     #[test]
     fn map_z_projection_covers_every_known_mode_and_falls_back_to_single_stack() {
-        assert_eq!(map_z_projection("MaxIntensity"), ZStackHandling::MaxIntensity);
-        assert_eq!(map_z_projection("MinIntensity"), ZStackHandling::MinIntensity);
-        assert_eq!(map_z_projection("AvgIntensity"), ZStackHandling::AvgIntensity);
-        assert_eq!(map_z_projection("TakeMiddle"), ZStackHandling::TakeTheMiddle);
+        assert_eq!(
+            map_z_projection("MaxIntensity"),
+            ZStackHandling::MaxIntensity
+        );
+        assert_eq!(
+            map_z_projection("MinIntensity"),
+            ZStackHandling::MinIntensity
+        );
+        assert_eq!(
+            map_z_projection("AvgIntensity"),
+            ZStackHandling::AvgIntensity
+        );
+        assert_eq!(
+            map_z_projection("TakeMiddle"),
+            ZStackHandling::TakeTheMiddle
+        );
         assert_eq!(map_z_projection("SingleStack"), ZStackHandling::SingleStack);
-        assert_eq!(map_z_projection("SomethingUnknown"), ZStackHandling::SingleStack);
+        assert_eq!(
+            map_z_projection("SomethingUnknown"),
+            ZStackHandling::SingleStack
+        );
     }
 
     #[test]
@@ -1771,7 +1821,10 @@ mod tests {
             "pipelines": []
         }"##;
         let outcome = import_legacy_project(json).unwrap();
-        assert_eq!(outcome.project.plate.grouping_mode, GroupingMode::NoGrouping);
+        assert_eq!(
+            outcome.project.plate.grouping_mode,
+            GroupingMode::NoGrouping
+        );
     }
 
     #[test]
@@ -1882,7 +1935,8 @@ mod tests {
 
     #[test]
     fn rolling_ball_defaults_to_the_ball_type_for_a_ball_value() {
-        let json = pipeline_with_step(r#"{ "$rollingBall": { "ballType": "Ball", "ballSize": 10 } }"#);
+        let json =
+            pipeline_with_step(r#"{ "$rollingBall": { "ballType": "Ball", "ballSize": 10 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::RollingBall(s) => {
@@ -1933,12 +1987,22 @@ mod tests {
     #[test]
     fn hessian_maps_every_documented_mode() {
         let cases = [
-            ("EigenvaluesX", FiltersHessianHessianModeSettings::EigenvaluesX),
-            ("EigenvaluesY", FiltersHessianHessianModeSettings::EigenvaluesY),
-            ("Determinant", FiltersHessianHessianModeSettings::Determinant),
+            (
+                "EigenvaluesX",
+                FiltersHessianHessianModeSettings::EigenvaluesX,
+            ),
+            (
+                "EigenvaluesY",
+                FiltersHessianHessianModeSettings::EigenvaluesY,
+            ),
+            (
+                "Determinant",
+                FiltersHessianHessianModeSettings::Determinant,
+            ),
         ];
         for (legacy, expected) in cases {
-            let json = pipeline_with_step(&format!(r#"{{ "$hessian": {{ "mode": "{legacy}" }} }}"#));
+            let json =
+                pipeline_with_step(&format!(r#"{{ "$hessian": {{ "mode": "{legacy}" }} }}"#));
             let outcome = import_legacy_project(&json).unwrap();
             match only_command(&outcome) {
                 PipelineCommand::Hessian(s) => assert_eq!(s.mode, expected, "mode {legacy}"),
@@ -1999,7 +2063,8 @@ mod tests {
 
     #[test]
     fn structure_tensor_defaults_to_coherence_for_an_unrecognized_mode_with_a_warning() {
-        let json = pipeline_with_step(r#"{ "$structureTensor": { "mode": "Bogus", "kernelSize": 3 } }"#);
+        let json =
+            pipeline_with_step(r#"{ "$structureTensor": { "mode": "Bogus", "kernelSize": 3 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::StructureTensor(s) => {
@@ -2007,12 +2072,18 @@ mod tests {
             }
             other => panic!("expected StructureTensor, got {other:?}"),
         }
-        assert!(outcome.warnings.iter().any(|w| w.contains("$structureTensor")));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("$structureTensor"))
+        );
     }
 
     #[test]
     fn gaussian_weighted_deviation_keeps_kernel_size_and_sigma() {
-        let json = pipeline_with_step(r#"{ "$gaussianWeightedDev": { "kernelSize": 9, "sigma": 2.5 } }"#);
+        let json =
+            pipeline_with_step(r#"{ "$gaussianWeightedDev": { "kernelSize": 9, "sigma": 2.5 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::WeightedDeviation(s) => {
@@ -2065,7 +2136,10 @@ mod tests {
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::RankFilter(s) => {
-                assert_eq!(s.filter_type, FiltersRankFilterRankFilterTypeSettings::Median)
+                assert_eq!(
+                    s.filter_type,
+                    FiltersRankFilterRankFilterTypeSettings::Median
+                )
             }
             other => panic!("expected RankFilter, got {other:?}"),
         }
@@ -2235,7 +2309,12 @@ mod tests {
             }
             other => panic!("expected Voronoi, got {other:?}"),
         }
-        assert!(!outcome.warnings.iter().any(|w| w.contains("center classes")));
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("center classes"))
+        );
     }
 
     #[test]
@@ -2247,7 +2326,12 @@ mod tests {
             ] } }"#,
         );
         let outcome = import_legacy_project(&json).unwrap();
-        assert!(outcome.warnings.iter().any(|w| w.contains("2 color ranges")));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("2 color ranges"))
+        );
     }
 
     #[test]
@@ -2259,7 +2343,8 @@ mod tests {
 
     #[test]
     fn box_blur_with_a_repeat_other_than_one_is_applied_once_with_a_warning() {
-        let json = pipeline_with_step(r#"{ "$blur": { "mode": "Blur", "kernelSize": 3, "repeat": 3 } }"#);
+        let json =
+            pipeline_with_step(r#"{ "$blur": { "mode": "Blur", "kernelSize": 3, "repeat": 3 } }"#);
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
             PipelineCommand::Blur(s) => assert_eq!(s.kernel_size, 3),
@@ -2350,7 +2435,12 @@ mod tests {
         );
         let outcome = import_legacy_project(&json).unwrap();
         assert!(outcome.warnings.iter().any(|w| w.contains("no match")));
-        assert!(outcome.warnings.iter().any(|w| w.contains("intensity filter")));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("intensity filter"))
+        );
     }
 
     #[test]
@@ -2448,7 +2538,13 @@ mod tests {
         );
         let outcome = import_legacy_project(&json).unwrap();
         assert!(outcome.project.pipelines[0].steps.is_empty());
-        for name in ["$crop", "$fillHoles", "$nop", "$aiClassify", "$colocalization"] {
+        for name in [
+            "$crop",
+            "$fillHoles",
+            "$nop",
+            "$aiClassify",
+            "$colocalization",
+        ] {
             assert!(
                 outcome.warnings.iter().any(|w| w.contains(name)),
                 "missing warning for {name}, got: {:#?}",

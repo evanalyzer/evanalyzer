@@ -720,7 +720,7 @@
       "description": "Identifies and labels discrete objects within a binary or multi-class image.",
       "type": "object",
       "properties": {
-        "minSizePx": {
+        "minSize": {
           "description": "unit: px²",
           "type": "integer",
           "format": "int32",

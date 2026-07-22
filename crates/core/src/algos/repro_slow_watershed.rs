@@ -35,8 +35,8 @@ mod repro_slow_watershed {
 
         let result = reader
             .read_image_tile_combined(
-                0,              // series
-                0,              // resolution_idx
+                0, // series
+                0, // resolution_idx
                 ZProjection::MaxIntensity,
                 &Some(0..=0),   // z_range: exactly z=0
                 0,              // t_stack
@@ -107,10 +107,7 @@ mod repro_slow_watershed {
                 }],
             }
         );
-        run_step!(
-            "ConnectedComponents",
-            ConnectedComponents { min_size_px: 0 }
-        );
+        run_step!("ConnectedComponents", ConnectedComponents { min_size: 0 });
 
         let t0 = Instant::now();
         run_step!(

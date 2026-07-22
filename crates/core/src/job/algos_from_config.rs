@@ -316,7 +316,7 @@ impl From<ColorFilterCommandSettings> for ColorFilterCommand {
 impl From<ConnectedComponentsSettings> for ConnectedComponents {
     fn from(_s: ConnectedComponentsSettings) -> Self {
         ConnectedComponents {
-            min_size_px: _s.min_size_px,
+            min_size: _s.min_size,
         }
     }
 }
