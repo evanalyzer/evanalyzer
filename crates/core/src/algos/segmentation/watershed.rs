@@ -113,9 +113,16 @@ impl ImageAlgorithm for Watershed {
         ctx.swap()?;
 
         // Run the transform
+        //
+        // `edges_are_background: false` matches ImageJ / the reference C++ port
+        // (`Edm::makeFloatEDM(binary8, 0, false)` in docs/watershed/watershed.hpp),
+        // which treats the image border as ordinary space rather than an implicit
+        // background wall. Setting this to `true` would artificially clamp the EDM
+        // near the image edges, changing peak shapes (and therefore watershed
+        // splits) for any object that touches or is close to the border.
         let transform = DistanceTransform {
             threshold: 0.0,
-            edges_are_background: true,
+            edges_are_background: false,
         };
         transform.execute(ctx, cache)?;
 
@@ -1055,5 +1062,82 @@ mod tests {
             unique.len()
         );
     }
-    // temp debug
+
+    /// End-to-end regression for the `edges_are_background` bug through the
+    /// actual `Watershed::execute` entry point (not just the lower-level
+    /// `watershed_segment_edm`): a small lobe flush against the LEFT image
+    /// border, touching a larger interior lobe. The reference C++
+    /// implementation (`docs/watershed/watershed.hpp:56`,
+    /// `Edm::makeFloatEDM(binary8, 0, /*edgesAreBackground=*/false)`) splits
+    /// this into two instances at this tolerance. Before the fix, `watershed.rs`
+    /// built its `DistanceTransform` with `edges_are_background: true`, which
+    /// collapses the border lobe's EDM peak and merges the whole shape into a
+    /// single instance instead.
+    #[test]
+    fn test_watershed_splits_border_touching_lobe_matching_cpp_reference() {
+        const MASK: &[&str] = &[
+            "..........................",
+            "..........................",
+            "..........................",
+            "..........................",
+            "......#...................",
+            "....#####.................",
+            "#..#######................",
+            "##.#######................",
+            "###########...............",
+            "##.#######................",
+            "#..#######................",
+            "....#####.................",
+            "......#...................",
+            "..........................",
+            "..........................",
+            "..........................",
+        ];
+        let width = MASK[0].len();
+        let height = MASK.len();
+        let data: Vec<u32> = MASK
+            .iter()
+            .flat_map(|row| row.chars().map(|c| if c == '#' { 1u32 } else { 0u32 }))
+            .collect();
+
+        let size = ImageSize { width, height };
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+        let mut cache = PipelineCache::default();
+
+        Watershed {
+            maximum_finder_tolerance: 1.0,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+        }
+        .execute(&mut ctx, &mut cache)
+        .expect("Watershed failed");
+
+        let result = ctx.instance_map.expect("No instance map after watershed");
+        let out = result.as_slice();
+
+        // The border lobe's centre (6, 8) and the dominant lobe's centre
+        // (13, 8) must end up as two distinct, non-zero instances - matching
+        // the C++ reference, which places a watershed line at (2, 8).
+        let border_lobe = out[8 * width + 1];
+        let dominant_lobe = out[8 * width + 6];
+        assert_ne!(border_lobe, 0, "border lobe centre should be labeled");
+        assert_ne!(dominant_lobe, 0, "dominant lobe centre should be labeled");
+        assert_ne!(
+            border_lobe, dominant_lobe,
+            "the border-touching lobe must be split from the dominant lobe, \
+             matching the C++ reference (edges_are_background=false); got the \
+             same instance for both, indicating edges_are_background regressed \
+             back to true"
+        );
+
+        let unique: HashSet<u32> = out.iter().copied().filter(|&v| v > 0).collect();
+        assert_eq!(
+            unique.len(),
+            2,
+            "expected exactly 2 instances, found {}",
+            unique.len()
+        );
+    }
 }

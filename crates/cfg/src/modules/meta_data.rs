@@ -24,4 +24,12 @@ pub struct MetaData {
 
     /// Creation time
     pub creation_time: chrono::DateTime<chrono::Utc>,
+
+    /// Category used to group templates in pickers (e.g. "Cell Biology / Uptake")
+    #[serde(default)]
+    pub category: String,
+
+    /// Free-form keywords used to search/filter templates
+    #[serde(default)]
+    pub tags: Vec<String>,
 }

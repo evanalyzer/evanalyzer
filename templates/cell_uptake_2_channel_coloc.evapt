@@ -6,7 +6,14 @@
     "authorFirstName": "Melanie",
     "authorLastName": "Schuerz",
     "authorOrganization": "University of Salzburg",
-    "creationTime": "2026-06-11T00:00:00Z"
+    "creationTime": "2026-06-11T00:00:00Z",
+    "category": "Cell Biology / Uptake",
+    "tags": [
+      "uptake-assay",
+      "colocalization",
+      "brightfield",
+      "2-channel"
+    ]
   },
   "classification": {
     "classes": [
@@ -303,14 +310,14 @@
           "enabled": true,
           "command": {
             "type": "classifyRois",
-            "originSegmentation": [
-              1
+            "inputClasses": [
+              {
+                "VALID": 1
+              }
             ],
-            "inputClasses": [],
-            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-            "outputClass": {
-              "VALID": 4
-            },
+            "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+            "originSegmentation": [],
+            "outputClass": "UNSET",
             "overlappingWith": "UNSET",
             "minIntersectionArea": 0.0,
             "sizeUnit": "px",
@@ -423,14 +430,14 @@
           "enabled": true,
           "command": {
             "type": "classifyRois",
-            "originSegmentation": [
-              1
+             "inputClasses": [
+              {
+                "VALID": 1
+              }
             ],
-            "inputClasses": [],
-            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-            "outputClass": {
-              "VALID": 11
-            },
+            "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+            "originSegmentation": [],
+            "outputClass": "UNSET",
             "overlappingWith": "UNSET",
             "minIntersectionArea": 0.0,
             "sizeUnit": "px",

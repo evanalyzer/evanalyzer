@@ -95,6 +95,16 @@ impl ImageAlgorithm for WeightedDeviation {
             }
         };
 
+        // `scratch_pad` may be left over as a different container type/size
+        // from an earlier pipeline step (e.g. F32Rgb right after
+        // `ColorFilterCommand`, which swaps the original RGB image into the
+        // scratch slot). Without this, every `if let F32Gray(scratch) = ...`
+        // below would silently fail to match, skipping all the actual
+        // computation while still letting `ctx.swap()` succeed - handing the
+        // next pipeline step a stale, wrong-typed buffer with `execute()`
+        // still reporting `Ok(())`.
+        ctx.prepare_f32_gray_scratch()?;
+
         // Prepare meanSq (E[X^2])
         // We calculate grayF * grayF into a temporary image
         let mut mean_sq = if let ImageContainer::F32Gray(input) = ctx.image.as_ref() {
@@ -177,6 +187,50 @@ mod tests {
     use super::*;
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
+
+    #[test]
+    fn test_weighted_deviation_repro_stale_rgb_scratch() -> Result<(), Box<dyn std::error::Error>> {
+        let size = ImageSize {
+            width: 4,
+            height: 4,
+        };
+        let input_img =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![5.0f32; 16], CpuAllocator)?;
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+
+        // Simulate a scratch_pad left over as F32Rgb from an earlier pipeline
+        // step (e.g. right after ColorFilterCommand, which swaps the
+        // original RGB image into the scratch slot).
+        ctx.scratch_pad = Arc::new(ImageContainer::F32Rgb(crate::image::ManagedImage {
+            data: Image::<f32, 3, CpuAllocator>::new(size, vec![9.0f32; 48], CpuAllocator)?,
+            tile_offset: ctx.scratch_pad.tile_offset(),
+            plane: ctx.scratch_pad.plane(),
+        }));
+
+        let algo = WeightedDeviation {
+            kernel_size: 3,
+            sigma: 1.0,
+        };
+        let mut cache = PipelineCache::default();
+        let result = algo.execute(&mut ctx, &mut cache);
+
+        // Either compute correctly (self-heal to F32Gray) or fail loudly -
+        // never silently succeed while handing the pipeline back a stale
+        // F32Rgb buffer instead of a deviation map.
+        match result {
+            Ok(()) => {
+                assert!(
+                    matches!(ctx.image.as_ref(), ImageContainer::F32Gray(_)),
+                    "WeightedDeviation reported success but left ctx.image as {:?} \
+                     instead of the computed F32Gray deviation map - the stale RGB \
+                     scratch buffer leaked through unnoticed",
+                    ctx.image
+                );
+            }
+            Err(_) => {} // Loud failure is an acceptable outcome too.
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_weighted_deviation_edge() -> Result<(), Box<dyn std::error::Error>> {

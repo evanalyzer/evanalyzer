@@ -1,5 +1,5 @@
 use crate::{
-    ImageTile,
+    ImageTile, ManagedImage,
     algos::ImageAlgorithm,
     image::{ImageContainer, PixelSizes},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
@@ -10,14 +10,27 @@ use log::info;
 use std::sync::Arc;
 use std::{path::PathBuf, time::Instant};
 
+/// The buffers captured at a breakpoint, all from the same pipeline step so
+/// the UI can switch between views instantly with no pipeline re-run.
+#[derive(Clone)]
+pub struct BreakpointCapture {
+    pub image: Arc<ImageContainer>,
+    /// `None` if this pipeline step runs before segmentation (e.g. before
+    /// `Threshold`).
+    pub segmentation: Option<Arc<ImageContainer>>,
+    /// `None` if this pipeline step runs before instance labeling (e.g.
+    /// before `ConnectedComponents`/`Watershed`).
+    pub instances: Option<Arc<ImageContainer>>,
+}
+
 pub struct PipelineResult {
     pub image: Arc<ImageContainer>,
     pub cache: PipelineCache,
     /// True when the pipeline stopped early due to a Stop breakpoint.
     pub breakpoint_hit: bool,
-    /// Populated when a Snapshot breakpoint was reached: the image captured
-    /// at that step while the pipeline continued to run to completion.
-    pub breakpoint_snapshot: Option<Arc<ImageContainer>>,
+    /// Populated when a Stop or Snapshot breakpoint was reached: the image
+    /// plus segmentation/instance maps captured at that step.
+    pub breakpoint_capture: Option<BreakpointCapture>,
 }
 
 pub struct CorePipelineSettings {
@@ -85,8 +98,9 @@ impl Pipeline {
     /// `breakpoint_step` identifies a step index (0-based) at which to act.
     /// `snapshot_mode`:
     ///   - `false` (Stop) — stop execution at that step and return early.
-    ///   - `true`  (Snapshot) — clone the image at that step, then continue
-    ///     to completion; the clone is returned in `breakpoint_snapshot`.
+    ///   - `true`  (Snapshot) — capture the buffers at that step, then
+    ///     continue to completion; the capture is returned in
+    ///     `breakpoint_capture`.
     pub fn run(
         &self,
         output_path: PathBuf,
@@ -107,7 +121,7 @@ impl Pipeline {
             initial_image,
         )?;
         let start = Instant::now();
-        let mut breakpoint_snapshot: Option<Arc<ImageContainer>> = None;
+        let mut breakpoint_capture: Option<BreakpointCapture> = None;
 
         for (idx, command) in self.commands.iter().enumerate() {
             let step_start = Instant::now();
@@ -115,10 +129,31 @@ impl Pipeline {
             let duration = step_start.elapsed();
             info!("Executed {} in {:?}", command.name(), duration);
 
+            // Only capture at the exact breakpoint step - `breakpoint_step`
+            // is `None` whenever no breakpoint is set, so this never runs
+            // (and never clones segmentation/instance buffers) for a normal
+            // run.
             if breakpoint_step == Some(idx as i32) {
+                let capture = BreakpointCapture {
+                    image: ctx.image.clone(),
+                    segmentation: ctx.segmentation_map.as_ref().map(|s| {
+                        Arc::new(ImageContainer::U32(ManagedImage {
+                            data: s.clone(),
+                            tile_offset: ctx.image.tile_offset(),
+                            plane: ctx.image.plane(),
+                        }))
+                    }),
+                    instances: ctx.instance_map.as_ref().map(|i| {
+                        Arc::new(ImageContainer::U32(ManagedImage {
+                            data: i.clone(),
+                            tile_offset: ctx.image.tile_offset(),
+                            plane: ctx.image.plane(),
+                        }))
+                    }),
+                };
                 if snapshot_mode {
                     // Snapshot: capture but continue running.
-                    breakpoint_snapshot = Some(ctx.image.clone());
+                    breakpoint_capture = Some(capture);
                 } else {
                     // Stop: return immediately with the intermediate image.
                     cache.image_cache.clear_pipeline_context();
@@ -132,7 +167,7 @@ impl Pipeline {
                         image: ctx.image,
                         cache,
                         breakpoint_hit: true,
-                        breakpoint_snapshot: None,
+                        breakpoint_capture: Some(capture),
                     });
                 }
             }
@@ -148,7 +183,7 @@ impl Pipeline {
             image: ctx.image,
             cache,
             breakpoint_hit: false,
-            breakpoint_snapshot,
+            breakpoint_capture,
         })
     }
 }

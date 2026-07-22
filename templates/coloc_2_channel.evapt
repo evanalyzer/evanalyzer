@@ -6,7 +6,13 @@
     "authorFirstName": "Melanie",
     "authorLastName": "Schuerz",
     "authorOrganization": "",
-    "creationTime": "2026-06-11T00:00:00Z"
+    "creationTime": "2026-06-11T00:00:00Z",
+    "category": "Colocalization",
+    "tags": [
+      "colocalization",
+      "spots",
+      "2-channel"
+    ]
   },
   "classification": {
     "classes": [

@@ -341,6 +341,15 @@ impl Cellpose {
     fn write_instances(&self, labels: &[u32], seg_slice: &mut [u32], inst_slice: &mut [u32]) {
         let max_label = labels.iter().copied().max().unwrap_or(0) as usize;
         if max_label == 0 {
+            // `seg_slice`/`inst_slice` may be reused buffers carrying stale
+            // labels from an earlier segmentation pass in the same pipeline
+            // (e.g. re-running Cellpose, or running it after another
+            // instance-map-writing step) - per this command's documented
+            // contract ("all other pixels are assigned BACKGROUND"), finding
+            // zero cells must still reset the maps rather than leaving
+            // whatever was there before.
+            seg_slice.fill(0);
+            inst_slice.fill(0);
             return;
         }
 
@@ -363,11 +372,8 @@ impl Cellpose {
         let foreground_class = self.object_class_id.as_u32();
         for (i, &label) in labels.iter().enumerate() {
             let instance_id = remap[label as usize];
-            if instance_id == 0 {
-                continue;
-            }
             inst_slice[i] = instance_id;
-            seg_slice[i] = foreground_class;
+            seg_slice[i] = if instance_id == 0 { 0 } else { foreground_class };
         }
     }
 }
@@ -496,15 +502,38 @@ mod tests {
     }
 
     #[test]
-    fn write_instances_is_a_noop_for_an_all_background_label_map() {
+    fn write_instances_resets_stale_buffers_for_an_all_background_label_map() {
+        // Regression: `seg_slice`/`inst_slice` may be reused buffers carrying
+        // stale nonzero labels from an earlier segmentation pass in the same
+        // pipeline. Per this command's documented contract ("all other
+        // pixels are assigned BACKGROUND"), finding zero cells this run must
+        // reset them to 0, not silently preserve whatever was there before.
         let algo = cellpose(0);
         let labels = vec![0, 0, 0, 0];
-        let mut seg = vec![9u32; 4]; // pre-filled with a sentinel
+        let mut seg = vec![9u32; 4]; // stale sentinel from a previous pass
         let mut inst = vec![9u32; 4];
         algo.write_instances(&labels, &mut seg, &mut inst);
 
-        assert_eq!(seg, vec![9, 9, 9, 9], "must not touch the slices when there is nothing to write");
-        assert_eq!(inst, vec![9, 9, 9, 9]);
+        assert_eq!(seg, vec![0, 0, 0, 0], "stale segmentation labels must be reset to background");
+        assert_eq!(inst, vec![0, 0, 0, 0], "stale instance ids must be reset to background");
+    }
+
+    #[test]
+    fn write_instances_resets_stale_buffers_for_pixels_outside_any_surviving_object() {
+        // Same stale-buffer scenario, but with a mix of surviving and
+        // dropped/background pixels: every pixel not covered by a surviving
+        // object must be explicitly reset, not just the ones that happen to
+        // be background in `labels`.
+        let algo = cellpose(2);
+        // label 1: 3px (kept), label 2: 1px (dropped for being < min_size),
+        // remaining 2 pixels are background (label 0).
+        let labels = vec![1, 1, 1, 2, 0, 0];
+        let mut seg = vec![9u32; 6];
+        let mut inst = vec![9u32; 6];
+        algo.write_instances(&labels, &mut seg, &mut inst);
+
+        assert_eq!(inst, vec![1, 1, 1, 0, 0, 0]);
+        assert_eq!(seg, vec![7, 7, 7, 0, 0, 0]);
     }
 
     #[test]

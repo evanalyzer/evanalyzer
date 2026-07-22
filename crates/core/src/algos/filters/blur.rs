@@ -13,7 +13,9 @@ use std::sync::Arc;
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::InternalErrors;
+use kornia_image::{Image, ImageSize};
 use kornia_imgproc::filter::box_blur;
+use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 
 /// Smooths an image by averaging pixel intensities within a local neighborhood.
@@ -65,15 +67,13 @@ impl ImageAlgorithm for Blur {
         match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             // Handle Grayscale (1 Channel)
             (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
-                box_blur(input, output, (self.kernel_size, self.kernel_size))
-                    .map_err(InternalErrors::from_kornia)?;
+                output.data = Self::box_blur_edge_replicate(input, self.kernel_size)?;
                 ctx.swap()?;
                 Ok(())
             }
             // Handle RGB (3 Channel)
             (ImageContainer::F32Rgb(input), ImageContainer::F32Rgb(output)) => {
-                box_blur(input, output, (self.kernel_size, self.kernel_size))
-                    .map_err(InternalErrors::from_kornia)?;
+                output.data = Self::box_blur_edge_replicate(input, self.kernel_size)?;
                 ctx.swap()?;
 
                 Ok(())
@@ -87,6 +87,92 @@ impl ImageAlgorithm for Blur {
 
     fn name(&self) -> &'static str {
         "Blur"
+    }
+}
+
+impl Blur {
+    /// Box-blurs `src` with edge-replicated borders.
+    ///
+    /// `kornia_imgproc::filter::box_blur` always zero-pads at the image
+    /// border ("NOTE: This function uses a constant border type", confirmed
+    /// empirically: a single bright corner pixel blurs to `1/9`, not the
+    /// `4/9` edge-replicate would give). The reference (`docs/blur/blur.cpp`,
+    /// `filter3x3`'s default `BLUR_MORE` mode, which is what a bare `{"type":
+    /// "blur"}` step actually runs - `docs/blur/blur_settings.hpp` defaults
+    /// `mode` to `BLUR_MORE`, not `GAUSSIAN`) replicates edge pixels instead,
+    /// so this pads the image by `kernel_size / 2` on every side before
+    /// blurring, then crops back to the original size - the zero-padding
+    /// artifact falls entirely within the discarded padding.
+    fn box_blur_edge_replicate<const C: usize>(
+        src: &Image<f32, C, CpuAllocator>,
+        kernel_size: usize,
+    ) -> Result<Image<f32, C, CpuAllocator>, InternalErrors> {
+        let pad = kernel_size / 2;
+        let padded_in = Self::pad_edge_replicate(src, pad)?;
+        let padded_size = padded_in.size();
+        let mut padded_out = Image::<f32, C, CpuAllocator>::new(
+            padded_size,
+            vec![0.0f32; padded_size.width * padded_size.height * C],
+            CpuAllocator,
+        )
+        .map_err(InternalErrors::from_kornia)?;
+        box_blur(&padded_in, &mut padded_out, (kernel_size, kernel_size))
+            .map_err(InternalErrors::from_kornia)?;
+        Self::crop_center(&padded_out, src.width(), src.height(), pad)
+    }
+
+    /// Pads `src` by `pad` pixels on every side, clamping to the nearest
+    /// edge pixel (replicate padding).
+    fn pad_edge_replicate<const C: usize>(
+        src: &Image<f32, C, CpuAllocator>,
+        pad: usize,
+    ) -> Result<Image<f32, C, CpuAllocator>, InternalErrors> {
+        let (w, h) = (src.width(), src.height());
+        let (pw, ph) = (w + 2 * pad, h + 2 * pad);
+        let src_data = src.as_slice();
+        let mut out = vec![0.0f32; pw * ph * C];
+        for y in 0..ph {
+            let sy = (y as isize - pad as isize).clamp(0, h as isize - 1) as usize;
+            for x in 0..pw {
+                let sx = (x as isize - pad as isize).clamp(0, w as isize - 1) as usize;
+                let src_idx = (sy * w + sx) * C;
+                let dst_idx = (y * pw + x) * C;
+                out[dst_idx..dst_idx + C].copy_from_slice(&src_data[src_idx..src_idx + C]);
+            }
+        }
+        Image::<f32, C, CpuAllocator>::new(
+            ImageSize {
+                width: pw,
+                height: ph,
+            },
+            out,
+            CpuAllocator,
+        )
+        .map_err(InternalErrors::from_kornia)
+    }
+
+    /// Crops the `width` x `height` region starting `pad` pixels in from
+    /// `src`'s top-left corner.
+    fn crop_center<const C: usize>(
+        src: &Image<f32, C, CpuAllocator>,
+        width: usize,
+        height: usize,
+        pad: usize,
+    ) -> Result<Image<f32, C, CpuAllocator>, InternalErrors> {
+        let pw = src.width();
+        let src_data = src.as_slice();
+        let mut out = vec![0.0f32; width * height * C];
+        for y in 0..height {
+            let sy = y + pad;
+            for x in 0..width {
+                let sx = x + pad;
+                let src_idx = (sy * pw + sx) * C;
+                let dst_idx = (y * width + x) * C;
+                out[dst_idx..dst_idx + C].copy_from_slice(&src_data[src_idx..src_idx + C]);
+            }
+        }
+        Image::<f32, C, CpuAllocator>::new(ImageSize { width, height }, out, CpuAllocator)
+            .map_err(InternalErrors::from_kornia)
     }
 }
 
@@ -149,6 +235,50 @@ mod tests {
 
             // Check far corner (outside the 3x3 reach)
             assert_eq!(corner_val, 0.0, "Far corner should remain black");
+        } else {
+            panic!("Expected F32Gray in ctx.image after swap");
+        }
+    }
+
+    /// The reference (`docs/blur/blur.cpp`, `filter3x3`) replicates edge
+    /// pixels at the image border - a bare `{"type": "blur"}` step actually
+    /// runs this path, since `docs/blur/blur_settings.hpp` defaults `mode`
+    /// to `BLUR_MORE`, not `GAUSSIAN`. `kornia_imgproc::filter::box_blur`
+    /// always zero-pads instead ("NOTE: This function uses a constant
+    /// border type"), which would make every border pixel - and, for tiled
+    /// processing, every tile seam - systematically darker than the
+    /// reference. A single bright corner pixel makes the difference exact
+    /// and unambiguous: zero-padding blurs it to `1/9`, edge-replicate to
+    /// `4/9` (the corner's own value gets counted for all 5 out-of-bounds
+    /// neighbor positions that clamp back onto it).
+    #[test]
+    fn test_box_blur_edge_replicates_at_border() {
+        let size = ImageSize {
+            width: 5,
+            height: 5,
+        };
+        let mut data = vec![0.0f32; 25];
+        data[0] = 1.0; // top-left corner pixel
+
+        let input_img = Image::new(size, data, CpuAllocator).unwrap();
+        let blur_cmd = Blur { kernel_size: 3 };
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        let mut cache = PipelineCache::default();
+        blur_cmd
+            .execute(&mut ctx, &mut cache)
+            .expect("Blur execution failed");
+
+        if let ImageContainer::F32Gray(result_img) = ctx.image.as_ref() {
+            let pixels = result_img.as_slice();
+            let expected_corner = 4.0 / 9.0;
+            assert!(
+                (pixels[0] - expected_corner).abs() < 1e-5,
+                "corner pixel: got {}, expected {} (edge-replicate); a value near {} means \
+                 the border is being zero-padded instead",
+                pixels[0],
+                expected_corner,
+                1.0 / 9.0
+            );
         } else {
             panic!("Expected F32Gray in ctx.image after swap");
         }
@@ -315,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn test_blur_swap_failure_path() {
+    fn test_blur_recovers_from_a_mismatched_scratch_pad() {
         // 1. Create a valid 5x5 Gray image
         let size = ImageSize {
             width: 5,
@@ -330,7 +460,8 @@ mod tests {
         };
         let wrong_scratch = Image::new(wrong_size, vec![0.0f32; 9], CpuAllocator).unwrap();
 
-        // 3. Manually build a broken context
+        // 3. Manually build a context whose scratch pad doesn't match the
+        // image size.
         let mut ctx = PipelineContext {
             output_path: None,
             image: ImageContainer::new_f32_gray_from_image_test(img).into(),
@@ -358,14 +489,21 @@ mod tests {
         let blur_cmd = Blur { kernel_size: 3 };
         let mut cache = PipelineCache::default();
 
-        // 4. Execute
-        // This will likely fail inside box_blur (because input/output sizes differ)
-        // OR inside ctx.swap() if box_blur somehow finished.
+        // 4. Execute. `box_blur_edge_replicate` fully reconstructs its output
+        // at the input's size (via pad-then-crop) rather than writing into
+        // the scratch pad's pre-existing buffer, so a stale/mismatched
+        // scratch pad size no longer matters.
         let result = blur_cmd.execute(&mut ctx, &mut cache);
 
         assert!(
-            result.is_err(),
-            "Should have failed due to internal buffer mismatch"
+            result.is_ok(),
+            "Blur should recover from a mismatched scratch pad by reconstructing its own \
+             correctly-sized output: {result:?}"
         );
+        if let ImageContainer::F32Gray(result_img) = ctx.image.as_ref() {
+            assert_eq!(result_img.size(), size);
+        } else {
+            panic!("Expected F32Gray in ctx.image after swap");
+        }
     }
 }

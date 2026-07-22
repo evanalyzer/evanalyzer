@@ -176,14 +176,47 @@ impl ViewportWorker {
             // ----------------------------------------------------------------
             // STEP 3: Disk I/O (skipped in breakpoint mode)
             // ----------------------------------------------------------------
+            // Whether the buffer this frame renders is a U32 label map
+            // (Segmentation/Instances) rather than intensity data - set
+            // below when `show_bp` picks one. Declared outside the `if` so
+            // STEP 4 can branch on it after `read_result` is computed.
+            let mut is_label_render = false;
             let read_result = if show_bp {
                 match &*self.viewport_controller.breakpoint_channel.read().unwrap() {
                     Some(bp) => {
-                        let is_rgb = matches!(&*bp.image, ImageContainer::F32Rgb(_));
+                        // Pick the buffer matching the user's selected view
+                        // mode, falling back to the intensity image if the
+                        // pipeline hadn't produced that buffer yet at this
+                        // breakpoint step (e.g. Segmentation selected but the
+                        // breakpoint is before `Threshold`).
+                        let source_image = match self.viewport_controller.breakpoint_view_mode() {
+                            crate::editor::viewport_controller::BreakpointViewMode::Image => {
+                                bp.image.clone()
+                            }
+                            crate::editor::viewport_controller::BreakpointViewMode::Segmentation => {
+                                bp.segmentation.clone().unwrap_or_else(|| bp.image.clone())
+                            }
+                            crate::editor::viewport_controller::BreakpointViewMode::Instances => {
+                                bp.instances.clone().unwrap_or_else(|| bp.image.clone())
+                            }
+                        };
+                        is_label_render = matches!(&*source_image, ImageContainer::U32(_));
+                        let is_rgb = matches!(&*source_image, ImageContainer::F32Rgb(_));
                         let channel = ImageChannel {
-                            image: bp.image.clone(),
+                            image: source_image,
                             color: [1.0, 1.0, 1.0],
-                            c_stack: 0,
+                            // Must match the channel the breakpointed pipeline
+                            // actually started from - the render loop below
+                            // looks up histogram/LUT settings by `c_stack`,
+                            // and hardcoding 0 here made the breakpoint image
+                            // render using an unrelated channel's histogram
+                            // range whenever the pipeline started from any
+                            // other channel (usually all-black, since the
+                            // real data then falls outside that channel's
+                            // configured min/max window). Irrelevant for
+                            // label rendering (is_label_render bypasses the
+                            // histogram lookup entirely), but harmless there.
+                            c_stack: bp.channel_idx.unwrap_or(0),
                             name: "Breakpoint".to_string(),
                             is_rgb,
                             is_visible: true,
@@ -261,101 +294,116 @@ impl ViewportWorker {
                 master_slice.fill(Rgb8Pixel { r: 0, g: 0, b: 0 });
 
                 // ------------------------------------------------------------
-                // STEP 5: Auto-adjust - write lock acquired AFTER read lock dropped
-                // Safe because we dropped the project read lock in STEP 1.
-                // Skipped in breakpoint mode to preserve the original histogram.
+                // STEP 5-7: Render pixels + build histograms - pure CPU, no locks.
+                //
+                // Segmentation/Instances breakpoint views bypass all of this:
+                // label IDs aren't intensities, so a histogram min/max window
+                // is meaningless for them - `render_labels_to_rgb8` writes
+                // `master_slice` directly instead.
                 // ------------------------------------------------------------
-                if !show_bp && (task.auto_adjust_if_not_set || task.auto_adjust_selected) {
-                    for channel in render_src.iter() {
-                        let idx = channel.c_stack;
-                        if let Some(ch) = hist_settings.get(&idx) {
-                            if (!ch.is_some() && task.auto_adjust_if_not_set)
-                                || (task.auto_adjust_selected && idx == selected_channel)
-                            {
-                                let (min, max, min_range, max_range) =
-                                    apply_auto_adjust(&channel.image, channel.is_rgb);
-                                debug!(
-                                    "Auto-adjusting channel {} min={} max={} range=({},{})",
-                                    idx, min, max, min_range, max_range
-                                );
-                                self.app_state
-                                    .get_project_write()
-                                    .set_image_histogram_settings_for_channel(
-                                        idx, min, max, min_range, max_range,
-                                    );
-                            }
-                        }
-                    }
-                    self.histogram_controller.sync_histogram_settings_to_slint();
-                } else if task.is_new_image || task.is_new_series {
-                    self.histogram_controller.sync_histogram_settings_to_slint();
-                }
-
-                // ------------------------------------------------------------
-                // STEP 6: Re-read histogram settings after potential write
-                // Fresh read lock - safe because write lock was released above
-                // ------------------------------------------------------------
-                let hist_settings_fresh = self
-                    .app_state
-                    .get_project()
-                    .get_image_channel_histograms()
-                    .clone();
-
-                // Build channel contexts for rendering
-                let mut channel_contexts = Vec::with_capacity(render_src.len());
+                let mut channel_contexts: Vec<ChannelCtx> = Vec::new();
                 let mut is_rgb = false;
 
-                for channel in render_src.iter() {
-                    let idx = channel.c_stack;
-                    if let Some(Some(histogram)) = hist_settings_fresh.get(&idx) {
-                        let data_slice = match &*channel.image {
-                            ImageContainer::F32Gray(img) => {
-                                is_rgb = false;
-                                Some(img.as_slice())
-                            }
-                            ImageContainer::F32Rgb(img) => {
-                                is_rgb = true;
-                                Some(img.as_slice())
-                            }
-                            _ => None,
-                        };
-
-                        if let Some(slice) = data_slice {
-                            let inv_range = 1.0 / (histogram.max - histogram.min).max(0.001);
-                            // In breakpoint mode the LowRes ghost is rendered in
-                            // grayscale so it doesn't flash color during pan/zoom.
-                            let color = if is_low_res && in_breakpoint_mode {
-                                [1.0f32, 1.0, 1.0]
-                            } else {
-                                channel.color
-                            };
-                            channel_contexts.push(ChannelCtx {
-                                image_data: slice,
-                                histogram: (*histogram).clone(),
-                                color,
-                                r_factor: inv_range * color[0] * 255.0,
-                                g_factor: inv_range * color[1] * 255.0,
-                                b_factor: inv_range * color[2] * 255.0,
-                                offset: -histogram.min,
-                                h_mult: (NUM_BINS as f32 - 1.0)
-                                    / (histogram.max_limit - histogram.min_limit).max(f32::EPSILON),
-                                channel_idx: idx,
-                            });
+                let all_hists: Vec<Vec<f32>> = if is_label_render {
+                    if let Some(channel) = render_src.first() {
+                        if let ImageContainer::U32(img) = &*channel.image {
+                            render_labels_to_rgb8(img.data.as_slice(), master_slice);
                         }
                     }
-                }
+                    Vec::new()
+                } else {
+                    // STEP 5: Auto-adjust - write lock acquired AFTER read lock
+                    // dropped. Safe because we dropped the project read lock in
+                    // STEP 1. Skipped in breakpoint mode to preserve the
+                    // original histogram.
+                    if !show_bp && (task.auto_adjust_if_not_set || task.auto_adjust_selected) {
+                        for channel in render_src.iter() {
+                            let idx = channel.c_stack;
+                            if let Some(ch) = hist_settings.get(&idx) {
+                                if (!ch.is_some() && task.auto_adjust_if_not_set)
+                                    || (task.auto_adjust_selected && idx == selected_channel)
+                                {
+                                    let (min, max, min_range, max_range) =
+                                        apply_auto_adjust(&channel.image, channel.is_rgb);
+                                    debug!(
+                                        "Auto-adjusting channel {} min={} max={} range=({},{})",
+                                        idx, min, max, min_range, max_range
+                                    );
+                                    self.app_state
+                                        .get_project_write()
+                                        .set_image_histogram_settings_for_channel(
+                                            idx, min, max, min_range, max_range,
+                                        );
+                                }
+                            }
+                        }
+                        self.histogram_controller.sync_histogram_settings_to_slint();
+                    } else if task.is_new_image || task.is_new_series {
+                        self.histogram_controller.sync_histogram_settings_to_slint();
+                    }
 
-                // ------------------------------------------------------------
-                // STEP 7: Render pixels + build histograms - pure CPU, no locks
-                // ------------------------------------------------------------
-                let all_hists = prepare_image_channels_for_slint(
-                    &channel_contexts,
-                    master_slice,
-                    NUM_BINS,
-                    !is_low_res,
-                    &visible_channels,
-                    is_rgb,
-                );
+                    // STEP 6: Re-read histogram settings after potential write.
+                    // Fresh read lock - safe because write lock was released above.
+                    let hist_settings_fresh = self
+                        .app_state
+                        .get_project()
+                        .get_image_channel_histograms()
+                        .clone();
+
+                    // Build channel contexts for rendering
+                    channel_contexts = Vec::with_capacity(render_src.len());
+
+                    for channel in render_src.iter() {
+                        let idx = channel.c_stack;
+                        if let Some(Some(histogram)) = hist_settings_fresh.get(&idx) {
+                            let data_slice = match &*channel.image {
+                                ImageContainer::F32Gray(img) => {
+                                    is_rgb = false;
+                                    Some(img.as_slice())
+                                }
+                                ImageContainer::F32Rgb(img) => {
+                                    is_rgb = true;
+                                    Some(img.as_slice())
+                                }
+                                _ => None,
+                            };
+
+                            if let Some(slice) = data_slice {
+                                let inv_range = 1.0 / (histogram.max - histogram.min).max(0.001);
+                                // In breakpoint mode the LowRes ghost is rendered in
+                                // grayscale so it doesn't flash color during pan/zoom.
+                                let color = if is_low_res && in_breakpoint_mode {
+                                    [1.0f32, 1.0, 1.0]
+                                } else {
+                                    channel.color
+                                };
+                                channel_contexts.push(ChannelCtx {
+                                    image_data: slice,
+                                    histogram: (*histogram).clone(),
+                                    color,
+                                    r_factor: inv_range * color[0] * 255.0,
+                                    g_factor: inv_range * color[1] * 255.0,
+                                    b_factor: inv_range * color[2] * 255.0,
+                                    offset: -histogram.min,
+                                    h_mult: (NUM_BINS as f32 - 1.0)
+                                        / (histogram.max_limit - histogram.min_limit)
+                                            .max(f32::EPSILON),
+                                    channel_idx: idx,
+                                });
+                            }
+                        }
+                    }
+
+                    // STEP 7: render
+                    prepare_image_channels_for_slint(
+                        &channel_contexts,
+                        master_slice,
+                        NUM_BINS,
+                        !is_low_res,
+                        &visible_channels,
+                        is_rgb,
+                    )
+                };
 
                 // ------------------------------------------------------------
                 // STEP 7b: Composite into a viewport-sized, screen-space buffer
@@ -532,6 +580,59 @@ pub fn apply_auto_adjust(img: &ImageContainer, is_rgb: bool) -> (f32, f32, f32, 
     }
 
     (min, max, (min - 0.01).max(0.0), (max + 0.01).min(1.0))
+}
+
+/// Renders a `u32` label buffer (segmentation classes or instance IDs)
+/// directly to RGB8, bypassing the histogram/LUT pipeline entirely - label
+/// IDs aren't intensities, so a min/max window doesn't apply to them. `0`
+/// (background) renders black; every other ID gets a deterministic,
+/// visually-distinct color, so the same ID always renders the same color
+/// across redraws (this fires on every pan/zoom).
+fn render_labels_to_rgb8(labels: &[u32], dest_pixels: &mut [Rgb8Pixel]) {
+    use rayon::prelude::*;
+    let n = labels.len().min(dest_pixels.len());
+    dest_pixels[..n]
+        .par_iter_mut()
+        .zip(labels[..n].par_iter())
+        .for_each(|(px, &id)| {
+            *px = label_to_rgb8(id);
+        });
+}
+
+/// Maps a label ID to a color via golden-ratio hue stepping: consecutive IDs
+/// land far apart on the hue wheel, so adjacent objects - which often get
+/// consecutive IDs from connected-components/instance labeling - stay
+/// visually distinguishable instead of blending into near-identical shades.
+fn label_to_rgb8(id: u32) -> Rgb8Pixel {
+    if id == 0 {
+        return Rgb8Pixel { r: 0, g: 0, b: 0 };
+    }
+    const GOLDEN_RATIO_CONJUGATE: f32 = 0.618_034;
+    let hue = (id as f32 * GOLDEN_RATIO_CONJUGATE).fract();
+    let (r, g, b) = hsv_to_rgb8(hue, 0.65, 0.95);
+    Rgb8Pixel { r, g, b }
+}
+
+/// Minimal HSV -> RGB8 conversion (`h`, `s`, `v` in `0.0..=1.0`).
+fn hsv_to_rgb8(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+    let i = (h * 6.0).floor();
+    let f = h * 6.0 - i;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - f * s);
+    let t = v * (1.0 - (1.0 - f) * s);
+    let (r, g, b) = match (i as i64).rem_euclid(6) {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+    (
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8,
+    )
 }
 
 /// Converts f32 image channels to RGB8 pixels, applying histogram brightness settings.

@@ -5,6 +5,7 @@ use crate::ImagesListState;
 use crate::PipelinesPanelState;
 use crate::ProjectTemplateDef;
 use crate::ProjectTemplateState;
+use crate::TagFilterChip;
 use crate::ToolbarState;
 use crate::UiState;
 use crate::UnsavedChangesState;
@@ -24,9 +25,22 @@ use evanalyzer_cfg::settings::templates::ProjectTemplate;
 use evanalyzer_core::SUPPORTED_IMAGE_FORMATS;
 use log::{info, warn};
 use slint::ComponentHandle;
-use slint::{ModelRc, VecModel};
+use slint::{ModelRc, SharedString, VecModel};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+/// Sentinel shown as the first entry of the category `ComboBox`; selecting it
+/// clears the category filter rather than matching a real category name.
+const ALL_CATEGORIES: &str = "All categories";
+
+/// Current state of the "New from Project Template" picker's category/tag
+/// filters. Empty `category` and `tags` mean "no filter" (show everything).
+#[derive(Default, Clone)]
+struct TemplateFilter {
+    category: String,
+    tags: BTreeSet<String>,
+}
 
 /// An action that would discard the current project's unsaved changes if run
 /// immediately - gated behind [`ProjectController::guard_discard`], which
@@ -50,6 +64,9 @@ pub struct ProjectController {
     /// Project templates currently shown in the "New from Project Template"
     /// dialog. Reloaded from disk whenever the dialog is opened.
     project_templates: Mutex<Vec<ProjectTemplate>>,
+    /// Category/tag filter currently applied to `project_templates` in the
+    /// picker. Reset whenever the dialog is (re)opened.
+    template_filter: Mutex<TemplateFilter>,
     /// The open/import/quit action waiting on the unsaved-changes dialog's
     /// answer, if any (see [`PendingAction`]).
     pending_action: Mutex<Option<PendingAction>>,
@@ -76,6 +93,7 @@ impl ProjectController {
             results_list_controller,
             template_controller,
             project_templates: Mutex::new(Vec::new()),
+            template_filter: Mutex::new(TemplateFilter::default()),
             pending_action: Mutex::new(None),
         }
     }
@@ -335,6 +353,33 @@ impl ProjectController {
                         .set_active_dialog(DialogType::None);
                 }
             });
+
+            // Project template picker: category filter changed
+            let manager = Arc::clone(self);
+            ui.global::<ProjectTemplateState>()
+                .on_select_category(move |category| {
+                    let mut filter = manager.template_filter.lock().expect("Poisoned");
+                    filter.category = if category.as_str() == ALL_CATEGORIES {
+                        String::new()
+                    } else {
+                        category.to_string()
+                    };
+                    drop(filter);
+                    manager.refresh_filtered_templates();
+                });
+
+            // Project template picker: tag chip toggled
+            let manager = Arc::clone(self);
+            ui.global::<ProjectTemplateState>()
+                .on_toggle_tag(move |tag| {
+                    let tag = tag.to_string();
+                    let mut filter = manager.template_filter.lock().expect("Poisoned");
+                    if !filter.tags.remove(&tag) {
+                        filter.tags.insert(tag);
+                    }
+                    drop(filter);
+                    manager.refresh_filtered_templates();
+                });
 
             // Open website in the system browser
             ui.global::<ToolbarState>().on_open_website(|| {
@@ -619,11 +664,17 @@ impl ProjectController {
     /// ready, so a slow filesystem doesn't delay opening the dialog.
     fn open_project_template_dialog(self: &Arc<Self>) {
         let manager = self.clone();
+        *self.template_filter.lock().expect("Poisoned") = TemplateFilter::default();
         if let Some(ui) = self.ui.upgrade() {
             let picker = ui.global::<ProjectTemplateState>();
             picker.set_selected_id(-1);
             picker.set_has_detail(false);
             picker.set_templates(ModelRc::new(VecModel::from(Vec::<ProjectTemplateDef>::new())));
+            picker.set_categories(ModelRc::new(VecModel::from(vec![SharedString::from(
+                ALL_CATEGORIES,
+            )])));
+            picker.set_tag_chips(ModelRc::new(VecModel::from(Vec::<TagFilterChip>::new())));
+            picker.set_filters_active(false);
             ui.global::<GlobalAppState>()
                 .set_active_dialog(DialogType::ProjectTemplate);
         }
@@ -631,11 +682,6 @@ impl ProjectController {
             let templates: Vec<ProjectTemplate> = load_project_templates()
                 .into_iter()
                 .map(|(_path, template)| template)
-                .collect();
-            let defs: Vec<ProjectTemplateDef> = templates
-                .iter()
-                .enumerate()
-                .map(|(idx, t)| project_template_to_def(idx as i32, t))
                 .collect();
             *manager.project_templates.lock().expect("Poisoned") = templates;
 
@@ -647,12 +693,73 @@ impl ProjectController {
                 {
                     return;
                 }
-                ui.global::<ProjectTemplateState>()
-                    .set_templates(ModelRc::new(VecModel::from(defs)));
+                manager.refresh_filtered_templates();
             }) {
                 warn!("Failed to populate project template picker: {}", e);
             }
         });
+    }
+
+    /// Recomputes the category/tag facets and the filtered template list from
+    /// `project_templates` + `template_filter`, and pushes them to the picker.
+    ///
+    /// Called whenever the dialog is (re)opened or a filter changes. `id`s in
+    /// the resulting `ProjectTemplateDef`s are always indices into the full
+    /// (unfiltered) `project_templates`, since that's what `on_select` /
+    /// `on_confirm` look up by.
+    fn refresh_filtered_templates(self: &Arc<Self>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let templates = self.project_templates.lock().expect("Poisoned");
+        let filter = self.template_filter.lock().expect("Poisoned").clone();
+
+        let mut categories_seen: BTreeSet<String> = BTreeSet::new();
+        let mut tags_seen: BTreeSet<String> = BTreeSet::new();
+        for t in templates.iter() {
+            if !t.meta.category.is_empty() {
+                categories_seen.insert(t.meta.category.clone());
+            }
+            tags_seen.extend(t.meta.tags.iter().filter(|s| !s.is_empty()).cloned());
+        }
+
+        let mut categories: Vec<SharedString> = vec![SharedString::from(ALL_CATEGORIES)];
+        categories.extend(categories_seen.into_iter().map(SharedString::from));
+
+        let tag_chips: Vec<TagFilterChip> = tags_seen
+            .into_iter()
+            .map(|name| {
+                let active = filter.tags.contains(&name);
+                TagFilterChip {
+                    name: name.into(),
+                    active,
+                }
+            })
+            .collect();
+
+        let defs: Vec<ProjectTemplateDef> = templates
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                let category_ok =
+                    filter.category.is_empty() || t.meta.category == filter.category;
+                let tags_ok = filter.tags.is_empty()
+                    || t.meta.tags.iter().any(|tag| filter.tags.contains(tag));
+                category_ok && tags_ok
+            })
+            .map(|(idx, t)| project_template_to_def(idx as i32, t))
+            .collect();
+
+        let picker = ui.global::<ProjectTemplateState>();
+        let still_visible = defs.iter().any(|d| d.id == picker.get_selected_id());
+        if !still_visible {
+            picker.set_selected_id(-1);
+            picker.set_has_detail(false);
+        }
+        picker.set_categories(ModelRc::new(VecModel::from(categories)));
+        picker.set_tag_chips(ModelRc::new(VecModel::from(tag_chips)));
+        picker.set_filters_active(!filter.category.is_empty() || !filter.tags.is_empty());
+        picker.set_templates(ModelRc::new(VecModel::from(defs)));
     }
 
     /// Replaces the current project's classification, plate and pipeline
@@ -727,6 +834,14 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
     .trim()
     .to_string();
 
+    let tags: Vec<SharedString> = template
+        .meta
+        .tags
+        .iter()
+        .cloned()
+        .map(SharedString::from)
+        .collect();
+
     ProjectTemplateDef {
         id,
         name: template.meta.name.clone().into(),
@@ -741,5 +856,7 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
             .to_string()
             .into(),
         pipeline_count: template.pipelines.len() as i32,
+        category: template.meta.category.clone().into(),
+        tags: ModelRc::new(VecModel::from(tags)),
     }
 }

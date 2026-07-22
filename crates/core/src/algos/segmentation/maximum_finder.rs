@@ -729,3 +729,281 @@ fn make_fate_table() -> [i32; 256] {
     }
     table
 }
+
+/// Golden-data regression tests comparing this port against the reference C++
+/// implementation in `docs/watershed/` (`maximum_finder.cpp` + `edm.cpp`), run
+/// through a small standalone harness (`Edm::makeFloatEDM` -> `MaximumFinder::
+/// findMaxima(..., SEGMENTED, false, true)`), exactly mirroring what
+/// `Watershed::execute` does in `docs/watershed/watershed.hpp`.
+///
+/// Each expected mask below is the *exact* stdout of that harness for the given
+/// input mask and tolerance - not hand-derived. `'#'` is foreground/particle,
+/// `'.'` is background/watershed line.
+#[cfg(test)]
+mod cpp_reference_tests {
+    use super::*;
+    use crate::algos::ImageAlgorithm;
+    use crate::algos::spartial_transform::edm::DistanceTransform;
+    use crate::pipeline::pipeline_cache::PipelineCache;
+    use crate::pipeline::pipeline_context::PipelineContext;
+    use kornia_image::{Image, ImageSize};
+    use kornia_tensor::CpuAllocator;
+
+    /// Parses a compact `#`/`.` mask into a flat row-major `f32` buffer
+    /// (`1.0` foreground, `0.0` background) plus its dimensions.
+    fn parse_mask(rows: &[&str]) -> (Vec<f32>, usize, usize) {
+        let height = rows.len();
+        let width = rows[0].len();
+        let mut data = Vec::with_capacity(width * height);
+        for row in rows {
+            assert_eq!(row.len(), width, "ragged golden mask");
+            data.extend(row.chars().map(|c| if c == '#' { 1.0 } else { 0.0 }));
+        }
+        (data, width, height)
+    }
+
+    /// Parses a compact `#`/`.` expected watershed mask into a flat row-major
+    /// `u8` buffer (`255` particle, `0` background/line).
+    fn parse_expected(rows: &[&str]) -> Vec<u8> {
+        rows.iter()
+            .flat_map(|row| row.chars().map(|c| if c == '#' { 255u8 } else { 0u8 }))
+            .collect()
+    }
+
+    /// Runs this crate's full EDM + watershed pipeline exactly as
+    /// `Watershed::execute` does: `DistanceTransform { threshold: 0.0,
+    /// edges_are_background: false }` followed by `watershed_segment_edm`.
+    fn run_pipeline(mask: &[f32], width: usize, height: usize, tolerance: f32) -> Vec<u8> {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize { width, height },
+            mask.to_vec(),
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        let mut cache = PipelineCache::default();
+        DistanceTransform {
+            threshold: 0.0,
+            edges_are_background: false,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
+        let edm = ctx.get_f32_gray_image().unwrap();
+        watershed_segment_edm(edm.as_slice(), width, height, tolerance)
+    }
+
+    /// Renders a mismatch as an aligned two-block diff for debugging.
+    fn assert_masks_eq(actual: &[u8], expected: &[u8], width: usize, height: usize, case: &str) {
+        if actual == expected {
+            return;
+        }
+        let render = |m: &[u8]| -> String {
+            (0..height)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| if m[y * width + x] == 255 { '#' } else { '.' })
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        panic!(
+            "{case}: watershed_segment_edm output does not match the C++ reference.\n\
+             --- actual (Rust) ---\n{}\n--- expected (C++ reference) ---\n{}",
+            render(actual),
+            render(expected)
+        );
+    }
+
+    // Two touching r=4 discs, 6px apart, well inside the image - the canonical
+    // ImageJ watershed example. Sanity check that the non-border-touching case
+    // matches exactly.
+    const TWO_DISCS_MASK: &[&str] = &[
+        ".................",
+        ".................",
+        ".....#.....#.....",
+        "...#####.#####...",
+        "..#############..",
+        "..#############..",
+        ".###############.",
+        "..#############..",
+        "..#############..",
+        "...#####.#####...",
+        ".....#.....#.....",
+        ".................",
+        ".................",
+    ];
+    const TWO_DISCS_EXPECTED: &[&str] = &[
+        ".................",
+        ".................",
+        ".....#.....#.....",
+        "...#####.#####...",
+        "..######.######..",
+        "..######.######..",
+        ".#######.#######.",
+        "..######.######..",
+        "..######.######..",
+        "...#####.#####...",
+        ".....#.....#.....",
+        ".................",
+        ".................",
+    ];
+
+    #[test]
+    fn watershed_matches_cpp_reference_two_touching_discs() {
+        let (mask, w, h) = parse_mask(TWO_DISCS_MASK);
+        let expected = parse_expected(TWO_DISCS_EXPECTED);
+        let actual = run_pipeline(&mask, w, h, 0.5);
+        assert_masks_eq(&actual, &expected, w, h, "two_touching_discs");
+    }
+
+    // Regression for the `edges_are_background` bug: a small r=2 lobe flush
+    // against the LEFT image border, touching a larger r=4 interior lobe.
+    // `Edm::makeFloatEDM(binary8, 0, false)` (docs/watershed/watershed.hpp:56)
+    // does NOT treat the image edge as background; the C++ reference splits the
+    // two lobes at (2, 8) - a real neck, not a border artifact. Running the
+    // exact same mask with `edgesAreBackground=true` (the bug this locks in)
+    // collapses the small lobe's EDM peak near the border and fills that neck
+    // in solid instead of leaving a watershed line, changing the result at
+    // (2, 8). This test only passes because `watershed.rs` now constructs
+    // `DistanceTransform` with `edges_are_background: false`.
+    const BORDER_SPLIT_MASK: &[&str] = &[
+        "..........................",
+        "..........................",
+        "..........................",
+        "..........................",
+        "......#...................",
+        "....#####.................",
+        "#..#######................",
+        "##.#######................",
+        "###########...............",
+        "##.#######................",
+        "#..#######................",
+        "....#####.................",
+        "......#...................",
+        "..........................",
+        "..........................",
+        "..........................",
+    ];
+    const BORDER_SPLIT_EXPECTED: &[&str] = &[
+        "..........................",
+        "..........................",
+        "..........................",
+        "..........................",
+        "......#...................",
+        "....#####.................",
+        "#..#######................",
+        "##.#######................",
+        "##.########...............",
+        "##.#######................",
+        "#..#######................",
+        "....#####.................",
+        "......#...................",
+        "..........................",
+        "..........................",
+        "..........................",
+    ];
+
+    #[test]
+    fn watershed_matches_cpp_reference_border_touching_lobe() {
+        let (mask, w, h) = parse_mask(BORDER_SPLIT_MASK);
+        let expected = parse_expected(BORDER_SPLIT_EXPECTED);
+        let actual = run_pipeline(&mask, w, h, 1.0);
+        assert_masks_eq(&actual, &expected, w, h, "border_touching_lobe");
+    }
+
+    // Elongated "peanut" (two overlapping r=8 discs, centres 13px apart): a
+    // larger, non-convex case at the default ImageJ tolerance (0.5).
+    const PEANUT_MASK: &[&str] = &[
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "............#...........",
+        ".........#######........",
+        ".......###########......",
+        "......#############.....",
+        "......#############.....",
+        ".....###############....",
+        ".....###############....",
+        ".....###############....",
+        "....#################...",
+        ".....###############....",
+        ".....###############....",
+        ".....###############....",
+        "......#############.....",
+        "......#############.....",
+        ".......###########......",
+        ".......###########......",
+        "......#############.....",
+        "......#############.....",
+        ".....###############....",
+        ".....###############....",
+        ".....###############....",
+        "....#################...",
+        ".....###############....",
+        ".....###############....",
+        ".....###############....",
+        "......#############.....",
+        "......#############.....",
+        ".......###########......",
+        ".........#######........",
+        "............#...........",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+    ];
+    const PEANUT_EXPECTED: &[&str] = &[
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "............#...........",
+        ".........#######........",
+        ".......###########......",
+        "......#############.....",
+        "......#############.....",
+        ".....###############....",
+        ".....###############....",
+        ".....###############....",
+        "....#################...",
+        ".....###############....",
+        ".....###############....",
+        ".....###############....",
+        "......#############.....",
+        "......#############.....",
+        "........................",
+        ".......###########......",
+        "......#############.....",
+        "......#############.....",
+        ".....###############....",
+        ".....###############....",
+        ".....###############....",
+        "....#################...",
+        ".....###############....",
+        ".....###############....",
+        ".....###############....",
+        "......#############.....",
+        "......#############.....",
+        ".......###########......",
+        ".........#######........",
+        "............#...........",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+    ];
+
+    #[test]
+    fn watershed_matches_cpp_reference_peanut() {
+        let (mask, w, h) = parse_mask(PEANUT_MASK);
+        let expected = parse_expected(PEANUT_EXPECTED);
+        let actual = run_pipeline(&mask, w, h, 0.5);
+        assert_masks_eq(&actual, &expected, w, h, "peanut");
+    }
+}

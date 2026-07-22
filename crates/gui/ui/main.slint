@@ -199,12 +199,26 @@ export component AppWindow inherits Window {
                     SidebarLeft { }
                 }
 
-                Viewport {
-                    display_image: root.display_image;
-                    ghost_image: root.ghost_image;
-                    roi_image: root.roi_image;
+                Rectangle {
                     horizontal-stretch: 1;
-                    enabled: GlobalAppState.active_dialog == DialogType.none;
+
+                    Viewport {
+                        display_image: root.display_image;
+                        ghost_image: root.ghost_image;
+                        roi_image: root.roi_image;
+                        width: 100%;
+                        height: 100%;
+                        enabled: GlobalAppState.active_dialog == DialogType.none;
+                    }
+
+                    // Kept scoped to the viewport's own bounds (not the whole
+                    // window) so it never covers the sidebars/toolbar/status
+                    // bar - see the "Overlay Manager" section for every other
+                    // dialog, which intentionally does span the full window.
+                    if (GlobalAppState.active_dialog == DialogType.preview-rendering): PreviewRendering {
+                        width: 100%;
+                        height: 100%;
+                    }
                 }
 
                 // Image tools sidebar
@@ -290,10 +304,6 @@ export component AppWindow inherits Window {
             height: 100%;
         }
         if (GlobalAppState.active_dialog == DialogType.pipeline-running): PipelineRunningDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.preview-rendering): PreviewRendering {
             width: 100%;
             height: 100%;
         }

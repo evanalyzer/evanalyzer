@@ -60,6 +60,15 @@
     },
     {
       "enabled": true,
+      "command":{
+        "type": "rollingBall",
+        "ballType": "BALL",
+        "preSmooth": false,
+        "radius": 4
+      }
+    },
+    {
+      "enabled": true,
       "command": {
         "type": "threshold",
         "thresholds": [
@@ -90,14 +99,14 @@
       "enabled": true,
       "command": {
         "type": "classifyRois",
-        "originSegmentation": [
-          1
+        "inputClasses": [
+          {
+            "VALID": 1
+          }
         ],
-        "inputClasses": [],
-        "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-        "outputClass": {
-          "VALID": 1
-        },
+        "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+        "originSegmentation": [],
+        "outputClass": "UNSET",
         "overlappingWith": "UNSET",
         "minIntersectionArea": 0.0,
         "sizeUnit": "px",
@@ -114,14 +123,6 @@
         "minFeret": 0.0,
         "maxFeret": 2147483648,
         "allowEdgeTouching": true
-      }
-    },
-    {
-      "enabled": true,
-      "command": {
-        "type": "saveImage",
-        "name": "cell_area",
-        "source": "IMAGE"
       }
     }
   ]

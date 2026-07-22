@@ -1,133 +1,61 @@
-import { Palette, ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
-import { GlobalAppState, DialogType } from "../state.slint";
-import { AppButton } from "../components/app_button.slint";
 import { PipelineRunningState } from "pipeline_running_dialog.slint";
 
 
 // -- Dialog --------------------------------------------------------------------
 
+// A slim, unobtrusive progress banner across the middle of the viewport.
+// Preview rendering is fast most of the time, so this deliberately avoids a
+// full modal card (backdrop, centered dialog, blocking TouchArea) - it's a
+// thin black strip, vertically centered over the image, with white
+// status/progress text and a small "✕" to cancel or dismiss, all grouped
+// together in the middle rather than spread edge-to-edge.
 export component PreviewRendering inherits Rectangle {
-    //background: Theme.modal-overlay;
+    background: transparent;
 
-    TouchArea { }
-
-    Rectangle {
-        x: (parent.width - self.width) / 2;
+    bar := Rectangle {
+        x: 0;
         y: (parent.height - self.height) / 2;
-        width: 340px;
-        // Grow with the content, but never taller than the viewport, so the
-        // bottom button row stays on screen even for very long error messages
-        // (the error text scrolls inside its panel instead of pushing it down).
-        height: min(layout.preferred-height, parent.height - 40px);
-        background: Palette.background;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: PipelineRunningState.has-error && PipelineRunningState.done ? Theme.err : Palette.border;
-        drop-shadow-blur: 32px;
-        drop-shadow-color: Theme.shadow;
-        animate border-color { duration: 250ms; }
+        width: 100%;
+        height: 26px;
+        background: #000000;
 
-        layout := VerticalLayout {
-            padding: 16px;
-            spacing: 10px;
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
 
-            // Header row: status dot + title + percentage
-            HorizontalLayout {
-                spacing: 10px;
-                alignment: space-between;
+            Text {
+                text: !PipelineRunningState.done ? "Generating preview…" : (PipelineRunningState.has-error ? "Preview failed: " + PipelineRunningState.status-message : "Preview ready");
+                font-size: 11px;
+                color: PipelineRunningState.has-error && PipelineRunningState.done ? Theme.err : #FFFFFF;
+                vertical-alignment: center;
+                overflow: elide;
+            }
 
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: start;
+            Text {
+                text: PipelineRunningState.total > 0 && !PipelineRunningState.done ? (PipelineRunningState.processed + " / " + PipelineRunningState.total + " (" + (PipelineRunningState.processed * 100 / PipelineRunningState.total) + "%)") : "";
+                font-size: 11px;
+                color: #FFFFFFAA;
+                vertical-alignment: center;
+            }
 
-                    Rectangle {
-                        width: 8px;
-                        height: 8px;
-                        border-radius: 4px;
-                        y: 3px;
-                        background: PipelineRunningState.done ? (PipelineRunningState.has-error ? Theme.err : Theme.ok) : Theme.accent;
-                        animate background { duration: 300ms; }
-                    }
-
-                    Text {
-                        text: PipelineRunningState.done ? (PipelineRunningState.has-error ? "Preview failed" : "Preview ready") : "Generating preview…";
-                        font-size: 13px;
-                        font-weight: 600;
-                        color: Palette.foreground;
-                        vertical-alignment: center;
-                    }
-                }
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 3px;
+                background: close-ta.has-hover ? #FFFFFF33 : transparent;
+                animate background { duration: 80ms; }
 
                 Text {
-                    text: PipelineRunningState.total > 0 && !PipelineRunningState.done ? ((PipelineRunningState.processed * 100 / PipelineRunningState.total) + "%") : "";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: Theme.accent;
-                    vertical-alignment: center;
-                }
-            }
-
-            // Progress bar (hidden when done with error)
-            if !PipelineRunningState.has-error || !PipelineRunningState.done: Rectangle {
-                height: 4px;
-                border-radius: 2px;
-                background: Theme.raised;
-
-                Rectangle {
-                    x: 0;
-                    width: PipelineRunningState.total > 0 ? parent.width * (PipelineRunningState.processed * 1.0 / PipelineRunningState.total) : 0px;
-                    height: parent.height;
-                    border-radius: 2px;
-                    background: Theme.ok;
-                    animate width {
-                        duration: 350ms;
-                        easing: ease-out;
-                    }
-                }
-            }
-
-            // Error message panel. Sized to the message, but capped so a very long
-            // error scrolls inside the panel instead of growing the dialog past the
-            // viewport and pushing the button row off-screen.
-            if PipelineRunningState.has-error && PipelineRunningState.done: Rectangle {
-                height: min(msg.preferred-height + 16px, root.height - 170px);
-                background: Theme.err.with-alpha(0.1);
-                border-radius: 6px;
-                border-width: 1px;
-                border-color: Theme.err.with-alpha(0.35);
-
-                ScrollView {
-                    width: 100%;
-                    height: 100%;
-
-                    msg := Text {
-                        x: 8px;
-                        y: 8px;
-                        width: 292px;
-                        text: PipelineRunningState.status-message;
-                        font-size: 11px;
-                        font-family: Theme.font-mono;
-                        color: Theme.err;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-
-            // Bottom row: count + button
-            HorizontalLayout {
-                alignment: space-between;
-                spacing: 8px;
-
-                Text {
-                    text: PipelineRunningState.total > 0 && !PipelineRunningState.has-error ? (PipelineRunningState.processed + " / " + PipelineRunningState.total) : "";
+                    text: "✕";
                     font-size: 11px;
-                    color: Theme.text-mute;
+                    color: #FFFFFF;
+                    horizontal-alignment: center;
                     vertical-alignment: center;
                 }
 
-                AppButton {
-                    text: PipelineRunningState.done ? "Close" : "Cancel";
+                close-ta := TouchArea {
+                    mouse-cursor: pointer;
                     clicked => {
                         if (PipelineRunningState.done) {
                             PipelineRunningState.close();

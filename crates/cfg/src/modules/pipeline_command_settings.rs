@@ -1181,7 +1181,7 @@ impl Default for UNetSettings {
 
 // ============ OBJECT ============
 
-fn _serde_default_connectedcomponents_min_size_px() -> i32 {
+fn _serde_default_connectedcomponents_min_size() -> i32 {
     0i32
 }
 ///  Identifies and labels discrete objects within a binary or multi-class image.
@@ -1199,13 +1199,13 @@ pub struct ConnectedComponentsSettings {
     ///  default) disables filtering.
     #[schemars(range(min = 1))]
     #[schemars(description = "unit: px²")]
-    #[serde(default = "_serde_default_connectedcomponents_min_size_px")]
-    pub min_size_px: i32,
+    #[serde(default = "_serde_default_connectedcomponents_min_size")]
+    pub min_size: i32,
 }
 
 impl Default for ConnectedComponentsSettings {
     fn default() -> Self {
-        Self { min_size_px: 0i32 }
+        Self { min_size: 0i32 }
     }
 }
 

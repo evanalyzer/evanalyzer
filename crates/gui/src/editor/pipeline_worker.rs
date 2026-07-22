@@ -249,11 +249,14 @@ impl PipelineWorker {
                     }
                     evanalyzer_core::ProgressEvent::BreakpointReached {
                         image,
+                        segmentation,
+                        instances,
                         tile_offset_x,
                         tile_offset_y,
                         tile_width,
                         tile_height,
                         nr_bits,
+                        channel_idx,
                     } => {
                         info!(
                             "Breakpoint image received for tile ({},{}) {}x{}",
@@ -263,11 +266,14 @@ impl PipelineWorker {
                         // re-render it with live histogram/LUT settings.
                         self_handle.viewport_controller.set_breakpoint_channel(
                             image,
+                            segmentation,
+                            instances,
                             tile_offset_x,
                             tile_offset_y,
                             tile_width,
                             tile_height,
                             nr_bits,
+                            channel_idx,
                         );
                     }
                     evanalyzer_core::ProgressEvent::ImageFailed { path } => {

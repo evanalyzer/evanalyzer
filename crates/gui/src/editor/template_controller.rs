@@ -3,12 +3,15 @@ use crate::DialogType;
 use crate::UiState;
 use crate::{GlobalAppState, TemplateMetaSlint, TemplateMetaState};
 use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_app::templates::get_user_templates_folder;
+use evanalyzer_app::templates::{
+    get_user_templates_folder, load_pipeline_templates, load_project_templates,
+};
 use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use log::warn;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 /// What the in-progress "save as template" flow is currently saving.
@@ -84,9 +87,38 @@ impl TemplateController {
             description: "".into(),
             author_name: "".into(),
             author_organization: "".into(),
+            category: "".into(),
+            tags: "".into(),
         });
+        state.set_known_categories(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::TemplateMeta);
+
+        // Fetch the categories already in use across existing templates in the
+        // background, so the dialog can offer them as quick-pick suggestions
+        // without blocking on disk IO.
+        let ui_weak = self.ui.clone();
+        std::thread::spawn(move || {
+            let mut categories: BTreeSet<String> = BTreeSet::new();
+            for (_path, template) in load_project_templates() {
+                if !template.meta.category.is_empty() {
+                    categories.insert(template.meta.category);
+                }
+            }
+            for (_path, template) in load_pipeline_templates() {
+                if !template.meta.category.is_empty() {
+                    categories.insert(template.meta.category);
+                }
+            }
+            let categories: Vec<SharedString> = categories.into_iter().map(Into::into).collect();
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.global::<TemplateMetaState>()
+                        .set_known_categories(ModelRc::new(VecModel::from(categories)));
+                }
+            });
+        });
     }
 
     /// Metadata dialog confirmed: build `MetaData`, ask for a save location, and persist.
@@ -107,6 +139,13 @@ impl TemplateController {
         let author_first_name = author_parts.next().unwrap_or("").to_string();
         let author_last_name = author_parts.collect::<Vec<_>>().join(" ");
 
+        let tags: Vec<String> = meta_slint
+            .tags
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
         let meta = MetaData {
             name: meta_slint.name.to_string(),
             short_description: meta_slint.short_description.to_string(),
@@ -115,6 +154,8 @@ impl TemplateController {
             author_last_name,
             author_organization: meta_slint.author_organization.to_string(),
             creation_time: chrono::Utc::now(),
+            category: meta_slint.category.to_string(),
+            tags,
         };
 
         let templates_folder = get_user_templates_folder();
