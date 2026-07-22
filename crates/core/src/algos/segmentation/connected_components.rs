@@ -98,6 +98,15 @@ impl ConnectedComponents {
                 let idx = y * width + x;
                 let class_id = input[idx];
                 if class_id == 0 {
+                    // `output` (the instance map) may be a reused buffer
+                    // carrying stale nonzero IDs from an earlier labeling
+                    // pass in the same pipeline (e.g. a prior
+                    // ConnectedComponents/Watershed run) - background
+                    // pixels must be explicitly reset, not just skipped,
+                    // or a stale ID can outlive this pass's much smaller
+                    // `lookup` table and panic with an out-of-bounds index
+                    // in the re-indexing pass below.
+                    output[idx] = 0;
                     continue;
                 }
 
@@ -552,6 +561,46 @@ mod tests {
     /// pad from an earlier step. Anything reading `ctx.image` afterwards -
     /// notably preview breakpoints - would see that stale buffer instead of
     /// the real processed image.
+    #[test]
+    fn test_ccl_repro_stale_instance_map_leaks_into_new_background() {
+        let size = ImageSize {
+            width: 4,
+            height: 4,
+        };
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+
+        // Simulate an instance_map left over from an earlier labeling pass
+        // in the same pipeline (e.g. a prior ConnectedComponents/Watershed
+        // run): every pixel already carries a nonzero ID, including ones
+        // that are background in the CURRENT segmentation.
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, vec![7u32; 16], CpuAllocator).unwrap());
+
+        // Current segmentation: only pixel (1,1) [index 5] is foreground.
+        let mut seg_data = vec![0u32; 16];
+        seg_data[5] = 1;
+        ctx.segmentation_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
+
+        let mut cache = PipelineCache::default();
+        ConnectedComponents { min_size_px: 0 }
+            .execute(&mut ctx, &mut cache)
+            .expect("CCL failed");
+
+        let out_slice = ctx.get_instance_map().unwrap().as_slice();
+        for (i, &v) in out_slice.iter().enumerate() {
+            if i == 5 {
+                assert!(v > 0, "the single foreground pixel should be labeled");
+            } else {
+                assert_eq!(
+                    v, 0,
+                    "pixel {i} is background in the current segmentation but kept a \
+                     stale instance ID ({v}) from a previous labeling pass"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_ccl_does_not_touch_ctx_image() {
         use crate::image::ImageContainer;
