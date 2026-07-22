@@ -183,7 +183,16 @@ impl ViewportWorker {
                         let channel = ImageChannel {
                             image: bp.image.clone(),
                             color: [1.0, 1.0, 1.0],
-                            c_stack: 0,
+                            // Must match the channel the breakpointed pipeline
+                            // actually started from - the render loop below
+                            // looks up histogram/LUT settings by `c_stack`,
+                            // and hardcoding 0 here made the breakpoint image
+                            // render using an unrelated channel's histogram
+                            // range whenever the pipeline started from any
+                            // other channel (usually all-black, since the
+                            // real data then falls outside that channel's
+                            // configured min/max window).
+                            c_stack: bp.channel_idx.unwrap_or(0),
                             name: "Breakpoint".to_string(),
                             is_rgb,
                             is_visible: true,

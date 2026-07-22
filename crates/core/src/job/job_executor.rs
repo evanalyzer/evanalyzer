@@ -70,6 +70,12 @@ pub enum ProgressEvent {
         /// Original image bit depth (e.g. 8, 12, 16) — used for the
         /// pixel-value HUD so values are scaled to the real range.
         nr_bits: u8,
+        /// The channel the breakpointed pipeline actually started from
+        /// (`ImageAddress::Channel(n)`), so the UI can look up *that*
+        /// channel's histogram/LUT settings instead of guessing. `None`
+        /// when the pipeline starts from something other than a plain
+        /// channel address (e.g. scratchpad or a memory slot).
+        channel_idx: Option<i32>,
     },
 }
 
@@ -820,6 +826,13 @@ impl<'a> JobExecutor {
 
             let mut stop_image: Option<std::sync::Arc<crate::image::ImageContainer>> = None;
             let mut snapshot_image: Option<std::sync::Arc<crate::image::ImageContainer>> = None;
+            // The channel the breakpointed pipeline actually started from, so
+            // the UI can look up that channel's histogram/LUT settings
+            // instead of guessing (previously hardcoded to channel 0 on the
+            // GUI side, which showed the wrong - often black, since it read
+            // an unrelated channel's histogram range - image whenever the
+            // pipeline didn't start from channel 0).
+            let mut breakpoint_channel_idx: Option<i32> = None;
             for pipe_id in order {
                 if stop_image.is_some() {
                     break;
@@ -834,8 +847,14 @@ impl<'a> JobExecutor {
                     let result = p.run(self.output_path.clone(), cache, bp_step, snapshot_mode)?;
                     if result.breakpoint_hit {
                         stop_image = Some(result.image);
+                        if let ImageAddress::Channel(idx) = p.settings.start_image {
+                            breakpoint_channel_idx = Some(idx);
+                        }
                     } else if let Some(snap) = result.breakpoint_snapshot {
                         snapshot_image = Some(snap);
+                        if let ImageAddress::Channel(idx) = p.settings.start_image {
+                            breakpoint_channel_idx = Some(idx);
+                        }
                     }
                     cache = result.cache;
                 }
@@ -852,6 +871,7 @@ impl<'a> JobExecutor {
                             tile_width: tile.width,
                             tile_height: tile.height,
                             nr_bits,
+                            channel_idx: breakpoint_channel_idx,
                         })
                         .ok();
                 }
@@ -869,6 +889,7 @@ impl<'a> JobExecutor {
                             tile_width: tile.width,
                             tile_height: tile.height,
                             nr_bits,
+                            channel_idx: breakpoint_channel_idx,
                         })
                         .ok();
                 }

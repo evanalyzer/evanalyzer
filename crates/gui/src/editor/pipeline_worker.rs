@@ -254,6 +254,7 @@ impl PipelineWorker {
                         tile_width,
                         tile_height,
                         nr_bits,
+                        channel_idx,
                     } => {
                         info!(
                             "Breakpoint image received for tile ({},{}) {}x{}",
@@ -268,6 +269,7 @@ impl PipelineWorker {
                             tile_width,
                             tile_height,
                             nr_bits,
+                            channel_idx,
                         );
                     }
                     evanalyzer_core::ProgressEvent::ImageFailed { path } => {

@@ -35,6 +35,11 @@ pub struct BreakpointChannelData {
     /// Original image bit depth — forwarded to `ReadContext.bit_depth` so the
     /// pixel-value HUD scales values correctly (e.g. ×65535 for 16-bit).
     pub nr_bits: u8,
+    /// The channel the breakpointed pipeline actually started from, so
+    /// rendering can look up *that* channel's histogram/LUT settings
+    /// instead of an unrelated one. `None` when the pipeline didn't start
+    /// from a plain channel address; falls back to channel 0 for rendering.
+    pub channel_idx: Option<i32>,
 }
 
 pub struct DrawingTaskContainer {
@@ -316,6 +321,7 @@ impl ViewportController {
     ///
     /// If the breakpoint toggle is already active a high-res redraw is triggered
     /// immediately so the new image appears without requiring a pan or zoom.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_breakpoint_channel(
         &self,
         image: ImageContainer,
@@ -324,6 +330,7 @@ impl ViewportController {
         tile_width: usize,
         tile_height: usize,
         nr_bits: u8,
+        channel_idx: Option<i32>,
     ) {
         {
             let mut ch = self.breakpoint_channel.write().unwrap();
@@ -334,6 +341,7 @@ impl ViewportController {
                 tile_width,
                 tile_height,
                 nr_bits,
+                channel_idx,
             });
         }
         let ui_weak = self.ui.clone();
