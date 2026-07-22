@@ -79,7 +79,6 @@ impl ImageAlgorithm for ConnectedComponents {
             segmentation.size().height,
         );
 
-        ctx.swap()?;
         Ok(())
     }
 
@@ -278,7 +277,6 @@ mod tests {
         let result = labeling.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
-        // Get results from ctx.image (because of ctx.swap())
         let output = ctx.get_instance_map().unwrap();
         output.print_window();
         let out_slice = output.as_slice();
@@ -543,5 +541,54 @@ mod tests {
         let unique_ids: HashSet<_> = out_slice.iter().filter(|&&x| x > 0).collect();
         assert_eq!(unique_ids.len(), 1, "Expected exactly one surviving object");
         assert_eq!(id_large, 1, "Surviving object should be re-indexed to ID 1");
+    }
+
+    /// `ConnectedComponents` labels via `segmentation_map` -> `instance_map`;
+    /// it has no business touching `ctx.image`/`ctx.scratch_pad` at all. A
+    /// stray `ctx.swap()` call used to run after `compute_ccl` anyway
+    /// (probably copy-pasted from a command that actually uses the
+    /// image/scratch-pad pair, like `Blur`), silently replacing `ctx.image`
+    /// with whatever stale content happened to be sitting in the scratch
+    /// pad from an earlier step. Anything reading `ctx.image` afterwards -
+    /// notably preview breakpoints - would see that stale buffer instead of
+    /// the real processed image.
+    #[test]
+    fn test_ccl_does_not_touch_ctx_image() {
+        use crate::image::ImageContainer;
+        use std::sync::Arc;
+
+        let size = ImageSize {
+            width: 4,
+            height: 4,
+        };
+        let real_image_marker = 42.0f32;
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        if let ImageContainer::F32Gray(img) = Arc::make_mut(&mut ctx.image) {
+            img.as_slice_mut().fill(real_image_marker);
+        }
+        // Distinctive stale content, standing in for leftover data from an
+        // earlier scratch-pad-using step.
+        let stale_marker = -999.0f32;
+        if let ImageContainer::F32Gray(scratch) = Arc::make_mut(&mut ctx.scratch_pad) {
+            scratch.as_slice_mut().fill(stale_marker);
+        }
+
+        let mut seg_data = vec![0u32; 16];
+        seg_data[5] = 1;
+        ctx.segmentation_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
+
+        let mut cache = PipelineCache::default();
+        ConnectedComponents { min_size_px: 0 }
+            .execute(&mut ctx, &mut cache)
+            .expect("CCL failed");
+
+        let ImageContainer::F32Gray(img) = ctx.image.as_ref() else {
+            panic!("expected F32Gray");
+        };
+        assert!(
+            img.as_slice().iter().all(|&v| v == real_image_marker),
+            "ConnectedComponents::execute must not mutate ctx.image"
+        );
     }
 }
