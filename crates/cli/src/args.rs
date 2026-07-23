@@ -262,6 +262,19 @@ pub struct HeatmapArgs {
     #[arg(long, default_value = "viridis")]
     pub color_scheme: String,
 
+    /// Pin the color scale's lower bound instead of computing it from this
+    /// heatmap's own data (0). Must be given together with --range-max — the
+    /// point is to render multiple heatmaps under an identical color mapping
+    /// so they're directly comparable.
+    #[arg(long, requires = "range_max")]
+    pub range_min: Option<f64>,
+
+    /// Pin the color scale's upper bound instead of computing it from this
+    /// heatmap's own data (its max cell value). Must be given together with
+    /// --range-min.
+    #[arg(long, requires = "range_min")]
+    pub range_max: Option<f64>,
+
     #[arg(long, default_value_t = 1000)]
     pub width: u32,
 

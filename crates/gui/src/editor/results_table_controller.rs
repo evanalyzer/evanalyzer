@@ -10,7 +10,7 @@ use evanalyzer_app::result::{
     discover_coloc_detail_columns, flatten_coloc_rows, plottable_columns, render_heatmap,
     render_histogram, render_scatter, save_rendered_chart_png, sort_display_rows, to_display_row,
     AggFunc, ColorBy, ColumnSpec, DatabaseFilter, EvictEdge, GroupBy, GroupConfig,
-    HeatmapColorScheme, HeatmapMetric, PageRowCounts, RenderedChart, ResultsExporter,
+    HeatmapColorScheme, HeatmapMetric, HeatmapRange, PageRowCounts, RenderedChart, ResultsExporter,
     ResultsLoader, RoiRow, RowWindow, DEFAULT_WINDOW_PAGES,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -47,6 +47,7 @@ struct ChartRenderConfig {
     heatmap_metric: String,
     cell_size_px: f64,
     heatmap_color_scheme: HeatmapColorScheme,
+    heatmap_range: HeatmapRange,
     /// The chart area's current on-screen pixel size (a one-shot read of the
     /// window's size at the moment Plot was clicked — see
     /// `on_chart_render_requested`), so rendering matches the actual display
@@ -261,6 +262,14 @@ impl ResultsTableController {
                     heatmap_color_scheme: HeatmapColorScheme::from_label(
                         &state.get_chart_heatmap_color_scheme(),
                     ),
+                    heatmap_range: if state.get_chart_heatmap_range_auto() {
+                        HeatmapRange::Auto
+                    } else {
+                        HeatmapRange::Manual {
+                            min: state.get_chart_heatmap_range_min() as f64,
+                            max: state.get_chart_heatmap_range_max() as f64,
+                        }
+                    },
                     render_width,
                     render_height,
                 };
@@ -1641,6 +1650,9 @@ impl ResultsTableController {
                             state.set_chart_heatmap_metric(slint::SharedString::new());
                             state.set_chart_cell_size_px(20);
                             state.set_chart_heatmap_color_scheme("Viridis".into());
+                            state.set_chart_heatmap_range_auto(true);
+                            state.set_chart_heatmap_range_min(0.0);
+                            state.set_chart_heatmap_range_max(1.0);
                             state.set_chart_plottable_columns(slint::ModelRc::new(
                                 slint::VecModel::from(plottable_column_labels(&specs)),
                             ));
@@ -2834,6 +2846,15 @@ impl ResultsTableController {
                         }
                     }
                     state.set_chart_image(slint::Image::from_rgb8(buf));
+                    // Keep the Min/Max fields synced to whatever range the
+                    // heatmap actually rendered with - in Auto mode this
+                    // shows the freshly computed range instead of a stale
+                    // one; in Manual mode it's just their own input echoed
+                    // back, so this is a no-op either way.
+                    if let Some((min, max)) = chart.heatmap_range {
+                        state.set_chart_heatmap_range_min(min as f32);
+                        state.set_chart_heatmap_range_max(max as f32);
+                    }
                 }
                 state.set_chart_status(status.into());
             });
@@ -2989,6 +3010,7 @@ impl ResultsTableController {
                 match render_heatmap(
                     &data,
                     config.heatmap_color_scheme,
+                    config.heatmap_range,
                     config.render_width,
                     config.render_height,
                 ) {

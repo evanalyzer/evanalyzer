@@ -4,8 +4,9 @@ use crate::args::{
 };
 use crate::commands::common::{build_database_filter, build_group_config, discover_columns};
 use evanalyzer_app::result::{
-    ColorBy, HeatmapColorScheme, HeatmapMetric, ResultsExporter, ResultsLoader, compute_heatmap,
-    compute_histogram, compute_scatter, save_heatmap_png, save_histogram_png, save_scatter_png,
+    ColorBy, HeatmapColorScheme, HeatmapMetric, HeatmapRange, ResultsExporter, ResultsLoader,
+    compute_heatmap, compute_histogram, compute_scatter, save_heatmap_png, save_histogram_png,
+    save_scatter_png,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use std::sync::Arc;
@@ -87,7 +88,13 @@ fn export_heatmap(args: HeatmapArgs) -> Result<(), InternalErrors> {
     let data = compute_heatmap(&rois, &metric, &specs, args.cell_size)
         .ok_or_else(|| column_not_found_error(&args.metric, &args.db))?;
     let scheme = HeatmapColorScheme::from_label(&args.color_scheme);
-    save_heatmap_png(&data, scheme, args.width, args.height, &args.out)?;
+    // `requires` on the arg definitions guarantees these are either both
+    // present or both absent.
+    let range = match (args.range_min, args.range_max) {
+        (Some(min), Some(max)) => HeatmapRange::Manual { min, max },
+        _ => HeatmapRange::Auto,
+    };
+    save_heatmap_png(&data, scheme, range, args.width, args.height, &args.out)?;
     println!("Saved heatmap to {}", args.out.display());
     Ok(())
 }
