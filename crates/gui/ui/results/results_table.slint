@@ -250,6 +250,18 @@ export global ResultsState {
     // (e.g. "Viridis", "Magma", "Plasma", "Grayscale").
     in property <[string]> chart_heatmap_color_scheme_options: [];
     in-out property <string> chart_heatmap_color_scheme: "Viridis";
+    // Whether the color scale's [min, max] is recomputed from the current
+    // data on every render (true) or pinned to chart_heatmap_range_min/max
+    // (false) - persists across repaints so different heatmaps can be
+    // compared under an identical color mapping. Editing either range field
+    // switches this to false; the "Auto" button switches it back to true.
+    in-out property <bool> chart_heatmap_range_auto: true;
+    // The color scale's range. While chart_heatmap_range_auto is true, the
+    // controller overwrites these after every render with the range it
+    // actually used, so they always reflect what's on screen (a starting
+    // point if the user then wants to switch to manual and fine-tune).
+    in-out property <float> chart_heatmap_range_min: 0.0;
+    in-out property <float> chart_heatmap_range_max: 1.0;
     // Rendered chart bitmap, built by the controller via the `plotters` crate.
     in property <image> chart_image;
     // Empty while a chart is shown; otherwise an explanatory/placeholder

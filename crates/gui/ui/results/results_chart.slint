@@ -1,4 +1,4 @@
-import { ComboBox, SpinBox } from "std-widgets.slint";
+import { ComboBox, LineEdit, SpinBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ResultsState, ResultsChartKind } from "results_table.slint";
 
@@ -236,6 +236,71 @@ export component ResultsChart inherits Rectangle {
                         model: ResultsState.chart_heatmap_color_scheme_options;
                         current-value: ResultsState.chart_heatmap_color_scheme;
                         selected(v) => { ResultsState.chart_heatmap_color_scheme = v; }
+                    }
+
+                    Text {
+                        text: "Range:";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    // Editing either bound switches to manual mode; the
+                    // "Auto" button below switches back. While auto, the
+                    // controller keeps these fields synced to the range it
+                    // actually rendered with, so they're never stale.
+                    LineEdit {
+                        width: 64px;
+                        font-size: 11px;
+                        text: "\{ResultsState.chart_heatmap_range_min}";
+                        edited(t) => {
+                            ResultsState.chart_heatmap_range_min = t.to-float();
+                            ResultsState.chart_heatmap_range_auto = false;
+                        }
+                    }
+
+                    Text {
+                        text: "–";
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+
+                    LineEdit {
+                        width: 64px;
+                        font-size: 11px;
+                        text: "\{ResultsState.chart_heatmap_range_max}";
+                        edited(t) => {
+                            ResultsState.chart_heatmap_range_max = t.to-float();
+                            ResultsState.chart_heatmap_range_auto = false;
+                        }
+                    }
+
+                    auto-range-ta := TouchArea {
+                        width: 44px;
+                        height: 26px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            ResultsState.chart_heatmap_range_auto = true;
+                        }
+
+                        Rectangle {
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            background: ResultsState.chart_heatmap_range_auto ? Theme.accent : (auto-range-ta.has-hover ? Theme.hover : Theme.raised);
+
+                            Text {
+                                text: "Auto";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                font-weight: 600;
+                                color: ResultsState.chart_heatmap_range_auto ? white : Theme.text-dim;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
                     }
                 }
 
