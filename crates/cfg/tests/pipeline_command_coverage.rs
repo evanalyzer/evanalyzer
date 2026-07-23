@@ -375,10 +375,19 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
 
 #[test]
 fn to_summary_is_empty_for_variants_without_a_custom_summary() {
-    for id in [1, 5, 13, 22, 25, 29] {
+    for id in [1, 13, 22, 25, 29] {
         let cmd = default_command(id).unwrap();
         assert_eq!(cmd.to_summary(), "", "id {id} ({})", cmd.name());
     }
+}
+
+#[test]
+fn to_summary_formats_connected_components_min_size() {
+    // `min_size` is an `i32`; `{:.3}` precision formatting has no effect on
+    // integers (only on floats), so the summary is deliberately unpadded.
+    let mut cmd = default_command(5).unwrap();
+    cmd.apply_param_change("min_size", "12");
+    assert_eq!(cmd.to_summary(), "Min Size: 12");
 }
 
 #[test]

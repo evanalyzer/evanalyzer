@@ -1590,9 +1590,13 @@ component ResultsStatusBar inherits Rectangle {
 export component ResultsWindow inherits Window {
     title: "Results - EVAnalyzer";
     icon: @image-url("../icons/icon.png");
-    preferred-width: 1100px;
+    preferred-width: 1300px;
     preferred-height: 900px;
-    min-width: 900px;
+    // The heatmap toolbar row (chart-kind buttons + Color by/Cell size/
+    // Colors/Range controls + Plot) is the widest content in this window and
+    // needs ~1220px before "Plot" starts clipping off the right edge -
+    // measured directly by rendering ResultsChart at increasing widths.
+    min-width: 1300px;
     min-height: 300px;
     background: Theme.bg;
 

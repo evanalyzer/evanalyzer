@@ -598,6 +598,11 @@ pub struct RenderedChart {
     /// rendered plot area — shouldn't happen in practice, but hover support
     /// degrades gracefully (no tooltip) rather than panicking if it ever did.
     pub hit_test: Option<ChartHitTester>,
+    /// For heatmaps, the `[min, max]` the color scale/legend actually used
+    /// (the resolved value of the `HeatmapRange` passed to `render_heatmap`) —
+    /// lets the GUI display/persist the live auto-computed range even while
+    /// in `Auto` mode. `None` for histogram/scatter charts.
+    pub heatmap_range: Option<(f64, f64)>,
 }
 
 /// Fixed, deterministic color cycle for scatter groups (class/colocalized
@@ -909,6 +914,36 @@ impl HeatmapColorScheme {
     }
 }
 
+/// The `[min, max]` a heatmap's color scale (and legend) spans.
+///
+/// `Auto` reproduces the original behavior — always `[0, max(cell values)]` —
+/// recomputed fresh on every render. `Manual` pins an explicit range that
+/// stays fixed regardless of what the currently-plotted data's own min/max
+/// happen to be, so two different heatmaps rendered with the same `Manual`
+/// range map the same value to the same color and are directly comparable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HeatmapRange {
+    Auto,
+    Manual { min: f64, max: f64 },
+}
+
+impl HeatmapRange {
+    /// Resolves to a concrete `(min, max)` pair, guaranteeing `max > min` (a
+    /// degenerate/inverted manual range collapses to a hairline span above
+    /// `min` rather than dividing by zero downstream).
+    fn resolve(self, cells: &[HeatmapCell]) -> (f64, f64) {
+        match self {
+            HeatmapRange::Auto => {
+                let max = cells.iter().map(|c| c.value).fold(0.0f64, f64::max).max(1e-9);
+                (0.0, max)
+            }
+            HeatmapRange::Manual { min, max } => {
+                if max > min { (min, max) } else { (min, min + 1e-9) }
+            }
+        }
+    }
+}
+
 fn interpolate_stops(stops: &[(f64, u8, u8, u8)], t: f64) -> RGBColor {
     let t = t.clamp(0.0, 1.0);
     for i in 0..stops.len() - 1 {
@@ -928,10 +963,12 @@ fn draw_heatmap(
     root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
     data: &HeatmapData,
     scheme: HeatmapColorScheme,
-) -> Result<Option<ChartHitTester>, InternalErrors> {
+    range: HeatmapRange,
+) -> Result<(Option<ChartHitTester>, (f64, f64)), InternalErrors> {
     root.fill(&WHITE).map_err(to_internal_error)?;
 
-    let max_value = data.cells.iter().map(|c| c.value).fold(0.0f64, f64::max).max(1e-9);
+    let (range_min, range_max) = range.resolve(&data.cells);
+    let range_span = range_max - range_min;
     let legend_width = 110i32;
     // `split_horizontally(x)` returns (left part of width x, right remainder)
     // — split at `total_width - legend_width` so the *chart* gets the bulk of
@@ -1000,7 +1037,7 @@ fn draw_heatmap(
                 let row = i / data.cols;
                 let x0 = data.x_min + col as f64 * data.cell_size;
                 let y0 = data.y_min + row as f64 * data.cell_size;
-                let color = scheme.color(cell.value / max_value);
+                let color = scheme.color((cell.value - range_min) / range_span);
                 Rectangle::new(
                     [(x0, y0), (x0 + data.cell_size, y0 + data.cell_size)],
                     color.filled(),
@@ -1030,7 +1067,7 @@ fn draw_heatmap(
         .margin_bottom(10)
         .margin_right(10)
         .y_label_area_size(60)
-        .build_cartesian_2d(0f64..1f64, 0f64..max_value)
+        .build_cartesian_2d(0f64..1f64, range_min..range_max)
         .map_err(to_internal_error)?;
     legend
         .configure_mesh()
@@ -1047,14 +1084,14 @@ fn draw_heatmap(
             let t0 = i as f64 / LEGEND_STEPS as f64;
             let t1 = (i + 1) as f64 / LEGEND_STEPS as f64;
             Rectangle::new(
-                [(0.0, t0 * max_value), (1.0, t1 * max_value)],
+                [(0.0, range_min + t0 * range_span), (1.0, range_min + t1 * range_span)],
                 scheme.color(t0).filled(),
             )
         }))
         .map_err(to_internal_error)?;
 
     root.present().map_err(to_internal_error)?;
-    Ok(mapping.map(|mapping| ChartHitTester {
+    let hit_test = mapping.map(|mapping| ChartHitTester {
         mapping,
         data: HitTestData::Heatmap {
             cols: data.cols,
@@ -1065,7 +1102,8 @@ fn draw_heatmap(
             cells: data.cells.clone(),
             value_label: data.value_label.clone(),
         },
-    }))
+    });
+    Ok((hit_test, (range_min, range_max)))
 }
 
 /// Renders into an in-memory RGB8 buffer — used by the GUI to build a
@@ -1076,7 +1114,7 @@ pub fn render_histogram(data: &HistogramData, width: u32, height: u32) -> Result
         let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
         draw_histogram(root, data)?
     };
-    Ok(RenderedChart { width, height, rgb, hit_test })
+    Ok(RenderedChart { width, height, rgb, hit_test, heatmap_range: None })
 }
 
 /// Renders into an in-memory RGB8 buffer — used by the GUI to build a
@@ -1087,7 +1125,7 @@ pub fn render_scatter(data: &ScatterData, width: u32, height: u32) -> Result<Ren
         let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
         draw_scatter(root, data)?
     };
-    Ok(RenderedChart { width, height, rgb, hit_test })
+    Ok(RenderedChart { width, height, rgb, hit_test, heatmap_range: None })
 }
 
 /// Renders straight to a PNG file. Not called anywhere yet — exists so a
@@ -1113,15 +1151,16 @@ pub fn save_scatter_png(data: &ScatterData, width: u32, height: u32, path: &Path
 pub fn render_heatmap(
     data: &HeatmapData,
     scheme: HeatmapColorScheme,
+    range: HeatmapRange,
     width: u32,
     height: u32,
 ) -> Result<RenderedChart, InternalErrors> {
     let mut rgb = vec![0u8; (width * height * 3) as usize];
-    let hit_test = {
+    let (hit_test, used_range) = {
         let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
-        draw_heatmap(root, data, scheme)?
+        draw_heatmap(root, data, scheme, range)?
     };
-    Ok(RenderedChart { width, height, rgb, hit_test })
+    Ok(RenderedChart { width, height, rgb, hit_test, heatmap_range: Some(used_range) })
 }
 
 /// Renders straight to a PNG file. Not called anywhere yet — exists so a
@@ -1130,12 +1169,13 @@ pub fn render_heatmap(
 pub fn save_heatmap_png(
     data: &HeatmapData,
     scheme: HeatmapColorScheme,
+    range: HeatmapRange,
     width: u32,
     height: u32,
     path: &Path,
 ) -> Result<(), InternalErrors> {
     let root = BitMapBackend::new(path, (width, height)).into_drawing_area();
-    draw_heatmap(root, data, scheme)?;
+    draw_heatmap(root, data, scheme, range)?;
     Ok(())
 }
 
@@ -1563,10 +1603,70 @@ mod tests {
                 HeatmapCell { count: 1, value: 1.0 },
             ],
         };
-        let chart = render_heatmap(&data, HeatmapColorScheme::Viridis, 200, 150).unwrap();
+        let chart =
+            render_heatmap(&data, HeatmapColorScheme::Viridis, HeatmapRange::Auto, 200, 150).unwrap();
         assert_eq!(chart.width, 200);
         assert_eq!(chart.height, 150);
         assert_eq!(chart.rgb.len(), 200 * 150 * 3);
+    }
+
+    #[test]
+    fn render_heatmap_auto_range_reports_zero_to_data_max() {
+        let data = HeatmapData {
+            x_label: "X position (px)".into(),
+            y_label: "Y position (px)".into(),
+            value_label: "Count".into(),
+            cols: 1,
+            rows: 1,
+            cell_size: 10.0,
+            x_min: 0.0,
+            y_min: 0.0,
+            cells: vec![HeatmapCell { count: 3, value: 7.5 }],
+        };
+        let chart =
+            render_heatmap(&data, HeatmapColorScheme::Viridis, HeatmapRange::Auto, 200, 150).unwrap();
+        assert_eq!(chart.heatmap_range, Some((0.0, 7.5)));
+    }
+
+    #[test]
+    fn render_heatmap_manual_range_is_reported_back_verbatim() {
+        let data = HeatmapData {
+            x_label: "X position (px)".into(),
+            y_label: "Y position (px)".into(),
+            value_label: "Count".into(),
+            cols: 1,
+            rows: 1,
+            cell_size: 10.0,
+            x_min: 0.0,
+            y_min: 0.0,
+            // Deliberately far outside the manual range below - manual mode
+            // must not let the data's own value influence the reported range.
+            cells: vec![HeatmapCell { count: 3, value: 500.0 }],
+        };
+        let manual = HeatmapRange::Manual { min: 2.0, max: 10.0 };
+        let chart =
+            render_heatmap(&data, HeatmapColorScheme::Viridis, manual, 200, 150).unwrap();
+        assert_eq!(chart.heatmap_range, Some((2.0, 10.0)));
+    }
+
+    #[test]
+    fn heatmap_range_manual_inverted_or_degenerate_bounds_still_resolve_to_a_valid_span() {
+        let cells = [HeatmapCell { count: 1, value: 5.0 }];
+        // max <= min must not divide by zero downstream - collapses to a
+        // hairline span just above min instead.
+        let (min, max) = HeatmapRange::Manual { min: 5.0, max: 5.0 }.resolve(&cells);
+        assert_eq!(min, 5.0);
+        assert!(max > min);
+
+        let (min, max) = HeatmapRange::Manual { min: 5.0, max: 1.0 }.resolve(&cells);
+        assert_eq!(min, 5.0);
+        assert!(max > min);
+    }
+
+    #[test]
+    fn heatmap_range_auto_ignores_manual_style_values_and_always_starts_at_zero() {
+        let cells = [HeatmapCell { count: 1, value: -3.0 }, HeatmapCell { count: 1, value: 12.0 }];
+        assert_eq!(HeatmapRange::Auto.resolve(&cells), (0.0, 12.0));
     }
 
     #[test]
@@ -1715,7 +1815,8 @@ mod tests {
                 HeatmapCell { count: 5, value: 5.0 },
             ],
         };
-        let chart = render_heatmap(&data, HeatmapColorScheme::Viridis, 800, 500).unwrap();
+        let chart =
+            render_heatmap(&data, HeatmapColorScheme::Viridis, HeatmapRange::Auto, 800, 500).unwrap();
         let tester = chart.hit_test.expect("heatmap should produce a hit tester");
 
         let mut hits = std::collections::HashSet::new();

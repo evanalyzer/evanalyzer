@@ -63,12 +63,6 @@
     {
       "enabled": true,
       "command": {
-        "type": ""
-      }
-    },
-    {
-      "enabled": true,
-      "command": {
         "type": "classifyRois",
         "inputClasses": [
           {
