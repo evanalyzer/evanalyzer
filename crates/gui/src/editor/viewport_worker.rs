@@ -170,8 +170,10 @@ impl ViewportWorker {
                 .viewport_controller
                 .show_breakpoint
                 .load(Ordering::Relaxed);
-            // HighRes skips disk I/O when in breakpoint mode.
-            let show_bp = !is_low_res && in_breakpoint_mode;
+            // Both tiers skip disk I/O and render the in-memory breakpoint buffer
+            // when in breakpoint mode - the LowRes ghost renders it in grayscale
+            // (below) rather than being left showing the unrelated regular image.
+            let show_bp = in_breakpoint_mode;
 
             // ----------------------------------------------------------------
             // STEP 3: Disk I/O (skipped in breakpoint mode)
