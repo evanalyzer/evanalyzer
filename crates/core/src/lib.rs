@@ -17,6 +17,8 @@ pub use crate::init::init;
 
 // System resource sizing (JVM heap, parallelism) based on available RAM
 pub use crate::resources::SystemDiagnostics;
+pub use crate::resources::cpu_ram_diagnostics;
+pub use crate::resources::cuda_is_available;
 pub use crate::resources::recommended_jvm_heap_bytes;
 pub use crate::resources::recommended_parallelism;
 pub use crate::resources::recommended_reader_pool_size;

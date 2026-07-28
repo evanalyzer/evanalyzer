@@ -341,6 +341,19 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     let results_ui = ResultsWindow::new()?;
     let results_ui_handle = results_ui.as_weak();
 
+    // Warm up the JVM (used to bridge to Bio-Formats for image reading) on a
+    // background thread rather than blocking startup on it - JVM cold start
+    // plus classloading is slow and nobody needs it before the window is even
+    // shown. `ImageReader::new` also starts it lazily on first actual use (see
+    // `ensure_java_wrapper`), so this is a pure head start, not a requirement:
+    // if the user opens an image before this thread finishes, that call just
+    // waits on the same init instead of failing.
+    std::thread::spawn(|| {
+        if let Err(e) = evanalyzer_core::init(evanalyzer_core::CoreConfig::default()) {
+            log::warn!("Background JVM warmup failed (will retry on first image read): {e}");
+        }
+    });
+
     // Load and apply settings
     load_about_dialog_information(&ui);
     load_user_settings(&ui, &results_ui);
@@ -375,24 +388,34 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
 /// About dialog content: version comes from the crate version (which the
 /// release CI patches to the git tag before building), the rest is read
 /// from the host machine once at startup - none of it changes at runtime.
+///
+/// The CUDA check is probed on a background thread rather than here: loading
+/// the CUDA driver and creating a context on first use is slow (commonly
+/// hundreds of ms), and nobody looks at the About dialog in the first instant
+/// after launch, so there's no reason to make the window wait on it.
 fn load_about_dialog_information(ui: &AppWindow) {
-    let diagnostics = evanalyzer_core::system_diagnostics();
+    let (cpu_cores, total_ram_bytes) = evanalyzer_core::cpu_ram_diagnostics();
     let info = ui.global::<AppInfoState>();
     info.set_version(env!("CARGO_PKG_VERSION").into());
-    info.set_cpu_cores(diagnostics.cpu_cores as i32);
-    info.set_ram_total(
-        format!(
-            "{:.1} GB",
-            diagnostics.total_ram_bytes as f64 / 1_073_741_824.0
-        )
-        .into(),
-    );
-    info.set_cuda_available(diagnostics.cuda_available);
+    info.set_cpu_cores(cpu_cores as i32);
+    info.set_ram_total(format!("{:.1} GB", total_ram_bytes as f64 / 1_073_741_824.0).into());
     let paragraphs: Vec<slint::SharedString> = license_text::LICENSE_TEXT
         .split("\n\n")
         .map(|p| p.into())
         .collect();
     info.set_license_paragraphs(slint::ModelRc::new(slint::VecModel::from(paragraphs)));
+
+    let ui_weak = ui.as_weak();
+    std::thread::spawn(move || {
+        let cuda_available = evanalyzer_core::cuda_is_available();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<AppInfoState>()
+                    .set_cuda_available(cuda_available);
+            }
+        })
+        .ok();
+    });
 }
 
 /// Apply the persisted dark/light preference to both windows. Each window

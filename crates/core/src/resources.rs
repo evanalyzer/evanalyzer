@@ -107,8 +107,9 @@ pub struct SystemDiagnostics {
     pub cuda_available: bool,
 }
 
-/// Reads current host CPU/RAM/CUDA availability once, for display purposes.
-pub fn system_diagnostics() -> SystemDiagnostics {
+/// Reads current host CPU core count and total RAM. Cheap and fast (no
+/// driver/device probing) - safe to call on a startup path.
+pub fn cpu_ram_diagnostics() -> (usize, u64) {
     let cpu_cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -116,20 +117,35 @@ pub fn system_diagnostics() -> SystemDiagnostics {
     let mut sys = System::new();
     sys.refresh_memory();
 
+    (cpu_cores, sys.total_memory())
+}
+
+/// Reads current host CPU/RAM/CUDA availability once, for display purposes.
+///
+/// Includes the CUDA probe (see [`cuda_is_available`]), which is slow - don't
+/// call this on a UI startup path; use [`cpu_ram_diagnostics`] plus a
+/// backgrounded [`cuda_is_available`] instead (see `evanalyzer_gui`).
+pub fn system_diagnostics() -> SystemDiagnostics {
+    let (cpu_cores, total_ram_bytes) = cpu_ram_diagnostics();
+
     SystemDiagnostics {
         cpu_cores,
-        total_ram_bytes: sys.total_memory(),
+        total_ram_bytes,
         cuda_available: cuda_is_available(),
     }
 }
 
+/// Probes CUDA driver/device availability. Loading the CUDA driver and
+/// creating a context on first use is slow (commonly hundreds of ms), so
+/// callers on a UI startup path should run this on a background thread
+/// rather than blocking on it - see its use in `evanalyzer_gui`.
 #[cfg(feature = "ai")]
-fn cuda_is_available() -> bool {
+pub fn cuda_is_available() -> bool {
     tch::Device::cuda_if_available().is_cuda()
 }
 
 #[cfg(not(feature = "ai"))]
-fn cuda_is_available() -> bool {
+pub fn cuda_is_available() -> bool {
     false
 }
 

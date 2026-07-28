@@ -1,3 +1,5 @@
+use crate::resources::recommended_jvm_heap_bytes;
+use evanalyzer_cfg::core_types::InternalErrors;
 use jni::objects::GlobalRef;
 use jni::sys::jmethodID;
 use jni::{InitArgsBuilder, JNIVersion, JavaVM};
@@ -63,6 +65,24 @@ pub fn init_java_wrapper(memory_limit: u64) -> Result<(), Box<dyn Error>> {
         .map_err(|_| "Internal Error: OnceLock already full despite double-check")?;
 
     Ok(())
+}
+
+/// Returns the global `JavaWrapper`, initializing it first if this is the
+/// first call. The JVM is started lazily (on first actual image read) rather
+/// than eagerly at process startup, so launching the app - or running a CLI
+/// command that never touches an image - doesn't pay the JVM/Bio-Formats
+/// classloading cost up front. `init_java_wrapper` is idempotent and
+/// safe to call from multiple threads (see its own doc comment), so this
+/// is also what a caller that wants to warm the JVM up in the background
+/// (e.g. the GUI, right after showing its window) should call directly.
+pub fn ensure_java_wrapper() -> Result<&'static JavaWrapper, InternalErrors> {
+    if JAVA_WRAPPER.get().is_none() {
+        init_java_wrapper(recommended_jvm_heap_bytes())
+            .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
+    }
+    JAVA_WRAPPER
+        .get()
+        .ok_or_else(|| InternalErrors::JvmError("JVM failed to initialize".into()))
 }
 
 /// Java wrapper
