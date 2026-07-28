@@ -3,7 +3,7 @@ use crate::{
     editor::{
         classification_controller::ClassificationController, pipeline_task::PipelineTask,
         pipelines_controller::PipelinesController, results_list_controller::ResultsListController,
-        roi_list_controller::RoiListController, viewport_controller::ViewportController,
+        object_list_controller::ObjectListController, viewport_controller::ViewportController,
     },
 };
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -15,7 +15,7 @@ pub struct PipelineWorker {
     pub(crate) app_state: Arc<UiState>,
     pub(crate) pipeline_controller: Arc<PipelinesController>,
     pub(crate) viewport_controller: Arc<ViewportController>,
-    pub(crate) roi_list_controller: Arc<RoiListController>,
+    pub(crate) object_list_controller: Arc<ObjectListController>,
     pub(crate) classification_controller: Arc<ClassificationController>,
     pub(crate) results_list_controller: Arc<ResultsListController>,
 }
@@ -25,7 +25,7 @@ impl PipelineWorker {
         app_state: Arc<UiState>,
         pipeline_controller: Arc<PipelinesController>,
         viewport_controller: Arc<ViewportController>,
-        roi_list_controller: Arc<RoiListController>,
+        object_list_controller: Arc<ObjectListController>,
         classification_controller: Arc<ClassificationController>,
         results_list_controller: Arc<ResultsListController>,
     ) -> Self {
@@ -33,7 +33,7 @@ impl PipelineWorker {
             app_state,
             pipeline_controller,
             viewport_controller,
-            roi_list_controller,
+            object_list_controller,
             classification_controller,
             results_list_controller,
         }
@@ -98,7 +98,7 @@ impl PipelineWorker {
                 // Reject previews that would cover too much of a whole-slide image at
                 // once: at low zoom the viewport can span hundreds of tiles, each
                 // potentially producing huge numbers of ROIs that the viewport renderer
-                // and ROI list can't handle responsively. Tell the user to zoom in
+                // and object list can't handle responsively. Tell the user to zoom in
                 // instead of silently grinding through it.
                 const MAX_PREVIEW_VISIBLE_TILES: usize = 4;
                 match job_exec.count_preview_visible_tiles() {
@@ -175,7 +175,7 @@ impl PipelineWorker {
                                 .app_state
                                 .get_project_write()
                                 .tmp_settings
-                                .preview_rois
+                                .preview_objects
                                 .clear();
                         }
                         let ui_handle = self.app_state.ui_handle.clone();
@@ -192,7 +192,7 @@ impl PipelineWorker {
                     evanalyzer_core::ProgressEvent::TileCompleted {
                         tile_index,
                         total_tiles,
-                        rois,
+                        objects,
                     } => {
                         info!("Tile {tile_index}/{total_tiles} completed");
                         if is_preview {
@@ -201,13 +201,13 @@ impl PipelineWorker {
                                 .app_state
                                 .get_project_write()
                                 .tmp_settings
-                                .preview_rois
-                                .extend(rois);
-                            self_handle.roi_list_controller.sync_rois_to_slint();
+                                .preview_objects
+                                .extend(objects);
+                            self_handle.object_list_controller.sync_objects_to_slint();
                             self_handle
                                 .classification_controller
                                 .sync_classification_to_slint();
-                            self_handle.viewport_controller.trigger_image_redraw_rois();
+                            self_handle.viewport_controller.trigger_image_redraw_objects();
                         }
                         let ui_handle = self.app_state.ui_handle.clone();
                         let _ = slint::invoke_from_event_loop(move || {
@@ -319,11 +319,11 @@ impl PipelineWorker {
                     if is_preview {
                         // All tiles have already been streamed in via TileCompleted; just
                         // do a final sync to make sure the UI is consistent.
-                        self_handle.roi_list_controller.sync_rois_to_slint();
+                        self_handle.object_list_controller.sync_objects_to_slint();
                         self_handle
                             .classification_controller
                             .sync_classification_to_slint();
-                        self_handle.viewport_controller.trigger_image_redraw_rois();
+                        self_handle.viewport_controller.trigger_image_redraw_objects();
                     } else {
                         self_handle
                             .results_list_controller

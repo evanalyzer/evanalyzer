@@ -1,4 +1,4 @@
-//! # roi
+//! # object
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-02-03
@@ -8,13 +8,13 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::{
+    ImagePlane,
     algos::ImageAlgorithm,
+    object::{Intensity, Object, ObjectInit},
     pipeline::{
-        pipeline_cache::{sample_channel_pixel, PipelineCache},
+        pipeline_cache::{PipelineCache, sample_channel_pixel},
         pipeline_context::PipelineContext,
     },
-    roi::{Intensity, Roi, RoiInit},
-    ImagePlane,
 };
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SegmentationClass};
@@ -24,12 +24,12 @@ use kornia_image::ImageSize;
 use macros::CommandsMeta;
 use std::sync::Arc;
 
-/// Represents a bounded region of interest extracted from a labeled image.
+/// Represents a bounded object extracted from a labeled image.
 
 /// A command to extract spatial statistics and bounding boxes from labeled objects.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "measure", next = "classify")]
-pub struct ExtractRois {
+pub struct ExtractObjects {
     /// Maximum allowed ROIs to extract.
     ///
     /// If this limit is exceeded the pipeline fails.
@@ -44,14 +44,14 @@ pub struct ExtractRois {
     pub max_objects_before_fail: i32,
 }
 
-impl ImageAlgorithm for ExtractRois {
-    /// Extracts ROI data from a U32Label image.
+impl ImageAlgorithm for ExtractObjects {
+    /// Extracts object data from a U32Label image.
     ///
     /// The process performs a single-pass scan ($O(N)$) to minimize CPU overhead:
     /// 1. **Extent Tracking**: For every non-zero pixel, the algorithm updates the
     ///    running min/max coordinates for that specific Label ID.
     /// 2. **Area Calculation**: Increments the pixel count for each unique ID.
-    /// 3. **ROI Finalization**: Converts tracked extents into width/height dimensions.
+    /// 3. **object Finalization**: Converts tracked extents into width/height dimensions.
     ///
     /// # Errors
     /// Returns [`InternalErrors::FormatMismatch`] if the input image is not U32Label.
@@ -108,9 +108,9 @@ impl ImageAlgorithm for ExtractRois {
         let n_obj = max_id + 1;
 
         // Struct-of-arrays accumulators. Pass 1 only ever touches these small, contiguous
-        // arrays (indexed by instance id) instead of the large `Roi` struct and its
-        // per-ROI intensity IndexMap — far better cache behaviour on the hot per-pixel
-        // path. The full `Roi`s are assembled once, in pass 2.
+        // arrays (indexed by instance id) instead of the large `Object` struct and its
+        // per-object intensity IndexMap — far better cache behaviour on the hot per-pixel
+        // path. The full `Object`s are assembled once, in pass 2.
         let mut area = vec![0usize; n_obj];
         let mut bbox = vec![[u32::MAX, u32::MAX, 0u32, 0u32]; n_obj];
         let mut sum_x = vec![0u64; n_obj];
@@ -179,11 +179,11 @@ impl ImageAlgorithm for ExtractRois {
             }
         }
 
-        // --- Pass 2: assemble each ROI (mask, intensities, geometry) ---
+        // --- Pass 2: assemble each object (mask, intensities, geometry) ---
         // Kept single-threaded on purpose: the pipeline parallelizes across images (one
         // core per image), so adding threads here would oversubscribe the CPU.
         cache
-            .roi_cache
+            .object_cache
             .extend((1..=max_id).filter(|&id| area[id] != 0).map(|id| {
                 let bb = bbox[id];
                 let rw = (bb[2] - bb[0] + 1) as usize;
@@ -221,8 +221,8 @@ impl ImageAlgorithm for ExtractRois {
                     );
                 }
 
-                // `Roi::new` finalizes geometry (perimeter/ellipse) from the mask and moments.
-                let mut roi = Roi::new(RoiInit {
+                // `Object::new` finalizes geometry (perimeter/ellipse) from the mask and moments.
+                let mut object = Object::new(ObjectInit {
                     id: ObjectId::next(),
                     segmentation_class: SegmentationClass(seg_class[id]),
                     bbox: bb,
@@ -238,21 +238,23 @@ impl ImageAlgorithm for ExtractRois {
                     plane,
                     ..Default::default()
                 });
-                // Assign the segmentation class as default first object class so classify ROI is not mandatory.
-                roi.add_object_class(ObjectClass::from_segmentation_class(roi.segmentation_class));
+                // Assign the segmentation class as default first object class so classify object is not mandatory.
+                object.add_object_class(ObjectClass::from_segmentation_class(
+                    object.segmentation_class,
+                ));
 
-                (roi.id.clone(), roi)
+                (object.id.clone(), object)
             }));
 
         Ok(())
     }
 
     fn name(&self) -> &'static str {
-        "ExtractRois"
+        "ExtractObjects"
     }
 }
 
-impl Roi {
+impl Object {
     pub fn from_mask(
         full_image_size: &ImageSize,
         mask: BitVec<u64, Lsb0>,
@@ -261,7 +263,7 @@ impl Roi {
         images: &[(i32, Arc<crate::ImageContainer>)],
         object_class: ObjectClass,
     ) -> Self {
-        let mut roi = Roi::new(RoiInit {
+        let mut object = Object::new(ObjectInit {
             id: ObjectId::next(),
             segmentation_class: SegmentationClass::MANUAL_ANNOTATED,
             intensities: IndexMap::new(),
@@ -270,8 +272,8 @@ impl Roi {
             ..Default::default()
         });
 
-        roi.add_object_class(object_class);
-        roi.plane = match origin_image.plane() {
+        object.add_object_class(object_class);
+        object.plane = match origin_image.plane() {
             Some(plane) => plane,
             None => ImagePlane {
                 z: -1,
@@ -287,20 +289,20 @@ impl Roi {
 
         for y in y1..=y2 {
             for x in x1..=x2 {
-                roi.update_roi_metrics(full_image_size, x, y, origin_image, images);
+                object.update_object_metrics(full_image_size, x, y, origin_image, images);
             }
         }
-        roi.finalize_intensity_statistics();
+        object.finalize_intensity_statistics();
         // Re-finalize geometry now that the mask, area and moments are fully
-        // accumulated — the eager finalize in Roi::new only saw the empty skeleton.
-        roi.finalize_geometry();
+        // accumulated — the eager finalize in Object::new only saw the empty skeleton.
+        object.finalize_geometry();
 
-        roi
+        object
     }
 
-    /// Updates ROI metrics (sum / min / max intensity, moments, edge flag) for one pixel.
+    /// Updates object metrics (sum / min / max intensity, moments, edge flag) for one pixel.
     ///
-    /// This method accumulates intensity data from each channel for every pixel in the ROI.
+    /// This method accumulates intensity data from each channel for every pixel in the object.
     /// For grayscale images, the raw intensity is used.
     /// For RGB images, the perceptual luminance (BT.709) is calculated with optional background correction.
     /// The per-channel average is derived later in [`finalize_intensity_statistics`].
@@ -310,7 +312,7 @@ impl Roi {
     /// * `y` - Absolute Y coordinate in the full image
     /// * `origin_image` - The original image container with tile and zoom information
     /// * `images` - Array of image containers indexed by channel ID
-    pub fn update_roi_metrics(
+    pub fn update_object_metrics(
         &mut self,
         full_image_size: &ImageSize,
         x: usize,
@@ -385,8 +387,8 @@ impl Roi {
     }
 
     /// Finalizes per-channel intensity statistics — derives the average from the
-    /// accumulated sum and the ROI's pixel `area`. Call once after all pixels have been
-    /// processed via [`update_roi_metrics`](Self::update_roi_metrics).
+    /// accumulated sum and the object's pixel `area`. Call once after all pixels have been
+    /// processed via [`update_object_metrics`](Self::update_object_metrics).
     pub fn finalize_intensity_statistics(&mut self) {
         let n = self.area.max(1) as f64;
         for (_channel_id, intensity) in self.intensities.iter_mut() {
@@ -411,8 +413,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        image::{ManagedImage, PixelSizes},
         F32Gray, ImagePlane,
+        image::{ManagedImage, PixelSizes},
     };
     use bitvec::slice::BitSlice;
     use kornia_image::{Image, ImageSize};
@@ -420,7 +422,7 @@ mod tests {
     // Adjust imports based on your internal project structure
 
     #[test]
-    fn test_extract_rois_full_validation() {
+    fn test_extract_objects_full_validation() {
         let size = ImageSize {
             width: 10,
             height: 10,
@@ -433,7 +435,7 @@ mod tests {
         let mut intensity = vec![0.0f32; 100];
         // Create a Semantic Label Image (u32)
         let mut labels = vec![0u32; 100];
-        // Create an Instance Class Image (u32) - This is what ExtractRois iterates on
+        // Create an Instance Class Image (u32) - This is what ExtractObjects iterates on
         let mut classes = vec![0u32; 100];
 
         // Define Object 1: A 2x2 square in the middle
@@ -491,63 +493,61 @@ mod tests {
             .expect("Failed to create test image"),
         );
 
-        cache
-            .image_cache
-            .add_to_channel_cache(ctx.image.clone(), 0);
+        cache.image_cache.add_to_channel_cache(ctx.image.clone(), 0);
 
         // 2. Execute Algorithm
-        let extractor = ExtractRois {
+        let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
         };
         extractor
             .execute(&mut ctx, &mut cache)
             .expect("Extraction failed");
 
-        let mut rois: Vec<&Roi> = cache.roi_cache.values().collect();
+        let mut objects: Vec<&Object> = cache.object_cache.values().collect();
         // Sort by area (ascending) so the single-pixel edge object is [0] and
         // the 2×2 square is [1]. Sorting by ObjectId is unsafe because UUIDv7
         // is time-based and interleaves with IDs from parallel tests.
-        rois.sort_by_key(|r| r.area);
-        assert_eq!(rois.len(), 2);
+        objects.sort_by_key(|r| r.area);
+        assert_eq!(objects.len(), 2);
 
         // 3. Assertions for Object 1 (The 2x2 Square) — larger area, index 1
-        let roi1 = rois[1];
+        let object1 = objects[1];
 
-        assert_eq!(roi1.area, 4);
-        assert_eq!(roi1.bbox, [4, 4, 5, 5]); // [min_x, min_y, max_x, max_y]
-        assert_eq!(roi1.intensities.get(&0).unwrap().sum_intensity, 40.0);
-        assert_eq!(roi1.intensities.get(&0).unwrap().max_intensity, 10.0);
-        assert_eq!(roi1.segmentation_class, SegmentationClass(1));
-        assert!(!roi1.touches_edge);
+        assert_eq!(object1.area, 4);
+        assert_eq!(object1.bbox, [4, 4, 5, 5]); // [min_x, min_y, max_x, max_y]
+        assert_eq!(object1.intensities.get(&0).unwrap().sum_intensity, 40.0);
+        assert_eq!(object1.intensities.get(&0).unwrap().max_intensity, 10.0);
+        assert_eq!(object1.segmentation_class, SegmentationClass(1));
+        assert!(!object1.touches_edge);
 
         // Test Centroid
-        let (cx, cy) = roi1.get_centroid();
+        let (cx, cy) = object1.get_centroid();
         assert_eq!(cx, 4.5);
         assert_eq!(cy, 4.5);
 
         // Test Ellipse (A square should have equal major/minor)
-        let ellipse = roi1.get_ellipse();
+        let ellipse = object1.get_ellipse();
         assert!(ellipse.major > 0.0);
         assert!((ellipse.major - ellipse.minor).abs() < 0.001); // Symmetry check
         assert_eq!(ellipse.eccentricity, 0.0); // Square is circle-like in moments
 
         // 4. Assertions for Object 2 (The Edge Pixel) - lower ObjectId, index 0
-        let roi2 = rois[0];
-        assert!(roi2.touches_edge);
-        assert_eq!(roi2.area, 1);
+        let object2 = objects[0];
+        assert!(object2.touches_edge);
+        assert_eq!(object2.area, 1);
 
         // 5. Test Compressed Mask for Object 1
-        // ROI 1 is 2x2. Mask data should have bits set for a 2x2 area.
+        // object 1 is 2x2. Mask data should have bits set for a 2x2 area.
         // bitset_size = (2*2 + 63) / 64 = 1.
-        assert_eq!(roi1.mask_data.len(), 4);
-        assert!(roi1.mask_data[0]);
-        assert!(roi1.mask_data[1]);
-        assert!(roi1.mask_data[2]);
-        assert!(roi1.mask_data[3]);
+        assert_eq!(object1.mask_data.len(), 4);
+        assert!(object1.mask_data[0]);
+        assert!(object1.mask_data[1]);
+        assert!(object1.mask_data[2]);
+        assert!(object1.mask_data[3]);
     }
 
     #[test]
-    fn test_extract_rois_with_tile_offset() {
+    fn test_extract_objects_with_tile_offset() {
         // Setup: Full image 50x60, Tile 15x20 at offset 10x15
         let full_size = ImageSize {
             width: 50,
@@ -595,36 +595,38 @@ mod tests {
                 .unwrap(),
         );
 
-        cache
-            .image_cache
-            .add_to_channel_cache(ctx.image.clone(), 0);
+        cache.image_cache.add_to_channel_cache(ctx.image.clone(), 0);
 
         // Execute
-        let extractor = ExtractRois {
+        let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
         };
         extractor
             .execute(&mut ctx, &mut cache)
             .expect("Extraction failed");
 
-        // Assertions - only one ROI was created
-        assert_eq!(cache.roi_cache.len(), 1);
-        let roi = cache.roi_cache.values().next().expect("ROI not found");
+        // Assertions - only one object was created
+        assert_eq!(cache.object_cache.len(), 1);
+        let object = cache
+            .object_cache
+            .values()
+            .next()
+            .expect("object not found");
 
         // The bounding box should be in GLOBAL coordinates
-        assert_eq!(roi.bbox, [10, 15, 10, 15]);
+        assert_eq!(object.bbox, [10, 15, 10, 15]);
 
         // Centroid should be the global coordinate (10.0, 15.0)
-        let (cx, cy) = roi.get_centroid();
+        let (cx, cy) = object.get_centroid();
         assert_eq!(cx, 10.0);
         assert_eq!(cy, 15.0);
 
         // Intensity check
-        assert_eq!(roi.intensities.get(&0).unwrap().sum_intensity, 50.0);
+        assert_eq!(object.intensities.get(&0).unwrap().sum_intensity, 50.0);
     }
 
     #[test]
-    fn test_extract_rois_samples_correct_pixel_per_object_in_a_multi_tile_image() {
+    fn test_extract_objects_samples_correct_pixel_per_object_in_a_multi_tile_image() {
         // Regression test: when the full image is larger than the current tile (the
         // whole-slide-image / multi-tile case), intensity sampling must use the tile's
         // own pixel grid directly - not scale coordinates by tile_size/full_image_size,
@@ -654,8 +656,12 @@ mod tests {
         intensity[5 * 15 + 7] = 99.0;
 
         ctx.image = Arc::new(crate::image::ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(tile_size, &intensity, CpuAllocator)
-                .unwrap(),
+            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
+                tile_size,
+                &intensity,
+                CpuAllocator,
+            )
+            .unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
@@ -670,31 +676,29 @@ mod tests {
                 .unwrap(),
         );
 
-        cache
-            .image_cache
-            .add_to_channel_cache(ctx.image.clone(), 0);
+        cache.image_cache.add_to_channel_cache(ctx.image.clone(), 0);
 
-        let extractor = ExtractRois {
+        let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
         };
         extractor
             .execute(&mut ctx, &mut cache)
             .expect("Extraction failed");
 
-        assert_eq!(cache.roi_cache.len(), 2);
-        let mut rois: Vec<&Roi> = cache.roi_cache.values().collect();
-        rois.sort_by_key(|r| r.intensities.get(&0).unwrap().sum_intensity as i64);
+        assert_eq!(cache.object_cache.len(), 2);
+        let mut objects: Vec<&Object> = cache.object_cache.values().collect();
+        objects.sort_by_key(|r| r.intensities.get(&0).unwrap().sum_intensity as i64);
 
-        assert_eq!(rois[0].intensities.get(&0).unwrap().sum_intensity, 10.0);
+        assert_eq!(objects[0].intensities.get(&0).unwrap().sum_intensity, 10.0);
         assert_eq!(
-            rois[1].intensities.get(&0).unwrap().sum_intensity,
+            objects[1].intensities.get(&0).unwrap().sum_intensity,
             99.0,
             "second object must sample its own pixel, not object 1's"
         );
     }
 
     #[test]
-    fn test_roi_from_mask_no_offset() {
+    fn test_object_from_mask_no_offset() {
         let mask = BitVec::<u64, Lsb0>::repeat(true, 4); // 2x2 block
         let bbox = [0, 0, 1, 1];
         let image_size = ImageSize {
@@ -715,7 +719,7 @@ mod tests {
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
 
-        let roi = Roi::from_mask(
+        let object = Object::from_mask(
             &image_size,
             mask,
             bbox,
@@ -724,12 +728,12 @@ mod tests {
             ObjectClass::Unset,
         );
 
-        assert_eq!(roi.area, 4);
-        assert_eq!(roi.intensities.get(&0).unwrap().sum_intensity, 40.0);
+        assert_eq!(object.area, 4);
+        assert_eq!(object.intensities.get(&0).unwrap().sum_intensity, 40.0);
     }
 
     #[test]
-    fn test_roi_from_mask_with_offset() {
+    fn test_object_from_mask_with_offset() {
         // Mask is 2x2, but positioned at global (10, 10)
         let mask = BitVec::<u64, Lsb0>::repeat(true, 4);
         let bbox = [10, 10, 11, 11];
@@ -755,7 +759,7 @@ mod tests {
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
 
-        let roi = Roi::from_mask(
+        let object = Object::from_mask(
             &full_size,
             mask,
             bbox,
@@ -765,13 +769,13 @@ mod tests {
         );
 
         // Centroid should be in global space: (10.5, 10.5)
-        let (cx, cy) = roi.get_centroid();
+        let (cx, cy) = object.get_centroid();
         assert_eq!(cx, 10.5);
         assert_eq!(cy, 10.5);
     }
 
     #[test]
-    fn test_roi_from_mask_rgb() {
+    fn test_object_from_mask_rgb() {
         let mask = BitVec::<u64, Lsb0>::repeat(true, 1); // 1 pixel
         let bbox = [0, 0, 0, 0];
         let size = ImageSize {
@@ -788,7 +792,7 @@ mod tests {
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
 
-        let roi = Roi::from_mask(
+        let object = Object::from_mask(
             &size,
             mask,
             bbox,
@@ -797,16 +801,16 @@ mod tests {
             ObjectClass::Unset,
         );
 
-        let intensity = roi.intensities.get(&1).unwrap();
+        let intensity = object.intensities.get(&1).unwrap();
         assert!((intensity.sum_intensity - 0.2126).abs() < 1e-4);
     }
 
     #[test]
     fn test_name() {
-        let extractor = ExtractRois {
+        let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,
         };
         let name = extractor.name();
-        assert_eq!(name, "ExtractRois");
+        assert_eq!(name, "ExtractObjects");
     }
 }

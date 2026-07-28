@@ -51,10 +51,10 @@ mod modules {
             "/src/modules/classification_settings.rs"
         ));
     }
-    pub mod roi_settings {
+    pub mod object_settings {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/modules/roi_settings.rs"
+            "/src/modules/object_settings.rs"
         ));
     }
     pub mod images_settings {
@@ -103,10 +103,10 @@ mod modules {
 mod settings {
     pub use crate::modules::classification_settings;
     pub use crate::modules::images_settings;
+    pub use crate::modules::object_settings;
     pub use crate::modules::pipeline_command;
     pub use crate::modules::pipeline_settings;
     pub use crate::modules::plate_settings;
-    pub use crate::modules::roi_settings;
 }
 
 #[path = "build/pipeline_commands_generator.rs"]
@@ -125,7 +125,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/types/ids.rs");
     println!("cargo:rerun-if-changed=src/types/units.rs");
     println!("cargo:rerun-if-changed=src/modules/classification_settings.rs");
-    println!("cargo:rerun-if-changed=src/modules/roi_settings.rs");
+    println!("cargo:rerun-if-changed=src/modules/object_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/images_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/parameter_def.rs");
     println!("cargo:rerun-if-changed=src/modules/pipeline_settings.rs");

@@ -25,7 +25,7 @@ const JVM_HEAP_RAM_FRACTION: f64 = 0.125;
 
 /// Rough estimate of the peak RAM one parallel worker (one whole image, or
 /// one tile when previewing a single whole-slide image) can need: loaded
-/// channel planes, pipeline intermediate/scratch buffers and ROI masks for a
+/// channel planes, pipeline intermediate/scratch buffers and object masks for a
 /// 4096px tile across several channels. This is a heuristic guardrail against
 /// over-committing on low-RAM machines, not a measured per-pipeline bound.
 const ESTIMATED_RAM_PER_WORKER_BYTES: u64 = 1_500_000_000;
@@ -34,7 +34,7 @@ const ESTIMATED_RAM_PER_WORKER_BYTES: u64 = 1_500_000_000;
 /// parsed OME metadata/tile index (plus, if memoized, the deserialized
 /// `.bfmemo` state) and headroom for one in-flight tile buffer. Much lighter
 /// than [`ESTIMATED_RAM_PER_WORKER_BYTES`] - a reader has no pipeline
-/// scratch buffers or ROI masks - so reader-pool sizing is a separate,
+/// scratch buffers or object masks - so reader-pool sizing is a separate,
 /// smaller budget from [`recommended_parallelism`]. Heuristic guardrail, not
 /// a measured bound.
 const ESTIMATED_RAM_PER_READER_BYTES: u64 = 150_000_000;
@@ -107,8 +107,9 @@ pub struct SystemDiagnostics {
     pub cuda_available: bool,
 }
 
-/// Reads current host CPU/RAM/CUDA availability once, for display purposes.
-pub fn system_diagnostics() -> SystemDiagnostics {
+/// Reads current host CPU core count and total RAM. Cheap and fast (no
+/// driver/device probing) - safe to call on a startup path.
+pub fn cpu_ram_diagnostics() -> (usize, u64) {
     let cpu_cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -116,20 +117,35 @@ pub fn system_diagnostics() -> SystemDiagnostics {
     let mut sys = System::new();
     sys.refresh_memory();
 
+    (cpu_cores, sys.total_memory())
+}
+
+/// Reads current host CPU/RAM/CUDA availability once, for display purposes.
+///
+/// Includes the CUDA probe (see [`cuda_is_available`]), which is slow - don't
+/// call this on a UI startup path; use [`cpu_ram_diagnostics`] plus a
+/// backgrounded [`cuda_is_available`] instead (see `evanalyzer_gui`).
+pub fn system_diagnostics() -> SystemDiagnostics {
+    let (cpu_cores, total_ram_bytes) = cpu_ram_diagnostics();
+
     SystemDiagnostics {
         cpu_cores,
-        total_ram_bytes: sys.total_memory(),
+        total_ram_bytes,
         cuda_available: cuda_is_available(),
     }
 }
 
+/// Probes CUDA driver/device availability. Loading the CUDA driver and
+/// creating a context on first use is slow (commonly hundreds of ms), so
+/// callers on a UI startup path should run this on a background thread
+/// rather than blocking on it - see its use in `evanalyzer_gui`.
 #[cfg(feature = "ai")]
-fn cuda_is_available() -> bool {
+pub fn cuda_is_available() -> bool {
     tch::Device::cuda_if_available().is_cuda()
 }
 
 #[cfg(not(feature = "ai"))]
-fn cuda_is_available() -> bool {
+pub fn cuda_is_available() -> bool {
     false
 }
 

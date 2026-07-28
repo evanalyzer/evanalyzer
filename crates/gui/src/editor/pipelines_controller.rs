@@ -1,7 +1,7 @@
 use crate::AppWindow;
 use crate::DialogType;
 use crate::editor::pipeline_task::PipelineTask;
-use crate::editor::roi_list_controller::RoiListController;
+use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
@@ -49,7 +49,7 @@ thread_local! {
 pub struct PipelinesController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
-    pub(crate) _roi_list_controller: Arc<RoiListController>,
+    pub(crate) _object_list_controller: Arc<ObjectListController>,
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) template_controller: Arc<TemplateController>,
     pub(crate) task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>,
@@ -69,14 +69,14 @@ impl PipelinesController {
     pub fn new(
         ui: slint::Weak<AppWindow>,
         app_state: Arc<UiState>,
-        roi_list_controller: Arc<RoiListController>,
+        object_list_controller: Arc<ObjectListController>,
         viewport_controller: Arc<ViewportController>,
         template_controller: Arc<TemplateController>,
     ) -> Self {
         Self {
             ui,
             app_state: app_state.clone(),
-            _roi_list_controller: roi_list_controller,
+            _object_list_controller: object_list_controller,
             viewport_controller,
             template_controller,
             task_request: Arc::new((Mutex::new(None), Condvar::new())),
@@ -620,22 +620,21 @@ impl PipelinesController {
                             // follow the previous step (its `allowed_next`, which is
                             // decoupled from the display `category` — e.g.
                             // ConnectedComponents suggests Object + Measure so both
-                            // Watershed and ExtractRois are in view). These are only
+                            // Watershed and ExtractObjects are in view). These are only
                             // suggestions: the user can toggle any chip, and clearing
                             // them all shows every command.
-                            let (ctx_cat, suggested) = if p.steps.is_empty()
-                                || context_idx == usize::MAX
-                            {
-                                (-1i32, [false; 5])
-                            } else {
-                                let prev = &p.steps[context_idx].command;
-                                let ctx_order = prev.category().display_order() as i32;
-                                let mut flags = [false; 5];
-                                for c in prev.allowed_next() {
-                                    flags[c.display_order() as usize] = true;
-                                }
-                                (ctx_order, flags)
-                            };
+                            let (ctx_cat, suggested) =
+                                if p.steps.is_empty() || context_idx == usize::MAX {
+                                    (-1i32, [false; 5])
+                                } else {
+                                    let prev = &p.steps[context_idx].command;
+                                    let ctx_order = prev.category().display_order() as i32;
+                                    let mut flags = [false; 5];
+                                    for c in prev.allowed_next() {
+                                        flags[c.display_order() as usize] = true;
+                                    }
+                                    (ctx_order, flags)
+                                };
                             (name, p.steps.len() as i32, ctx_cat, suggested)
                         } else {
                             (String::new(), 0, -1i32, [false; 5])
@@ -770,81 +769,82 @@ impl PipelinesController {
             // Picker: import a bioimage.io model - pick its rdf.yaml, configure an
             // AI segmentation command from it, and insert it like a normal step.
             let manager = self.clone();
-            ui.global::<CommandPickerState>().on_import_bioimageio(move || {
-                let Some(ui) = manager.ui.upgrade() else {
-                    return;
-                };
-                let picker = ui.global::<CommandPickerState>();
-                let pipeline_id = picker.get_pipeline_id() as u32;
-                let after_idx = picker.get_insert_after_idx();
+            ui.global::<CommandPickerState>()
+                .on_import_bioimageio(move || {
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let picker = ui.global::<CommandPickerState>();
+                    let pipeline_id = picker.get_pipeline_id() as u32;
+                    let after_idx = picker.get_insert_after_idx();
 
-                let Some(path) = rfd::FileDialog::new()
-                    .add_filter("bioimage.io RDF", &["yaml", "yml"])
-                    .pick_file()
-                else {
-                    return; // user cancelled the file picker; leave the command picker open
-                };
+                    let Some(path) = rfd::FileDialog::new()
+                        .add_filter("bioimage.io RDF", &["yaml", "yml"])
+                        .pick_file()
+                    else {
+                        return; // user cancelled the file picker; leave the command picker open
+                    };
 
-                match evanalyzer_app::bioimageio::configure_from_file(&path) {
-                    Ok(configured) => {
-                        let step = PipelineStepSettings {
-                            enabled: true,
-                            command: configured.command,
-                        };
-                        {
-                            let mut project = manager.app_state.get_project_write();
-                            if let Some(pipeline) =
-                                project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
+                    match evanalyzer_app::bioimageio::configure_from_file(&path) {
+                        Ok(configured) => {
+                            let step = PipelineStepSettings {
+                                enabled: true,
+                                command: configured.command,
+                            };
                             {
-                                let insert_at = if after_idx < 0 {
-                                    0
-                                } else {
-                                    ((after_idx as usize) + 1).min(pipeline.steps.len())
-                                };
-                                pipeline.steps.insert(insert_at, step);
+                                let mut project = manager.app_state.get_project_write();
+                                if let Some(pipeline) =
+                                    project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
+                                {
+                                    let insert_at = if after_idx < 0 {
+                                        0
+                                    } else {
+                                        ((after_idx as usize) + 1).min(pipeline.steps.len())
+                                    };
+                                    pipeline.steps.insert(insert_at, step);
+                                }
+                            }
+                            ui.global::<GlobalAppState>()
+                                .set_active_dialog(DialogType::None);
+                            manager.pipeline_settings_changed();
+                            manager.sync_steps_of_selected_pipeline_to_slint(
+                                PipelineId(pipeline_id),
+                                false,
+                            );
+
+                            // Surface any caveats (assumed defaults, required
+                            // normalization, remote weights) so the user can verify.
+                            if !configured.notes.is_empty() {
+                                let body = configured
+                                    .notes
+                                    .iter()
+                                    .map(|n| format!("• {n}"))
+                                    .collect::<Vec<_>>()
+                                    .join("\n\n");
+                                let msg = format!(
+                                    "Imported a model from {}.\n\nPlease review:\n\n{body}",
+                                    path.display()
+                                );
+                                let warning = ui.global::<WarningState>();
+                                warning.set_info(true);
+                                warning.set_title("bioimage.io model imported".into());
+                                warning.set_message(msg.into());
+                                ui.global::<GlobalAppState>()
+                                    .set_active_dialog(DialogType::Warning);
                             }
                         }
-                        ui.global::<GlobalAppState>()
-                            .set_active_dialog(DialogType::None);
-                        manager.pipeline_settings_changed();
-                        manager.sync_steps_of_selected_pipeline_to_slint(
-                            PipelineId(pipeline_id),
-                            false,
-                        );
-
-                        // Surface any caveats (assumed defaults, required
-                        // normalization, remote weights) so the user can verify.
-                        if !configured.notes.is_empty() {
-                            let body = configured
-                                .notes
-                                .iter()
-                                .map(|n| format!("• {n}"))
-                                .collect::<Vec<_>>()
-                                .join("\n\n");
-                            let msg = format!(
-                                "Imported a model from {}.\n\nPlease review:\n\n{body}",
-                                path.display()
-                            );
+                        Err(e) => {
                             let warning = ui.global::<WarningState>();
-                            warning.set_info(true);
-                            warning.set_title("bioimage.io model imported".into());
-                            warning.set_message(msg.into());
+                            warning.set_info(false);
+                            warning.set_title("bioimage.io import failed".into());
+                            warning.set_message(
+                                format!("Could not import the bioimage.io model:\n\n{e}").into(),
+                            );
                             ui.global::<GlobalAppState>()
                                 .set_active_dialog(DialogType::Warning);
                         }
                     }
-                    Err(e) => {
-                        let warning = ui.global::<WarningState>();
-                        warning.set_info(false);
-                        warning.set_title("bioimage.io import failed".into());
-                        warning.set_message(
-                            format!("Could not import the bioimage.io model:\n\n{e}").into(),
-                        );
-                        ui.global::<GlobalAppState>()
-                            .set_active_dialog(DialogType::Warning);
-                    }
-                }
-            });
+                });
 
             // Step parameter changed
             let manager = self.clone();
@@ -1077,9 +1077,9 @@ impl PipelinesController {
     ///
     /// Clones every project-level field except `images.list`: that map holds
     /// one `ImageEntry` per project image, each carrying its own
-    /// `SeriesSettings::rois` (full `RoiSettings`, mask data included) - so a
+    /// `SeriesSettings::objects` (full `ObjectMetricSettings`, mask data included) - so a
     /// naive `ProjectSettings::clone()` followed by `list.clear()` pays to
-    /// clone every other image's ROI results just to immediately discard
+    /// clone every other image's object results just to immediately discard
     /// them. Building `list` fresh with only the preview image skips that
     /// entirely.
     fn build_preview_project_settings(
@@ -1147,7 +1147,7 @@ impl PipelinesController {
 
         // Only the selected image is needed for a preview - build the settings
         // fresh instead of cloning every other image's settings (and their
-        // stored ROI results) just to discard them.
+        // stored object results) just to discard them.
         let project_tmp = Self::build_preview_project_settings(
             &project.settings,
             current_image_path,
@@ -1438,12 +1438,7 @@ impl PipelinesController {
         }
     }
 
-    fn apply_picker_filter(
-        self: &Arc<Self>,
-        ui: &AppWindow,
-        query: &str,
-        filter_favorites: bool,
-    ) {
+    fn apply_picker_filter(self: &Arc<Self>, ui: &AppWindow, query: &str, filter_favorites: bool) {
         let q = query.to_ascii_lowercase();
         let metas = all_command_meta();
 
@@ -2005,10 +2000,10 @@ mod tests {
     use super::*;
     use evanalyzer_cfg::settings::images_settings::SeriesSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
-    use evanalyzer_cfg::settings::roi_settings::RoiSettings;
+    use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
     use std::collections::BTreeMap;
 
-    fn image_entry_with_rois(rel_path: &str, roi_count: usize) -> ImageEntry {
+    fn image_entry_with_objects(rel_path: &str, object_count: usize) -> ImageEntry {
         ImageEntry {
             rel_path: PathBuf::from(rel_path),
             file_size: 42,
@@ -2016,7 +2011,9 @@ mod tests {
             series: BTreeMap::from([(
                 0,
                 SeriesSettings {
-                    rois: (0..roi_count).map(|_| RoiSettings::default()).collect(),
+                    objects: (0..object_count)
+                        .map(|_| ObjectMetricSettings::default())
+                        .collect(),
                     ..Default::default()
                 },
             )]),
@@ -2025,12 +2022,22 @@ mod tests {
 
     fn project_with_images(entries: &[(&str, usize)]) -> ProjectSettings {
         let mut list = indexmap::IndexMap::new();
-        for (rel_path, roi_count) in entries {
-            list.insert(PathBuf::from(rel_path), image_entry_with_rois(rel_path, *roi_count));
+        for (rel_path, object_count) in entries {
+            list.insert(
+                PathBuf::from(rel_path),
+                image_entry_with_objects(rel_path, *object_count),
+            );
         }
         ProjectSettings {
-            metadata: MetaData { name: "test-project".into(), ..Default::default() },
-            images: ImageSettings { root: Some(PathBuf::from("/root")), list, settings: Default::default() },
+            metadata: MetaData {
+                name: "test-project".into(),
+                ..Default::default()
+            },
+            images: ImageSettings {
+                root: Some(PathBuf::from("/root")),
+                list,
+                settings: Default::default(),
+            },
             ..Default::default()
         }
     }
@@ -2038,7 +2045,12 @@ mod tests {
     #[test]
     fn build_preview_project_settings_keeps_only_the_selected_image() {
         let project = project_with_images(&[("a.tif", 5), ("b.tif", 3), ("c.tif", 7)]);
-        let selected = project.images.list.get(&PathBuf::from("b.tif")).unwrap().clone();
+        let selected = project
+            .images
+            .list
+            .get(&PathBuf::from("b.tif"))
+            .unwrap()
+            .clone();
 
         let preview = PipelinesController::build_preview_project_settings(
             &project,
@@ -2049,13 +2061,22 @@ mod tests {
         assert_eq!(preview.images.list.len(), 1);
         let (path, entry) = preview.images.list.iter().next().unwrap();
         assert_eq!(path, &PathBuf::from("b.tif"));
-        assert_eq!(entry.series[&0].rois.len(), 3, "preview must keep the selected image's own ROIs");
+        assert_eq!(
+            entry.series[&0].objects.len(),
+            3,
+            "preview must keep the selected image's own ROIs"
+        );
     }
 
     #[test]
     fn build_preview_project_settings_preserves_every_other_project_field() {
         let project = project_with_images(&[("a.tif", 1)]);
-        let selected = project.images.list.get(&PathBuf::from("a.tif")).unwrap().clone();
+        let selected = project
+            .images
+            .list
+            .get(&PathBuf::from("a.tif"))
+            .unwrap()
+            .clone();
 
         let preview = PipelinesController::build_preview_project_settings(
             &project,
@@ -2070,7 +2091,12 @@ mod tests {
     #[test]
     fn build_preview_project_settings_does_not_mutate_the_source_project() {
         let project = project_with_images(&[("a.tif", 1), ("b.tif", 2)]);
-        let selected = project.images.list.get(&PathBuf::from("a.tif")).unwrap().clone();
+        let selected = project
+            .images
+            .list
+            .get(&PathBuf::from("a.tif"))
+            .unwrap()
+            .clone();
 
         let _preview = PipelinesController::build_preview_project_settings(
             &project,
@@ -2078,7 +2104,11 @@ mod tests {
             selected,
         );
 
-        assert_eq!(project.images.list.len(), 2, "the source project's image list must be untouched");
+        assert_eq!(
+            project.images.list.len(),
+            2,
+            "the source project's image list must be untouched"
+        );
     }
 
     fn template(idx_seed: &str, steps: Vec<PipelineStepSettings>) -> PipelineTemplate {
@@ -2114,7 +2144,10 @@ mod tests {
     #[test]
     fn template_to_command_def_takes_its_category_from_the_first_step() {
         // id 5 is "ConnectedComponents" -> CommandCategory::Object.
-        let step = PipelineStepSettings { enabled: true, command: default_command(5).unwrap() };
+        let step = PipelineStepSettings {
+            enabled: true,
+            command: default_command(5).unwrap(),
+        };
         let t = template("Multi", vec![step]);
         let def = template_to_command_def(0, &t);
         assert_eq!(def.category, StepCategory::Object);
@@ -2129,7 +2162,11 @@ mod tests {
         t.meta.author_first_name.clear();
         t.meta.author_last_name.clear();
         let def_empty = template_to_command_def(0, &t);
-        assert_eq!(def_empty.author, SharedString::from(""), "no dangling space with both names empty");
+        assert_eq!(
+            def_empty.author,
+            SharedString::from(""),
+            "no dangling space with both names empty"
+        );
     }
 
     #[test]
@@ -2147,7 +2184,11 @@ mod tests {
                 CommandCategory::Measure => StepCategory::Measure,
                 CommandCategory::Classify => StepCategory::Classify,
             };
-            assert_eq!(def.category, expected_category, "id {}: {}", meta.id, meta.name);
+            assert_eq!(
+                def.category, expected_category,
+                "id {}: {}",
+                meta.id, meta.name
+            );
         }
     }
 }

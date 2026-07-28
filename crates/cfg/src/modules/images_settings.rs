@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ops::RangeInclusive, path::PathBuf};
 
-use crate::settings::roi_settings::RoiSettings;
+use crate::settings::object_settings::ObjectMetricSettings;
 
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -47,7 +47,7 @@ pub struct SeriesSettings {
     pub pixel_sizes: PixelSizeSettings,
     pub z_stack: Option<ZStackSettings>,
     pub t_stack: Option<TStackSettings>,
-    pub rois: Vec<RoiSettings>,
+    pub objects: Vec<ObjectMetricSettings>,
 }
 
 #[derive(Serialize, Deserialize, Default, JsonSchema, Debug, Clone, PartialEq, Eq, Hash)]

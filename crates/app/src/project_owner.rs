@@ -2,7 +2,7 @@
 
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass, ObjectId},
-    settings::{project_settings::ProjectSettings, roi_settings::RoiSettings},
+    settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
 };
 use evanalyzer_core::{ImageReader, ReadMode, recommended_reader_pool_size};
 use std::collections::HashSet;
@@ -25,9 +25,9 @@ pub struct ProjectTmpSettings {
     pub selected_object_class: ObjectClass,
 
     /// The regions of interest from the preview run
-    pub preview_rois: Vec<RoiSettings>,
+    pub preview_objects: Vec<ObjectMetricSettings>,
 
-    pub selected_roi: Option<ObjectId>,
+    pub selected_object: Option<ObjectId>,
 
     /// Class IDs currently hidden from the viewport overlay.
     pub hidden_classes: HashSet<ObjectClass>,
@@ -36,7 +36,7 @@ pub struct ProjectTmpSettings {
     /// "Unclassified" otherwise). Defaults to hidden - these are usually
     /// pipeline output the user hasn't classified yet, not something worth
     /// cluttering the list/viewport with by default.
-    pub hide_unclassified_rois: bool,
+    pub hide_unclassified_objects: bool,
 }
 
 impl Default for ProjectTmpSettings {
@@ -45,10 +45,10 @@ impl Default for ProjectTmpSettings {
             current_project: None,
             current_image: None,
             selected_object_class: ObjectClass::default(),
-            preview_rois: Vec::new(),
-            selected_roi: None,
+            preview_objects: Vec::new(),
+            selected_object: None,
             hidden_classes: HashSet::new(),
-            hide_unclassified_rois: true,
+            hide_unclassified_objects: true,
         }
     }
 }
@@ -204,8 +204,9 @@ impl AppHandle {
         path: &PathBuf,
     ) -> Result<(Vec<String>, Option<String>), InternalErrors> {
         let (project, warnings, legacy_image_folder) =
-            crate::extensions::project_ext::import_legacy_project(path)
-                .map_err(|e| InternalErrors::Internal(format!("Could not import legacy project: {e}")))?;
+            crate::extensions::project_ext::import_legacy_project(path).map_err(|e| {
+                InternalErrors::Internal(format!("Could not import legacy project: {e}"))
+            })?;
         *self.project.write().expect("Poisoned") = project;
         Ok((warnings, legacy_image_folder))
     }
@@ -253,7 +254,10 @@ impl AppHandle {
         // docs). Building them concurrently would risk every reader racing
         // to populate that cache at once, for no benefit.
         for _ in 0..size {
-            readers.push(Arc::new(ImageReader::new(new_path, ReadMode::SplitChannels)?));
+            readers.push(Arc::new(ImageReader::new(
+                new_path,
+                ReadMode::SplitChannels,
+            )?));
         }
 
         let pool = Arc::new(ReaderPool {
@@ -266,44 +270,44 @@ impl AppHandle {
 }
 
 impl ProjectWithRuntime {
-    pub fn get_preview_rois(&self) -> &Vec<RoiSettings> {
-        return &self.tmp_settings.preview_rois;
+    pub fn get_preview_objects(&self) -> &Vec<ObjectMetricSettings> {
+        return &self.tmp_settings.preview_objects;
     }
 
-    pub fn set_selected_roi(&mut self, roi_id: Option<ObjectId>) {
-        self.tmp_settings.selected_roi = roi_id;
+    pub fn set_selected_object(&mut self, object_id: Option<ObjectId>) {
+        self.tmp_settings.selected_object = object_id;
     }
 
-    pub fn get_selected_roi_id(&self) -> Option<ObjectId> {
-        return self.tmp_settings.selected_roi.clone();
+    pub fn get_selected_object_id(&self) -> Option<ObjectId> {
+        return self.tmp_settings.selected_object.clone();
     }
 
-    pub fn get_selected_roi(&self) -> Option<RoiSettings> {
+    pub fn get_selected_object(&self) -> Option<ObjectMetricSettings> {
         if let Some(series) = self.get_selected_image_series() {
-            let id = self.get_selected_roi_id();
+            let id = self.get_selected_object_id();
             if let Some(id_some) = id {
                 let found = series
-                    .rois
+                    .objects
                     .iter()
-                    .chain(self.get_preview_rois())
-                    .find(|roi| roi.id == id_some)
+                    .chain(self.get_preview_objects())
+                    .find(|object| object.id == id_some)
                     .cloned();
                 return found;
             } else {
-                return self.get_selected_preview_roi_from();
+                return self.get_selected_preview_object_from();
             };
         }
-        return self.get_selected_preview_roi_from();
+        return self.get_selected_preview_object_from();
     }
 
-    pub fn get_selected_preview_roi_from(&self) -> Option<RoiSettings> {
-        let id = self.get_selected_roi_id();
+    pub fn get_selected_preview_object_from(&self) -> Option<ObjectMetricSettings> {
+        let id = self.get_selected_object_id();
         if let Some(id_some) = id {
             let found = self
                 .tmp_settings
-                .preview_rois
+                .preview_objects
                 .iter()
-                .find(|roi| roi.id == id_some)
+                .find(|object| object.id == id_some)
                 .cloned();
             return found;
         } else {
@@ -392,70 +396,84 @@ mod tests {
     }
 
     #[test]
-    fn get_preview_rois_reflects_tmp_settings() {
+    fn get_preview_objects_reflects_tmp_settings() {
         let owner = ProjectOwner::new();
         let handle = owner.handle();
         {
             let mut project = handle.get_project_write();
-            project.tmp_settings.preview_rois.push(RoiSettings {
-                id: ObjectId(7),
-                ..Default::default()
-            });
+            project
+                .tmp_settings
+                .preview_objects
+                .push(ObjectMetricSettings {
+                    id: ObjectId(7),
+                    ..Default::default()
+                });
         }
         let project = handle.get_project();
-        assert_eq!(project.get_preview_rois().len(), 1);
-        assert_eq!(project.get_preview_rois()[0].id, ObjectId(7));
+        assert_eq!(project.get_preview_objects().len(), 1);
+        assert_eq!(project.get_preview_objects()[0].id, ObjectId(7));
     }
 
     #[test]
-    fn selected_roi_prefers_the_series_roi_over_a_same_id_preview_roi() {
+    fn selected_object_prefers_the_series_object_over_a_same_id_preview_object() {
         let owner = ProjectOwner::new();
         let path = seed_one_image(&owner, "img.tif");
         let handle = owner.handle();
         {
             let mut project = handle.get_project_write();
             project.set_current_image_path(&path);
-            project.add_roi(&RoiSettings {
+            project.add_object(&ObjectMetricSettings {
                 id: ObjectId(1),
                 area: 100,
                 ..Default::default()
             });
-            project.tmp_settings.preview_rois.push(RoiSettings {
-                id: ObjectId(1),
-                area: 999,
-                ..Default::default()
-            });
-            project.set_selected_roi(Some(ObjectId(1)));
+            project
+                .tmp_settings
+                .preview_objects
+                .push(ObjectMetricSettings {
+                    id: ObjectId(1),
+                    area: 999,
+                    ..Default::default()
+                });
+            project.set_selected_object(Some(ObjectId(1)));
         }
         let project = handle.get_project();
-        let selected = project.get_selected_roi().expect("a ROI is selected");
-        assert_eq!(selected.area, 100, "the real series ROI should win, not the preview one");
+        let selected = project.get_selected_object().expect("a object is selected");
+        assert_eq!(
+            selected.area, 100,
+            "the real series object should win, not the preview one"
+        );
     }
 
     #[test]
-    fn selected_roi_falls_back_to_a_preview_roi_when_no_series_roi_matches() {
+    fn selected_object_falls_back_to_a_preview_object_when_no_series_object_matches() {
         let owner = ProjectOwner::new();
         let handle = owner.handle();
         {
             let mut project = handle.get_project_write();
-            project.tmp_settings.preview_rois.push(RoiSettings {
-                id: ObjectId(42),
-                area: 5,
-                ..Default::default()
-            });
-            project.set_selected_roi(Some(ObjectId(42)));
+            project
+                .tmp_settings
+                .preview_objects
+                .push(ObjectMetricSettings {
+                    id: ObjectId(42),
+                    area: 5,
+                    ..Default::default()
+                });
+            project.set_selected_object(Some(ObjectId(42)));
         }
         let project = handle.get_project();
-        let selected = project.get_selected_roi().expect("preview ROI should be found");
+        let selected = project
+            .get_selected_object()
+            .expect("preview object should be found");
         assert_eq!(selected.area, 5);
     }
 
     #[test]
-    fn selected_roi_is_none_when_nothing_is_selected() {
+    fn selected_object_is_none_when_nothing_is_selected() {
         let owner = ProjectOwner::new();
         let handle = owner.handle();
         let project = handle.get_project();
-        assert_eq!(project.get_selected_roi_id(), None);
-        assert!(project.get_selected_roi().is_none());
+        assert_eq!(project.get_selected_object_id(), None);
+        assert!(project.get_selected_object().is_none());
     }
 }

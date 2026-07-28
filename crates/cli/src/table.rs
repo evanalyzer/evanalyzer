@@ -1,16 +1,16 @@
 //! Minimal ASCII table printer for the `view` command - no extra dependency
 //! for what is just a quick terminal preview (full data goes through `export`).
-use evanalyzer_app::result::{ColumnSpec, RoiRow, to_display_row};
+use evanalyzer_app::result::{ColumnSpec, ObjectRow, to_display_row};
 use std::io::Write;
 
 const MAX_COL_WIDTH: usize = 28;
 
-pub fn print_roi_table(specs: &[ColumnSpec], rois: &[RoiRow]) {
+pub fn print_object_table(specs: &[ColumnSpec], objects: &[ObjectRow]) {
     let headers: Vec<String> = specs.iter().map(|c| c.label.clone()).collect();
-    let rows: Vec<Vec<String>> = rois
+    let rows: Vec<Vec<String>> = objects
         .iter()
         .enumerate()
-        .map(|(i, roi)| to_display_row(i, roi, specs).values)
+        .map(|(i, object)| to_display_row(i, object, specs).values)
         .collect();
     write_grid(&mut std::io::stdout(), &headers, &rows).ok();
 }

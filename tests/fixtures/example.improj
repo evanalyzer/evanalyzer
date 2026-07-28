@@ -131,8 +131,8 @@
             },
             "zStack": null,
             "tStack": null,
-            "selectedRoi": null,
-            "rois": []
+            "selectedObject": null,
+            "objects": []
           }
         }
       }
@@ -223,7 +223,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "classifyRois",
+            "type": "classifyObjects",
             "originSegmentation": [1],
             "inputClasses": [],
             "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
@@ -252,7 +252,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "extractRois"
+            "type": "extractObjects"
           }
         }
       ]
@@ -306,7 +306,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "classifyRois",
+            "type": "classifyObjects",
             "originSegmentation": [1],
             "inputClasses": [],
             "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",

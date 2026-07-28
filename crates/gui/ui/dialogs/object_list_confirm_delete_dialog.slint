@@ -9,10 +9,10 @@ import {
 } from "../state.slint";
 
 
-import { RoiListState } from "../editor/roi_list_panel.slint";
+import { ObjectListState } from "../editor/object_list_panel.slint";
 
-export component ConfirmDeleteRoiDialog inherits BaseDialog {
-    title-text: "Delete Region of Interest";
+export component ConfirmDeleteObjectDialog inherits BaseDialog {
+    title-text: "Delete object";
     icon: "⚠️";
     main-height: 260px;
     main-width: 440px;
@@ -20,7 +20,7 @@ export component ConfirmDeleteRoiDialog inherits BaseDialog {
     VerticalLayout {
         spacing: 12px;
         Text {
-            text: "This action cannot be undone. Deleting the selected region of interest.";
+            text: "This action cannot be undone. Deleting the selected object.";
             wrap: word-wrap;
             color: Palette.foreground;
             font-size: 14px;
@@ -28,7 +28,7 @@ export component ConfirmDeleteRoiDialog inherits BaseDialog {
         }
 
         Text {
-            text: "Delete region of interest \{RoiListState.selected_roi.id}?";
+            text: "Delete object \{ObjectListState.selected_object.id}?";
             wrap: word-wrap;
             color: Palette.foreground.with-alpha(0.5);
             font-size: 13px;
@@ -56,8 +56,8 @@ export component ConfirmDeleteRoiDialog inherits BaseDialog {
                 width: 100px;
                 clicked => {
                     GlobalAppState.active_dialog = DialogType.none;
-                    RoiListState.roi_delete(RoiListState.selected_roi.id);
-                    RoiListState.selected_roi = { };
+                    ObjectListState.object_delete(ObjectListState.selected_object.id);
+                    ObjectListState.selected_object = { };
                 }
             }
         }

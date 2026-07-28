@@ -13,19 +13,19 @@ impl From<FiltersRollingBallBallTypeSettings> for BallType {
     }
 }
 
-impl From<ClassificationClassifyRoisClassifyMatchHandlingSettings> for ClassifyMatchHandling {
-    fn from(_s: ClassificationClassifyRoisClassifyMatchHandlingSettings) -> Self {
+impl From<ClassificationClassifyObjectsClassifyMatchHandlingSettings> for ClassifyMatchHandling {
+    fn from(_s: ClassificationClassifyObjectsClassifyMatchHandlingSettings) -> Self {
         match _s {
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch => ClassifyMatchHandling::AddOutputClassIfMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => ClassifyMatchHandling::AddOutputClassIfNotMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfMatch => ClassifyMatchHandling::RemoveInputClassIfMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => ClassifyMatchHandling::RemoveInputClassIfNotMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => ClassifyMatchHandling::RemoveOutputClassIfMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => ClassifyMatchHandling::RemoveAllClassesIfMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfMatch => ClassifyMatchHandling::ReclassifyIfMatch,
-            ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfNotMatch => ClassifyMatchHandling::ReclassifyIfNotMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => ClassifyMatchHandling::AddOutputClassIfMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => ClassifyMatchHandling::AddOutputClassIfNotMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => ClassifyMatchHandling::RemoveInputClassIfMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => ClassifyMatchHandling::RemoveInputClassIfNotMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => ClassifyMatchHandling::RemoveOutputClassIfMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => ClassifyMatchHandling::RemoveAllClassesIfMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => ClassifyMatchHandling::ReclassifyIfMatch,
+            ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => ClassifyMatchHandling::ReclassifyIfNotMatch,
         }
     }
 }
@@ -95,6 +95,19 @@ impl From<MorphologyMorphologicalTransformationMorphOpsSettings> for MorphOps {
     }
 }
 
+impl From<ClassificationObjectMathObjectSetOperationSettings> for ObjectSetOperation {
+    fn from(_s: ClassificationObjectMathObjectSetOperationSettings) -> Self {
+        match _s {
+            ClassificationObjectMathObjectSetOperationSettings::And => ObjectSetOperation::And,
+            ClassificationObjectMathObjectSetOperationSettings::Or => ObjectSetOperation::Or,
+            ClassificationObjectMathObjectSetOperationSettings::Xor => ObjectSetOperation::Xor,
+            ClassificationObjectMathObjectSetOperationSettings::Subtract => {
+                ObjectSetOperation::Subtract
+            }
+        }
+    }
+}
+
 impl From<MathImageMathOperandSettings> for Operand {
     fn from(_s: MathImageMathOperandSettings) -> Self {
         match _s {
@@ -123,17 +136,6 @@ impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
             FiltersRankFilterRankFilterTypeSettings::Max => RankFilterType::Max,
             FiltersRankFilterRankFilterTypeSettings::Mean => RankFilterType::Mean,
             FiltersRankFilterRankFilterTypeSettings::Outliers(v) => RankFilterType::Outliers(v),
-        }
-    }
-}
-
-impl From<ClassificationMathRoiRoiSetOperationSettings> for RoiSetOperation {
-    fn from(_s: ClassificationMathRoiRoiSetOperationSettings) -> Self {
-        match _s {
-            ClassificationMathRoiRoiSetOperationSettings::And => RoiSetOperation::And,
-            ClassificationMathRoiRoiSetOperationSettings::Or => RoiSetOperation::Or,
-            ClassificationMathRoiRoiSetOperationSettings::Xor => RoiSetOperation::Xor,
-            ClassificationMathRoiRoiSetOperationSettings::Subtract => RoiSetOperation::Subtract,
         }
     }
 }
@@ -174,45 +176,47 @@ impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
     }
 }
 
-impl From<ClassificationTransformRoisTransformFunctionSettings> for TransformFunction {
-    fn from(_s: ClassificationTransformRoisTransformFunctionSettings) -> Self {
+impl From<ClassificationTransformObjectsTransformFunctionSettings> for TransformFunction {
+    fn from(_s: ClassificationTransformObjectsTransformFunctionSettings) -> Self {
         match _s {
-            ClassificationTransformRoisTransformFunctionSettings::Scale { factor } => {
+            ClassificationTransformObjectsTransformFunctionSettings::Scale { factor } => {
                 TransformFunction::Scale {
                     factor: factor.clamp(0.0, 65535.0),
                 }
             }
-            ClassificationTransformRoisTransformFunctionSettings::SnapArea { extra_size, unit } => {
-                TransformFunction::SnapArea {
-                    extra_size: extra_size.clamp(0.0, 65535.0),
-                    unit: unit,
-                }
-            }
-            ClassificationTransformRoisTransformFunctionSettings::MinCircle {
+            ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
+                extra_size,
+                unit,
+            } => TransformFunction::SnapArea {
+                extra_size: extra_size.clamp(0.0, 65535.0),
+                unit: unit,
+            },
+            ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
                 min_diameter,
                 unit,
             } => TransformFunction::MinCircle {
                 min_diameter: min_diameter.clamp(0.0, 65535.0),
                 unit: unit,
             },
-            ClassificationTransformRoisTransformFunctionSettings::DrawCircle { diameter, unit } => {
-                TransformFunction::DrawCircle {
-                    diameter: diameter.clamp(0.0, 65535.0),
-                    unit: unit,
-                }
-            }
-            ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale } => {
+            ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
+                diameter,
+                unit,
+            } => TransformFunction::DrawCircle {
+                diameter: diameter.clamp(0.0, 65535.0),
+                unit: unit,
+            },
+            ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse { scale } => {
                 TransformFunction::FittingEllipse {
                     scale: scale.clamp(0.0, 65535.0),
                 }
             }
-            ClassificationTransformRoisTransformFunctionSettings::Expand { margin, unit } => {
+            ClassificationTransformObjectsTransformFunctionSettings::Expand { margin, unit } => {
                 TransformFunction::Expand {
                     margin: margin.clamp(0.0, 65535.0),
                     unit: unit,
                 }
             }
-            ClassificationTransformRoisTransformFunctionSettings::Shrink { margin, unit } => {
+            ClassificationTransformObjectsTransformFunctionSettings::Shrink { margin, unit } => {
                 TransformFunction::Shrink {
                     margin: margin.clamp(0.0, 65535.0),
                     unit: unit,
@@ -260,9 +264,9 @@ impl From<CellposeSettings> for Cellpose {
     }
 }
 
-impl From<ClassifyRoisSettings> for ClassifyRois {
-    fn from(_s: ClassifyRoisSettings) -> Self {
-        ClassifyRois {
+impl From<ClassifyObjectsSettings> for ClassifyObjects {
+    fn from(_s: ClassifyObjectsSettings) -> Self {
+        ClassifyObjects {
             origin_segmentation: _s
                 .origin_segmentation
                 .into_iter()
@@ -358,9 +362,9 @@ impl From<EnhanceContrastSettings> for EnhanceContrast {
     }
 }
 
-impl From<ExtractRoisSettings> for ExtractRois {
-    fn from(_s: ExtractRoisSettings) -> Self {
-        ExtractRois {
+impl From<ExtractObjectsSettings> for ExtractObjects {
+    fn from(_s: ExtractObjectsSettings) -> Self {
+        ExtractObjects {
             max_objects_before_fail: _s.max_objects_before_fail,
         }
     }
@@ -450,19 +454,10 @@ impl From<MorphologicalCommandSettings> for MorphologicalCommand {
     }
 }
 
-impl From<RankFilterSettings> for RankFilter {
-    fn from(_s: RankFilterSettings) -> Self {
-        RankFilter {
-            radius: _s.radius,
-            filter_type: RankFilterType::from(_s.filter_type),
-        }
-    }
-}
-
-impl From<RoiMathSettings> for RoiMath {
-    fn from(_s: RoiMathSettings) -> Self {
-        RoiMath {
-            operation: RoiSetOperation::from(_s.operation),
+impl From<ObjectMathSettings> for ObjectMath {
+    fn from(_s: ObjectMathSettings) -> Self {
+        ObjectMath {
+            operation: ObjectSetOperation::from(_s.operation),
             input_class: _s.input_class,
             other_class: _s.other_class,
             other_filter_classes: _s
@@ -474,6 +469,15 @@ impl From<RoiMathSettings> for RoiMath {
             min_overlap_area: _s.min_overlap_area,
             output_class: _s.output_class,
             keep_unmatched: _s.keep_unmatched,
+        }
+    }
+}
+
+impl From<RankFilterSettings> for RankFilter {
+    fn from(_s: RankFilterSettings) -> Self {
+        RankFilter {
+            radius: _s.radius,
+            filter_type: RankFilterType::from(_s.filter_type),
         }
     }
 }
@@ -539,9 +543,9 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
     }
 }
 
-impl From<TransformRoisSettings> for TransformRois {
-    fn from(_s: TransformRoisSettings) -> Self {
-        TransformRois {
+impl From<TransformObjectsSettings> for TransformObjects {
+    fn from(_s: TransformObjectsSettings) -> Self {
+        TransformObjects {
             function: TransformFunction::from(_s.function),
             input_class: _s.input_class,
             output_class: _s.output_class,
@@ -621,8 +625,8 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::Cellpose(_settings) => Err(InternalErrors::Generic(
             "This build was compiled without the ai feature; Cellpose is unavailable.".into(),
         )),
-        PipelineCommand::ClassifyRois(settings) => {
-            Ok(Box::new(crate::algos::ClassifyRois::from(settings)))
+        PipelineCommand::ClassifyObjects(settings) => {
+            Ok(Box::new(crate::algos::ClassifyObjects::from(settings)))
         }
         PipelineCommand::Colocalization(settings) => {
             Ok(Box::new(crate::algos::Colocalization::from(settings)))
@@ -645,8 +649,8 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::EnhanceContrast(settings) => {
             Ok(Box::new(crate::algos::EnhanceContrast::from(settings)))
         }
-        PipelineCommand::ExtractRois(settings) => {
-            Ok(Box::new(crate::algos::ExtractRois::from(settings)))
+        PipelineCommand::ExtractObjects(settings) => {
+            Ok(Box::new(crate::algos::ExtractObjects::from(settings)))
         }
         PipelineCommand::GaussianBlur(settings) => {
             Ok(Box::new(crate::algos::GaussianBlur::from(settings)))
@@ -670,10 +674,12 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::MorphologicalCommand(settings) => {
             Ok(Box::new(crate::algos::MorphologicalCommand::from(settings)))
         }
+        PipelineCommand::ObjectMath(settings) => {
+            Ok(Box::new(crate::algos::ObjectMath::from(settings)))
+        }
         PipelineCommand::RankFilter(settings) => {
             Ok(Box::new(crate::algos::RankFilter::from(settings)))
         }
-        PipelineCommand::RoiMath(settings) => Ok(Box::new(crate::algos::RoiMath::from(settings))),
         PipelineCommand::RollingBall(settings) => {
             Ok(Box::new(crate::algos::RollingBall::from(settings)))
         }
@@ -692,8 +698,8 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::Threshold(settings) => {
             Ok(Box::new(crate::algos::Threshold::from(settings)))
         }
-        PipelineCommand::TransformRois(settings) => {
-            Ok(Box::new(crate::algos::TransformRois::from(settings)))
+        PipelineCommand::TransformObjects(settings) => {
+            Ok(Box::new(crate::algos::TransformObjects::from(settings)))
         }
         #[cfg(feature = "ai")]
         PipelineCommand::UNet(settings) => Ok(Box::new(crate::algos::UNet::from(settings))),

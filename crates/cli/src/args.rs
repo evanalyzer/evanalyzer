@@ -106,7 +106,7 @@ pub struct FilterArgs {
 
 #[derive(Args, Default)]
 pub struct GroupArgs {
-    /// Aggregate rows instead of exporting one row per ROI
+    /// Aggregate rows instead of exporting one row per object
     #[arg(long, value_enum)]
     pub group_by: Option<GroupByKind>,
 
@@ -158,7 +158,7 @@ pub enum ChartKind {
     Histogram(HistogramArgs),
     /// Plot two numeric columns against each other
     Scatter(ScatterArgs),
-    /// Bin ROI centroids into a spatial grid
+    /// Bin object centroids into a spatial grid
     Heatmap(HeatmapArgs),
 }
 

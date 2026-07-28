@@ -43,10 +43,10 @@ fn export_histogram(args: HistogramArgs) -> Result<(), InternalErrors> {
     let loader = ResultsLoader::new(&args.db);
     let specs = discover_columns(&loader)?;
     let filter = build_database_filter(&args.filter, true, 0, 0);
-    let rois = loader.get_rois(filter)?;
+    let objects = loader.get_objects(filter)?;
 
     let data = compute_histogram(
-        &rois,
+        &objects,
         &args.column,
         &specs,
         args.buckets,
@@ -63,10 +63,10 @@ fn export_scatter(args: ScatterArgs) -> Result<(), InternalErrors> {
     let loader = ResultsLoader::new(&args.db);
     let specs = discover_columns(&loader)?;
     let filter = build_database_filter(&args.filter, true, 0, 0);
-    let rois = loader.get_rois(filter)?;
+    let objects = loader.get_objects(filter)?;
 
     let data =
-        compute_scatter(&rois, &args.x, &args.y, to_color_by(args.color_by), &specs, args.max_points)
+        compute_scatter(&objects, &args.x, &args.y, to_color_by(args.color_by), &specs, args.max_points)
         .ok_or_else(|| column_not_found_error(&format!("{} / {}", args.x, args.y), &args.db))?;
     save_scatter_png(&data, args.width, args.height, &args.out)?;
     println!("Saved scatter plot to {}", args.out.display());
@@ -77,7 +77,7 @@ fn export_heatmap(args: HeatmapArgs) -> Result<(), InternalErrors> {
     let loader = ResultsLoader::new(&args.db);
     let specs = discover_columns(&loader)?;
     let filter = build_database_filter(&args.filter, true, 0, 0);
-    let rois = loader.get_rois(filter)?;
+    let objects = loader.get_objects(filter)?;
 
     let metric = if args.metric == "count" {
         HeatmapMetric::Count
@@ -85,7 +85,7 @@ fn export_heatmap(args: HeatmapArgs) -> Result<(), InternalErrors> {
         HeatmapMetric::Average(args.metric.clone())
     };
 
-    let data = compute_heatmap(&rois, &metric, &specs, args.cell_size)
+    let data = compute_heatmap(&objects, &metric, &specs, args.cell_size)
         .ok_or_else(|| column_not_found_error(&args.metric, &args.db))?;
     let scheme = HeatmapColorScheme::from_label(&args.color_scheme);
     // `requires` on the arg definitions guarantees these are either both

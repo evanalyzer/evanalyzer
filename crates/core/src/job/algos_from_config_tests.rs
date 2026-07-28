@@ -32,7 +32,7 @@ fn ball_type_paraboloid_setting_converts_to_balltype_paraboloid() {
 #[test]
 fn classify_match_handling_first_variant_converts() {
     let result: ClassifyMatchHandling =
-        ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch.into();
+        ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch.into();
     assert!(matches!(
         result,
         ClassifyMatchHandling::AddOutputClassIfMatch
@@ -42,7 +42,7 @@ fn classify_match_handling_first_variant_converts() {
 #[test]
 fn classify_match_handling_middle_variant_converts() {
     let result: ClassifyMatchHandling =
-        ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfMatch.into();
+        ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch.into();
     assert!(matches!(
         result,
         ClassifyMatchHandling::RemoveAllClassesIfMatch
@@ -52,7 +52,7 @@ fn classify_match_handling_middle_variant_converts() {
 #[test]
 fn classify_match_handling_last_variant_converts() {
     let result: ClassifyMatchHandling =
-        ClassificationClassifyRoisClassifyMatchHandlingSettings::ReclassifyIfNotMatch.into();
+        ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch.into();
     assert!(matches!(
         result,
         ClassifyMatchHandling::ReclassifyIfNotMatch
@@ -203,27 +203,28 @@ fn rank_filter_type_outliers_setting_converts_and_preserves_value() {
 }
 
 #[test]
-fn roi_set_operation_and_setting_converts() {
-    let result: RoiSetOperation = ClassificationMathRoiRoiSetOperationSettings::And.into();
-    assert!(matches!(result, RoiSetOperation::And));
+fn object_set_operation_and_setting_converts() {
+    let result: ObjectSetOperation = ClassificationObjectMathObjectSetOperationSettings::And.into();
+    assert!(matches!(result, ObjectSetOperation::And));
 }
 
 #[test]
-fn roi_set_operation_or_setting_converts() {
-    let result: RoiSetOperation = ClassificationMathRoiRoiSetOperationSettings::Or.into();
-    assert!(matches!(result, RoiSetOperation::Or));
+fn object_set_operation_or_setting_converts() {
+    let result: ObjectSetOperation = ClassificationObjectMathObjectSetOperationSettings::Or.into();
+    assert!(matches!(result, ObjectSetOperation::Or));
 }
 
 #[test]
-fn roi_set_operation_xor_setting_converts() {
-    let result: RoiSetOperation = ClassificationMathRoiRoiSetOperationSettings::Xor.into();
-    assert!(matches!(result, RoiSetOperation::Xor));
+fn object_set_operation_xor_setting_converts() {
+    let result: ObjectSetOperation = ClassificationObjectMathObjectSetOperationSettings::Xor.into();
+    assert!(matches!(result, ObjectSetOperation::Xor));
 }
 
 #[test]
-fn roi_set_operation_subtract_setting_converts() {
-    let result: RoiSetOperation = ClassificationMathRoiRoiSetOperationSettings::Subtract.into();
-    assert!(matches!(result, RoiSetOperation::Subtract));
+fn object_set_operation_subtract_setting_converts() {
+    let result: ObjectSetOperation =
+        ClassificationObjectMathObjectSetOperationSettings::Subtract.into();
+    assert!(matches!(result, ObjectSetOperation::Subtract));
 }
 
 #[test]
@@ -265,7 +266,7 @@ fn threshold_method_yen_setting_converts() {
 #[test]
 fn transform_function_scale_setting_converts_and_clamps_factor() {
     let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::Scale { factor: 999999.0 }.into();
+        ClassificationTransformObjectsTransformFunctionSettings::Scale { factor: 999999.0 }.into();
     match result {
         TransformFunction::Scale { factor } => assert_eq!(factor, 65535.0),
         _ => panic!("expected Scale variant"),
@@ -275,7 +276,7 @@ fn transform_function_scale_setting_converts_and_clamps_factor() {
 #[test]
 fn transform_function_scale_setting_clamps_negative_factor_to_zero() {
     let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::Scale { factor: -10.0 }.into();
+        ClassificationTransformObjectsTransformFunctionSettings::Scale { factor: -10.0 }.into();
     match result {
         TransformFunction::Scale { factor } => assert_eq!(factor, 0.0),
         _ => panic!("expected Scale variant"),
@@ -285,7 +286,7 @@ fn transform_function_scale_setting_clamps_negative_factor_to_zero() {
 #[test]
 fn transform_function_snap_area_setting_converts_and_carries_unit() {
     let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::SnapArea {
+        ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
             extra_size: 12.0,
             unit: SizeUnits::Pixels,
         }
@@ -302,7 +303,7 @@ fn transform_function_snap_area_setting_converts_and_carries_unit() {
 #[test]
 fn transform_function_min_circle_setting_converts() {
     let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::MinCircle {
+        ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
             min_diameter: 5.0,
             unit: SizeUnits::NanoMeter,
         }
@@ -319,7 +320,7 @@ fn transform_function_min_circle_setting_converts() {
 #[test]
 fn transform_function_draw_circle_setting_converts() {
     let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::DrawCircle {
+        ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
             diameter: 8.0,
             unit: SizeUnits::Pixels,
         }
@@ -336,7 +337,8 @@ fn transform_function_draw_circle_setting_converts() {
 #[test]
 fn transform_function_fitting_ellipse_setting_converts() {
     let result: TransformFunction =
-        ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale: 2.0 }.into();
+        ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 2.0 }
+            .into();
     match result {
         TransformFunction::FittingEllipse { scale } => assert_eq!(scale, 2.0),
         _ => panic!("expected FittingEllipse variant"),
@@ -345,11 +347,12 @@ fn transform_function_fitting_ellipse_setting_converts() {
 
 #[test]
 fn transform_function_expand_setting_converts() {
-    let result: TransformFunction = ClassificationTransformRoisTransformFunctionSettings::Expand {
-        margin: 3.0,
-        unit: SizeUnits::NanoMeter,
-    }
-    .into();
+    let result: TransformFunction =
+        ClassificationTransformObjectsTransformFunctionSettings::Expand {
+            margin: 3.0,
+            unit: SizeUnits::NanoMeter,
+        }
+        .into();
     match result {
         TransformFunction::Expand { margin, unit } => {
             assert_eq!(margin, 3.0);
@@ -361,11 +364,12 @@ fn transform_function_expand_setting_converts() {
 
 #[test]
 fn transform_function_shrink_setting_converts() {
-    let result: TransformFunction = ClassificationTransformRoisTransformFunctionSettings::Shrink {
-        margin: 4.0,
-        unit: SizeUnits::Pixels,
-    }
-    .into();
+    let result: TransformFunction =
+        ClassificationTransformObjectsTransformFunctionSettings::Shrink {
+            margin: 4.0,
+            unit: SizeUnits::Pixels,
+        }
+        .into();
     match result {
         TransformFunction::Shrink { margin, unit } => {
             assert_eq!(margin, 4.0);
@@ -432,8 +436,8 @@ fn cellpose_settings_clamp_negative_probability_threshold_to_zero() {
 }
 
 #[test]
-fn classify_rois_settings_convert_identity_fields() {
-    let settings = ClassifyRoisSettings {
+fn classify_objects_settings_convert_identity_fields() {
+    let settings = ClassifyObjectsSettings {
         origin_segmentation: vec![SegmentationClass(1), SegmentationClass(2)],
         input_classes: vec![ObjectClass::Valid(3)],
         output_class: ObjectClass::Valid(4),
@@ -441,7 +445,7 @@ fn classify_rois_settings_convert_identity_fields() {
         allow_edge_touching: false,
         ..Default::default()
     };
-    let result = ClassifyRois::from(settings);
+    let result = ClassifyObjects::from(settings);
     assert_eq!(
         result.origin_segmentation,
         vec![SegmentationClass(1), SegmentationClass(2)]
@@ -453,15 +457,15 @@ fn classify_rois_settings_convert_identity_fields() {
 }
 
 #[test]
-fn classify_rois_settings_clamp_area_and_circularity_fields() {
-    let settings = ClassifyRoisSettings {
+fn classify_objects_settings_clamp_area_and_circularity_fields() {
+    let settings = ClassifyObjectsSettings {
         min_area: -5.0,
         max_area: 9999999999.0,
         min_circularity: -0.5,
         max_circularity: 5.0,
         ..Default::default()
     };
-    let result = ClassifyRois::from(settings);
+    let result = ClassifyObjects::from(settings);
     assert_eq!(result.min_area, 0.0);
     assert_eq!(result.max_area, 2147483600.0);
     assert_eq!(result.min_circularity, 0.0);
@@ -565,11 +569,11 @@ fn enhance_contrast_settings_convert_fields() {
 }
 
 #[test]
-fn extract_rois_settings_convert_max_objects_before_fail() {
-    let settings = ExtractRoisSettings {
+fn extract_objects_settings_convert_max_objects_before_fail() {
+    let settings = ExtractObjectsSettings {
         max_objects_before_fail: 500,
     };
-    let result = ExtractRois::from(settings);
+    let result = ExtractObjects::from(settings);
     assert_eq!(result.max_objects_before_fail, 500);
 }
 
@@ -700,9 +704,9 @@ fn rank_filter_settings_convert_all_fields() {
 }
 
 #[test]
-fn roi_math_settings_convert_all_fields() {
-    let settings = RoiMathSettings {
-        operation: ClassificationMathRoiRoiSetOperationSettings::Subtract,
+fn object_math_settings_convert_all_fields() {
+    let settings = ObjectMathSettings {
+        operation: ClassificationObjectMathObjectSetOperationSettings::Subtract,
         input_class: ObjectClass::Valid(1),
         other_class: ObjectClass::Valid(2),
         other_filter_classes: vec![ObjectClass::Valid(3)],
@@ -711,8 +715,8 @@ fn roi_math_settings_convert_all_fields() {
         output_class: ObjectClass::Valid(5),
         keep_unmatched: false,
     };
-    let result = RoiMath::from(settings);
-    assert!(matches!(result.operation, RoiSetOperation::Subtract));
+    let result = ObjectMath::from(settings);
+    assert!(matches!(result.operation, ObjectSetOperation::Subtract));
     assert_eq!(result.input_class, ObjectClass::Valid(1));
     assert_eq!(result.other_class, ObjectClass::Valid(2));
     assert_eq!(result.other_filter_classes, vec![ObjectClass::Valid(3)]);
@@ -826,15 +830,15 @@ fn threshold_entry_settings_convert_and_clamp_thresholds() {
 }
 
 #[test]
-fn transform_rois_settings_convert_all_fields() {
-    let settings = TransformRoisSettings {
-        function: ClassificationTransformRoisTransformFunctionSettings::FittingEllipse {
+fn transform_objects_settings_convert_all_fields() {
+    let settings = TransformObjectsSettings {
+        function: ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse {
             scale: 1.2,
         },
         input_class: ObjectClass::Valid(1),
         output_class: ObjectClass::Valid(2),
     };
-    let result = TransformRois::from(settings);
+    let result = TransformObjects::from(settings);
     match result.function {
         TransformFunction::FittingEllipse { scale } => assert_eq!(scale, 1.2),
         _ => panic!("expected FittingEllipse variant"),
@@ -944,12 +948,12 @@ fn into_algorithm_watershed_dispatches_to_watershed_algorithm() {
 }
 
 #[test]
-fn into_algorithm_classify_rois_dispatches_to_classify_rois_algorithm() {
-    let result = into_algorithm(PipelineCommand::ClassifyRois(
-        ClassifyRoisSettings::default(),
+fn into_algorithm_classify_objects_dispatches_to_classify_objects_algorithm() {
+    let result = into_algorithm(PipelineCommand::ClassifyObjects(
+        ClassifyObjectsSettings::default(),
     ))
     .expect("conversion should not fail");
-    assert_eq!(result.name(), "ClassifyRois");
+    assert_eq!(result.name(), "ClassifyObjects");
 }
 
 #[test]

@@ -31,8 +31,8 @@ export global ClassificationState {
 
     // Whether ROIs with no object class assigned (shown in red as "Unclassified")
     // are hidden from the list and viewport. Defaults to hidden - see Rust side
-    // (ProjectTmpSettings::hide_unclassified_rois) for the persisted source of truth.
-    in-out property <bool> hide_unclassified_rois: true;
+    // (ProjectTmpSettings::hide_unclassified_objects) for the persisted source of truth.
+    in-out property <bool> hide_unclassified_objects: true;
 
     callback hide_unclassified_toggled();
     callback class_selected(int);
@@ -253,18 +253,18 @@ export component ClassificationPanel inherits Rectangle {
                 animate background { duration: 100ms; }
 
                 Image {
-                    source: ClassificationState.hide_unclassified_rois
+                    source: ClassificationState.hide_unclassified_objects
                         ? @image-url("../icons/regular-white/eye-slash.svg")
                         : @image-url("../icons/regular-white/eye.svg");
                     width: 13px;
                     height: 13px;
-                    colorize: ClassificationState.hide_unclassified_rois ? Theme.text-faint : Theme.text-dim;
+                    colorize: ClassificationState.hide_unclassified_objects ? Theme.text-faint : Theme.text-dim;
                 }
 
                 unclassified_eye_ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        ClassificationState.hide_unclassified_rois = !ClassificationState.hide_unclassified_rois;
+                        ClassificationState.hide_unclassified_objects = !ClassificationState.hide_unclassified_objects;
                         ClassificationState.hide_unclassified_toggled();
                     }
                 }
