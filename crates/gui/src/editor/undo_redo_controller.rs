@@ -4,7 +4,7 @@ use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
 use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
-use crate::editor::roi_list_controller::RoiListController;
+use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::AppWindow;
 use crate::PipelinesPanelState;
@@ -27,7 +27,7 @@ pub struct UndoRedoController {
     project_settings_controller: Arc<ProjectSettingsController>,
     classification_controller: Arc<ClassificationController>,
     pipelines_controller: Arc<PipelinesController>,
-    roi_list_controller: Arc<RoiListController>,
+    object_list_controller: Arc<ObjectListController>,
     viewport_controller: Arc<ViewportController>,
 }
 
@@ -39,7 +39,7 @@ impl UndoRedoController {
         project_settings_controller: Arc<ProjectSettingsController>,
         classification_controller: Arc<ClassificationController>,
         pipelines_controller: Arc<PipelinesController>,
-        roi_list_controller: Arc<RoiListController>,
+        object_list_controller: Arc<ObjectListController>,
         viewport_controller: Arc<ViewportController>,
     ) -> Self {
         Self {
@@ -49,7 +49,7 @@ impl UndoRedoController {
             project_settings_controller,
             classification_controller,
             pipelines_controller,
-            roi_list_controller,
+            object_list_controller,
             viewport_controller,
         }
     }
@@ -80,10 +80,10 @@ impl UndoRedoController {
     /// `ProjectSettings` just changed out from under the UI, repaint
     /// everything" situations.
     ///
-    /// `sync_pipelines_to_slint`/`sync_rois_to_slint` only refresh their
-    /// respective *list* (pipeline names, ROI rows) - the currently
+    /// `sync_pipelines_to_slint`/`sync_objects_to_slint` only refresh their
+    /// respective *list* (pipeline names, object rows) - the currently
     /// open/selected item's own detail panel (a pipeline's step list, an
-    /// ROI's classification) is a separate sync call that only fires on
+    /// object's classification) is a separate sync call that only fires on
     /// selection changes, so it goes stale after a restore until the user
     /// re-selects the item. Refresh those explicitly too.
     fn refresh_all_panels(self: &Arc<Self>) {
@@ -93,9 +93,9 @@ impl UndoRedoController {
         self.classification_controller
             .sync_classification_to_slint();
         self.pipelines_controller.sync_pipelines_to_slint();
-        self.roi_list_controller.sync_rois_to_slint();
-        self.roi_list_controller.sync_selected_roi_to_slint(false);
-        self.viewport_controller.trigger_image_redraw_rois();
+        self.object_list_controller.sync_objects_to_slint();
+        self.object_list_controller.sync_selected_object_to_slint(false);
+        self.viewport_controller.trigger_image_redraw_objects();
 
         if let Some(ui) = self.ui.upgrade() {
             let active_pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id();

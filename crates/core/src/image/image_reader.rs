@@ -1,6 +1,6 @@
 use crate::converters::wavelength_to_rgb_float;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
-use crate::image::java::JAVA_WRAPPER;
+use crate::image::java::{JAVA_WRAPPER, ensure_java_wrapper};
 use evanalyzer_cfg::core_types::InternalErrors;
 use jni::objects::{GlobalRef, JMethodID, JValue};
 use jni::signature::{Primitive, ReturnType};
@@ -268,10 +268,10 @@ impl ImageReader {
             ReadMode::SplitChannels => true,
         };
 
-        // Initial Checks
-        let wrapper = JAVA_WRAPPER
-            .get()
-            .expect("Java Runtime not initialized, call init_java_wrapper");
+        // Initial Checks. Starts the JVM lazily on first use if it hasn't
+        // been warmed up already (see the background warmup spawned by the
+        // GUI at startup, in `evanalyzer_gui::run`).
+        let wrapper = ensure_java_wrapper()?;
 
         let jvm = wrapper.jvm.as_ref().ok_or("JVM not initialized")?;
         let class = wrapper
@@ -426,9 +426,7 @@ impl ImageReader {
     /// let _ = read_image_meta();
     /// ```
     fn read_image_meta(&self) -> Result<ImageMeta, InternalErrors> {
-        let wrapper = JAVA_WRAPPER
-            .get()
-            .expect("Java Runtime not initialized, call init_java_wrapper");
+        let wrapper = ensure_java_wrapper()?;
 
         let jvm = wrapper
             .jvm
@@ -474,9 +472,7 @@ impl ImageReader {
         byte_scratch: &mut Vec<u8>,
     ) -> Result<ImageContainer, InternalErrors> {
         // 1. Setup Environment and Instance
-        let wrapper = JAVA_WRAPPER
-            .get()
-            .expect("Java Runtime not initialized, call init_java_wrapper");
+        let wrapper = ensure_java_wrapper()?;
         let jvm = wrapper.jvm.as_ref().ok_or("JVM not initialized")?;
         let instance = self
             .wrapper_instance

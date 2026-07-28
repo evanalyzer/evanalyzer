@@ -60,7 +60,7 @@ pub fn build_group_config(args: &GroupArgs) -> GroupConfig {
 /// Discovers the full set of columns (fixed + per-channel + coloc-partner) present
 /// in `loader`'s database, for use as `ResultsExporter`/`compute_*` chart inputs.
 pub fn discover_columns(loader: &ResultsLoader) -> Result<Vec<ColumnSpec>, InternalErrors> {
-    let sample = loader.get_rois(DatabaseFilter {
+    let sample = loader.get_objects(DatabaseFilter {
         page_size: COLUMN_DISCOVERY_SAMPLE,
         ..Default::default()
     })?;

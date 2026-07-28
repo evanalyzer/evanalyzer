@@ -52,11 +52,17 @@ import {
     ClassSettingsSlint,
 } from "dialogs/classification_class_edit_dialog.slint";
 
-import { RoiListState, RoiItemDataSlint } from "editor/roi_list_panel.slint";
-import { ViewportState, ViewportRoiState } from "editor/viewport_state.slint";
 import {
-    ConfirmDeleteRoiDialog,
-} from "dialogs/roi_list_confirm_delete_dialog.slint";
+    ObjectListState,
+    ObjectItemDataSlint,
+} from "editor/object_list_panel.slint";
+import {
+    ViewportState,
+    ViewportObjectState,
+} from "editor/viewport_state.slint";
+import {
+    ConfirmDeleteObjectDialog,
+} from "dialogs/object_list_confirm_delete_dialog.slint";
 import {
     CommandSelectionDialog,
     CommandPickerState,
@@ -89,7 +95,10 @@ import { WarningDialog } from "dialogs/warning_dialog.slint";
 import { WarningState } from "state.slint";
 import { UnsavedChangesDialog } from "dialogs/unsaved_changes_dialog.slint";
 import { UnsavedChangesState } from "state.slint";
-import { RunAnalysisDialog, RunAnalysisState } from "dialogs/run_analysis_dialog.slint";
+import {
+    RunAnalysisDialog,
+    RunAnalysisState,
+} from "dialogs/run_analysis_dialog.slint";
 import {
     ResultsWindow,
     ResultsState,
@@ -100,21 +109,52 @@ import {
 } from "results/results_window.slint";
 import { ResultsListState } from "editor/results_list_panel.slint";
 
-export {GlobalAppState,ProjectSettingsSlint, ProjectSettingsState,
-        ImagePixelInfo,DialogType, HistogramState, ViewportState,
-        ChannelState, ChannelInfo, IntensityProjection, ImageMetaData,
-        ImagesListState, ImageItemData,ClassificationState, ClassificationSettingsState,
-        ClassSettingsSlint,RoiListState,RoiItemDataSlint,
-        ToolbarState, ToolState, ViewportRoiState, PipelinesPanelState,
-        CommandPickerState, CommandDef, DefaultParamPreview,
-        PipelineEditState, PipelineDeleteConfirmState, PipelineRunningState,
-        TemplateMetaState, TemplateMetaSlint,
-        ProjectTemplateState, ProjectTemplateDef,
-        ResultsListState, WarningState, AppInfoState, UnsavedChangesState, RunAnalysisState,
-        ResultsWindow, ResultsState, ResultsColumnDef, ResultsRow, ResultsViewMode, ResultsChartKind,
-        Appearance }
-
-
+export {
+    GlobalAppState,
+    ProjectSettingsSlint,
+    ProjectSettingsState,
+    ImagePixelInfo,
+    DialogType,
+    HistogramState,
+    ViewportState,
+    ChannelState,
+    ChannelInfo,
+    IntensityProjection,
+    ImageMetaData,
+    ImagesListState,
+    ImageItemData,
+    ClassificationState,
+    ClassificationSettingsState,
+    ClassSettingsSlint,
+    ObjectListState,
+    ObjectItemDataSlint,
+    ToolbarState,
+    ToolState,
+    ViewportObjectState,
+    PipelinesPanelState,
+    CommandPickerState,
+    CommandDef,
+    DefaultParamPreview,
+    PipelineEditState,
+    PipelineDeleteConfirmState,
+    PipelineRunningState,
+    TemplateMetaState,
+    TemplateMetaSlint,
+    ProjectTemplateState,
+    ProjectTemplateDef,
+    ResultsListState,
+    WarningState,
+    AppInfoState,
+    UnsavedChangesState,
+    RunAnalysisState,
+    ResultsWindow,
+    ResultsState,
+    ResultsColumnDef,
+    ResultsRow,
+    ResultsViewMode,
+    ResultsChartKind,
+    Appearance,
+}
 export component AppWindow inherits Window {
     // A literal binding on the inherited `title` property isn't settable
     // from Rust (Slint only generates an accessor for a plain, binding-free
@@ -134,7 +174,7 @@ export component AppWindow inherits Window {
     callback apply_math();
     in property <image> display_image;
     in property <image> ghost_image;
-    in property <image> roi_image;
+    in property <image> object_image;
 
     // Initial color scheme is applied from Rust (`Appearance.apply`) right
     // after this window is constructed, using the persisted preference -
@@ -205,7 +245,7 @@ export component AppWindow inherits Window {
                     Viewport {
                         display_image: root.display_image;
                         ghost_image: root.ghost_image;
-                        roi_image: root.roi_image;
+                        object_image: root.object_image;
                         width: 100%;
                         height: 100%;
                         enabled: GlobalAppState.active_dialog == DialogType.none;
@@ -248,7 +288,7 @@ export component AppWindow inherits Window {
         if (GlobalAppState.active_dialog == DialogType.classification_confirm_delete): ConfirmDeleteClassDialog { }
         if (GlobalAppState.active_dialog == DialogType.classification_confirm_auto_add_dialog): ConfirmAutoAddClassesDialog { }
         if (GlobalAppState.active_dialog == DialogType.classification-edit-class-dialog): ClassEditDialog { }
-        if (GlobalAppState.active_dialog == DialogType.roi-confirm-delete): ConfirmDeleteRoiDialog { }
+        if (GlobalAppState.active_dialog == DialogType.object-confirm-delete): ConfirmDeleteObjectDialog { }
         if (GlobalAppState.active_dialog == DialogType.command-selection-dialog): CommandSelectionDialog {
             width: 100%;
             height: 100%;

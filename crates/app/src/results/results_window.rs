@@ -1,6 +1,6 @@
 //! Bounds the results table's memory usage while scrolling through a very
 //! large file: [`RowWindow`] tracks which contiguous run of pages of
-//! [`RoiRow`]s is currently loaded and evicts the oldest page from the
+//! [`ObjectRow`]s is currently loaded and evicts the oldest page from the
 //! opposite scroll edge whenever a new page pushes the window past its size
 //! limit, instead of letting the loaded set grow forever as the user scrolls.
 //!
@@ -9,7 +9,7 @@
 //! owns translating [`EvictEdge`] into an actual `VecModel` edit and scroll-
 //! position compensation.
 
-use super::results_loader::RoiRow;
+use super::results_loader::ObjectRow;
 use std::collections::{HashMap, VecDeque};
 
 /// Default number of pages kept resident before evicting the oldest page from
@@ -36,7 +36,7 @@ pub struct EvictEdge {
     pub row_count: usize,
 }
 
-/// Tracks the contiguous run of pages of [`RoiRow`]s currently loaded, bounding
+/// Tracks the contiguous run of pages of [`ObjectRow`]s currently loaded, bounding
 /// memory by evicting the oldest page from the opposite edge whenever a new
 /// page pushes the window past `window_pages`. Rows are looked up by their
 /// stable, case-insensitive `object_id` rather than by array position, so an
@@ -47,7 +47,7 @@ pub struct RowWindow {
     window_pages: usize,
     /// Always contiguous: `{p, p+1, ..., p+len-1}` for some `p`.
     pages: VecDeque<PageEntry>,
-    rows: HashMap<String, RoiRow>,
+    rows: HashMap<String, ObjectRow>,
 }
 
 impl RowWindow {
@@ -72,11 +72,11 @@ impl RowWindow {
     /// loaded past the bottom). Returns an eviction instruction if the window
     /// now exceeds `window_pages` (evicts from the front — the oldest,
     /// topmost page — since the window grew from the bottom).
-    pub fn note_appended(&mut self, page: usize, rois: &[RoiRow]) -> Option<EvictEdge> {
-        self.insert_rows(rois);
+    pub fn note_appended(&mut self, page: usize, objects: &[ObjectRow]) -> Option<EvictEdge> {
+        self.insert_rows(objects);
         self.pages.push_back(PageEntry {
             page,
-            object_ids: lowercased_ids(rois),
+            object_ids: lowercased_ids(objects),
         });
         self.evict_if_needed(true)
     }
@@ -85,18 +85,19 @@ impl RowWindow {
     /// an earlier, previously-evicted page was re-fetched). Returns an
     /// eviction instruction (from the tail this time) if the window now
     /// exceeds `window_pages`.
-    pub fn note_prepended(&mut self, page: usize, rois: &[RoiRow]) -> Option<EvictEdge> {
-        self.insert_rows(rois);
+    pub fn note_prepended(&mut self, page: usize, objects: &[ObjectRow]) -> Option<EvictEdge> {
+        self.insert_rows(objects);
         self.pages.push_front(PageEntry {
             page,
-            object_ids: lowercased_ids(rois),
+            object_ids: lowercased_ids(objects),
         });
         self.evict_if_needed(false)
     }
 
-    fn insert_rows(&mut self, rois: &[RoiRow]) {
-        for roi in rois {
-            self.rows.insert(roi.object_id.to_lowercase(), roi.clone());
+    fn insert_rows(&mut self, objects: &[ObjectRow]) {
+        for object in objects {
+            self.rows
+                .insert(object.object_id.to_lowercase(), object.clone());
         }
     }
 
@@ -113,12 +114,15 @@ impl RowWindow {
         for id in &evicted.object_ids {
             self.rows.remove(id);
         }
-        Some(EvictEdge { from_front: evict_from_front, row_count })
+        Some(EvictEdge {
+            from_front: evict_from_front,
+            row_count,
+        })
     }
 
     /// Looks up a currently-loaded row by its (case-insensitive) `object_id`.
     /// Returns `None` for an id that was evicted, or was never loaded.
-    pub fn get(&self, object_id: &str) -> Option<&RoiRow> {
+    pub fn get(&self, object_id: &str) -> Option<&ObjectRow> {
         self.rows.get(&object_id.to_lowercase())
     }
 
@@ -137,15 +141,15 @@ impl RowWindow {
     }
 }
 
-fn lowercased_ids(rois: &[RoiRow]) -> Vec<String> {
-    rois.iter().map(|r| r.object_id.to_lowercase()).collect()
+fn lowercased_ids(objects: &[ObjectRow]) -> Vec<String> {
+    objects.iter().map(|r| r.object_id.to_lowercase()).collect()
 }
 
 /// Lighter sibling of [`RowWindow`] for views with no row selection (the
 /// colocalization detail flat table): tracks the same contiguous run of
 /// loaded *source* pages and evicts the same way, but only remembers how many
 /// *displayed* rows each source page produced (its flattening can fan one
-/// source ROI out into zero or more rows), not the rows' content — nothing in
+/// source object out into zero or more rows), not the rows' content — nothing in
 /// that view ever looks a row up by id, so there's no map to keep in sync.
 pub struct PageRowCounts {
     window_pages: usize,
@@ -155,7 +159,10 @@ pub struct PageRowCounts {
 
 impl PageRowCounts {
     pub fn new(window_pages: usize) -> Self {
-        Self { window_pages, pages: VecDeque::new() }
+        Self {
+            window_pages,
+            pages: VecDeque::new(),
+        }
     }
 
     pub fn reset(&mut self) {
@@ -179,7 +186,10 @@ impl PageRowCounts {
         } else {
             self.pages.pop_back()
         }?;
-        Some(EvictEdge { from_front: evict_from_front, row_count })
+        Some(EvictEdge {
+            from_front: evict_from_front,
+            row_count,
+        })
     }
 
     pub fn oldest_loaded_page(&self) -> Option<usize> {
@@ -195,8 +205,8 @@ impl PageRowCounts {
 mod tests {
     use super::*;
 
-    fn roi(id: &str) -> RoiRow {
-        RoiRow {
+    fn object(id: &str) -> ObjectRow {
+        ObjectRow {
             image_name: String::new(),
             image_rel_path: String::new(),
             c_stack: None,
@@ -232,8 +242,8 @@ mod tests {
         }
     }
 
-    fn page_of(ids: &[&str]) -> Vec<RoiRow> {
-        ids.iter().map(|id| roi(id)).collect()
+    fn page_of(ids: &[&str]) -> Vec<ObjectRow> {
+        ids.iter().map(|id| object(id)).collect()
     }
 
     #[test]
@@ -273,7 +283,10 @@ mod tests {
         w.note_appended(6, &page_of(&["f"]));
         // Scrolled back up and backfilled an earlier page — now 3 pages loaded.
         let evict = w.note_prepended(4, &page_of(&["d"])).expect("must evict");
-        assert!(!evict.from_front, "prepend evicts from the tail, not the front");
+        assert!(
+            !evict.from_front,
+            "prepend evicts from the tail, not the front"
+        );
         assert_eq!(evict.row_count, 1);
 
         assert_eq!(w.oldest_loaded_page(), Some(4));
@@ -312,11 +325,14 @@ mod tests {
     #[test]
     fn page_row_counts_evicts_by_displayed_row_count_not_page_count() {
         let mut w = PageRowCounts::new(2);
-        assert_eq!(w.note_appended(0, 3), None); // one source ROI -> 3 flattened rows
+        assert_eq!(w.note_appended(0, 3), None); // one source object -> 3 flattened rows
         assert_eq!(w.note_appended(1, 1), None);
         let evict = w.note_appended(2, 5).expect("must evict");
         assert!(evict.from_front);
-        assert_eq!(evict.row_count, 3, "evicted page's displayed row count, not 1");
+        assert_eq!(
+            evict.row_count, 3,
+            "evicted page's displayed row count, not 1"
+        );
         assert_eq!(w.oldest_loaded_page(), Some(1));
     }
 

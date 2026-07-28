@@ -8,7 +8,7 @@ import { ScaleBar } from "viewport_scalebar.slint";
 import { Navigator } from "viewport_navigator.slint";
 import {
     ViewportState,
-    ViewportRoiState,
+    ViewportObjectState,
     ToolState,
     MarkerData,
 } from "viewport_state.slint";
@@ -20,7 +20,7 @@ export component Viewport inherits Rectangle {
     property <length> last_mouse_y: 0;
     in-out property <image> display_image;
     in-out property <image> ghost_image;
-    in-out property <image> roi_image;
+    in-out property <image> object_image;
     in property <bool> enabled;
     property <duration> last-click-time: 0ms;
 
@@ -28,27 +28,27 @@ export component Viewport inherits Rectangle {
     clip: true;
 
     pure function get_polyg_path(offset_x: length, offset_y: length) -> string {
-        get_polyg_segment(offset_x, offset_y, 0, "M") + get_polyg_segment(offset_x, offset_y, 1, " L") + get_polyg_segment(offset_x, offset_y, 2, " L") + get_polyg_segment(offset_x, offset_y, 3, " L") + get_polyg_segment(offset_x, offset_y, 4, " L") + get_polyg_segment(offset_x, offset_y, 5, " L") + get_polyg_segment(offset_x, offset_y, 6, " L") + get_polyg_segment(offset_x, offset_y, 7, " L") + get_polyg_segment(offset_x, offset_y, 8, " L") + get_polyg_segment(offset_x, offset_y, 9, " L") + get_polyg_segment(offset_x, offset_y, 10, " L") + get_polyg_segment(offset_x, offset_y, 11, " L") + get_polyg_segment(offset_x, offset_y, 12, " L") + get_polyg_segment(offset_x, offset_y, 13, " L") + get_polyg_segment(offset_x, offset_y, 14, " L") + get_polyg_segment(offset_x, offset_y, 15, " L") + (ViewportRoiState.polygon_points.length > 0 ? " Z" : "")
+        get_polyg_segment(offset_x, offset_y, 0, "M") + get_polyg_segment(offset_x, offset_y, 1, " L") + get_polyg_segment(offset_x, offset_y, 2, " L") + get_polyg_segment(offset_x, offset_y, 3, " L") + get_polyg_segment(offset_x, offset_y, 4, " L") + get_polyg_segment(offset_x, offset_y, 5, " L") + get_polyg_segment(offset_x, offset_y, 6, " L") + get_polyg_segment(offset_x, offset_y, 7, " L") + get_polyg_segment(offset_x, offset_y, 8, " L") + get_polyg_segment(offset_x, offset_y, 9, " L") + get_polyg_segment(offset_x, offset_y, 10, " L") + get_polyg_segment(offset_x, offset_y, 11, " L") + get_polyg_segment(offset_x, offset_y, 12, " L") + get_polyg_segment(offset_x, offset_y, 13, " L") + get_polyg_segment(offset_x, offset_y, 14, " L") + get_polyg_segment(offset_x, offset_y, 15, " L") + (ViewportObjectState.polygon_points.length > 0 ? " Z" : "")
     }
 
     pure function get_polyg_segment(offset_x: length, offset_y: length, idx: int, prefix: string) -> string {
-        idx <= ViewportRoiState.poly_idx ? prefix + " " + ((ViewportRoiState.polygon_points[idx].x - offset_x) / 1px) + " " + ((ViewportRoiState.polygon_points[idx].y - offset_y) / 1px) : ""
+        idx <= ViewportObjectState.poly_idx ? prefix + " " + ((ViewportObjectState.polygon_points[idx].x - offset_x) / 1px) + " " + ((ViewportObjectState.polygon_points[idx].y - offset_y) / 1px) : ""
     }
 
     pure function get_rect_path(offset_x: length, offset_y: length) -> string {
-        let min_x = (min(ViewportRoiState.polygon_points[0].x, ViewportRoiState.polygon_points[1].x) - offset-x) / 1px;
-        let min_y = (min(ViewportRoiState.polygon_points[0].y, ViewportRoiState.polygon_points[1].y) - offset-y) / 1px;
-        let max_x = (max(ViewportRoiState.polygon_points[0].x, ViewportRoiState.polygon_points[1].x) - offset-x) / 1px;
-        let max_y = (max(ViewportRoiState.polygon_points[0].y, ViewportRoiState.polygon_points[1].y) - offset-y) / 1px;
+        let min_x = (min(ViewportObjectState.polygon_points[0].x, ViewportObjectState.polygon_points[1].x) - offset-x) / 1px;
+        let min_y = (min(ViewportObjectState.polygon_points[0].y, ViewportObjectState.polygon_points[1].y) - offset-y) / 1px;
+        let max_x = (max(ViewportObjectState.polygon_points[0].x, ViewportObjectState.polygon_points[1].x) - offset-x) / 1px;
+        let max_y = (max(ViewportObjectState.polygon_points[0].y, ViewportObjectState.polygon_points[1].y) - offset-y) / 1px;
         return "M " + min_x + " " + min_y + " L " + max_x + " " + min_y + " L " + max_x + " " + max_y + " L " + min_x + " " + max_y + " Z";
     }
 
     pure function get_oval_path(offset_x: length, offset_y: length) -> string {
         get_oval_path_impl(
-        (min(ViewportRoiState.polygon_points[0].x, ViewportRoiState.polygon_points[1].x) - offset-x) / 1px,
-        (min(ViewportRoiState.polygon_points[0].y, ViewportRoiState.polygon_points[1].y) - offset-y) / 1px,
-        (max(ViewportRoiState.polygon_points[0].x, ViewportRoiState.polygon_points[1].x) - offset-x) / 1px,
-        (max(ViewportRoiState.polygon_points[0].y, ViewportRoiState.polygon_points[1].y) - offset-y) / 1px)
+        (min(ViewportObjectState.polygon_points[0].x, ViewportObjectState.polygon_points[1].x) - offset-x) / 1px,
+        (min(ViewportObjectState.polygon_points[0].y, ViewportObjectState.polygon_points[1].y) - offset-y) / 1px,
+        (max(ViewportObjectState.polygon_points[0].x, ViewportObjectState.polygon_points[1].x) - offset-x) / 1px,
+        (max(ViewportObjectState.polygon_points[0].y, ViewportObjectState.polygon_points[1].y) - offset-y) / 1px)
     }
 
     pure function get_oval_path_impl(min_x: float, min_y: float, max_x: float, max_y: float) -> string {
@@ -95,13 +95,13 @@ export component Viewport inherits Rectangle {
             height: ViewportState.tile_height;
         }
 
-        // Layer 3: The region of interests
+        // Layer 3: The objects
         // The buffer is viewport-sized and already in screen coordinates, so it
         // covers the viewport directly - no stretching or offset needed here.
         Image {
-            source: root.roi_image;
+            source: root.object_image;
             image-fit: fill;
-            visible: ViewportRoiState.show_rois && ViewportState.roi_ready;
+            visible: ViewportObjectState.show_objects && ViewportState.object_ready;
             x: 0;
             y: 0;
             width: parent.width;
@@ -109,7 +109,7 @@ export component Viewport inherits Rectangle {
         }
 
         // Layer 4: Markers
-        for marker[i] in ViewportRoiState.markers: Rectangle {
+        for marker[i] in ViewportObjectState.markers: Rectangle {
             property <length> sx: marker.image-x * ViewportState.zoom_factor * 1px + ViewportState.offset_x;
             property <length> sy: marker.image-y * ViewportState.zoom_factor * 1px + ViewportState.offset_y;
             x: sx - 8px;
@@ -163,20 +163,20 @@ export component Viewport inherits Rectangle {
             }
         }
 
-        // Layer 4b: Selected-ROI crosshair (from the results table). Four arms
-        // point at the ROI centre with a gap around it, so the object itself is
+        // Layer 4b: Selected-object crosshair (from the results table). Four arms
+        // point at the object centre with a gap around it, so the object itself is
         // left unobscured while the position is easy to spot.
-        if ViewportRoiState.roi_highlight.active: Rectangle {
+        if ViewportObjectState.object_highlight.active: Rectangle {
             width: 100%;
             height: 100%;
 
-            // ROI centre in screen coordinates.
-            property <length> cx: (ViewportRoiState.roi_highlight.x-px + ViewportRoiState.roi_highlight.w-px / 2) * ViewportState.zoom_factor * 1px + ViewportState.offset_x;
-            property <length> cy: (ViewportRoiState.roi_highlight.y-px + ViewportRoiState.roi_highlight.h-px / 2) * ViewportState.zoom_factor * 1px + ViewportState.offset_y;
-            // Gap from the centre to where each arm starts: half the ROI plus a
+            // object centre in screen coordinates.
+            property <length> cx: (ViewportObjectState.object_highlight.x-px + ViewportObjectState.object_highlight.w-px / 2) * ViewportState.zoom_factor * 1px + ViewportState.offset_x;
+            property <length> cy: (ViewportObjectState.object_highlight.y-px + ViewportObjectState.object_highlight.h-px / 2) * ViewportState.zoom_factor * 1px + ViewportState.offset_y;
+            // Gap from the centre to where each arm starts: half the object plus a
             // little padding, clamped so tiny ROIs still get a visible gap.
-            property <length> gap-x: max(ViewportRoiState.roi_highlight.w-px / 2 * ViewportState.zoom_factor * 1px + 8px, 14px);
-            property <length> gap-y: max(ViewportRoiState.roi_highlight.h-px / 2 * ViewportState.zoom_factor * 1px + 8px, 14px);
+            property <length> gap-x: max(ViewportObjectState.object_highlight.w-px / 2 * ViewportState.zoom_factor * 1px + 8px, 14px);
+            property <length> gap-y: max(ViewportObjectState.object_highlight.h-px / 2 * ViewportState.zoom_factor * 1px + 8px, 14px);
             property <length> arm: 44px;
             property <length> thick: 4px;
 
@@ -228,13 +228,13 @@ export component Viewport inherits Rectangle {
             y: ViewportState.display_y;
             width: ViewportState.tile_width;
             height: ViewportState.tile_height;
-            visible: ViewportRoiState.poly_idx > 0;
+            visible: ViewportObjectState.poly_idx > 0;
             Path {
                 stroke: Theme.accent;
                 viewbox-width: ViewportState.tile_width / 1px;
                 viewbox-height: ViewportState.tile_height / 1px;
                 stroke-width: 2px;
-                commands: ViewportRoiState.act_tool_state == ToolState.PaintOval ? get_oval_path(ViewportState.display_x,ViewportState.display_y) : ViewportRoiState.act_tool_state == ToolState.PaintRectangle ? get_rect_path(ViewportState.display_x,ViewportState.display_y) : get_polyg_path(ViewportState.display_x,ViewportState.display_y);
+                commands: ViewportObjectState.act_tool_state == ToolState.PaintOval ? get_oval_path(ViewportState.display_x,ViewportState.display_y) : ViewportObjectState.act_tool_state == ToolState.PaintRectangle ? get_rect_path(ViewportState.display_x,ViewportState.display_y) : get_polyg_path(ViewportState.display_x,ViewportState.display_y);
             }
         }
 
@@ -331,53 +331,53 @@ export component Viewport inherits Rectangle {
                 root.last_mouse_y = self.mouse-y;
 
                 // Object selection
-                if (ViewportRoiState.act_tool_state == ToolState.Select) {
-                    ViewportRoiState.viewport_clicked(root.last_mouse_x, root.last_mouse_y);
+                if (ViewportObjectState.act_tool_state == ToolState.Select) {
+                    ViewportObjectState.viewport_clicked(root.last_mouse_x, root.last_mouse_y);
                 }
 
                 // Marker tool
-                if (ViewportRoiState.act_tool_state == ToolState.PaintMarker) {
+                if (ViewportObjectState.act_tool_state == ToolState.PaintMarker) {
                     if (evt.button == PointerEventButton.left) {
-                        ViewportRoiState.marker-placed(root.last_mouse_x, root.last_mouse_y);
+                        ViewportObjectState.marker-placed(root.last_mouse_x, root.last_mouse_y);
                     }
                     if (evt.button == PointerEventButton.right) {
-                        ViewportRoiState.marker-remove-at(root.last_mouse_x, root.last_mouse_y);
+                        ViewportObjectState.marker-remove-at(root.last_mouse_x, root.last_mouse_y);
                     }
                 }
 
                 // Paint object
-                if (ViewportRoiState.act_tool_state != ToolState.Move && ViewportRoiState.act_tool_state != ToolState.Select && ViewportRoiState.act_tool_state != ToolState.PaintMarker) {
-                    if (ViewportRoiState.act_tool_state != ToolState.PaintPolygon) {
-                        if (!ViewportRoiState.is_drawing) {
-                            ViewportRoiState.is_drawing = true;
-                            ViewportRoiState.polygon_points[0] = { x: self.mouse-x, y: self.mouse-y };
-                            ViewportRoiState.polygon_points[1] = { x: self.mouse-x, y: self.mouse-y };
-                            ViewportRoiState.poly_idx = 1;
+                if (ViewportObjectState.act_tool_state != ToolState.Move && ViewportObjectState.act_tool_state != ToolState.Select && ViewportObjectState.act_tool_state != ToolState.PaintMarker) {
+                    if (ViewportObjectState.act_tool_state != ToolState.PaintPolygon) {
+                        if (!ViewportObjectState.is_drawing) {
+                            ViewportObjectState.is_drawing = true;
+                            ViewportObjectState.polygon_points[0] = { x: self.mouse-x, y: self.mouse-y };
+                            ViewportObjectState.polygon_points[1] = { x: self.mouse-x, y: self.mouse-y };
+                            ViewportObjectState.poly_idx = 1;
                         } else {
-                            ViewportRoiState.roi_paint_finished(ViewportRoiState.polygon_points,ViewportRoiState.act_tool_state, ViewportRoiState.poly_idx);
-                            ViewportRoiState.is_drawing = false;
-                            ViewportRoiState.poly_idx = 0;
+                            ViewportObjectState.object_paint_finished(ViewportObjectState.polygon_points,ViewportObjectState.act_tool_state, ViewportObjectState.poly_idx);
+                            ViewportObjectState.is_drawing = false;
+                            ViewportObjectState.poly_idx = 0;
                         }
                     } else {
-                        if (!ViewportRoiState.is_drawing) {
-                            ViewportRoiState.is_drawing = true;
+                        if (!ViewportObjectState.is_drawing) {
+                            ViewportObjectState.is_drawing = true;
                         }
                         if (animation-tick() - last-click-time) < 300ms {
-                            ViewportRoiState.roi_paint_finished(ViewportRoiState.polygon_points,ViewportRoiState.act_tool_state, ViewportRoiState.poly_idx);
-                            ViewportRoiState.is_drawing = false;
-                            ViewportRoiState.poly_idx = 0;
+                            ViewportObjectState.object_paint_finished(ViewportObjectState.polygon_points,ViewportObjectState.act_tool_state, ViewportObjectState.poly_idx);
+                            ViewportObjectState.is_drawing = false;
+                            ViewportObjectState.poly_idx = 0;
                         } else {
-                            ViewportRoiState.polygon_points[ViewportRoiState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
-                            ViewportRoiState.poly_idx = ViewportRoiState.poly_idx + 1;
-                            ViewportRoiState.polygon_points[ViewportRoiState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                            ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                            ViewportObjectState.poly_idx = ViewportObjectState.poly_idx + 1;
+                            ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
                         }
                         last-click-time = animation-tick();
                     }
                 }
             }
             if (evt.kind == PointerEventKind.move) {
-                if (ViewportRoiState.act_tool_state != ToolState.Move && ViewportRoiState.is_drawing) {
-                    ViewportRoiState.polygon_points[ViewportRoiState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
+                if (ViewportObjectState.act_tool_state != ToolState.Move && ViewportObjectState.is_drawing) {
+                    ViewportObjectState.polygon_points[ViewportObjectState.poly_idx] = { x: self.mouse-x, y: self.mouse-y };
                 } else {
                     ViewportState.report_mouse_moved(self.mouse-x, self.mouse-y);
                 }
@@ -385,7 +385,7 @@ export component Viewport inherits Rectangle {
         }
 
         moved => {
-            if ViewportRoiState.act_tool_state == ToolState.Move {
+            if ViewportObjectState.act_tool_state == ToolState.Move {
                 if (self.pressed) {
                     ViewportState.offset_x += self.mouse-x - root.last_mouse_x;
                     ViewportState.offset_y += self.mouse-y - root.last_mouse_y;

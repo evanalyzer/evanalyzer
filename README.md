@@ -34,8 +34,8 @@ EVAnalyzer is the Rust reimplementation of [ImageC](https://github.com/imagec) a
 | **Multi-channel viewer** | Per-channel brightness/contrast, visibility toggles, and colour assignment |
 | **Z-stack support** | Single-plane selection or intensity projections (Max, Min, Average, Sum, Middle) |
 | **Time-lapse support** | Playback through T-stack sequences at configurable frame rates |
-| **ROI annotation** | Rectangle, oval, and polygon regions of interest drawn directly on the image |
-| **ROI classification** | Object classes with custom colours, names, and measurement criteria |
+| **object annotation** | Rectangle, oval, and polygon regions of interest drawn directly on the image |
+| **object classification** | Object classes with custom colours, names, and measurement criteria |
 | **Analysis pipeline** | Composable processing steps from a library of algorithms (see below) |
 | **Multi-well plate layout** | Group images by well/plate for high-content screening experiments |
 | **CSV export** | Pipeline results exported per image and per well |
@@ -75,7 +75,7 @@ Two AI segmentation algorithms are available (built with the `ai` Cargo feature,
    - **Boundary-aware models — use the boundary channel (recommended).** Models like bioimage.io's [`affable-shark`](https://bioimage.io/#/?id=affable-shark) (*NucleiSegmentationBoundaryModel* — a U-Net, **not** StarDist) predict an explicit boundary in a second channel **specifically so you can separate touching nuclei**. Set `boundary_channel` to that channel (commonly `1`) and `boundary_threshold` (~`0.5`): a pixel is foreground only where the mask is high *and* the boundary is low, carving thin gaps between objects. Then a plain `ConnectedComponents` separates them — no watershed needed:
 
      ```
-     UNet (foreground_channel: 0, boundary_channel: 1) → ConnectedComponents → ExtractRois
+     UNet (foreground_channel: 0, boundary_channel: 1) → ConnectedComponents → ExtractObjects
      ```
 
      Discarding the boundary channel and relying on watershed instead is the most common reason touching nuclei "won't split": a distance-map watershed can't separate a blob that has no waist, and the waist information lives in the boundary channel you didn't use.
@@ -83,7 +83,7 @@ Two AI segmentation algorithms are available (built with the `ai` Cargo feature,
    - **Mask-only models — distance-map watershed.** If the model gives only a foreground mask (no boundary), chain a watershed:
 
      ```
-     UNet → ConnectedComponents → Watershed → ExtractRois
+     UNet → ConnectedComponents → Watershed → ExtractObjects
      ```
 
      `ConnectedComponents` labels each blob; `Watershed` re-splits any blob with more than one object. It's a faithful port of ImageJ's `Process > Binary > Watershed` (the `MaximumFinder` distance-map algorithm), so the default `maximum_finder_tolerance` of `0.5` works for most nuclei. Note this only works when touching nuclei actually form a pinched "peanut"; heavily overlapping nuclei with no waist cannot be split from the mask alone.
@@ -98,10 +98,10 @@ The workspace is organised into focused crates:
 
 | Crate | Description |
 |---|---|
-| `evanalyzer_core` | Image I/O (Bio-Formats via JVM), processing algorithms, ROI model, pipeline execution |
+| `evanalyzer_core` | Image I/O (Bio-Formats via JVM), processing algorithms, object model, pipeline execution |
 | `evanalyzer_cfg` | Project settings, serialisation to JSON, pipeline command configuration |
 | `evanalyzer_app` | Application handle, shared project state |
-| `evanalyzer_gui` | Slint-based desktop GUI — viewport, histogram, ROI tools, classification panel |
+| `evanalyzer_gui` | Slint-based desktop GUI — viewport, histogram, object tools, classification panel |
 | `evanalyzer_cli` | Headless CLI: analyze projects, export/view results databases (see [Command-Line Interface](#command-line-interface-cli)) |
 | `evanalyzer_bin` | Binary entry point — launches GUI or CLI depending on arguments |
 
@@ -249,7 +249,7 @@ evanalyzer cli view --db results/.../job.evadb --image sample01.tif --class Nucl
 evanalyzer cli columns --db results/.../job.evadb   # column ids for --group-by / chart axes
 ```
 
-`view` prints a quick summary (image/class counts, T/Z range) plus a page of ROI
+`view` prints a quick summary (image/class counts, T/Z range) plus a page of object
 rows — enough to sanity-check a run without opening the GUI. `columns` lists every
 column id (including per-channel and colocalization-partner columns) available
 for grouping and charting.

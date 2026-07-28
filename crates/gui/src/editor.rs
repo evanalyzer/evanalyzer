@@ -7,12 +7,12 @@ use crate::{
         pipelines_controller::PipelinesController,
         project_settings_controller::ProjectSettingsController,
         results_list_controller::ResultsListController,
-        results_table_controller::ResultsTableController, roi_list_controller::RoiListController,
+        results_table_controller::ResultsTableController, object_list_controller::ObjectListController,
         template_controller::TemplateController,
         undo_redo_controller::UndoRedoController,
         viewport_controller::ViewportController,
         viewport_image_controller::ViewportImageController,
-        viewport_roi_controller::ViewPortRoiController,
+        viewport_object_controller::ViewPortObjectController,
     },
 };
 use std::sync::Arc;
@@ -28,13 +28,13 @@ pub mod project_controller;
 pub mod project_settings_controller;
 pub mod results_list_controller;
 pub mod results_table_controller;
-pub mod roi_list_controller;
+pub mod object_list_controller;
 pub mod template_controller;
 pub mod undo_redo_controller;
 pub mod viewport_cache;
 pub mod viewport_controller;
 pub mod viewport_image_controller;
-pub mod viewport_roi_controller;
+pub mod viewport_object_controller;
 pub mod viewport_task;
 pub mod viewport_worker;
 
@@ -43,12 +43,12 @@ pub struct Editor {
     project_controller: Arc<project_controller::ProjectController>,
     histogram_controller: Arc<histogram_controller::HistogramController>,
     viewport_image_controller: Arc<viewport_image_controller::ViewportImageController>,
-    viewport_roi_controller: Arc<viewport_roi_controller::ViewPortRoiController>,
+    viewport_object_controller: Arc<viewport_object_controller::ViewPortObjectController>,
     viewport_worker: Arc<viewport_worker::ViewportWorker>,
     image_meta_controller: Arc<ImageMetaController>,
     project_settings_controller: Arc<ProjectSettingsController>,
     classification_controller: Arc<ClassificationController>,
-    roi_list_controller: Arc<RoiListController>,
+    object_list_controller: Arc<ObjectListController>,
     pipelines_controller: Arc<PipelinesController>,
     pipeline_worker: Arc<PipelineWorker>,
     results_table_controller: Arc<ResultsTableController>,
@@ -66,7 +66,7 @@ impl Editor {
         let viewport_controller = Arc::new(ViewportController::new(ui.clone(), app_state.clone()));
         let view_port_cache = Arc::new(viewport_cache::ViewportCache::new(app_state.clone()));
 
-        let roi_list_controller = Arc::new(RoiListController::new(
+        let object_list_controller = Arc::new(ObjectListController::new(
             ui.clone(),
             app_state.clone(),
             viewport_controller.clone(),
@@ -86,7 +86,7 @@ impl Editor {
         let classification_controller = Arc::new(ClassificationController::new(
             ui.clone(),
             app_state.clone(),
-            roi_list_controller.clone(),
+            object_list_controller.clone(),
             viewport_controller.clone(),
         ));
 
@@ -102,7 +102,7 @@ impl Editor {
             viewport_controller.clone(),
             histogram_controller.clone(),
             image_meta_controller.clone(),
-            roi_list_controller.clone(),
+            object_list_controller.clone(),
         ));
 
         let results_table_controller = Arc::new(ResultsTableController::new(
@@ -116,13 +116,13 @@ impl Editor {
             results_table_controller.clone(),
         ));
 
-        let viewport_roi_controller = Arc::new(ViewPortRoiController::new(
+        let viewport_object_controller = Arc::new(ViewPortObjectController::new(
             ui.clone(),
             app_state.clone(),
             viewport_controller.clone(),
             view_port_cache.clone(),
             image_list_controller.clone(),
-            roi_list_controller.clone(),
+            object_list_controller.clone(),
         ));
 
         let template_controller = Arc::new(TemplateController::new(
@@ -133,7 +133,7 @@ impl Editor {
         let pipelines_controller = Arc::new(pipelines_controller::PipelinesController::new(
             ui.clone(),
             app_state.clone(),
-            roi_list_controller.clone(),
+            object_list_controller.clone(),
             viewport_controller.clone(),
             template_controller.clone(),
         ));
@@ -169,7 +169,7 @@ impl Editor {
             app_state.clone(),
             pipelines_controller.clone(),
             viewport_controller.clone(),
-            roi_list_controller.clone(),
+            object_list_controller.clone(),
             classification_controller.clone(),
             results_list_controller.clone(),
         ));
@@ -181,7 +181,7 @@ impl Editor {
             project_settings_controller.clone(),
             classification_controller.clone(),
             pipelines_controller.clone(),
-            roi_list_controller.clone(),
+            object_list_controller.clone(),
             viewport_controller.clone(),
         ));
 
@@ -190,12 +190,12 @@ impl Editor {
             project_controller,
             histogram_controller,
             viewport_image_controller,
-            viewport_roi_controller,
+            viewport_object_controller,
             viewport_worker,
             image_meta_controller,
             project_settings_controller,
             classification_controller,
-            roi_list_controller,
+            object_list_controller,
             pipelines_controller,
             pipeline_worker,
             results_table_controller,
@@ -213,8 +213,8 @@ impl Editor {
         self.image_meta_controller.attach_callbacks();
         self.project_settings_controller.attach_callbacks();
         self.classification_controller.attach_callbacks();
-        self.viewport_roi_controller.attach_callbacks();
-        self.roi_list_controller.attach_callbacks();
+        self.viewport_object_controller.attach_callbacks();
+        self.object_list_controller.attach_callbacks();
         self.pipelines_controller.attach_callbacks();
         self.results_table_controller.attach_callbacks();
         self.results_list_controller.attach_callbacks();

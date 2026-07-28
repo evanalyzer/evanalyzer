@@ -6,6 +6,7 @@ import { ToolbarState } from "toolbar.slint";
 component MenuItem inherits Rectangle {
     in property <string> text;
     in property <image> icon: @image-url(""); // Default to empty
+    in property <brush> icon-colorize: Theme.text;
     callback clicked;
 
     height: 26px;
@@ -20,6 +21,7 @@ component MenuItem inherits Rectangle {
 
         if (root.icon.width > 0 && root.icon.height > 0): Image {
             source: root.icon;
+            colorize: root.icon-colorize;
             width: 12px;
             height: 12px;
             vertical-alignment: center;
@@ -90,7 +92,7 @@ export component CustomMenuBar inherits Rectangle {
 
             file-menu := PopupWindow {
                 y: parent.height;
-                width: 160px;
+                width: 200px;
                 MenuContainer {
                     MenuItem {
                         text: "Open…";
@@ -165,6 +167,7 @@ export component CustomMenuBar inherits Rectangle {
                     MenuItem {
                         text: "evanalyzer.org";
                         icon: @image-url("icons/regular-blue/question-mark.svg");
+                        icon-colorize: #4F71BF;
                         clicked => {
                             ToolbarState.open_website();
                             help-menu.close();

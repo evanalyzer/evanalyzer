@@ -1,27 +1,27 @@
 use bitvec::prelude::*;
 use evanalyzer_cfg::{
     core_types::{ObjectClass, ObjectId, SegmentationClass, TrackId},
-    settings::roi_settings::{IntensitySettings, RoiSettings, TrackSettings},
+    settings::object_settings::{IntensitySettings, ObjectMetricSettings, TrackSettings},
 };
 use indexmap::IndexMap;
 use kornia_image::ImageSize;
 use std::collections::HashSet;
 
+use crate::ImagePlane;
 use crate::pipeline::{
-    pipeline_cache::{sample_channel_pixel, PipelineCache},
+    pipeline_cache::{PipelineCache, sample_channel_pixel},
     pipeline_context::PipelineContext,
 };
-use crate::ImagePlane;
 
 #[derive(Debug, Default, Clone)]
 pub struct Intensity {
-    /// Sum of all pixel intensities in the ROI
+    /// Sum of all pixel intensities in the object
     pub sum_intensity: f64,
-    /// Minimum pixel intensity in the ROI
+    /// Minimum pixel intensity in the object
     pub min_intensity: f32,
-    /// Maximum pixel intensity in the ROI
+    /// Maximum pixel intensity in the object
     pub max_intensity: f32,
-    /// Average pixel intensity in the ROI
+    /// Average pixel intensity in the object
     pub avg_intensity: f32,
     /// All pixel values (used for computing median and std_dev)
     pub pixel_values: Vec<f32>,
@@ -30,19 +30,19 @@ pub struct Intensity {
 #[derive(Debug, Default, Clone)]
 pub struct Track {
     pub id: TrackId,
-    pub roi_ids: Vec<ObjectId>,        // Ordered list of ROIs over time
+    pub object_ids: Vec<ObjectId>,     // Ordered list of ROIs over time
     pub parent_track: Option<TrackId>, // If created by division
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Roi {
+pub struct Object {
     // Global unique object ID
     pub id: ObjectId,
 
     // Semantic class after threshold
     pub segmentation_class: SegmentationClass,
 
-    // Dedicated class after classify roi
+    // Dedicated class after classify object
     pub object_class: HashSet<ObjectClass>,
 
     // Colocalization
@@ -80,35 +80,35 @@ pub struct Roi {
     pub plane: ImagePlane,
 
     // --- Precomputed geometry metrics ---
-    // Filled by `finalize_geometry()` at ROI creation time — which runs on the
+    // Filled by `finalize_geometry()` at object creation time — which runs on the
     // parallel extraction/segmentation workers — and read back through
     // `get_perimeter()` / `get_ellipse()`. The perimeter is an O(bbox area)
     // boundary walk; computing it here keeps it off the single-threaded DB writer,
     // where a lazy computation would stall every other tile's insert. Both derive
     // purely from the immutable mask geometry (mask_data, bbox, area, moments),
     // which never changes after extraction, so the stored values stay valid for
-    // the ROI's lifetime. Default to 0 / empty until finalize_geometry runs.
+    // the object's lifetime. Default to 0 / empty until finalize_geometry runs.
     //
     // These are intentionally private (no `pub`): keeping them module-private makes
-    // a `Roi { .. }` struct literal illegal outside this module, which forces all
-    // external construction through [`Roi::new`] — the one path that is guaranteed
+    // a `Object { .. }` struct literal illegal outside this module, which forces all
+    // external construction through [`Object::new`] — the one path that is guaranteed
     // to call [`finalize_geometry`](Self::finalize_geometry). Callers read them via
     // `get_perimeter()` / `get_ellipse()`.
     perimeter: f32,
     ellipse: FittingEllipse,
 }
 
-/// Caller-settable fields for building a [`Roi`] via [`Roi::new`].
+/// Caller-settable fields for building a [`Object`] via [`Object::new`].
 ///
-/// Mirrors every field of [`Roi`] except the derived geometry metrics
-/// (`perimeter`, `ellipse`), which [`Roi::new`] computes for you. Build it with
-/// struct-update syntax and pass it to [`Roi::new`]:
+/// Mirrors every field of [`Object`] except the derived geometry metrics
+/// (`perimeter`, `ellipse`), which [`Object::new`] computes for you. Build it with
+/// struct-update syntax and pass it to [`Object::new`]:
 ///
 /// ```ignore
-/// let roi = Roi::new(RoiInit { id, bbox, mask_data, area, ..Default::default() });
+/// let object = Object::new(ObjectInit { id, bbox, mask_data, area, ..Default::default() });
 /// ```
 #[derive(Debug, Default, Clone)]
-pub struct RoiInit {
+pub struct ObjectInit {
     pub id: ObjectId,
     pub segmentation_class: SegmentationClass,
     pub object_class: HashSet<ObjectClass>,
@@ -148,7 +148,7 @@ pub struct FittingEllipse {
     pub eccentricity: f32,
 }
 
-/// A boolean set operation between two ROI masks, used by [`Roi::combine_geometry`].
+/// A boolean set operation between two object masks, used by [`Object::combine_geometry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BooleanOp {
     /// Intersection: pixels present in both operands.
@@ -161,13 +161,13 @@ pub enum BooleanOp {
     Subtract,
 }
 
-/// Rasterized mask geometry produced by a shape transform (see [`Roi::scaled_geometry`],
-/// [`Roi::circle_geometry`], [`Roi::fitting_ellipse_geometry`]).
+/// Rasterized mask geometry produced by a shape transform (see [`Object::scaled_geometry`],
+/// [`Object::circle_geometry`], [`Object::fitting_ellipse_geometry`]).
 ///
-/// Carries only the geometric fields of a [`Roi`] — identity, classes, lineage and plane are
+/// Carries only the geometric fields of a [`Object`] — identity, classes, lineage and plane are
 /// deliberately left out, since callers decide whether the transformed shape replaces the
-/// source ROI in place or becomes a brand-new ROI, and need to set those fields themselves
-/// via [`RoiInit`].
+/// source object in place or becomes a brand-new object, and need to set those fields themselves
+/// via [`ObjectInit`].
 #[derive(Debug, Default, Clone)]
 pub struct TransformedGeometry {
     pub bbox: [u32; 4],
@@ -181,10 +181,10 @@ pub struct TransformedGeometry {
     pub sum_xy: u64,
 }
 
-impl Roi {
-    /// Builds a fully-finalized ROI from [`RoiInit`].
+impl Object {
+    /// Builds a fully-finalized object from [`ObjectInit`].
     ///
-    /// This is the only public way to construct a [`Roi`]: the geometry metrics
+    /// This is the only public way to construct a [`Object`]: the geometry metrics
     /// (`perimeter`, `ellipse`) are computed here via
     /// [`finalize_geometry`](Self::finalize_geometry), so they can never be left
     /// uncomputed by a forgotten call.
@@ -194,8 +194,8 @@ impl Roi {
     /// [`finalize_geometry`](Self::finalize_geometry) again once accumulation is
     /// complete — the eager finalize here only reflects the geometry present in
     /// `init`.
-    pub fn new(init: RoiInit) -> Self {
-        let mut roi = Roi {
+    pub fn new(init: ObjectInit) -> Self {
+        let mut object = Object {
             id: init.id,
             segmentation_class: init.segmentation_class,
             object_class: init.object_class,
@@ -217,15 +217,15 @@ impl Roi {
             perimeter: 0.0,
             ellipse: FittingEllipse::default(),
         };
-        roi.finalize_geometry();
-        roi
+        object.finalize_geometry();
+        object
     }
 
-    /// Checks if a global coordinate (x, y) is within the ROI's mask.
+    /// Checks if a global coordinate (x, y) is within the object's mask.
     pub fn is_part_of(&self, x: u32, y: u32) -> bool {
         let [x_min, y_min, x_max, y_max] = self.bbox;
 
-        // bbox[2]/[3] are INCLUSIVE - the last pixel coordinate inside the ROI.
+        // bbox[2]/[3] are INCLUSIVE - the last pixel coordinate inside the object.
         if x < x_min || x > x_max || y < y_min || y > y_max {
             return false;
         }
@@ -247,7 +247,7 @@ impl Roi {
         }
     }
 
-    /// Adds an object to the ROI which colocalzis with it
+    /// Adds an object to the object which colocalzis with it
     ///
     /// The class is the object class of the other object which was used to
     /// calc the colocalization.
@@ -274,11 +274,11 @@ impl Roi {
 
     /// Computes and stores the geometry metrics (`perimeter`, `ellipse`) from the
     /// current mask. Call once after the mask/moments are fully assembled — i.e.
-    /// at ROI creation, on the parallel extraction workers — so later reads
+    /// at object creation, on the parallel extraction workers — so later reads
     /// (classification, DB export) are free field accesses. The metrics depend
-    /// only on the immutable geometry, so a single call is enough for the ROI's life.
+    /// only on the immutable geometry, so a single call is enough for the object's life.
     ///
-    /// `pub(crate)` on purpose: one-shot construction should go through [`Roi::new`],
+    /// `pub(crate)` on purpose: one-shot construction should go through [`Object::new`],
     /// which calls this for you. It stays reachable inside the crate for the
     /// incremental extraction path, which must re-finalize after the mask and
     /// moments are fully accumulated.
@@ -332,17 +332,17 @@ impl Roi {
         (4.0 * std::f32::consts::PI * self.area as f32) / (perimeter * perimeter)
     }
 
-    /// Returns the ROI perimeter in pixels, precomputed by
+    /// Returns the object perimeter in pixels, precomputed by
     /// [`finalize_geometry`](Self::finalize_geometry).
     ///
     /// The underlying [`compute_perimeter`](Self::compute_perimeter) is an
-    /// O(bbox area) boundary walk — by far the most expensive ROI metric — which
+    /// O(bbox area) boundary walk — by far the most expensive object metric — which
     /// is why it is computed once at creation rather than on demand.
     pub fn get_perimeter(&self) -> f32 {
         self.perimeter
     }
 
-    /// Calculates the perimeter of the ROI using ImageJ's algorithm.
+    /// Calculates the perimeter of the object using ImageJ's algorithm.
     ///
     /// This method computes the perimeter by analyzing the boundary of the mask.
     /// It counts the number of transitions between foreground and background pixels,
@@ -370,7 +370,7 @@ impl Roi {
         // Materialize the mask into a bool grid padded with a 1-pixel false border.
         // The border lets the 8-neighbor scan below run without per-neighbor bounds
         // checks, BitVec bit-addressing or Option handling — all of which dominated the
-        // boundary walk, the single most expensive ROI metric.
+        // boundary walk, the single most expensive object metric.
         let pw = width + 2;
         let mut grid = vec![false; pw * (height + 2)];
         for y in 0..height {
@@ -507,8 +507,8 @@ impl Roi {
         ellipse.minor
     }
 
-    pub fn to_roi_settings(&self) -> RoiSettings {
-        RoiSettings {
+    pub fn to_object_settings(&self) -> ObjectMetricSettings {
+        ObjectMetricSettings {
             id: self.id.clone(),
             segmentation_class: self.segmentation_class,
             object_class: self.object_class.clone(),
@@ -517,7 +517,7 @@ impl Roi {
             children: self.children.clone(),
             track: TrackSettings {
                 id: self.track.id.clone(),
-                roi_ids: self.track.roi_ids.clone(),
+                object_ids: self.track.object_ids.clone(),
                 parent_track: self.track.parent_track.clone(),
             },
             area: self.area,
@@ -552,8 +552,8 @@ impl Roi {
         }
     }
 
-    pub fn from_roi_settings(s: RoiSettings) -> Self {
-        Roi::new(RoiInit {
+    pub fn from_object_settings(s: ObjectMetricSettings) -> Self {
+        Object::new(ObjectInit {
             id: s.id,
             segmentation_class: s.segmentation_class,
             object_class: s.object_class,
@@ -562,7 +562,7 @@ impl Roi {
             children: s.children,
             track: Track {
                 id: s.track.id,
-                roi_ids: s.track.roi_ids,
+                object_ids: s.track.object_ids,
                 parent_track: s.track.parent_track,
             },
             area: s.area,
@@ -598,8 +598,8 @@ impl Roi {
         })
     }
 
-    /// Computes the intersection with another ROI.
-    /// Returns `Some(Roi)` representing the overlapping region, or `None` if there is no overlap.
+    /// Computes the intersection with another object.
+    /// Returns `Some(Object)` representing the overlapping region, or `None` if there is no overlap.
     pub fn overlaps(&self, other: &Self) -> Option<Self> {
         // 1. Extract and find the overlap of the two bounding boxes
         let [s_xmin, s_ymin, s_xmax, s_ymax] = self.bbox;
@@ -674,8 +674,8 @@ impl Roi {
             return None;
         }
 
-        // 3. Assemble and return the brand-new structural intersection ROI
-        Some(Roi::new(RoiInit {
+        // 3. Assemble and return the brand-new structural intersection object
+        Some(Object::new(ObjectInit {
             id: ObjectId::next(), // Typically initialized empty or generated by your core engine later
             segmentation_class: self.segmentation_class.clone(),
             parent_id: Some(self.id.clone()), // Tracks lineage ancestry
@@ -693,8 +693,8 @@ impl Roi {
         }))
     }
 
-    /// Samples per-channel pixel intensities for this ROI's mask against the channel images
-    /// held in `cache`. For ROIs assembled by [`ExtractRois`](crate::algos::classification::extract_rois::ExtractRois)
+    /// Samples per-channel pixel intensities for this object's mask against the channel images
+    /// held in `cache`. For ROIs assembled by [`ExtractObjects`](crate::algos::classification::extract_objects::ExtractObjects)
     /// this is redundant (it already measures intensities in the same pass that builds the
     /// mask). It exists for ROIs synthesized later in the pipeline — e.g. the intersection
     /// ROIs colocalization creates via [`overlaps`](Self::overlaps) — which have a valid
@@ -868,8 +868,8 @@ impl Roi {
 
     /// Boolean set operation between `self` ("A") and the union of `others` ("B"):
     /// intersection (AND), union (OR), symmetric difference (XOR), or set difference
-    /// (Subtract, A \ B). Used for object-pair "ROI math" - unlike a pixel-level
-    /// binary-image operation, this keeps the result tied to exactly the input ROI(s)
+    /// (Subtract, A \ B). Used for object-pair "object math" - unlike a pixel-level
+    /// binary-image operation, this keeps the result tied to exactly the input object(s)
     /// it came from (via `parent_id`, set by the caller), and only ever touches the
     /// small bbox window spanned by the operands instead of rasterizing the whole
     /// tile/image.
@@ -879,7 +879,7 @@ impl Roi {
     /// so the working window covers the union of every operand's bbox.
     pub fn combine_geometry(
         &self,
-        others: &[&Roi],
+        others: &[&Object],
         op: BooleanOp,
         image_size: ImageSize,
     ) -> TransformedGeometry {
@@ -895,8 +895,8 @@ impl Roi {
             }
         }
         let bbox_f = [x_min as f32, y_min as f32, x_max as f32, y_max as f32];
-        let base_touches_edge = self.touches_edge
-            || (grows_beyond_self && others.iter().any(|o| o.touches_edge));
+        let base_touches_edge =
+            self.touches_edge || (grows_beyond_self && others.iter().any(|o| o.touches_edge));
 
         rasterize_geometry(bbox_f, image_size, base_touches_edge, |gx, gy| {
             let (px, py) = (gx as u32, gy as u32);
@@ -925,7 +925,9 @@ impl Roi {
             y_max as f32 + margin,
         ];
         rasterize_geometry(bbox_f, image_size, self.touches_edge, |gx, gy| {
-            disk_hits_mask(self, gx as i64, gy as i64, margin, /* require_all */ false)
+            disk_hits_mask(
+                self, gx as i64, gy as i64, margin, /* require_all */ false,
+            )
         })
     }
 
@@ -938,16 +940,18 @@ impl Roi {
         // Erosion only ever shrinks - the result can't extend past the original bbox.
         let bbox_f = [x_min as f32, y_min as f32, x_max as f32, y_max as f32];
         rasterize_geometry(bbox_f, image_size, self.touches_edge, |gx, gy| {
-            disk_hits_mask(self, gx as i64, gy as i64, margin, /* require_all */ true)
+            disk_hits_mask(
+                self, gx as i64, gy as i64, margin, /* require_all */ true,
+            )
         })
     }
 }
 
-/// Tests the disk of radius `margin` centered at pixel `(px, py)` against `roi`'s mask.
+/// Tests the disk of radius `margin` centered at pixel `(px, py)` against `object`'s mask.
 ///
 /// `require_all = false` (dilation): true if *any* pixel in the disk is part of the mask.
 /// `require_all = true` (erosion): true only if *every* pixel in the disk is part of the mask.
-fn disk_hits_mask(roi: &Roi, px: i64, py: i64, margin: f32, require_all: bool) -> bool {
+fn disk_hits_mask(object: &Object, px: i64, py: i64, margin: f32, require_all: bool) -> bool {
     let r = margin.ceil() as i64;
     let margin_sq = margin * margin;
     for dy in -r..=r {
@@ -956,7 +960,7 @@ fn disk_hits_mask(roi: &Roi, px: i64, py: i64, margin: f32, require_all: bool) -
                 continue;
             }
             let (nx, ny) = (px + dx, py + dy);
-            let inside = nx >= 0 && ny >= 0 && roi.is_part_of(nx as u32, ny as u32);
+            let inside = nx >= 0 && ny >= 0 && object.is_part_of(nx as u32, ny as u32);
             if require_all {
                 if !inside {
                     return false;
@@ -1146,8 +1150,8 @@ mod tests {
     use super::*;
     use evanalyzer_cfg::core_types::ObjectId;
 
-    /// Build a finalized ROI from a rectangular `rows × cols` boolean pattern.
-    fn roi_from_pattern(pattern: &[&[bool]]) -> Roi {
+    /// Build a finalized object from a rectangular `rows × cols` boolean pattern.
+    fn object_from_pattern(pattern: &[&[bool]]) -> Object {
         let height = pattern.len();
         let width = pattern[0].len();
         let mut mask = BitVec::<u64, Lsb0>::repeat(false, width * height);
@@ -1160,7 +1164,7 @@ mod tests {
                 }
             }
         }
-        Roi::new(RoiInit {
+        Object::new(ObjectInit {
             id: ObjectId(1),
             bbox: [0, 0, (width - 1) as u32, (height - 1) as u32],
             mask_data: mask,
@@ -1169,10 +1173,10 @@ mod tests {
         })
     }
 
-    /// A filled square ROI, `side` pixels wide, with top-left corner at `(x, y)`.
-    fn square_roi_at(x: u32, y: u32, side: u32) -> Roi {
+    /// A filled square object, `side` pixels wide, with top-left corner at `(x, y)`.
+    fn square_object_at(x: u32, y: u32, side: u32) -> Object {
         let area = (side * side) as usize;
-        Roi::new(RoiInit {
+        Object::new(ObjectInit {
             id: ObjectId(1),
             bbox: [x, y, x + side - 1, y + side - 1],
             mask_data: BitVec::<u64, Lsb0>::repeat(true, area),
@@ -1188,47 +1192,47 @@ mod tests {
 
     #[test]
     fn dilated_geometry_grows_bbox_by_exactly_the_margin() {
-        let roi = square_roi_at(100, 100, 4); // bbox [100,100,103,103]
-        let grown = roi.dilated_geometry(2.0, LARGE);
+        let object = square_object_at(100, 100, 4); // bbox [100,100,103,103]
+        let grown = object.dilated_geometry(2.0, LARGE);
         assert_eq!(grown.bbox, [98, 98, 105, 105]);
         assert!(grown.area > 16);
     }
 
     #[test]
     fn dilated_geometry_zero_margin_is_identity() {
-        let roi = square_roi_at(100, 100, 4);
-        let grown = roi.dilated_geometry(0.0, LARGE);
-        assert_eq!(grown.bbox, roi.bbox);
-        assert_eq!(grown.area, roi.area);
+        let object = square_object_at(100, 100, 4);
+        let grown = object.dilated_geometry(0.0, LARGE);
+        assert_eq!(grown.bbox, object.bbox);
+        assert_eq!(grown.area, object.area);
     }
 
     #[test]
     fn eroded_geometry_shrinks_bbox_by_exactly_the_margin() {
-        let roi = square_roi_at(100, 100, 8); // bbox [100,100,107,107]
-        let shrunk = roi.eroded_geometry(2.0, LARGE);
+        let object = square_object_at(100, 100, 8); // bbox [100,100,107,107]
+        let shrunk = object.eroded_geometry(2.0, LARGE);
         assert_eq!(shrunk.bbox, [102, 102, 105, 105]);
         assert!(shrunk.area > 0 && shrunk.area <= 16);
     }
 
     #[test]
     fn eroded_geometry_past_the_whole_mask_is_empty() {
-        let roi = square_roi_at(100, 100, 4);
-        let shrunk = roi.eroded_geometry(10.0, LARGE);
+        let object = square_object_at(100, 100, 4);
+        let shrunk = object.eroded_geometry(10.0, LARGE);
         assert_eq!(shrunk.area, 0);
     }
 
     #[test]
     fn combine_geometry_subtract_removes_only_the_overlapping_pixels() {
-        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
-        let b = square_roi_at(13, 13, 4); // [13,13,16,16], area 16, inside a
+        let a = square_object_at(10, 10, 10); // [10,10,19,19], area 100
+        let b = square_object_at(13, 13, 4); // [13,13,16,16], area 16, inside a
         let result = a.combine_geometry(&[&b], BooleanOp::Subtract, LARGE);
         assert_eq!(result.area, 100 - 16);
     }
 
     #[test]
     fn combine_geometry_subtract_with_no_overlap_is_unchanged() {
-        let a = square_roi_at(10, 10, 10);
-        let b = square_roi_at(50, 50, 4); // far away, no overlap
+        let a = square_object_at(10, 10, 10);
+        let b = square_object_at(50, 50, 4); // far away, no overlap
         let result = a.combine_geometry(&[&b], BooleanOp::Subtract, LARGE);
         assert_eq!(result.area, a.area);
         assert_eq!(result.bbox, a.bbox);
@@ -1236,17 +1240,17 @@ mod tests {
 
     #[test]
     fn combine_geometry_subtract_unions_multiple_subtrahends() {
-        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
-        let b1 = square_roi_at(10, 10, 3); // corner, area 9
-        let b2 = square_roi_at(16, 16, 3); // opposite corner, area 9, no overlap with b1
+        let a = square_object_at(10, 10, 10); // [10,10,19,19], area 100
+        let b1 = square_object_at(10, 10, 3); // corner, area 9
+        let b2 = square_object_at(16, 16, 3); // opposite corner, area 9, no overlap with b1
         let result = a.combine_geometry(&[&b1, &b2], BooleanOp::Subtract, LARGE);
         assert_eq!(result.area, 100 - 9 - 9);
     }
 
     #[test]
     fn combine_geometry_and_is_the_overlap_only() {
-        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
-        let b = square_roi_at(15, 15, 10); // [15,15,24,24], area 100, overlaps a in [15,15,19,19]
+        let a = square_object_at(10, 10, 10); // [10,10,19,19], area 100
+        let b = square_object_at(15, 15, 10); // [15,15,24,24], area 100, overlaps a in [15,15,19,19]
         let result = a.combine_geometry(&[&b], BooleanOp::And, LARGE);
         assert_eq!(result.area, 25); // 5x5 overlap
         assert_eq!(result.bbox, [15, 15, 19, 19]);
@@ -1254,34 +1258,42 @@ mod tests {
 
     #[test]
     fn combine_geometry_and_with_no_overlap_is_empty() {
-        let a = square_roi_at(10, 10, 10);
-        let b = square_roi_at(50, 50, 4);
+        let a = square_object_at(10, 10, 10);
+        let b = square_object_at(50, 50, 4);
         let result = a.combine_geometry(&[&b], BooleanOp::And, LARGE);
         assert_eq!(result.area, 0);
     }
 
     #[test]
     fn combine_geometry_and_unions_multiple_partners_before_intersecting() {
-        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
-        let b1 = square_roi_at(10, 10, 3); // corner, area 9, fully inside a
-        let b2 = square_roi_at(16, 16, 3); // opposite corner, area 9, fully inside a
+        let a = square_object_at(10, 10, 10); // [10,10,19,19], area 100
+        let b1 = square_object_at(10, 10, 3); // corner, area 9, fully inside a
+        let b2 = square_object_at(16, 16, 3); // opposite corner, area 9, fully inside a
         let result = a.combine_geometry(&[&b1, &b2], BooleanOp::And, LARGE);
-        assert_eq!(result.area, 9 + 9, "AND with the union of both partners, not just one");
+        assert_eq!(
+            result.area,
+            9 + 9,
+            "AND with the union of both partners, not just one"
+        );
     }
 
     #[test]
     fn combine_geometry_or_extends_beyond_self_bbox() {
-        let a = square_roi_at(10, 10, 10); // [10,10,19,19], area 100
-        let b = square_roi_at(15, 15, 10); // [15,15,24,24], area 100, overlap 25
+        let a = square_object_at(10, 10, 10); // [10,10,19,19], area 100
+        let b = square_object_at(15, 15, 10); // [15,15,24,24], area 100, overlap 25
         let result = a.combine_geometry(&[&b], BooleanOp::Or, LARGE);
-        assert_eq!(result.bbox, [10, 10, 24, 24], "union bbox must cover both operands");
+        assert_eq!(
+            result.bbox,
+            [10, 10, 24, 24],
+            "union bbox must cover both operands"
+        );
         assert_eq!(result.area, 100 + 100 - 25);
     }
 
     #[test]
     fn combine_geometry_or_with_no_overlap_is_just_self() {
-        let a = square_roi_at(10, 10, 10);
-        let b = square_roi_at(50, 50, 4);
+        let a = square_object_at(10, 10, 10);
+        let b = square_object_at(50, 50, 4);
         // No overlap means "no partner" at the command level, but the raw geometry
         // primitive itself still computes a true union if asked.
         let result = a.combine_geometry(&[&b], BooleanOp::Or, LARGE);
@@ -1290,11 +1302,15 @@ mod tests {
 
     #[test]
     fn combine_geometry_xor_excludes_the_overlap() {
-        let a = square_roi_at(10, 10, 10); // area 100
-        let b = square_roi_at(15, 15, 10); // area 100, overlap 25
+        let a = square_object_at(10, 10, 10); // area 100
+        let b = square_object_at(15, 15, 10); // area 100, overlap 25
         let result = a.combine_geometry(&[&b], BooleanOp::Xor, LARGE);
-        assert_eq!(result.area, 100 + 100 - 2 * 25, "XOR must exclude the overlap entirely");
-        let result_roi = Roi::new(RoiInit {
+        assert_eq!(
+            result.area,
+            100 + 100 - 2 * 25,
+            "XOR must exclude the overlap entirely"
+        );
+        let result_object = Object::new(ObjectInit {
             id: ObjectId(1),
             bbox: result.bbox,
             mask_data: result.mask_data,
@@ -1302,7 +1318,7 @@ mod tests {
             ..Default::default()
         });
         assert!(
-            !result_roi.is_part_of(17, 17),
+            !result_object.is_part_of(17, 17),
             "a pixel in both operands must be excluded"
         );
     }
@@ -1313,7 +1329,7 @@ mod tests {
         // whole-slide-image / multi-tile case), sampling must use the tile's own
         // pixel grid directly - not scale coordinates by tile_size/full_image_size,
         // which truncates to 0 for any real multi-tile image and made every
-        // synthesized ROI (e.g. colocalization intersections, Voronoi regions)
+        // synthesized object (e.g. colocalization intersections, Voronoi regions)
         // sample channel pixel 0 regardless of its actual tile-local position.
         use crate::image::ManagedImage;
         use crate::pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext};
@@ -1342,15 +1358,19 @@ mod tests {
         intensity[0] = 10.0; // local (0,0)
         intensity[5 * 15 + 7] = 99.0; // local (7,5)
         let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(tile_size, &intensity, CpuAllocator)
-                .unwrap(),
+            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
+                tile_size,
+                &intensity,
+                CpuAllocator,
+            )
+            .unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
         cache.image_cache.add_to_channel_cache(channel, 0);
 
-        // A 1-pixel ROI at the global position corresponding to tile-local (7,5).
-        let roi = Roi::new(RoiInit {
+        // A 1-pixel object at the global position corresponding to tile-local (7,5).
+        let object = Object::new(ObjectInit {
             id: ObjectId(1),
             bbox: [10 + 7, 15 + 5, 10 + 7, 15 + 5],
             mask_data: BitVec::<u64, Lsb0>::repeat(true, 1),
@@ -1358,20 +1378,20 @@ mod tests {
             ..Default::default()
         });
 
-        let intensities = roi.measure_intensities(&ctx, &cache);
+        let intensities = object.measure_intensities(&ctx, &cache);
 
         assert_eq!(
             intensities.get(&0).unwrap().sum_intensity,
             99.0,
-            "ROI at tile-local (7,5) must sample its own pixel, not pixel (0,0)"
+            "object at tile-local (7,5) must sample its own pixel, not pixel (0,0)"
         );
     }
 
     #[test]
     fn measure_intensities_skips_mask_pixels_outside_the_current_tile() {
-        // Regression test: `TransformRois` (Expand/Scale/Circle/...) clamps a ROI's mask
+        // Regression test: `TransformObjects` (Expand/Scale/Circle/...) clamps a object's mask
         // against the *full* image, not the tile it's being processed in, so a transformed
-        // ROI near a non-origin tile's top/left edge can legally have mask pixels that fall
+        // object near a non-origin tile's top/left edge can legally have mask pixels that fall
         // outside the tile currently loaded in `cache`. Before the fix, `x_abs - tile_offset`
         // underflowed for those pixels (silently wrapping in release builds) and indexed the
         // channel slice miles out of bounds, panicking. Now those pixels must simply be
@@ -1401,8 +1421,12 @@ mod tests {
         let mut intensity = vec![7.0f32; 15 * 20];
         intensity[5 * 15 + 7] = 99.0; // tile-local (7,5)
         let channel = Arc::new(ImageContainer::F32Gray(ManagedImage {
-            data: Image::<f32, 1, CpuAllocator>::from_size_slice(tile_size, &intensity, CpuAllocator)
-                .unwrap(),
+            data: Image::<f32, 1, CpuAllocator>::from_size_slice(
+                tile_size,
+                &intensity,
+                CpuAllocator,
+            )
+            .unwrap(),
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
@@ -1412,7 +1436,7 @@ mod tests {
         // [13, 16] against a tile that only starts at (10, 15). Only the bottom-right
         // 2x2 quadrant (global (10,15)..(11,16), i.e. tile-local (0,0)..(1,1)) is in-tile.
         let mask = BitVec::<u64, Lsb0>::repeat(true, 4 * 4);
-        let roi = Roi::new(RoiInit {
+        let object = Object::new(ObjectInit {
             id: ObjectId(1),
             bbox: [8, 13, 11, 16],
             mask_data: mask,
@@ -1422,7 +1446,7 @@ mod tests {
 
         // Must not panic, and must only have sampled the four in-tile pixels (tile-local
         // (0,0), (1,0), (0,1), (1,1)), all value 7.0 - away from the 99.0 marker.
-        let intensities = roi.measure_intensities(&ctx, &cache);
+        let intensities = object.measure_intensities(&ctx, &cache);
         let intensity = intensities.get(&0).unwrap();
         assert_eq!(intensity.sum_intensity, 28.0);
         assert_eq!(intensity.max_intensity, 7.0);
@@ -1432,12 +1456,12 @@ mod tests {
     fn perimeter_uses_inclusive_stride_for_2x2_square() {
         // 2×2 filled block. With the (now correct) inclusive stride the boundary walk
         // visits all four pixels; the weighted ImageJ scheme yields 4 + 6·√2.
-        let roi = roi_from_pattern(&[&[true, true], &[true, true]]);
+        let object = object_from_pattern(&[&[true, true], &[true, true]]);
         let expected = 4.0 + 6.0 * std::f32::consts::SQRT_2;
         assert!(
-            (roi.get_perimeter() - expected).abs() < 1e-3,
+            (object.get_perimeter() - expected).abs() < 1e-3,
             "got {}, expected {}",
-            roi.get_perimeter(),
+            object.get_perimeter(),
             expected
         );
     }
@@ -1446,31 +1470,31 @@ mod tests {
     fn perimeter_single_pixel() {
         // One pixel: all 8 neighbors are outside → (4·1 + 4·√2) / 2 = 2 + 2·√2.
         // (The old buggy stride returned 0 here because width collapsed to 0.)
-        let roi = roi_from_pattern(&[&[true]]);
+        let object = object_from_pattern(&[&[true]]);
         let expected = 2.0 + 2.0 * std::f32::consts::SQRT_2;
-        assert!((roi.get_perimeter() - expected).abs() < 1e-3);
+        assert!((object.get_perimeter() - expected).abs() < 1e-3);
     }
 
     #[test]
     fn solidity_is_one_for_filled_square() {
-        let roi = roi_from_pattern(&[
+        let object = object_from_pattern(&[
             &[true, true, true],
             &[true, true, true],
             &[true, true, true],
         ]);
         // Hull area == pixel area (9) → perfectly solid.
-        assert!((roi.get_solidity() - 1.0).abs() < 1e-4);
+        assert!((object.get_solidity() - 1.0).abs() < 1e-4);
     }
 
     #[test]
     fn solidity_below_one_for_concave_plus_shape() {
         // A plus/cross: concave, so the convex hull is larger than the pixel area.
-        let roi = roi_from_pattern(&[
+        let object = object_from_pattern(&[
             &[false, true, false],
             &[true, true, true],
             &[false, true, false],
         ]);
-        let s = roi.get_solidity();
+        let s = object.get_solidity();
         assert!(
             s > 0.0 && s < 1.0,
             "plus shape solidity should be in (0,1): {s}"
@@ -1479,7 +1503,7 @@ mod tests {
 
     #[test]
     fn solidity_one_for_single_pixel() {
-        let roi = roi_from_pattern(&[&[true]]);
-        assert_eq!(roi.get_solidity(), 1.0);
+        let object = object_from_pattern(&[&[true]]);
+        assert_eq!(object.get_solidity(), 1.0);
     }
 }

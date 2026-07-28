@@ -6,11 +6,11 @@ import { Theme, Appearance } from "style.slint";
 import { ViewportState } from "editor/viewport_state.slint";
 import { DialogType } from "state.slint";
 import {
-    ViewportRoiState,
+    ViewportObjectState,
     ToolState,
 } from "editor/viewport_state.slint";
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
-import { RoiListState } from "editor/roi_list_panel.slint";
+import { ObjectListState } from "editor/object_list_panel.slint";
 
 // Define the enum
 
@@ -112,25 +112,25 @@ export component Toolbar inherits Rectangle {
 
         ToolToggleButton {
             icon: @image-url("icons/regular-black/hand.svg");
-            checked: ViewportRoiState.act_tool_state == ToolState.Move;
+            checked: ViewportObjectState.act_tool_state == ToolState.Move;
             clicked => {
-                ViewportRoiState.act_tool_state = ToolState.Move;
+                ViewportObjectState.act_tool_state = ToolState.Move;
             }
         }
 
         ToolToggleButton {
             icon: @image-url("icons/regular-black/cursor.svg");
-            checked: ViewportRoiState.act_tool_state == ToolState.Select;
+            checked: ViewportObjectState.act_tool_state == ToolState.Select;
             clicked => {
-                ViewportRoiState.act_tool_state = ToolState.Select;
+                ViewportObjectState.act_tool_state = ToolState.Select;
             }
         }
 
         ToolToggleButton {
             icon: @image-url("icons/regular-black/crosshair.svg");
-            checked: ViewportRoiState.act_tool_state == ToolState.PaintMarker;
+            checked: ViewportObjectState.act_tool_state == ToolState.PaintMarker;
             clicked => {
-                ViewportRoiState.act_tool_state = ToolState.PaintMarker;
+                ViewportObjectState.act_tool_state = ToolState.PaintMarker;
             }
         }
 
@@ -138,25 +138,25 @@ export component Toolbar inherits Rectangle {
 
         ToolToggleButton {
             icon: @image-url("icons/regular-red/rectangle.svg");
-            checked: ViewportRoiState.act_tool_state == ToolState.PaintRectangle;
+            checked: ViewportObjectState.act_tool_state == ToolState.PaintRectangle;
             clicked => {
-                ViewportRoiState.act_tool_state = ToolState.PaintRectangle;
+                ViewportObjectState.act_tool_state = ToolState.PaintRectangle;
             }
         }
 
         ToolToggleButton {
             icon: @image-url("icons/regular-red/circle.svg");
-            checked: ViewportRoiState.act_tool_state == ToolState.PaintOval;
+            checked: ViewportObjectState.act_tool_state == ToolState.PaintOval;
             clicked => {
-                ViewportRoiState.act_tool_state = ToolState.PaintOval;
+                ViewportObjectState.act_tool_state = ToolState.PaintOval;
             }
         }
 
         ToolToggleButton {
             icon: @image-url("icons/regular-red/polygon.svg");
-            checked: ViewportRoiState.act_tool_state == ToolState.PaintPolygon;
+            checked: ViewportObjectState.act_tool_state == ToolState.PaintPolygon;
             clicked => {
-                ViewportRoiState.act_tool_state = ToolState.PaintPolygon;
+                ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
             }
         }
 
@@ -172,9 +172,9 @@ export component Toolbar inherits Rectangle {
 
         ToolToggleButton {
             icon: @image-url("icons/regular-black/paint-bucket.svg");
-            checked: ViewportRoiState.show_rois;
+            checked: ViewportObjectState.show_objects;
             clicked => {
-                ViewportRoiState.show_rois = !ViewportRoiState.show_rois;
+                ViewportObjectState.show_objects = !ViewportObjectState.show_objects;
             }
         }
 
@@ -186,10 +186,10 @@ export component Toolbar inherits Rectangle {
             width: 150px;
             minimum: 0.0;
             maximum: 0.8;
-            value: ViewportRoiState.roi_transparency;
+            value: ViewportObjectState.object_transparency;
             changed(val) => {
-                ViewportRoiState.roi_transparency = val;
-                ViewportRoiState.roi_transparency_changed(ViewportRoiState.roi_transparency);
+                ViewportObjectState.object_transparency = val;
+                ViewportObjectState.object_transparency_changed(ViewportObjectState.object_transparency);
             }
         }
 

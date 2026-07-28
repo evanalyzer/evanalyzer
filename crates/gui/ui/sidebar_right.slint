@@ -3,7 +3,7 @@ import { GlobalAppState } from "state.slint";
 import { ImageControlPanel } from "editor/image_control_panel.slint";
 import { NavIconRight } from "components/navicon_right.slint";
 import { Theme } from "style.slint";
-import { RoiListPanel } from "editor/roi_list_panel.slint";
+import { ObjectListPanel } from "editor/object_list_panel.slint";
 import { ClassificationPanel } from "editor/classification_panel.slint";
 
 export component SidebarRight inherits HorizontalLayout {
@@ -14,7 +14,7 @@ export component SidebarRight inherits HorizontalLayout {
         width: parent.width - 48px;
         background: Theme.panel;
         if (GlobalAppState.sidebar_right_active_tab == 0): ImageControlPanel { }
-        if (GlobalAppState.sidebar_right_active_tab == 1): RoiListPanel { }
+        if (GlobalAppState.sidebar_right_active_tab == 1): ObjectListPanel { }
         if (GlobalAppState.sidebar_right_active_tab == 2): ClassificationPanel { }
     }
 

@@ -1,4 +1,4 @@
-//! Parity tests for Part B of the memory-usage fix: `aggregate_rois_sql` (the
+//! Parity tests for Part B of the memory-usage fix: `aggregate_objects_sql` (the
 //! new SQL-pushdown grouped/aggregated query, computed in DuckDB) must produce
 //! byte-for-byte the same `(ColumnSpec, DisplayRow)` output as `aggregate_rows`
 //! (the existing, thoroughly-unit-tested in-memory Rust implementation) for
@@ -8,21 +8,23 @@
 
 use bitvec::prelude::*;
 use evanalyzer_app::result::{
-    aggregate_rois_sql, aggregate_rows, build_column_specs, ColumnSpec, DatabaseFilter, GroupBy,
-    GroupConfig, ResultsLoader,
+    ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, ResultsLoader, aggregate_objects_sql,
+    aggregate_rows, build_column_specs,
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
-use evanalyzer_core::{DuckDbExporter, Intensity, PipelineCache, PipelineResultExporter, Roi, RoiInit};
+use evanalyzer_core::{
+    DuckDbExporter, Intensity, Object, PipelineCache, PipelineResultExporter, ObjectInit,
+};
 use indexmap::IndexMap;
 use std::path::PathBuf;
 
-fn make_roi(id: u128, bbox: [u32; 4], classes: &[ObjectClass]) -> Roi {
+fn make_object(id: u128, bbox: [u32; 4], classes: &[ObjectClass]) -> Object {
     let [x_min, y_min, x_max, y_max] = bbox;
     let w = (x_max - x_min + 1) as usize;
     let h = (y_max - y_min + 1) as usize;
     let area = w * h;
     let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
-    let mut roi = Roi::new(RoiInit {
+    let mut object = Object::new(ObjectInit {
         id: ObjectId(id),
         bbox,
         mask_data,
@@ -30,13 +32,13 @@ fn make_roi(id: u128, bbox: [u32; 4], classes: &[ObjectClass]) -> Roi {
         ..Default::default()
     });
     for class in classes {
-        roi.add_object_class(*class);
+        object.add_object_class(*class);
     }
-    roi
+    object
 }
 
-fn with_channel0(mut roi: Roi, min: f32, max: f32, avg: f32) -> Roi {
-    roi.intensities = IndexMap::from([(
+fn with_channel0(mut object: Object, min: f32, max: f32, avg: f32) -> Object {
+    object.intensities = IndexMap::from([(
         0,
         Intensity {
             sum_intensity: 0.0,
@@ -46,25 +48,25 @@ fn with_channel0(mut roi: Roi, min: f32, max: f32, avg: f32) -> Roi {
             pixel_values: vec![],
         },
     )]);
-    roi
+    object
 }
 
-/// Exports each `(image_rel_path, rois)` pair as its own image (mirroring real
+/// Exports each `(image_rel_path, objects)` pair as its own image (mirroring real
 /// usage — one `PipelineCache`/`export()` call per image) into a fresh DuckDB
 /// file, and returns a `ResultsLoader` over it.
-fn export_fixture(images: Vec<(&str, Vec<Roi>)>) -> (tempfile::TempDir, ResultsLoader) {
+fn export_fixture(images: Vec<(&str, Vec<Object>)>) -> (tempfile::TempDir, ResultsLoader) {
     let dir = tempfile::TempDir::new().expect("failed to create temp dir");
     let db_path = dir.path().join("results.duckdb");
 
-    let exporter =
-        DuckDbExporter::new(&db_path, std::collections::HashMap::new()).expect("exporter init failed");
-    for (image_rel_path, rois) in images {
+    let exporter = DuckDbExporter::new(&db_path, std::collections::HashMap::new())
+        .expect("exporter init failed");
+    for (image_rel_path, objects) in images {
         let mut cache = PipelineCache {
             image_rel_path: PathBuf::from(image_rel_path),
             ..Default::default()
         };
-        for roi in rois {
-            cache.roi_cache.insert(roi.id.clone(), roi);
+        for object in objects {
+            cache.object_cache.insert(object.id.clone(), object);
         }
         exporter.export(&cache).expect("export failed");
     }
@@ -73,17 +75,31 @@ fn export_fixture(images: Vec<(&str, Vec<Roi>)>) -> (tempfile::TempDir, ResultsL
     (dir, ResultsLoader::new(db_path))
 }
 
-/// Runs both `aggregate_rows` (over every ROI fetched via `get_rois`) and
-/// `aggregate_rois_sql`, and asserts they produce the same column specs
+/// Runs both `aggregate_rows` (over every object fetched via `get_objects`) and
+/// `aggregate_objects_sql`, and asserts they produce the same column specs
 /// (id/label) and the same row values, in the same order.
 fn assert_parity(loader: &ResultsLoader, config: &GroupConfig, base_specs: &[ColumnSpec]) {
-    let all_rois = loader.get_rois(DatabaseFilter { page_size: 0, ..Default::default() }).unwrap();
-    let (rust_specs, rust_rows) = aggregate_rows(&all_rois, config, base_specs);
+    let all_objects = loader
+        .get_objects(DatabaseFilter {
+            page_size: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    let (rust_specs, rust_rows) = aggregate_rows(&all_objects, config, base_specs);
     let (sql_specs, sql_rows) =
-        aggregate_rois_sql(loader, DatabaseFilter::default(), config, base_specs).unwrap();
+        aggregate_objects_sql(loader, DatabaseFilter::default(), config, base_specs).unwrap();
 
-    let spec_ids = |specs: &[ColumnSpec]| specs.iter().map(|c| (c.id.clone(), c.label.clone())).collect::<Vec<_>>();
-    assert_eq!(spec_ids(&rust_specs), spec_ids(&sql_specs), "column specs must match exactly");
+    let spec_ids = |specs: &[ColumnSpec]| {
+        specs
+            .iter()
+            .map(|c| (c.id.clone(), c.label.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        spec_ids(&rust_specs),
+        spec_ids(&sql_specs),
+        "column specs must match exactly"
+    );
 
     let row_values = |rows: &[evanalyzer_app::result::DisplayRow]| {
         rows.iter().map(|r| r.values.clone()).collect::<Vec<_>>()
@@ -98,10 +114,10 @@ fn assert_parity(loader: &ResultsLoader, config: &GroupConfig, base_specs: &[Col
 #[test]
 fn parity_group_by_image_multiple_aggregates() {
     let img_a = vec![
-        with_channel0(make_roi(1, [0, 0, 9, 9], &[]), 10.0, 100.0, 50.0), // area_px=100
-        with_channel0(make_roi(2, [0, 0, 19, 9], &[]), 20.0, 200.0, 100.0), // area_px=200
+        with_channel0(make_object(1, [0, 0, 9, 9], &[]), 10.0, 100.0, 50.0), // area_px=100
+        with_channel0(make_object(2, [0, 0, 19, 9], &[]), 20.0, 200.0, 100.0), // area_px=200
     ];
-    let img_b = vec![make_roi(3, [0, 0, 29, 9], &[])]; // area_px=300, no channel data
+    let img_b = vec![make_object(3, [0, 0, 29, 9], &[])]; // area_px=300, no channel data
 
     let (_dir, loader) = export_fixture(vec![("img_a.tif", img_a), ("img_b.tif", img_b)]);
 
@@ -126,10 +142,10 @@ fn parity_group_by_image_multiple_aggregates() {
 
 #[test]
 fn parity_group_by_folder() {
-    let a1 = vec![make_roi(1, [0, 0, 9, 9], &[])];
-    let a2 = vec![make_roi(2, [0, 0, 9, 9], &[])];
-    let b1 = vec![make_roi(3, [0, 0, 9, 9], &[])];
-    let root1 = vec![make_roi(4, [0, 0, 9, 9], &[])];
+    let a1 = vec![make_object(1, [0, 0, 9, 9], &[])];
+    let a2 = vec![make_object(2, [0, 0, 9, 9], &[])];
+    let b1 = vec![make_object(3, [0, 0, 9, 9], &[])];
+    let root1 = vec![make_object(4, [0, 0, 9, 9], &[])];
 
     let (_dir, loader) = export_fixture(vec![
         ("plate1/wellA/img1.tif", a1),
@@ -152,9 +168,9 @@ fn parity_group_by_folder() {
 
 #[test]
 fn parity_group_by_regex_with_capture_group_and_non_matching_row() {
-    let a1 = vec![make_roi(1, [0, 0, 9, 9], &[])];
-    let a2 = vec![make_roi(2, [0, 0, 9, 9], &[])];
-    let control = vec![make_roi(3, [0, 0, 9, 9], &[])];
+    let a1 = vec![make_object(1, [0, 0, 9, 9], &[])];
+    let a2 = vec![make_object(2, [0, 0, 9, 9], &[])];
+    let control = vec![make_object(3, [0, 0, 9, 9], &[])];
 
     let (_dir, loader) = export_fixture(vec![
         ("A1_01.tif", a1),
@@ -176,7 +192,7 @@ fn parity_group_by_regex_with_capture_group_and_non_matching_row() {
 
 #[test]
 fn parity_group_by_regex_invalid_pattern_yields_no_groups() {
-    let (_dir, loader) = export_fixture(vec![("img.tif", vec![make_roi(1, [0, 0, 9, 9], &[])])]);
+    let (_dir, loader) = export_fixture(vec![("img.tif", vec![make_object(1, [0, 0, 9, 9], &[])])]);
 
     let base_specs = build_column_specs(&[], &[]);
     let config = GroupConfig {
@@ -191,12 +207,12 @@ fn parity_group_by_regex_invalid_pattern_yields_no_groups() {
 }
 
 #[test]
-fn parity_group_by_class_fans_out_multi_class_roi() {
+fn parity_group_by_class_fans_out_multi_class_object() {
     const CLASS_A: ObjectClass = ObjectClass::Valid(1);
     const CLASS_B: ObjectClass = ObjectClass::Valid(2);
 
-    let multi = make_roi(1, [0, 0, 9, 9], &[CLASS_A, CLASS_B]);
-    let single = make_roi(2, [0, 0, 19, 9], &[CLASS_A]);
+    let multi = make_object(1, [0, 0, 9, 9], &[CLASS_A, CLASS_B]);
+    let single = make_object(2, [0, 0, 19, 9], &[CLASS_A]);
 
     let (_dir, loader) = export_fixture(vec![("img.tif", vec![multi, single])]);
 
@@ -214,9 +230,9 @@ fn parity_group_by_class_fans_out_multi_class_roi() {
 
 #[test]
 fn parity_split_colocalized() {
-    let mut coloc = make_roi(1, [0, 0, 9, 9], &[]);
+    let mut coloc = make_object(1, [0, 0, 9, 9], &[]);
     coloc.add_colocalizing_object(ObjectClass::Valid(9), ObjectId(99));
-    let not_coloc = make_roi(2, [0, 0, 9, 9], &[]);
+    let not_coloc = make_object(2, [0, 0, 9, 9], &[]);
 
     let (_dir, loader) = export_fixture(vec![("img.tif", vec![coloc, not_coloc])]);
 
@@ -234,13 +250,13 @@ fn parity_split_colocalized() {
 
 #[test]
 fn parity_coloc_partner_count_is_aggregatable_metric() {
-    let mut roi1 = make_roi(1, [0, 0, 9, 9], &[]);
-    roi1.add_colocalizing_object(ObjectClass::Valid(2), ObjectId(101));
-    let mut roi2 = make_roi(2, [0, 0, 9, 9], &[]);
-    roi2.add_colocalizing_object(ObjectClass::Valid(2), ObjectId(101));
-    roi2.add_colocalizing_object(ObjectClass::Valid(2), ObjectId(102));
+    let mut object1 = make_object(1, [0, 0, 9, 9], &[]);
+    object1.add_colocalizing_object(ObjectClass::Valid(2), ObjectId(101));
+    let mut object2 = make_object(2, [0, 0, 9, 9], &[]);
+    object2.add_colocalizing_object(ObjectClass::Valid(2), ObjectId(101));
+    object2.add_colocalizing_object(ObjectClass::Valid(2), ObjectId(102));
 
-    let (_dir, loader) = export_fixture(vec![("img.tif", vec![roi1, roi2])]);
+    let (_dir, loader) = export_fixture(vec![("img.tif", vec![object1, object2])]);
 
     let coloc_partner_classes = loader.get_coloc_partner_class_names().unwrap();
     let base_specs = build_column_specs(&[], &coloc_partner_classes);
@@ -257,8 +273,11 @@ fn parity_coloc_partner_count_is_aggregatable_metric() {
 
 #[test]
 fn parity_respects_column_visibility() {
-    let rois = vec![make_roi(1, [0, 0, 9, 9], &[]), make_roi(2, [0, 0, 19, 9], &[])];
-    let (_dir, loader) = export_fixture(vec![("img.tif", rois)]);
+    let objects = vec![
+        make_object(1, [0, 0, 9, 9], &[]),
+        make_object(2, [0, 0, 19, 9], &[]),
+    ];
+    let (_dir, loader) = export_fixture(vec![("img.tif", objects)]);
 
     let mut base_specs = build_column_specs(&[], &[]);
     for spec in base_specs.iter_mut() {
@@ -282,11 +301,11 @@ fn parity_string_ordering_mixed_case_and_non_ascii() {
     // this pins down that they don't, for mixed-case ASCII and non-ASCII
     // (UTF-8 multi-byte) image names.
     let images = vec![
-        ("Zebra.tif", vec![make_roi(1, [0, 0, 9, 9], &[])]),
-        ("apple.tif", vec![make_roi(2, [0, 0, 9, 9], &[])]),
-        ("Apple.tif", vec![make_roi(3, [0, 0, 9, 9], &[])]),
-        ("\u{00e9}clair.tif", vec![make_roi(4, [0, 0, 9, 9], &[])]), // "éclair.tif"
-        ("zebra.tif", vec![make_roi(5, [0, 0, 9, 9], &[])]),
+        ("Zebra.tif", vec![make_object(1, [0, 0, 9, 9], &[])]),
+        ("apple.tif", vec![make_object(2, [0, 0, 9, 9], &[])]),
+        ("Apple.tif", vec![make_object(3, [0, 0, 9, 9], &[])]),
+        ("\u{00e9}clair.tif", vec![make_object(4, [0, 0, 9, 9], &[])]), // "éclair.tif"
+        ("zebra.tif", vec![make_object(5, [0, 0, 9, 9], &[])]),
     ];
     let (_dir, loader) = export_fixture(images);
 
@@ -304,7 +323,7 @@ fn parity_string_ordering_mixed_case_and_non_ascii() {
 
 #[test]
 fn parity_empty_result_set() {
-    let (_dir, loader) = export_fixture(vec![("img.tif", vec![make_roi(1, [0, 0, 9, 9], &[])])]);
+    let (_dir, loader) = export_fixture(vec![("img.tif", vec![make_object(1, [0, 0, 9, 9], &[])])]);
 
     let base_specs = build_column_specs(&[], &[]);
     let config = GroupConfig {
@@ -316,15 +335,15 @@ fn parity_empty_result_set() {
     };
 
     // A filter that matches nothing (unknown image).
-    let all_rois = loader
-        .get_rois(DatabaseFilter {
+    let all_objects = loader
+        .get_objects(DatabaseFilter {
             image_filter: Some(vec!["does_not_exist.tif".to_string()]),
             ..Default::default()
         })
         .unwrap();
-    assert!(all_rois.is_empty());
-    let (rust_specs, rust_rows) = aggregate_rows(&all_rois, &config, &base_specs);
-    let (sql_specs, sql_rows) = aggregate_rois_sql(
+    assert!(all_objects.is_empty());
+    let (rust_specs, rust_rows) = aggregate_rows(&all_objects, &config, &base_specs);
+    let (sql_specs, sql_rows) = aggregate_objects_sql(
         &loader,
         DatabaseFilter {
             image_filter: Some(vec!["does_not_exist.tif".to_string()]),

@@ -9,7 +9,7 @@ import { Theme } from "../style.slint";
 import { GlobalAppState } from "../state.slint";
 import { DialogType, ChannelState } from "../state.slint";
 
-export struct RoiItemDataSlint {
+export struct ObjectItemDataSlint {
     id: int,
     name: string,
     display_color: color,
@@ -19,7 +19,7 @@ export struct RoiItemDataSlint {
     class_ids: [int],
     label_name: string,
     label_id: int,
-    // Metrics – only populated for selected_roi (empty string = not available)
+    // Metrics – only populated for selected_object (empty string = not available)
     area: int,
     area_nm2: string,           // area in nm², formatted; empty string = not available
     intensities: [string],      // sum intensity per channel; empty string = not available
@@ -29,15 +29,15 @@ export struct RoiItemDataSlint {
     label_count: int,
 }
 
-export global RoiListState {
+export global ObjectListState {
     in-out property <bool> is_scanning: false;
-    in-out property <int> scroll_to_roi_index: -1;
-    in property <[RoiItemDataSlint]> roi_list: [
+    in-out property <int> scroll_to_object_index: -1;
+    in property <[ObjectItemDataSlint]> object_list: [
         {
             id: 1,
             name: "Annotation",
             display_color: #ff0000,
-            display_name: "roi_1",
+            display_name: "object_1",
             class_names: ["Nucleus"],
             class_colors: [#0066ff],
             class_ids: [0],
@@ -53,7 +53,7 @@ export global RoiListState {
             id: 2,
             name: "Annotation",
             display_color: #00ff00,
-            display_name: "roi_2",
+            display_name: "object_2",
             class_names: ["Cytoplasm", "Membrane", "Artifact", "Background"],
             class_colors: [#ff6600, #ffff00, #00ffff, #cccccc],
             class_ids: [1, 2, 3, 4],
@@ -69,7 +69,7 @@ export global RoiListState {
             id: 3,
             name: "Annotation",
             display_color: #ff0000,
-            display_name: "roi_3",
+            display_name: "object_3",
             class_names: [],
             class_colors: [],
             class_ids: [],
@@ -83,14 +83,14 @@ export global RoiListState {
         }
     ];
 
-    in-out property <RoiItemDataSlint> selected_roi;
+    in-out property <ObjectItemDataSlint> selected_object;
 
-    callback roi_selected(int);
-    callback roi_copy(int);
-    callback roi_edit(int);
-    callback roi_delete(int);
-    callback roi_add_class(int);
-    callback roi_remove_class(int, int);
+    callback object_selected(int);
+    callback object_copy(int);
+    callback object_edit(int);
+    callback object_delete(int);
+    callback object_add_class(int);
+    callback object_remove_class(int, int);
 }
 
 // ----------------------------------------------------------
@@ -126,8 +126,8 @@ component ActionButton inherits Rectangle {
 
 // ----------------------------------------------------------
 // Compact 32 px row – kept lean for large lists
-component RoiListRow inherits Rectangle {
-    in property <RoiItemDataSlint> data;
+component ObjectListRow inherits Rectangle {
+    in property <ObjectItemDataSlint> data;
     in property <bool> selected;
     callback row_clicked;
 
@@ -222,7 +222,7 @@ component RoiListRow inherits Rectangle {
 }
 
 // ----------------------------------------------------------
-export component RoiListPanel inherits Rectangle {
+export component ObjectListPanel inherits Rectangle {
 
     VerticalBox {
         spacing: 12px;
@@ -232,7 +232,7 @@ export component RoiListPanel inherits Rectangle {
         HorizontalLayout {
             alignment: space-between;
             Text {
-                text: "Region of Interests";
+                text: "Objects";
                 font-size: 14px;
                 font-weight: 600;
                 color: Theme.text;
@@ -240,7 +240,7 @@ export component RoiListPanel inherits Rectangle {
             }
 
             Text {
-                text: RoiListState.roi_list.length == 1 ? "1 ROI" : RoiListState.roi_list.length + " ROIs";
+                text: ObjectListState.object_list.length == 1 ? "1 object" : ObjectListState.object_list.length + " ROIs";
                 font-size: 11px;
                 font-family: Theme.font-mono;
                 color: Theme.text-mute;
@@ -248,34 +248,33 @@ export component RoiListPanel inherits Rectangle {
             }
         }
 
-        // ----- ROI LIST -----
+        // ----- object LIST -----
         Rectangle {
             vertical-stretch: 1;
 
             // Mirror global to react to viewport-driven selection changes
-            property <int> scroll_index: RoiListState.scroll_to_roi_index;
+            property <int> scroll_index: ObjectListState.scroll_to_object_index;
             changed scroll_index => {
-                if (RoiListState.scroll_to_roi_index >= 0) {
-                    roi_listview.viewport-y = Math.clamp(
-                        -(RoiListState.scroll_to_roi_index * 32px) + roi_listview.height / 2 - 16px,
-                        roi_listview.height - roi_listview.viewport-height,
-                        0px
-                    );
+                if (ObjectListState.scroll_to_object_index >= 0) {
+                    object_listview.viewport-y = Math.clamp(
+                        -(ObjectListState.scroll_to_object_index * 32px) + object_listview.height / 2 - 16px,
+                        object_listview.height - object_listview.viewport-height,
+                        0px);
                 }
             }
 
-            roi_listview := ListView {
+            object_listview := ListView {
                 width: 100%;
                 height: 100%;
                 horizontal-scrollbar-policy: always-off;
 
-                for data in RoiListState.roi_list: RoiListRow {
+                for data in ObjectListState.object_list: ObjectListRow {
                     data: data;
-                    selected: RoiListState.selected_roi.id == data.id;
+                    selected: ObjectListState.selected_object.id == data.id;
 
                     row_clicked => {
-                        if (data.id == RoiListState.selected_roi.id) {
-                            RoiListState.selected_roi = {
+                        if (data.id == ObjectListState.selected_object.id) {
+                            ObjectListState.selected_object = {
                                 id: 0,
                                 name: "",
                                 display_color: #000000,
@@ -288,17 +287,17 @@ export component RoiListPanel inherits Rectangle {
                                 intensities: [],
                                 intensity_avgs: [],
                             };
-                            RoiListState.roi_selected(-1);
+                            ObjectListState.object_selected(-1);
                         } else {
-                            RoiListState.selected_roi = data;
-                            RoiListState.roi_selected(data.id);
+                            ObjectListState.selected_object = data;
+                            ObjectListState.object_selected(data.id);
                         }
                     }
                 }
             }
 
             // Scanning overlay
-            if RoiListState.is_scanning: Rectangle {
+            if ObjectListState.is_scanning: Rectangle {
                 background: Theme.overlay-scrim;
                 Spinner {
                     indeterminate: true;
@@ -308,8 +307,8 @@ export component RoiListPanel inherits Rectangle {
             }
         }
 
-        // ----- SELECTED ROI DETAIL -----
-        if RoiListState.selected_roi.id != 0: Rectangle {
+        // ----- SELECTED object DETAIL -----
+        if ObjectListState.selected_object.id != 0: Rectangle {
             background: Theme.raised;
             border-radius: Theme.radius-md;
             border-width: 1px;
@@ -325,7 +324,7 @@ export component RoiListPanel inherits Rectangle {
                     alignment: space-between;
                     spacing: 6px;
                     Text {
-                        text: RoiListState.selected_roi.label_name;
+                        text: ObjectListState.selected_object.label_name;
                         font-size: 12px;
                         font-weight: 500;
                         color: Theme.text;
@@ -334,7 +333,7 @@ export component RoiListPanel inherits Rectangle {
                         horizontal-stretch: 1;
                     }
                     // Label count chip
-                    if RoiListState.selected_roi.label_count > 0: VerticalLayout {
+                    if ObjectListState.selected_object.label_count > 0: VerticalLayout {
                         alignment: center;
                         Rectangle {
                             height: 16px;
@@ -347,7 +346,7 @@ export component RoiListPanel inherits Rectangle {
                                 padding-left: 5px;
                                 padding-right: 5px;
                                 Text {
-                                    text: RoiListState.selected_roi.label_count + "×";
+                                    text: ObjectListState.selected_object.label_count + "×";
                                     font-size: 10px;
                                     font-family: Theme.font-mono;
                                     color: Theme.accent;
@@ -357,8 +356,8 @@ export component RoiListPanel inherits Rectangle {
                         }
                     }
                     // Display name
-                    if RoiListState.selected_roi.display_name != "": Text {
-                        text: RoiListState.selected_roi.display_name;
+                    if ObjectListState.selected_object.display_name != "": Text {
+                        text: ObjectListState.selected_object.display_name;
                         font-size: 10px;
                         font-family: Theme.font-mono;
                         color: Theme.text-mute;
@@ -368,7 +367,7 @@ export component RoiListPanel inherits Rectangle {
                 }
 
                 // Classes list (only when classes are defined)
-                if RoiListState.selected_roi.class_names.length > 0: Rectangle {
+                if ObjectListState.selected_object.class_names.length > 0: Rectangle {
                     background: rgba(255, 255, 255, 0.03);
                     border-radius: 4px;
 
@@ -376,7 +375,7 @@ export component RoiListPanel inherits Rectangle {
                         spacing: 2px;
                         padding: 4px;
 
-                        for class_name[index] in RoiListState.selected_roi.class_names: HorizontalLayout {
+                        for class_name[index] in ObjectListState.selected_object.class_names: HorizontalLayout {
                             spacing: 6px;
                             height: 20px;
 
@@ -386,7 +385,7 @@ export component RoiListPanel inherits Rectangle {
                                     width: 8px;
                                     height: 8px;
                                     border-radius: 2px;
-                                    background: RoiListState.selected_roi.class_colors[index];
+                                    background: ObjectListState.selected_object.class_colors[index];
                                 }
                             }
 
@@ -421,9 +420,9 @@ export component RoiListPanel inherits Rectangle {
                                     rm_ta := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
-                                            RoiListState.roi_remove_class(
-                                                RoiListState.selected_roi.id,
-                                                RoiListState.selected_roi.class_ids[index]);
+                                            ObjectListState.object_remove_class(
+                                                ObjectListState.selected_object.id,
+                                                ObjectListState.selected_object.class_ids[index]);
                                         }
                                     }
                                 }
@@ -459,15 +458,16 @@ export component RoiListPanel inherits Rectangle {
                             alignment: center;
                             spacing: 1px;
                             Text {
-                                text: RoiListState.selected_roi.area > 0 ? RoiListState.selected_roi.area + " px²" : "–";
+                                text: ObjectListState.selected_object.area > 0 ? ObjectListState.selected_object.area + " px²" : "–";
                                 font-size: 11px;
                                 font-family: Theme.font-mono;
                                 color: Theme.text-mute;
                                 vertical-alignment: center;
                                 horizontal-alignment: right;
                             }
-                            if RoiListState.selected_roi.area_nm2 != "": Text {
-                                text: RoiListState.selected_roi.area_nm2 + " nm²";
+
+                            if ObjectListState.selected_object.area_nm2 != "": Text {
+                                text: ObjectListState.selected_object.area_nm2 + " nm²";
                                 font-size: 9px;
                                 font-family: Theme.font-mono;
                                 color: Theme.text-faint;
@@ -490,7 +490,7 @@ export component RoiListPanel inherits Rectangle {
                         }
 
                         Text {
-                            text: RoiListState.selected_roi.circularity != "" ? RoiListState.selected_roi.circularity : "–";
+                            text: ObjectListState.selected_object.circularity != "" ? ObjectListState.selected_object.circularity : "–";
                             font-size: 11px;
                             font-family: Theme.font-mono;
                             color: Theme.text-mute;
@@ -512,9 +512,9 @@ export component RoiListPanel inherits Rectangle {
                     }
 
                     // Per-channel intensity rows
-                    if RoiListState.selected_roi.intensities.length > 0: VerticalLayout {
+                    if ObjectListState.selected_object.intensities.length > 0: VerticalLayout {
                         spacing: 2px;
-                        for intensity_val[i] in RoiListState.selected_roi.intensities: HorizontalLayout {
+                        for intensity_val[i] in ObjectListState.selected_object.intensities: HorizontalLayout {
                             alignment: space-between;
                             padding-left: 6px;
                             height: 18px;
@@ -555,6 +555,7 @@ export component RoiListPanel inherits Rectangle {
                                         color: Theme.text-faint;
                                         vertical-alignment: center;
                                     }
+
                                     Text {
                                         text: intensity_val != "" ? intensity_val : "–";
                                         font-size: 10px;
@@ -573,11 +574,12 @@ export component RoiListPanel inherits Rectangle {
                                         color: Theme.text-faint;
                                         vertical-alignment: center;
                                     }
+
                                     Text {
-                                        text: RoiListState.selected_roi.intensity_avgs.length > i
-                                            ? (RoiListState.selected_roi.intensity_avgs[i] != ""
-                                                ? RoiListState.selected_roi.intensity_avgs[i]
-                                                : "–")
+                                        text: ObjectListState.selected_object.intensity_avgs.length > i
+                                            ? (ObjectListState.selected_object.intensity_avgs[i] != ""
+                                            ? ObjectListState.selected_object.intensity_avgs[i]
+                                            : "–")
                                             : "–";
                                         font-size: 10px;
                                         font-family: Theme.font-mono;
@@ -590,7 +592,7 @@ export component RoiListPanel inherits Rectangle {
                     }
 
                     // Fallback when no intensities computed yet
-                    if RoiListState.selected_roi.intensities.length == 0: HorizontalLayout {
+                    if ObjectListState.selected_object.intensities.length == 0: HorizontalLayout {
                         alignment: space-between;
                         padding-left: 6px;
                         height: 18px;
@@ -624,9 +626,9 @@ export component RoiListPanel inherits Rectangle {
                     alignment: center;
                     ActionButton {
                         icon: @image-url("../icons/regular-white/copy-simple.svg");
-                        enabled: RoiListState.selected_roi.id != 0;
+                        enabled: ObjectListState.selected_object.id != 0;
                         clicked => {
-                            RoiListState.roi_copy(RoiListState.selected_roi.id);
+                            ObjectListState.object_copy(ObjectListState.selected_object.id);
                         }
                     }
                 }
@@ -635,9 +637,9 @@ export component RoiListPanel inherits Rectangle {
                     alignment: center;
                     ActionButton {
                         icon: @image-url("../icons/regular-white/trash-simple.svg");
-                        enabled: RoiListState.selected_roi.id != 0;
+                        enabled: ObjectListState.selected_object.id != 0;
                         clicked => {
-                            GlobalAppState.active_dialog = DialogType.roi_confirm_delete;
+                            GlobalAppState.active_dialog = DialogType.object_confirm_delete;
                         }
                     }
                 }
@@ -646,9 +648,9 @@ export component RoiListPanel inherits Rectangle {
                     alignment: center;
                     ActionButton {
                         icon: @image-url("../icons/regular-white/pencil-simple.svg");
-                        enabled: RoiListState.selected_roi.id != 0;
+                        enabled: ObjectListState.selected_object.id != 0;
                         clicked => {
-                            RoiListState.roi_edit(RoiListState.selected_roi.id);
+                            ObjectListState.object_edit(ObjectListState.selected_object.id);
                         }
                     }
                 }
@@ -675,9 +677,9 @@ export component RoiListPanel inherits Rectangle {
                     Button {
                         text: "+ Class";
                         primary: true;
-                        enabled: RoiListState.selected_roi.id != 0;
+                        enabled: ObjectListState.selected_object.id != 0;
                         clicked => {
-                            RoiListState.roi_add_class(RoiListState.selected_roi.id);
+                            ObjectListState.object_add_class(ObjectListState.selected_object.id);
                         }
                     }
                 }

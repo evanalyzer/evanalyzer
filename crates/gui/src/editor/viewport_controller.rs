@@ -42,7 +42,7 @@ pub struct ViewportState {
 
 #[derive(Clone)]
 pub struct ViewportOverlayState {
-    pub(crate) roi_transparency: f32,
+    pub(crate) object_transparency: f32,
 }
 
 /// Raw breakpoint image data retained for re-rendering when histogram settings change.
@@ -77,7 +77,7 @@ pub struct DrawingTaskContainer {
 pub struct Tasks {
     pub(crate) low_res_task: Arc<DrawingTaskContainer>,
     pub(crate) high_res_task: Arc<DrawingTaskContainer>,
-    pub(crate) roi_task: Arc<DrawingTaskContainer>,
+    pub(crate) object_task: Arc<DrawingTaskContainer>,
 }
 
 pub struct ViewportController {
@@ -130,7 +130,7 @@ impl ViewportController {
                 task_count: Arc::new(AtomicU32::new(0)),
                 task_request: Arc::new((Mutex::new(None), Condvar::new())),
             }),
-            roi_task: Arc::new(DrawingTaskContainer {
+            object_task: Arc::new(DrawingTaskContainer {
                 task_count: Arc::new(AtomicU32::new(0)),
                 task_request: Arc::new((Mutex::new(None), Condvar::new())),
             }),
@@ -149,7 +149,7 @@ impl ViewportController {
                 mouse_pos_y: 0.0,
             })),
             overlay_state: Arc::new(RwLock::new(ViewportOverlayState {
-                roi_transparency: 0.8,
+                object_transparency: 0.8,
             })),
             drawing_tasks,
             breakpoint_channel: Arc::new(RwLock::new(None)),
@@ -169,7 +169,7 @@ impl ViewportController {
         task.fit_to_screen = true;
         task.is_new_series = true;
         self.dispatch_worker_task(task.clone(), TaskDispatch::HighResAndLowRes);
-        self.dispatch_worker_task(task, TaskDispatch::Rois);
+        self.dispatch_worker_task(task, TaskDispatch::Objects);
     }
 
     pub fn trigger_new_series_redraw(&self) {
@@ -180,7 +180,7 @@ impl ViewportController {
         task.fit_to_screen = true;
         task.is_new_series = true;
         self.dispatch_worker_task(task.clone(), TaskDispatch::HighResAndLowRes);
-        self.dispatch_worker_task(task, TaskDispatch::Rois);
+        self.dispatch_worker_task(task, TaskDispatch::Objects);
     }
 
     pub fn trigger_image_redraw(&self) {
@@ -203,9 +203,9 @@ impl ViewportController {
         self.dispatch_worker_task(task, TaskDispatch::HighRes);
     }
 
-    pub fn trigger_image_redraw_rois(&self) {
+    pub fn trigger_image_redraw_objects(&self) {
         let task: DrawingTask = DrawingTask::default();
-        self.dispatch_worker_task(task, TaskDispatch::Rois);
+        self.dispatch_worker_task(task, TaskDispatch::Objects);
     }
 
     pub fn trigger_redraw_low_res(&self) {
@@ -216,14 +216,14 @@ impl ViewportController {
         self.high_res_posted_count.store(0, Ordering::SeqCst);
         self.high_res_last_count_at_false.store(0, Ordering::SeqCst);
 
-        // Hide the ROI overlay immediately: it is rendered in screen-space so it
+        // Hide the object overlay immediately: it is rendered in screen-space so it
         // detaches visually from image objects the moment the viewport pans or zooms.
-        // The debounce-triggered trigger_image_redraw_rois() will re-enable it once
+        // The debounce-triggered trigger_image_redraw_objects() will re-enable it once
         // the overlay has been re-composited at the new viewport position.
         let ui_weak = self.ui.clone();
         slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.global::<ViewportSlintState>().set_roi_ready(false);
+                ui.global::<ViewportSlintState>().set_object_ready(false);
             }
         })
         .ok();
@@ -277,8 +277,8 @@ impl ViewportController {
             merge_into_slot(&self.drawing_tasks.high_res_task.task_request, task.clone());
         }
 
-        if scope == TaskDispatch::Rois {
-            merge_into_slot(&self.drawing_tasks.roi_task.task_request, task.clone());
+        if scope == TaskDispatch::Objects {
+            merge_into_slot(&self.drawing_tasks.object_task.task_request, task.clone());
         }
     }
 
@@ -434,10 +434,10 @@ impl ViewportController {
             slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ViewportSlintState>().set_high_res_ready(true);
-                    // roi_ready is managed solely by trigger_redraw_low_res (sets false)
-                    // and sync_rois_to_slint_viewport (sets true). The LowRes image worker
-                    // must not touch it, otherwise it races with the ROI worker and leaves
-                    // roi_ready permanently false after a pan/zoom.
+                    // object_ready is managed solely by trigger_redraw_low_res (sets false)
+                    // and sync_objects_to_slint_viewport (sets true). The LowRes image worker
+                    // must not touch it, otherwise it races with the object worker and leaves
+                    // object_ready permanently false after a pan/zoom.
                 }
             })
             .ok();
@@ -457,10 +457,10 @@ impl ViewportController {
             slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.global::<ViewportSlintState>().set_high_res_ready(false);
-                    // roi_ready is managed solely by trigger_redraw_low_res (sets false)
-                    // and sync_rois_to_slint_viewport (sets true). The LowRes image worker
-                    // must not touch it, otherwise it races with the ROI worker and leaves
-                    // roi_ready permanently false after a pan/zoom.
+                    // object_ready is managed solely by trigger_redraw_low_res (sets false)
+                    // and sync_objects_to_slint_viewport (sets true). The LowRes image worker
+                    // must not touch it, otherwise it races with the object worker and leaves
+                    // object_ready permanently false after a pan/zoom.
                 }
             })
             .ok();
@@ -481,14 +481,14 @@ impl ViewportController {
     /// * This function returns `()` on success.
     /// * Note: This function will silently return if no reference ROIs are currently
     ///   defined within the active project.
-    pub fn sync_rois_to_slint_viewport(&self) {
+    pub fn sync_objects_to_slint_viewport(&self) {
         let project = self.app_state.get_project();
 
-        let roi_transparency = (self
+        let object_transparency = (self
             .overlay_state
             .read()
             .expect("Failed to acquire read lock on viewport state")
-            .roi_transparency
+            .object_transparency
             * 255.0) as u8;
 
         // Guard: image must be loaded.
@@ -518,36 +518,36 @@ impl ViewportController {
             return;
         }
 
-        // The ROI image is positioned at (0,0) in the viewport and covers the whole
+        // The object image is positioned at (0,0) in the viewport and covers the whole
         // viewport (see viewport.slint Layer 3).  The buffer is therefore viewport-sized
-        // and ROI pixels are mapped to screen coordinates directly.  This ensures the
+        // and object pixels are mapped to screen coordinates directly.  This ensures the
         // overlay is always rendered at screen resolution - no matter the zoom level -
         // eliminating the blur that appeared when a fixed 1024-px buffer was upscaled.
         let buf_w = viewport_width as u32;
         let buf_h = viewport_height as u32;
 
-        let selected_roi_id = project.get_selected_roi_id();
-        let rois_option = project.get_rois();
-        let Some(rois) = rois_option else {
+        let selected_object_id = project.get_selected_object_id();
+        let objects_option = project.get_objects();
+        let Some(objects) = objects_option else {
             return;
         };
 
-        let auto_rois = project.get_preview_rois();
+        let auto_objects = project.get_preview_objects();
 
-        let hide_unclassified = project.hide_unclassified_rois();
+        let hide_unclassified = project.hide_unclassified_objects();
 
         // Resolve project-level filtering/coloring decisions up front, so the
-        // actual compositing pass (`composite_roi_instances`) is pure pixel math
+        // actual compositing pass (`composite_object_instances`) is pure pixel math
         // with no project access - that's what makes it cheap to unit test.
-        let mut instances: Vec<RoiDrawInstance> = Vec::new();
-        for roi in rois.iter().chain(auto_rois.iter()) {
-            if hide_unclassified && roi.object_class.is_empty() {
+        let mut instances: Vec<ObjectDrawInstance> = Vec::new();
+        for object in objects.iter().chain(auto_objects.iter()) {
+            if hide_unclassified && object.object_class.is_empty() {
                 continue;
             }
 
             // Skip ROIs whose every assigned class is hidden.
-            let all_hidden = !roi.object_class.is_empty()
-                && roi
+            let all_hidden = !object.object_class.is_empty()
+                && object
                     .object_class
                     .iter()
                     .all(|c| !project.is_class_visible(c));
@@ -555,15 +555,15 @@ impl ViewportController {
                 continue;
             }
 
-            let color = if selected_roi_id.as_ref() == Some(&roi.id) {
-                Color::from_argb_u8(0xfc, 0xe9, 0x03, roi_transparency)
+            let color = if selected_object_id.as_ref() == Some(&object.id) {
+                Color::from_argb_u8(0xfc, 0xe9, 0x03, object_transparency)
             } else {
-                get_colors_from_class(&project, roi_transparency, &roi.object_class)
+                get_colors_from_class(&project, object_transparency, &object.object_class)
             };
 
-            instances.push(RoiDrawInstance {
-                bbox: roi.bbox,
-                mask: &roi.mask_data,
+            instances.push(ObjectDrawInstance {
+                bbox: object.bbox,
+                mask: &object.mask_data,
                 color: slint::Rgba8Pixel {
                     r: color.red(),
                     g: color.green(),
@@ -573,7 +573,7 @@ impl ViewportController {
             });
         }
 
-        let pixels = composite_roi_instances(&instances, buf_w, buf_h, zoom, off_x, off_y);
+        let pixels = composite_object_instances(&instances, buf_w, buf_h, zoom, off_x, off_y);
 
         let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(buf_w, buf_h);
         buffer.make_mut_slice().copy_from_slice(&pixels);
@@ -582,8 +582,8 @@ impl ViewportController {
         slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let image = slint::Image::from_rgba8(buffer);
-                ui.set_roi_image(image);
-                ui.global::<ViewportSlintState>().set_roi_ready(true);
+                ui.set_object_image(image);
+                ui.global::<ViewportSlintState>().set_object_ready(true);
             }
         })
         .ok();
@@ -754,12 +754,12 @@ impl ViewportController {
     }
 }
 
-/// One ROI's pre-resolved render inputs. All project-level filtering and color
+/// One object's pre-resolved render inputs. All project-level filtering and color
 /// resolution (selection, class visibility, hide-unclassified) happens before this
-/// is built, so [`composite_roi_instances`] is pure pixel math with no project
+/// is built, so [`composite_object_instances`] is pure pixel math with no project
 /// access - that's what makes it cheap to unit test independently of the Slint/UI
-/// plumbing in [`ViewportController::sync_rois_to_slint_viewport`].
-struct RoiDrawInstance<'a> {
+/// plumbing in [`ViewportController::sync_objects_to_slint_viewport`].
+struct ObjectDrawInstance<'a> {
     bbox: [u32; 4],
     mask: &'a bitvec::vec::BitVec<u64, bitvec::order::Lsb0>,
     color: slint::Rgba8Pixel,
@@ -782,7 +782,7 @@ fn blend_pixel_over(dst: &mut slint::Rgba8Pixel, src: slint::Rgba8Pixel) {
     };
 }
 
-/// Composites pre-resolved ROI instances into a viewport-sized RGBA buffer.
+/// Composites pre-resolved object instances into a viewport-sized RGBA buffer.
 ///
 /// Two perf shortcuts, both no-ops for ROIs whose screen footprint covers more
 /// than one pixel - i.e. normal/zoomed-in viewing walks every mask pixel exactly
@@ -799,12 +799,12 @@ fn blend_pixel_over(dst: &mut slint::Rgba8Pixel, src: slint::Rgba8Pixel) {
 ///   distinguished on screen anyway, so one pixel is stamped directly from the
 ///   bbox centre instead of walking every bit.
 ///
-/// Without these, cost scales with total mask pixels across every ROI in the
+/// Without these, cost scales with total mask pixels across every object in the
 /// project; with them it scales with the number of ROIs that are actually visible
 /// and bigger than a pixel - which is what makes hundreds of thousands of ROIs in
 /// a whole-slide project viable to render interactively.
-fn composite_roi_instances(
-    instances: &[RoiDrawInstance],
+fn composite_object_instances(
+    instances: &[ObjectDrawInstance],
     buf_w: u32,
     buf_h: u32,
     zoom: f32,
@@ -821,8 +821,8 @@ fn composite_roi_instances(
         };
         pixel_count
     ];
-    // Instance map: tracks which ROI instance owns each screen pixel.
-    // 0 = no ROI; n+1 = the ROI at `instances[n]`.
+    // Instance map: tracks which object instance owns each screen pixel.
+    // 0 = no object; n+1 = the object at `instances[n]`.
     // Used by the border pass to detect boundaries between same-colour adjacent instances.
     let mut instance_map = vec![0u32; pixel_count];
 
@@ -887,7 +887,7 @@ fn composite_roi_instances(
         }
     }
 
-    // Border pass: make the outline of every ROI instance fully opaque.
+    // Border pass: make the outline of every object instance fully opaque.
     // A pixel is a border pixel if any 4-connected neighbour belongs to a
     // different instance (including the background, which has instance_id 0).
     // This correctly separates same-colour adjacent instances that rgb comparison
@@ -919,7 +919,7 @@ fn composite_roi_instances(
 }
 
 #[cfg(test)]
-mod composite_roi_instances_tests {
+mod composite_object_instances_tests {
     use super::*;
     use bitvec::prelude::*;
 
@@ -934,19 +934,19 @@ mod composite_roi_instances_tests {
     }
 
     #[test]
-    fn single_pixel_roi_renders_at_correct_location_with_border_alpha() {
+    fn single_pixel_object_renders_at_correct_location_with_border_alpha() {
         // 3x3 bbox, only the centre bit set -> one isolated screen pixel.
         let bbox = [0u32, 0, 2, 2];
         let mut mask = bitvec![u64, Lsb0; 0; 9];
         mask.set(4, true); // local (1,1) in a 3-wide bbox
         let color = rgba(10, 20, 30, 128);
-        let instances = [RoiDrawInstance {
+        let instances = [ObjectDrawInstance {
             bbox,
             mask: &mask,
             color,
         }];
 
-        let pixels = composite_roi_instances(&instances, 5, 5, 1.0, 0.0, 0.0);
+        let pixels = composite_object_instances(&instances, 5, 5, 1.0, 0.0, 0.0);
 
         for y in 0..5usize {
             for x in 0..5usize {
@@ -969,13 +969,13 @@ mod composite_roi_instances_tests {
         let bbox = [1u32, 1, 2, 2];
         let mask = full_mask(bbox);
         let color = rgba(200, 0, 0, 128);
-        let instances = [RoiDrawInstance {
+        let instances = [ObjectDrawInstance {
             bbox,
             mask: &mask,
             color,
         }];
 
-        let pixels = composite_roi_instances(&instances, 8, 8, 2.0, 0.0, 0.0);
+        let pixels = composite_object_instances(&instances, 8, 8, 2.0, 0.0, 0.0);
 
         for y in 0..8usize {
             for x in 0..8usize {
@@ -998,34 +998,34 @@ mod composite_roi_instances_tests {
     }
 
     #[test]
-    fn roi_entirely_outside_viewport_is_culled_and_produces_no_pixels() {
+    fn object_entirely_outside_viewport_is_culled_and_produces_no_pixels() {
         let bbox = [1000u32, 1000, 1001, 1001];
         let mask = full_mask(bbox);
-        let instances = [RoiDrawInstance {
+        let instances = [ObjectDrawInstance {
             bbox,
             mask: &mask,
             color: rgba(255, 255, 255, 255),
         }];
 
-        let pixels = composite_roi_instances(&instances, 8, 8, 1.0, 0.0, 0.0);
+        let pixels = composite_object_instances(&instances, 8, 8, 1.0, 0.0, 0.0);
 
         assert!(pixels.iter().all(|p| p.a == 0));
     }
 
     #[test]
-    fn roi_straddling_the_viewport_edge_is_not_over_culled() {
+    fn object_straddling_the_viewport_edge_is_not_over_culled() {
         // 3x3 fully-set mask anchored at the origin, but the buffer is only 2x2:
         // the bbox extends past the buffer, yet still overlaps it and must not be
         // culled - the visible 2x2 corner should render fully.
         let bbox = [0u32, 0, 2, 2];
         let mask = full_mask(bbox);
-        let instances = [RoiDrawInstance {
+        let instances = [ObjectDrawInstance {
             bbox,
             mask: &mask,
             color: rgba(1, 2, 3, 200),
         }];
 
-        let pixels = composite_roi_instances(&instances, 2, 2, 1.0, 0.0, 0.0);
+        let pixels = composite_object_instances(&instances, 2, 2, 1.0, 0.0, 0.0);
 
         assert!(
             pixels.iter().all(|p| p.r == 1 && p.g == 2 && p.b == 3),
@@ -1034,23 +1034,23 @@ mod composite_roi_instances_tests {
     }
 
     #[test]
-    fn far_zoomed_out_roi_collapses_to_exactly_one_pixel_instead_of_vanishing() {
-        // A small (2x2) ROI viewed at zoom=0.01: its screen footprint
+    fn far_zoomed_out_object_collapses_to_exactly_one_pixel_instead_of_vanishing() {
+        // A small (2x2) object viewed at zoom=0.01: its screen footprint
         // (2 * 0.01 = 0.02px) is far below one pixel. Without the collapse path
         // this would either vanish (every mask pixel rounds into the same
         // sub-pixel slot that the old per-pixel clipping logic could drop) or
         // require iterating mask bits for no visual gain; with it, exactly one
-        // pixel must be painted so the ROI doesn't silently disappear.
+        // pixel must be painted so the object doesn't silently disappear.
         let bbox = [100u32, 100, 101, 101];
         let mask = full_mask(bbox);
         let color = rgba(50, 60, 70, 222);
-        let instances = [RoiDrawInstance {
+        let instances = [ObjectDrawInstance {
             bbox,
             mask: &mask,
             color,
         }];
 
-        let pixels = composite_roi_instances(&instances, 50, 50, 0.01, 0.0, 0.0);
+        let pixels = composite_object_instances(&instances, 50, 50, 0.01, 0.0, 0.0);
 
         let painted: Vec<_> = pixels.iter().filter(|p| p.a != 0).collect();
         assert_eq!(
@@ -1066,25 +1066,25 @@ mod composite_roi_instances_tests {
     }
 
     #[test]
-    fn overlapping_rois_blend_with_porter_duff_over() {
+    fn overlapping_objects_blend_with_porter_duff_over() {
         let bbox = [0u32, 0, 0, 0]; // single-pixel bbox
         let mask = full_mask(bbox);
         let bottom = rgba(255, 0, 0, 128);
         let top = rgba(0, 0, 255, 128);
         let instances = [
-            RoiDrawInstance {
+            ObjectDrawInstance {
                 bbox,
                 mask: &mask,
                 color: bottom,
             },
-            RoiDrawInstance {
+            ObjectDrawInstance {
                 bbox,
                 mask: &mask,
                 color: top,
             },
         ];
 
-        let pixels = composite_roi_instances(&instances, 3, 3, 1.0, 0.0, 0.0);
+        let pixels = composite_object_instances(&instances, 3, 3, 1.0, 0.0, 0.0);
 
         let mut expected = bottom;
         blend_pixel_over(&mut expected, top);
@@ -1121,7 +1121,12 @@ mod dispatch_slot_tests {
         merge_into_slot(&pair, DrawingTask::default());
 
         // What the worker's `wait_for_task` would have taken.
-        let taken = pair.0.lock().unwrap().take().expect("a task must be pending");
+        let taken = pair
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("a task must be pending");
         assert!(
             taken.is_new_image,
             "the new-image request must not be dropped by the later plain dispatch"
@@ -1140,7 +1145,12 @@ mod dispatch_slot_tests {
         };
         merge_into_slot(&pair, task);
 
-        let taken = pair.0.lock().unwrap().take().expect("a task must be pending");
+        let taken = pair
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("a task must be pending");
         assert!(taken.auto_adjust_selected);
         assert!(!taken.is_new_image);
     }
@@ -1156,11 +1166,20 @@ mod dispatch_slot_tests {
             },
         );
         // Worker consumes it.
-        pair.0.lock().unwrap().take().expect("a task must be pending");
+        pair.0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("a task must be pending");
 
         // A later, unrelated plain dispatch must not resurrect the old flag.
         merge_into_slot(&pair, DrawingTask::default());
-        let taken = pair.0.lock().unwrap().take().expect("a task must be pending");
+        let taken = pair
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("a task must be pending");
         assert!(
             !taken.is_new_image,
             "a fresh dispatch into an empty (already-consumed) slot must not merge with stale state"

@@ -13,7 +13,7 @@ use evanalyzer_cfg::{
         images_settings::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
         },
-        roi_settings::RoiSettings,
+        object_settings::ObjectMetricSettings,
     },
 };
 use indexmap::IndexMap;
@@ -47,7 +47,7 @@ pub enum ProgressEvent {
     TileCompleted {
         tile_index: usize,
         total_tiles: usize,
-        rois: Vec<RoiSettings>,
+        objects: Vec<ObjectMetricSettings>,
     },
     ImageCompleted {
         index: usize,
@@ -905,10 +905,10 @@ impl<'a> JobExecutor {
                 return Ok(());
             }
 
-            let tile_rois: Vec<RoiSettings> = cache
-                .roi_cache
+            let tile_objects: Vec<ObjectMetricSettings> = cache
+                .object_cache
                 .values()
-                .map(|r| r.to_roi_settings())
+                .map(|r| r.to_object_settings())
                 .collect();
 
             match cache_tx.try_send(cache) {
@@ -931,7 +931,7 @@ impl<'a> JobExecutor {
                 .send(ProgressEvent::TileCompleted {
                     tile_index,
                     total_tiles,
-                    rois: tile_rois,
+                    objects: tile_objects,
                 })
                 .ok();
 
@@ -1161,7 +1161,7 @@ impl<'a> JobExecutor {
                 image_meta: image_meta,
                 images: image_cache_map,
             },
-            roi_cache: BTreeMap::new(),
+            object_cache: BTreeMap::new(),
             image_rel_path: image_rel_path.clone(),
         })
     }
@@ -1233,7 +1233,7 @@ mod z_t_stack_precedence_tests {
             std::path::PathBuf::new(),
             global_image_settings,
             Arc::new(Mutex::new(MemoryExporter {
-                out_rois: Arc::new(Mutex::new(Vec::new())),
+                out_objects: Arc::new(Mutex::new(Vec::new())),
             })),
             None,
         )
@@ -1450,7 +1450,7 @@ mod preview_visible_tile_count_tests {
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
             Arc::new(Mutex::new(MemoryExporter {
-                out_rois: Arc::new(Mutex::new(Vec::new())),
+                out_objects: Arc::new(Mutex::new(Vec::new())),
             })),
             None,
         );
@@ -1536,7 +1536,7 @@ mod preview_tile_size_tests {
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
             Arc::new(Mutex::new(MemoryExporter {
-                out_rois: Arc::new(Mutex::new(Vec::new())),
+                out_objects: Arc::new(Mutex::new(Vec::new())),
             })),
             None,
         );
@@ -1606,7 +1606,7 @@ mod tile_iterator_tests {
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
             Arc::new(Mutex::new(MemoryExporter {
-                out_rois: Arc::new(Mutex::new(Vec::new())),
+                out_objects: Arc::new(Mutex::new(Vec::new())),
             })),
             None,
         )
@@ -1766,7 +1766,7 @@ mod z_stack_iterator_tests {
             std::path::PathBuf::new(),
             global_image_settings,
             Arc::new(Mutex::new(MemoryExporter {
-                out_rois: Arc::new(Mutex::new(Vec::new())),
+                out_objects: Arc::new(Mutex::new(Vec::new())),
             })),
             None,
         )
@@ -1904,7 +1904,7 @@ mod execution_order_tests {
             std::path::PathBuf::new(),
             GlobalImageSettings::default(),
             Arc::new(Mutex::new(MemoryExporter {
-                out_rois: Arc::new(Mutex::new(Vec::new())),
+                out_objects: Arc::new(Mutex::new(Vec::new())),
             })),
             None,
         )
@@ -2037,7 +2037,7 @@ mod tests {
     use super::*;
     use crate::{
         algos::{
-            Blur, ConnectedComponents, ExtractRois, ImageSource, SaveImage, Threshold,
+            Blur, ConnectedComponents, ExtractObjects, ImageSource, SaveImage, Threshold,
             ThresholdEntry, ThresholdMethod,
         },
         init_java_wrapper,
@@ -2129,8 +2129,8 @@ mod tests {
         };
         pipeline.add_command(Box::new(saver));
 
-        let extract_rois = ExtractRois;
-        pipeline.add_command(Box::new(extract_rois));
+        let extract_objects = ExtractObjects;
+        pipeline.add_command(Box::new(extract_objects));
 
         // Prepare the project
         let mut project = ProjectSettings::default();

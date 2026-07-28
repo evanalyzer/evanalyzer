@@ -1,4 +1,4 @@
-// # roi
+// # object_settings
 //
 // **Author:** Joachim Danmayr
 // **Date:** 2026-02-06
@@ -21,13 +21,13 @@ use std::collections::HashSet;
 #[derive(Debug, Default, Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IntensitySettings {
-    /// Sum of all pixel intensities in the ROI
+    /// Sum of all pixel intensities in the object
     pub sum_intensity: f64,
-    /// Minimum pixel intensity in the ROI
+    /// Minimum pixel intensity in the object
     pub min_intensity: f32,
-    /// Maximum pixel intensity in the ROI
+    /// Maximum pixel intensity in the object
     pub max_intensity: f32,
-    /// Average pixel intensity in the ROI
+    /// Average pixel intensity in the object
     #[serde(default)]
     pub avg_intensity: f32,
     /// Unused scratch buffer kept for layout compatibility; never serialized.
@@ -39,20 +39,20 @@ pub struct IntensitySettings {
 #[serde(rename_all = "camelCase")]
 pub struct TrackSettings {
     pub id: TrackId,
-    pub roi_ids: Vec<ObjectId>,        // Ordered list of ROIs over time
+    pub object_ids: Vec<ObjectId>,        // Ordered list of ROIs over time
     pub parent_track: Option<TrackId>, // If created by division
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct RoiSettings {
+pub struct ObjectMetricSettings {
     // Global unique object ID
     pub id: ObjectId,
 
     // Semantic class after threshold
     pub segmentation_class: SegmentationClass,
 
-    // Dedicated class after classify roi
+    // Dedicated class after classify object
     pub object_class: HashSet<ObjectClass>,
 
     // Colocalization
@@ -87,8 +87,8 @@ pub struct RoiSettings {
     // Intensities
     pub intensities: IndexMap<i32, IntensitySettings>, // Intensity values for each image channel
 
-    // Precomputed perimeter (pixels), filled from Roi::get_perimeter so consumers
-    // (e.g. the GUI ROI list) don't recompute the O(bbox area) boundary walk.
+    // Precomputed perimeter (pixels), filled from Object::get_perimeter so consumers
+    // (e.g. the GUI object list) don't recompute the O(bbox area) boundary walk.
     #[serde(default)]
     pub perimeter: f32,
 

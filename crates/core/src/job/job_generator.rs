@@ -9,7 +9,7 @@ use chrono::Utc;
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use evanalyzer_cfg::{
     core_types::InternalErrors,
-    settings::{project_settings::ProjectSettings, roi_settings::RoiSettings},
+    settings::{project_settings::ProjectSettings, object_settings::ObjectMetricSettings},
 };
 use log::{error, info};
 use std::{
@@ -24,9 +24,9 @@ pub fn generate_preview_job_from_project_settings(
     config: ProjectSettings,
     project_path: PathBuf,
 ) -> Result<JobExecutor, InternalErrors> {
-    let out_rois: Arc<Mutex<Vec<RoiSettings>>> = Arc::new(Mutex::new(vec![]));
+    let out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>> = Arc::new(Mutex::new(vec![]));
     let memory_storage = Arc::new(Mutex::new(MemoryExporter {
-        out_rois: out_rois.clone(),
+        out_objects: out_objects.clone(),
     }));
 
     let output_path = project_path.join("results").join("preview");

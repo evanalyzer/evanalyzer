@@ -10,12 +10,12 @@ use std::path::Path;
 /// 127.0, sum 255.0 (scaled values).
 pub(crate) const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
 
-/// Creates the `rois`/`coloc_stats` schema (matching the schema
+/// Creates the `objects`/`coloc_stats` schema (matching the schema
 /// `evanalyzer_core::storage::duckdb::CREATE_TABLES` writes - that constant
 /// isn't public, so this mirrors it by hand) on an already-open connection.
 fn create_schema(conn: &duckdb::Connection) {
     conn.execute_batch(
-        "CREATE TABLE rois (
+        "CREATE TABLE objects (
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL,
             c_stack INTEGER, z_stack INTEGER, t_stack INTEGER,
             object_id UUID NOT NULL,
@@ -44,13 +44,13 @@ fn create_schema(conn: &duckdb::Connection) {
         );
         CREATE TABLE coloc_stats (
             image VARCHAR NOT NULL, source_class VARCHAR NOT NULL, target_class VARCHAR NOT NULL,
-            n_colocalized UBIGINT, avg_targets_per_roi DOUBLE, total_source_rois UBIGINT
+            n_colocalized UBIGINT, avg_targets_per_object DOUBLE, total_source_objects UBIGINT
         );",
     )
     .expect("create schema");
 }
 
-/// Builds a minimal `rois` table and inserts two ROIs from two different
+/// Builds a minimal `objects` table and inserts two objects from two different
 /// images/classes. Lets tests exercise `ResultsLoader`/`ResultsExporter`
 /// end-to-end against a real DuckDB file instead of mocking the reader.
 pub(crate) fn seed_results_db(path: &Path) {
@@ -59,7 +59,7 @@ pub(crate) fn seed_results_db(path: &Path) {
 
     let insert = |image: &str, object_id: &str, class_name: &str, class_id: i32, area_px: u64| {
         conn.execute(
-            "INSERT INTO rois (
+            "INSERT INTO objects (
                 image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
                 object_class_name, object_class_id, track_id,
                 centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
@@ -95,11 +95,23 @@ pub(crate) fn seed_results_db(path: &Path) {
                 CH0_INTENSITIES_JSON,
             ],
         )
-        .unwrap_or_else(|e| panic!("insert roi {object_id}: {e}"));
+        .unwrap_or_else(|e| panic!("insert object {object_id}: {e}"));
     };
 
-    insert("img1.tif", "00000000-0000-0000-0000-000000000001", "ClassA", 1, 100);
-    insert("img2.tif", "00000000-0000-0000-0000-000000000002", "ClassB", 2, 200);
+    insert(
+        "img1.tif",
+        "00000000-0000-0000-0000-000000000001",
+        "ClassA",
+        1,
+        100,
+    );
+    insert(
+        "img2.tif",
+        "00000000-0000-0000-0000-000000000002",
+        "ClassB",
+        2,
+        200,
+    );
 }
 
 /// Builds a deterministic, order-decodable `object_id` for the bulk fixtures
@@ -140,7 +152,7 @@ fn flush_batch(conn: &duckdb::Connection, sql: &mut String, prefix: &str) {
     sql.push_str(prefix);
 }
 
-const INSERT_PREFIX: &str = "INSERT INTO rois (
+const INSERT_PREFIX: &str = "INSERT INTO objects (
     image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
     object_class_name, object_class_id, track_id,
     centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
@@ -155,7 +167,7 @@ const INSERT_PREFIX: &str = "INSERT INTO rois (
 
 const BATCH_ROWS: usize = 1000;
 
-/// Seeds `n` plain (non-colocalized) ROIs, cycling across three images and
+/// Seeds `n` plain (non-colocalized) objects, cycling across three images and
 /// two classes, with a unique, order-decodable `object_id` (see
 /// [`make_object_id`]) and `area_px` set to the row's index - so a
 /// pagination test can assert the exported `Area` column is exactly
@@ -197,14 +209,14 @@ pub(crate) fn seed_large_results_db(path: &Path, n: usize) {
     }
 }
 
-/// Seeds `n_sources` "ClassA" ROIs, each colocalized with exactly one
+/// Seeds `n_sources` "ClassA" objects, each colocalized with exactly one
 /// "ClassB" partner from a pool of `n_partners` (`partner_idx = idx %
 /// n_partners`, so partners are reused once `n_sources > n_partners`), plus
-/// the `n_partners` "ClassB" ROIs themselves. Both families use
+/// the `n_partners` "ClassB" objects themselves. Both families use
 /// order-decodable `object_id`s (see [`make_object_id`]) so a
 /// coloc-detail pagination test can, for every exported row, decode the
-/// source and partner indices straight from the "ROI ID" / "Coloc ClassB
-/// ROI ID" columns and assert `partner_idx == source_idx % n_partners` -
+/// source and partner indices straight from the "object ID" / "Coloc ClassB
+/// object ID" columns and assert `partner_idx == source_idx % n_partners` -
 /// proving both correct row coverage *and* correct partner resolution
 /// across an export-page boundary.
 pub(crate) fn seed_large_coloc_db(path: &Path, n_sources: usize, n_partners: usize) {
@@ -213,16 +225,17 @@ pub(crate) fn seed_large_coloc_db(path: &Path, n_sources: usize, n_partners: usi
 
     let mut sql = String::from(INSERT_PREFIX);
     let mut row_in_batch = 0usize;
-    let push_row = |conn: &duckdb::Connection, sql: &mut String, row_in_batch: &mut usize, row: String| {
-        if !sql.ends_with(' ') {
-            sql.push(',');
-        }
-        sql.push_str(&row);
-        *row_in_batch += 1;
-        if *row_in_batch % BATCH_ROWS == 0 {
-            flush_batch(conn, sql, INSERT_PREFIX);
-        }
-    };
+    let push_row =
+        |conn: &duckdb::Connection, sql: &mut String, row_in_batch: &mut usize, row: String| {
+            if !sql.ends_with(' ') {
+                sql.push(',');
+            }
+            sql.push_str(&row);
+            *row_in_batch += 1;
+            if *row_in_batch % BATCH_ROWS == 0 {
+                flush_batch(conn, sql, INSERT_PREFIX);
+            }
+        };
 
     for idx in 0..n_partners {
         let object_id = large_partner_object_id(idx);

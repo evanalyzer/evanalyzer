@@ -192,8 +192,8 @@ impl Pipeline {
 mod tests {
     use super::*;
     use crate::{
-        ManagedImage, Roi,
-        algos::{ExtractRois, Voronoi},
+        ManagedImage, Object,
+        algos::{ExtractObjects, Voronoi},
     };
     use evanalyzer_cfg::core_types::{ImageAddress, ObjectClass, SizeUnits};
     use kornia_apriltag::utils::Point2d;
@@ -203,7 +203,7 @@ mod tests {
     /// Test-only stand-in for real segmentation (Threshold + ConnectedComponents):
     /// stamps one rectangular object - at tile-local coordinates - directly into
     /// `ctx.segmentation_map`/`ctx.instance_map`, so the test can focus on whether
-    /// the *tile-awareness* of downstream steps (ExtractRois, Voronoi) holds, not on
+    /// the *tile-awareness* of downstream steps (ExtractObjects, Voronoi) holds, not on
     /// thresholding behaviour.
     struct FakeSegmenter {
         rect: [usize; 4], // [x_min, y_min, x_max, y_max], tile-local, inclusive
@@ -297,7 +297,7 @@ mod tests {
             },
         );
         stage1.add_command(Box::new(FakeSegmenter { rect: object_rect }));
-        stage1.add_command(Box::new(ExtractRois {
+        stage1.add_command(Box::new(ExtractObjects {
             max_objects_before_fail: 100_000,
         }));
         let result1 = stage1
@@ -306,7 +306,7 @@ mod tests {
 
         // Stage 2: Voronoi, sourced from Scratchpad - the recommended setup for a
         // pure object-manipulation step with no pixel input of its own - reading the
-        // center ROI stage 1 just produced via the cache that's threaded between
+        // center object stage 1 just produced via the cache that's threaded between
         // both pipelines on this same tile.
         let mut stage2 = Pipeline::new(
             PipelineId(2),
@@ -338,7 +338,7 @@ mod tests {
         // pixel coordinates from the *full* image instead of the *current tile*
         // silently corrupts results (or, once intensity sampling reads from the
         // tile-local channel buffer, panics outright) for any image split into more
-        // than one tile. This drives the real ExtractRois -> Voronoi pipeline chain,
+        // than one tile. This drives the real ExtractObjects -> Voronoi pipeline chain,
         // exactly as JobExecutor does per tile, against two adjacent tiles cut from
         // one larger image, and checks neither tile's results leak past its own
         // absolute bounds.
@@ -362,8 +362,8 @@ mod tests {
         );
 
         for (cache, lo_x, hi_x) in [(&cache_a, 0u32, 20u32), (&cache_b, 20u32, 40u32)] {
-            let regions: Vec<&Roi> = cache
-                .roi_cache
+            let regions: Vec<&Object> = cache
+                .object_cache
                 .values()
                 .filter(|r| r.has_object_class(&ObjectClass::Valid(99)))
                 .collect();
@@ -449,7 +449,7 @@ mod tests {
 
         // FakeSegmenter only ever touches segmentation_map/instance_map, never
         // ctx.image - exactly the shape of a real segmentation+measurement
-        // pipeline (e.g. Cellpose -> ExtractRois).
+        // pipeline (e.g. Cellpose -> ExtractObjects).
         let mut pipeline = Pipeline::new(
             PipelineId(1),
             CorePipelineSettings {

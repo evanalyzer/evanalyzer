@@ -1,17 +1,17 @@
-use evanalyzer_cfg::{core_types::ObjectClass, settings::roi_settings::RoiSettings};
+use evanalyzer_cfg::{core_types::ObjectClass, settings::object_settings::ObjectMetricSettings};
 
-pub trait RoiExt {
+pub trait ObjectExt {
     fn is_part_of(&self, x: u32, y: u32) -> bool;
     fn add_object_class(&mut self, object_class: ObjectClass);
     fn remove_object_class(&mut self, object_class: &ObjectClass);
 }
 
-impl RoiExt for RoiSettings {
-    /// Checks if a global coordinate (x, y) is within the ROI's mask.
+impl ObjectExt for ObjectMetricSettings {
+    /// Checks if a global coordinate (x, y) is within the object's mask.
     fn is_part_of(&self, x: u32, y: u32) -> bool {
         let [x_min, y_min, x_max, y_max] = self.bbox;
 
-        // bbox[2]/[3] are INCLUSIVE - the last pixel coordinate inside the ROI.
+        // bbox[2]/[3] are INCLUSIVE - the last pixel coordinate inside the object.
         if x < x_min || x > x_max || y < y_min || y > y_max {
             return false;
         }
@@ -43,14 +43,14 @@ mod tests {
     use super::*;
     use bitvec::{order::Lsb0, vec::BitVec};
 
-    /// A 4x3 ROI (bbox x_min=10,y_min=20,x_max=13,y_max=22, so width=4,
+    /// A 4x3 object (bbox x_min=10,y_min=20,x_max=13,y_max=22, so width=4,
     /// height=3) whose mask is true only at local (1,1) - global (11, 21).
-    fn single_pixel_roi() -> RoiSettings {
+    fn single_pixel_object() -> ObjectMetricSettings {
         let width = 4usize;
         let height = 3usize;
         let mut mask_data = BitVec::<u64, Lsb0>::repeat(false, width * height);
         mask_data.set(1 * width + 1, true);
-        RoiSettings {
+        ObjectMetricSettings {
             bbox: [10, 20, 13, 22],
             mask_data,
             ..Default::default()
@@ -59,22 +59,22 @@ mod tests {
 
     #[test]
     fn is_part_of_true_only_at_the_set_mask_bit() {
-        let roi = single_pixel_roi();
-        assert!(roi.is_part_of(11, 21));
-        assert!(!roi.is_part_of(10, 20));
-        assert!(!roi.is_part_of(12, 21));
-        assert!(!roi.is_part_of(11, 22));
+        let object = single_pixel_object();
+        assert!(object.is_part_of(11, 21));
+        assert!(!object.is_part_of(10, 20));
+        assert!(!object.is_part_of(12, 21));
+        assert!(!object.is_part_of(11, 22));
     }
 
     #[test]
     fn is_part_of_is_false_outside_the_bbox() {
-        let roi = single_pixel_roi();
+        let object = single_pixel_object();
         // Below/left of the bbox.
-        assert!(!roi.is_part_of(9, 21));
-        assert!(!roi.is_part_of(11, 19));
+        assert!(!object.is_part_of(9, 21));
+        assert!(!object.is_part_of(11, 19));
         // Above/right of the bbox (bbox max is inclusive, so max+1 is out).
-        assert!(!roi.is_part_of(14, 21));
-        assert!(!roi.is_part_of(11, 23));
+        assert!(!object.is_part_of(14, 21));
+        assert!(!object.is_part_of(11, 23));
     }
 
     #[test]
@@ -83,54 +83,54 @@ mod tests {
         let width = 2usize;
         let mut mask_data = BitVec::<u64, Lsb0>::repeat(false, width * width);
         mask_data.set(0, true);
-        let roi = RoiSettings {
+        let object = ObjectMetricSettings {
             bbox: [0, 0, 1, 1],
             mask_data,
             ..Default::default()
         };
-        assert!(roi.is_part_of(0, 0));
-        assert!(!roi.is_part_of(1, 1));
+        assert!(object.is_part_of(0, 0));
+        assert!(!object.is_part_of(1, 1));
     }
 
     #[test]
     fn add_object_class_inserts_a_valid_class_but_rejects_unset() {
-        let mut roi = RoiSettings::default();
-        roi.add_object_class(ObjectClass::Valid(1));
-        assert!(roi.object_class.contains(&ObjectClass::Valid(1)));
+        let mut object = ObjectMetricSettings::default();
+        object.add_object_class(ObjectClass::Valid(1));
+        assert!(object.object_class.contains(&ObjectClass::Valid(1)));
 
-        roi.add_object_class(ObjectClass::Unset);
+        object.add_object_class(ObjectClass::Unset);
         assert!(
-            !roi.object_class.contains(&ObjectClass::Unset),
+            !object.object_class.contains(&ObjectClass::Unset),
             "Unset must never be recorded as a real class"
         );
-        assert_eq!(roi.object_class.len(), 1);
+        assert_eq!(object.object_class.len(), 1);
     }
 
     #[test]
     fn add_object_class_is_idempotent() {
-        let mut roi = RoiSettings::default();
-        roi.add_object_class(ObjectClass::Valid(5));
-        roi.add_object_class(ObjectClass::Valid(5));
-        assert_eq!(roi.object_class.len(), 1);
+        let mut object = ObjectMetricSettings::default();
+        object.add_object_class(ObjectClass::Valid(5));
+        object.add_object_class(ObjectClass::Valid(5));
+        assert_eq!(object.object_class.len(), 1);
     }
 
     #[test]
     fn remove_object_class_only_removes_the_given_class() {
-        let mut roi = RoiSettings::default();
-        roi.add_object_class(ObjectClass::Valid(1));
-        roi.add_object_class(ObjectClass::Valid(2));
+        let mut object = ObjectMetricSettings::default();
+        object.add_object_class(ObjectClass::Valid(1));
+        object.add_object_class(ObjectClass::Valid(2));
 
-        roi.remove_object_class(&ObjectClass::Valid(1));
+        object.remove_object_class(&ObjectClass::Valid(1));
 
-        assert!(!roi.object_class.contains(&ObjectClass::Valid(1)));
-        assert!(roi.object_class.contains(&ObjectClass::Valid(2)));
+        assert!(!object.object_class.contains(&ObjectClass::Valid(1)));
+        assert!(object.object_class.contains(&ObjectClass::Valid(2)));
     }
 
     #[test]
     fn remove_object_class_on_a_missing_class_is_a_no_op() {
-        let mut roi = RoiSettings::default();
-        roi.add_object_class(ObjectClass::Valid(2));
-        roi.remove_object_class(&ObjectClass::Valid(99));
-        assert_eq!(roi.object_class.len(), 1);
+        let mut object = ObjectMetricSettings::default();
+        object.add_object_class(ObjectClass::Valid(2));
+        object.remove_object_class(&ObjectClass::Valid(99));
+        assert_eq!(object.object_class.len(), 1);
     }
 }

@@ -17,7 +17,7 @@
 //!
 use crate::{
     algos::ImageAlgorithm,
-    roi::{Roi, RoiInit},
+    object::{Object, ObjectInit},
 };
 use evanalyzer_cfg::core_types::{
     InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 /// Calculates spatial colocalization and intersections between specified object classes.
 ///
-/// This command scans the ROI cache, groups objects by their designated classes,
+/// This command scans the object cache, groups objects by their designated classes,
 /// and performs spatial overlap analysis. It records colocalization relationships
 /// between intersecting entities and can optionally generate new child ROIs representing
 /// the precise intersection regions.
@@ -46,13 +46,13 @@ pub struct Colocalization {
 
     /// Class of the overlapping area if needed
     ///
-    /// If defined the overlapping coloc area is added as new ROI and labeled with this class
+    /// If defined the overlapping coloc area is added as new object and labeled with this class
     pub class_for_overlapping_areas: ObjectClass,
 
     /// Classes an object must NOT overlap to be considered colocalized.
     ///
     /// An object that otherwise satisfies `classes_to_coloc` is excluded entirely
-    /// (no relation recorded, no intersection ROI created) if it also overlaps any
+    /// (no relation recorded, no intersection object created) if it also overlaps any
     /// object from one of these classes with at least `min_coloc_area`. Leave empty
     /// (the default) to disable this filter - exclusion is opt-in.
     ///
@@ -93,17 +93,17 @@ impl ImageAlgorithm for Colocalization {
         for target_class in &self.classes_to_coloc {
             let mut matched_ids = Vec::new();
 
-            for roi in cache.roi_cache.values() {
+            for object in cache.object_cache.values() {
                 let passes_filter = self
                     .filter_classes
                     .iter()
-                    .all(|f_class| roi.has_object_class(f_class));
+                    .all(|f_class| object.has_object_class(f_class));
                 if !passes_filter {
                     continue;
                 }
 
-                if roi.has_object_class(target_class) {
-                    matched_ids.push(roi.id.clone());
+                if object.has_object_class(target_class) {
+                    matched_ids.push(object.id.clone());
                 }
             }
 
@@ -117,18 +117,18 @@ impl ImageAlgorithm for Colocalization {
             Vec::new()
         } else {
             cache
-                .roi_cache
+                .object_cache
                 .values()
-                .filter(|roi| {
+                .filter(|object| {
                     self.filter_classes
                         .iter()
-                        .all(|f_class| roi.has_object_class(f_class))
+                        .all(|f_class| object.has_object_class(f_class))
                         && self
                             .exclude_classes
                             .iter()
-                            .any(|c| roi.has_object_class(c))
+                            .any(|c| object.has_object_class(c))
                 })
-                .map(|roi| roi.id.clone())
+                .map(|object| object.id.clone())
                 .collect()
         };
 
@@ -136,12 +136,12 @@ impl ImageAlgorithm for Colocalization {
             ObjectId,
             IndexMap<ObjectClass, Vec<ObjectId>>,
         > = std::collections::HashMap::new();
-        let mut new_rois: Vec<Roi> = Vec::new();
-        // Tracks which sorted sets of ROI IDs already produced an overlap ROI (avoids duplicates).
+        let mut new_objects: Vec<Object> = Vec::new();
+        // Tracks which sorted sets of object IDs already produced an overlap object (avoids duplicates).
         let mut processed_combinations: std::collections::HashSet<Vec<ObjectId>> =
             std::collections::HashSet::new();
 
-        // --- PHASE 2: For each ROI, check whether it overlaps at least one ROI from every
+        // --- PHASE 2: For each object, check whether it overlaps at least one object from every
         //              other class. Only then is it considered colocalized. ---
         for (class_idx, anchor_class) in self.classes_to_coloc.iter().enumerate() {
             let anchor_ids = match class_buckets.get(anchor_class) {
@@ -150,7 +150,7 @@ impl ImageAlgorithm for Colocalization {
             };
 
             'anchor: for anchor_id in &anchor_ids {
-                let anchor_roi = match cache.roi_cache.get(anchor_id) {
+                let anchor_object = match cache.object_cache.get(anchor_id) {
                     Some(r) => r,
                     None => continue,
                 };
@@ -175,9 +175,9 @@ impl ImageAlgorithm for Colocalization {
                         .filter(|other_id| *other_id != anchor_id)
                         .filter_map(|other_id| {
                             cache
-                                .roi_cache
+                                .object_cache
                                 .get(other_id)
-                                .and_then(|r| anchor_roi.overlaps(r))
+                                .and_then(|r| anchor_object.overlaps(r))
                                 .filter(|intersection| intersection.area >= min_area_px)
                                 .map(|intersection| (other_id.clone(), intersection.area))
                         })
@@ -211,15 +211,15 @@ impl ImageAlgorithm for Colocalization {
                 if exclude_ids.iter().any(|excl_id| {
                     excl_id != anchor_id
                         && cache
-                            .roi_cache
+                            .object_cache
                             .get(excl_id)
-                            .and_then(|r| anchor_roi.overlaps(r))
+                            .and_then(|r| anchor_object.overlaps(r))
                             .is_some_and(|intersection| intersection.area >= min_area_px)
                 }) {
                     continue 'anchor;
                 }
 
-                // The anchor ROI overlaps with at least one ROI from every other class.
+                // The anchor object overlaps with at least one object from every other class.
                 for (cls, ids) in &class_matches {
                     overlap_matches
                         .entry(anchor_id.clone())
@@ -232,14 +232,14 @@ impl ImageAlgorithm for Colocalization {
                 // Compute the N-way intersection area (chain of pairwise intersections).
                 if let ObjectClass::Valid(overlap_class_id) = self.class_for_overlapping_areas {
                     let overlap_class = ObjectClass::Valid(overlap_class_id);
-                    let mut states: Vec<(Roi, Vec<ObjectId>)> = Vec::new();
+                    let mut states: Vec<(Object, Vec<ObjectId>)> = Vec::new();
 
                     let mut matches_iter = class_matches.iter();
                     if let Some((_, first_ids)) = matches_iter.next() {
-                        // Seed: anchor ∩ each ROI from the first other class
+                        // Seed: anchor ∩ each object from the first other class
                         for first_id in first_ids {
-                            if let Some(first_roi) = cache.roi_cache.get(first_id) {
-                                if let Some(intersection) = anchor_roi.overlaps(first_roi) {
+                            if let Some(first_object) = cache.object_cache.get(first_id) {
+                                if let Some(intersection) = anchor_object.overlaps(first_object) {
                                     states.push((
                                         intersection,
                                         vec![anchor_id.clone(), first_id.clone()],
@@ -251,10 +251,10 @@ impl ImageAlgorithm for Colocalization {
                         // Extend each state by intersecting with ROIs from remaining classes
                         for (_, next_ids) in matches_iter {
                             let mut next_states = Vec::new();
-                            for (current_roi, current_ids) in &states {
+                            for (current_object, current_ids) in &states {
                                 for next_id in next_ids {
-                                    if let Some(next_roi) = cache.roi_cache.get(next_id) {
-                                        if let Some(intersection) = current_roi.overlaps(next_roi) {
+                                    if let Some(next_object) = cache.object_cache.get(next_id) {
+                                        if let Some(intersection) = current_object.overlaps(next_object) {
                                             let mut new_ids = current_ids.clone();
                                             new_ids.push(next_id.clone());
                                             next_states.push((intersection, new_ids));
@@ -265,18 +265,18 @@ impl ImageAlgorithm for Colocalization {
                             states = next_states;
                         }
 
-                        // Each unique set of contributing ROI IDs yields exactly one overlap ROI.
+                        // Each unique set of contributing object IDs yields exactly one overlap object.
                         for (mut intersection, mut ids) in states {
                             ids.sort_by_key(|ObjectId(n)| *n);
                             if processed_combinations.insert(ids) {
                                 intersection.add_object_class(overlap_class);
-                                // `Roi::overlaps()` only derives geometry from the parent masks
-                                // and never sampled pixel data, and this ROI never passes
-                                // through `ExtractRois` (the step that normally measures
+                                // `Object::overlaps()` only derives geometry from the parent masks
+                                // and never sampled pixel data, and this object never passes
+                                // through `ExtractObjects` (the step that normally measures
                                 // intensities), so it needs its own measurement pass here.
                                 intersection.intensities =
                                     intersection.measure_intensities(ctx, cache);
-                                new_rois.push(intersection);
+                                new_objects.push(intersection);
                             }
                         }
                     }
@@ -285,22 +285,22 @@ impl ImageAlgorithm for Colocalization {
         }
 
         // --- PHASE 3: Write Back Results ---
-        // A ROI carrying more than one of `classes_to_coloc` is anchored once per
+        // A object carrying more than one of `classes_to_coloc` is anchored once per
         // class it belongs to (see PHASE 2), so the same partner id can be
         // recomputed and `.extend()`-ed into `found_matches` more than once for a
         // given target class. Dedup per class before writing back, mirroring
-        // `Roi::add_colocalizing_object`.
-        for (roi_id, mut found_matches) in overlap_matches {
+        // `Object::add_colocalizing_object`.
+        for (object_id, mut found_matches) in overlap_matches {
             for ids in found_matches.values_mut() {
                 ids.sort();
                 ids.dedup();
             }
-            if let Some(roi) = cache.roi_cache.get_mut(&roi_id) {
-                roi.colocalized_with.extend(found_matches);
+            if let Some(object) = cache.object_cache.get_mut(&object_id) {
+                object.colocalized_with.extend(found_matches);
             }
         }
-        for roi in new_rois {
-            cache.roi_cache.insert(roi.id.clone(), roi);
+        for object in new_objects {
+            cache.object_cache.insert(object.id.clone(), object);
         }
 
         Ok(())
@@ -364,14 +364,14 @@ mod tests {
         .unwrap()
     }
 
-    fn make_filled_roi(id: u128, bbox: [u32; 4], plane: ImagePlane, class: ObjectClass) -> Roi {
+    fn make_filled_object(id: u128, bbox: [u32; 4], plane: ImagePlane, class: ObjectClass) -> Object {
         let [x_min, y_min, x_max, y_max] = bbox;
         // bbox uses inclusive convention: width = xmax - xmin + 1
         let w = (x_max - x_min + 1) as usize;
         let h = (y_max - y_min + 1) as usize;
         let area = w * h;
         let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
-        let mut roi = Roi::new(RoiInit {
+        let mut object = Object::new(ObjectInit {
             id: ObjectId(id),
             bbox,
             mask_data,
@@ -379,8 +379,8 @@ mod tests {
             plane,
             ..Default::default()
         });
-        roi.add_object_class(class);
-        roi
+        object.add_object_class(class);
+        object
     }
 
     const CLASS_A: ObjectClass = ObjectClass::Valid(1);
@@ -388,7 +388,7 @@ mod tests {
     const CLASS_C: ObjectClass = ObjectClass::Valid(3);
     const CLASS_OVERLAP: ObjectClass = ObjectClass::Valid(99);
 
-    // ROI IDs are set far above the ObjectId::next() counter range so that
+    // object IDs are set far above the ObjectId::next() counter range so that
     // counter-generated IDs from overlaps() never collide with test IDs in parallel runs.
     const ID_A: u128 = 100_000;
     const ID_B: u128 = 200_000;
@@ -410,19 +410,19 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        let roi = make_filled_roi(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
-        cache.roi_cache.insert(roi.id.clone(), roi);
+        let object = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
+        cache.object_cache.insert(object.id.clone(), object);
 
         run(&coloc, &mut cache);
 
         assert!(cache
-            .roi_cache
+            .object_cache
             .values()
             .all(|r| r.colocalized_with.is_empty()));
     }
 
     #[test]
-    fn overlapping_rois_are_colocalized() {
+    fn overlapping_objects_are_colocalized() {
         let coloc = Colocalization {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             filter_classes: vec![],
@@ -433,22 +433,22 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        // ROI A: [0,0,4,4], ROI B: [2,2,6,6] → overlap [2,2,4,4]
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        // object A: [0,0,4,4], object B: [2,2,6,6] → overlap [2,2,4,4]
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&coloc, &mut cache);
 
-        let a = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(
             a.colocalized_with.contains_key(&CLASS_B),
             "A should coloc with B"
         );
         assert!(a.colocalized_with[&CLASS_B].contains(&ObjectId(ID_B)));
 
-        let b = cache.roi_cache.get(&ObjectId(ID_B)).unwrap();
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
         assert!(
             b.colocalized_with.contains_key(&CLASS_A),
             "B should coloc with A"
@@ -457,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn non_overlapping_rois_are_not_colocalized() {
+    fn non_overlapping_objects_are_not_colocalized() {
         let coloc = Colocalization {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             filter_classes: vec![],
@@ -469,21 +469,21 @@ mod tests {
         };
         let mut cache = PipelineCache::default();
         // No shared bounding box region
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [10, 10, 14, 14], ImagePlane::default(), CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [10, 10, 14, 14], ImagePlane::default(), CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&coloc, &mut cache);
 
         assert!(cache
-            .roi_cache
+            .object_cache
             .values()
             .all(|r| r.colocalized_with.is_empty()));
     }
 
     #[test]
-    fn rois_on_different_channels_are_colocalized() {
+    fn objects_on_different_channels_are_colocalized() {
         // Cross-channel colocalization is the primary use case (e.g. DAPI channel vs GFP channel).
         // ROIs from different c-planes with matching XY extent must still colocalize.
         let coloc = Colocalization {
@@ -498,19 +498,19 @@ mod tests {
         let mut cache = PipelineCache::default();
         let plane_ch0 = ImagePlane { z: 0, c: 0, t: 0 };
         let plane_ch1 = ImagePlane { z: 0, c: 1, t: 0 };
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], plane_ch0, CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 6, 6], plane_ch1, CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], plane_ch0, CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 6, 6], plane_ch1, CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&coloc, &mut cache);
 
-        let a = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(
             a.colocalized_with.contains_key(&CLASS_B),
             "cross-channel overlap must be detected"
         );
-        let b = cache.roi_cache.get(&ObjectId(ID_B)).unwrap();
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
         assert!(
             b.colocalized_with.contains_key(&CLASS_A),
             "cross-channel overlap must be detected"
@@ -518,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_class_excludes_rois_that_do_not_have_it() {
+    fn filter_class_excludes_objects_that_do_not_have_it() {
         let coloc = Colocalization {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             filter_classes: vec![CLASS_C], // only ROIs also carrying CLASS_C participate
@@ -529,25 +529,25 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        // roi_a has CLASS_A but NOT CLASS_C → filtered out
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
-        // roi_b has CLASS_B and CLASS_C → passes filter
-        let mut roi_b = make_filled_roi(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
-        roi_b.add_object_class(CLASS_C);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        // object_a has CLASS_A but NOT CLASS_C → filtered out
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
+        // object_b has CLASS_B and CLASS_C → passes filter
+        let mut object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
+        object_b.add_object_class(CLASS_C);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&coloc, &mut cache);
 
-        // roi_a is excluded from CLASS_A bucket so no colocalization occurs
+        // object_a is excluded from CLASS_A bucket so no colocalization occurs
         assert!(cache
-            .roi_cache
+            .object_cache
             .values()
             .all(|r| r.colocalized_with.is_empty()));
     }
 
     #[test]
-    fn overlapping_area_is_added_as_new_roi() {
+    fn overlapping_area_is_added_as_new_object() {
         let coloc = Colocalization {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
             filter_classes: vec![],
@@ -559,28 +559,28 @@ mod tests {
         };
         let mut cache = PipelineCache::default();
         // Inclusive bboxes: A covers [0,3]×[0,3], B covers [2,5]×[2,5] → overlap [2,3]×[2,3]=2×2=4 px
-        let roi_a = make_filled_roi(ID_A, [0, 0, 3, 3], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 5, 5], ImagePlane::default(), CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 3, 3], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 5, 5], ImagePlane::default(), CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&coloc, &mut cache);
 
-        // Three ROIs total: the original two + the intersection ROI
-        assert_eq!(cache.roi_cache.len(), 3, "intersection ROI should be added");
-        let overlap_roi = cache
-            .roi_cache
+        // Three ROIs total: the original two + the intersection object
+        assert_eq!(cache.object_cache.len(), 3, "intersection object should be added");
+        let overlap_object = cache
+            .object_cache
             .values()
             .find(|r| r.has_object_class(&CLASS_OVERLAP))
-            .expect("intersection ROI tagged with CLASS_OVERLAP not found");
-        assert_eq!(overlap_roi.bbox, [2, 2, 3, 3]);
-        assert_eq!(overlap_roi.area, 4);
+            .expect("intersection object tagged with CLASS_OVERLAP not found");
+        assert_eq!(overlap_object.bbox, [2, 2, 3, 3]);
+        assert_eq!(overlap_object.area, 4);
     }
 
     #[test]
-    fn overlapping_area_roi_has_measured_intensities() {
-        // Regression test: `Roi::overlaps()` cannot sample pixel data (it only sees the two
-        // parent masks), so the intersection ROI needs its own intensity measurement pass.
+    fn overlapping_area_object_has_measured_intensities() {
+        // Regression test: `Object::overlaps()` cannot sample pixel data (it only sees the two
+        // parent masks), so the intersection object needs its own intensity measurement pass.
         const CHANNEL: i32 = 0;
         const VALUE: f32 = 5.0;
         let size = ImageSize {
@@ -632,10 +632,10 @@ mod tests {
         );
 
         // Inclusive bboxes: A covers [0,5]×[0,5], B covers [3,8]×[3,8] → overlap [3,5]×[3,5] = 3×3 = 9 px
-        let roi_a = make_filled_roi(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [3, 3, 8, 8], ImagePlane::default(), CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [3, 3, 8, 8], ImagePlane::default(), CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         let coloc = Colocalization {
             classes_to_coloc: vec![CLASS_A, CLASS_B],
@@ -648,16 +648,16 @@ mod tests {
         };
         coloc.execute(&mut ctx, &mut cache).unwrap();
 
-        let overlap_roi = cache
-            .roi_cache
+        let overlap_object = cache
+            .object_cache
             .values()
             .find(|r| r.has_object_class(&CLASS_OVERLAP))
-            .expect("intersection ROI tagged with CLASS_OVERLAP not found");
-        assert_eq!(overlap_roi.area, 9);
-        let intensity = overlap_roi
+            .expect("intersection object tagged with CLASS_OVERLAP not found");
+        assert_eq!(overlap_object.area, 9);
+        let intensity = overlap_object
             .intensities
             .get(&CHANNEL)
-            .expect("overlap ROI should have measured intensities for the channel");
+            .expect("overlap object should have measured intensities for the channel");
         assert_eq!(intensity.sum_intensity, 9.0 * VALUE as f64);
         assert_eq!(intensity.avg_intensity, VALUE);
         assert_eq!(intensity.min_intensity, VALUE);
@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn three_class_all_overlap_full_colocalization() {
         // A=[0,0,6,6], B=[2,2,8,8], C=[4,4,10,10] - every pair overlaps.
-        // Every ROI must be recorded as colocalized with both other classes.
+        // Every object must be recorded as colocalized with both other classes.
         let coloc = Colocalization {
             classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
             filter_classes: vec![],
@@ -680,16 +680,16 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 8, 8], ImagePlane::default(), CLASS_B);
-        let roi_c = make_filled_roi(ID_C, [4, 4, 10, 10], ImagePlane::default(), CLASS_C);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
-        cache.roi_cache.insert(roi_c.id.clone(), roi_c);
+        let object_a = make_filled_object(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 8, 8], ImagePlane::default(), CLASS_B);
+        let object_c = make_filled_object(ID_C, [4, 4, 10, 10], ImagePlane::default(), CLASS_C);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
+        cache.object_cache.insert(object_c.id.clone(), object_c);
 
         run(&coloc, &mut cache);
 
-        let a = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(
             a.colocalized_with.contains_key(&CLASS_B),
             "A must coloc with B"
@@ -701,7 +701,7 @@ mod tests {
         assert!(a.colocalized_with[&CLASS_B].contains(&ObjectId(ID_B)));
         assert!(a.colocalized_with[&CLASS_C].contains(&ObjectId(ID_C)));
 
-        let b = cache.roi_cache.get(&ObjectId(ID_B)).unwrap();
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
         assert!(
             b.colocalized_with.contains_key(&CLASS_A),
             "B must coloc with A"
@@ -713,7 +713,7 @@ mod tests {
         assert!(b.colocalized_with[&CLASS_A].contains(&ObjectId(ID_A)));
         assert!(b.colocalized_with[&CLASS_C].contains(&ObjectId(ID_C)));
 
-        let c = cache.roi_cache.get(&ObjectId(ID_C)).unwrap();
+        let c = cache.object_cache.get(&ObjectId(ID_C)).unwrap();
         assert!(
             c.colocalized_with.contains_key(&CLASS_A),
             "C must coloc with A"
@@ -740,31 +740,31 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 7, 7], ImagePlane::default(), CLASS_B);
-        let roi_c = make_filled_roi(ID_C, [4, 4, 9, 9], ImagePlane::default(), CLASS_C);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
-        cache.roi_cache.insert(roi_c.id.clone(), roi_c);
+        let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 7, 7], ImagePlane::default(), CLASS_B);
+        let object_c = make_filled_object(ID_C, [4, 4, 9, 9], ImagePlane::default(), CLASS_C);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
+        cache.object_cache.insert(object_c.id.clone(), object_c);
 
         run(&coloc, &mut cache);
 
-        let overlap_rois: Vec<_> = cache
-            .roi_cache
+        let overlap_objects: Vec<_> = cache
+            .object_cache
             .values()
             .filter(|r| r.has_object_class(&CLASS_OVERLAP))
             .collect();
         assert_eq!(
-            overlap_rois.len(),
+            overlap_objects.len(),
             1,
-            "exactly one 3-way overlap ROI should be added"
+            "exactly one 3-way overlap object should be added"
         );
         assert_eq!(
-            overlap_rois[0].bbox,
+            overlap_objects[0].bbox,
             [4, 4, 5, 5],
             "3-way bbox should be [4,4,5,5]"
         );
-        assert_eq!(overlap_rois[0].area, 4, "3-way area should be 4 pixels");
+        assert_eq!(overlap_objects[0].area, 4, "3-way area should be 4 pixels");
     }
 
     #[test]
@@ -782,16 +782,16 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 10, 10], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [1, 1, 4, 4], ImagePlane::default(), CLASS_B);
-        let roi_c = make_filled_roi(ID_C, [6, 6, 9, 9], ImagePlane::default(), CLASS_C);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
-        cache.roi_cache.insert(roi_c.id.clone(), roi_c);
+        let object_a = make_filled_object(ID_A, [0, 0, 10, 10], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [1, 1, 4, 4], ImagePlane::default(), CLASS_B);
+        let object_c = make_filled_object(ID_C, [6, 6, 9, 9], ImagePlane::default(), CLASS_C);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
+        cache.object_cache.insert(object_c.id.clone(), object_c);
 
         run(&coloc, &mut cache);
 
-        let a = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(
             a.colocalized_with.contains_key(&CLASS_B),
             "A overlaps both → should be colocalized"
@@ -801,13 +801,13 @@ mod tests {
             "A overlaps both → should be colocalized"
         );
 
-        let b = cache.roi_cache.get(&ObjectId(ID_B)).unwrap();
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
         assert!(
             b.colocalized_with.is_empty(),
             "B doesn't overlap C → must not be colocalized"
         );
 
-        let c = cache.roi_cache.get(&ObjectId(ID_C)).unwrap();
+        let c = cache.object_cache.get(&ObjectId(ID_C)).unwrap();
         assert!(
             c.colocalized_with.is_empty(),
             "C doesn't overlap B → must not be colocalized"
@@ -829,22 +829,22 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [3, 3, 8, 8], ImagePlane::default(), CLASS_B);
-        let roi_c = make_filled_roi(ID_C, [6, 6, 11, 11], ImagePlane::default(), CLASS_C);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
-        cache.roi_cache.insert(roi_c.id.clone(), roi_c);
+        let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [3, 3, 8, 8], ImagePlane::default(), CLASS_B);
+        let object_c = make_filled_object(ID_C, [6, 6, 11, 11], ImagePlane::default(), CLASS_C);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
+        cache.object_cache.insert(object_c.id.clone(), object_c);
 
         run(&coloc, &mut cache);
 
-        let a = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(
             a.colocalized_with.is_empty(),
             "A doesn't overlap C → must not be colocalized"
         );
 
-        let b = cache.roi_cache.get(&ObjectId(ID_B)).unwrap();
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
         assert!(
             b.colocalized_with.contains_key(&CLASS_A),
             "B overlaps both → should be colocalized"
@@ -854,7 +854,7 @@ mod tests {
             "B overlaps both → should be colocalized"
         );
 
-        let c = cache.roi_cache.get(&ObjectId(ID_C)).unwrap();
+        let c = cache.object_cache.get(&ObjectId(ID_C)).unwrap();
         assert!(
             c.colocalized_with.is_empty(),
             "C doesn't overlap A → must not be colocalized"
@@ -868,7 +868,7 @@ mod tests {
         // match against CLASS_C (via Y), which used to get `.extend()`-ed
         // into X's CLASS_C partner list twice — see the bug this guards
         // against, where the coloc-detail flat table showed an extra row for
-        // the same ROI/partner pair.
+        // the same object/partner pair.
         let coloc = Colocalization {
             classes_to_coloc: vec![CLASS_A, CLASS_B, CLASS_C],
             filter_classes: vec![],
@@ -886,26 +886,26 @@ mod tests {
         const ID_Y: u128 = 700_000;
 
         // X belongs to both A and B.
-        let mut x = make_filled_roi(ID_X, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
+        let mut x = make_filled_object(ID_X, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
         x.add_object_class(CLASS_B);
         // W (class A) and Z (class B) each overlap X, so both of X's anchor
         // passes (as an A member and as a B member) find a partner for the
         // *other* target class and pass the "must overlap every other class"
         // check.
-        let w = make_filled_roi(ID_W, [3, 3, 8, 8], ImagePlane::default(), CLASS_A);
-        let z = make_filled_roi(ID_Z, [0, 0, 2, 2], ImagePlane::default(), CLASS_B);
+        let w = make_filled_object(ID_W, [3, 3, 8, 8], ImagePlane::default(), CLASS_A);
+        let z = make_filled_object(ID_Z, [0, 0, 2, 2], ImagePlane::default(), CLASS_B);
         // Y (class C) overlaps X — this is the partner that both of X's
         // anchor passes independently rediscover for CLASS_C.
-        let y = make_filled_roi(ID_Y, [4, 4, 9, 9], ImagePlane::default(), CLASS_C);
+        let y = make_filled_object(ID_Y, [4, 4, 9, 9], ImagePlane::default(), CLASS_C);
 
-        cache.roi_cache.insert(x.id.clone(), x);
-        cache.roi_cache.insert(w.id.clone(), w);
-        cache.roi_cache.insert(z.id.clone(), z);
-        cache.roi_cache.insert(y.id.clone(), y);
+        cache.object_cache.insert(x.id.clone(), x);
+        cache.object_cache.insert(w.id.clone(), w);
+        cache.object_cache.insert(z.id.clone(), z);
+        cache.object_cache.insert(y.id.clone(), y);
 
         run(&coloc, &mut cache);
 
-        let x = cache.roi_cache.get(&ObjectId(ID_X)).unwrap();
+        let x = cache.object_cache.get(&ObjectId(ID_X)).unwrap();
         assert!(x.colocalized_with.contains_key(&CLASS_C), "X must coloc with C");
         assert_eq!(
             x.colocalized_with[&CLASS_C],
@@ -930,18 +930,18 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 8, 8], ImagePlane::default(), CLASS_B);
-        let roi_c = make_filled_roi(ID_C, [4, 4, 10, 10], ImagePlane::default(), CLASS_C);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
-        cache.roi_cache.insert(roi_c.id.clone(), roi_c);
+        let object_a = make_filled_object(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 8, 8], ImagePlane::default(), CLASS_B);
+        let object_c = make_filled_object(ID_C, [4, 4, 10, 10], ImagePlane::default(), CLASS_C);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
+        cache.object_cache.insert(object_c.id.clone(), object_c);
 
         run(&coloc, &mut cache);
 
         assert!(
             cache
-                .roi_cache
+                .object_cache
                 .values()
                 .all(|r| r.colocalized_with.is_empty()),
             "A and B both also overlap excluded class C, so neither should colocalize"
@@ -962,16 +962,16 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
-        let roi_c = make_filled_roi(ID_C, [20, 20, 24, 24], ImagePlane::default(), CLASS_C);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
-        cache.roi_cache.insert(roi_c.id.clone(), roi_c);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
+        let object_c = make_filled_object(ID_C, [20, 20, 24, 24], ImagePlane::default(), CLASS_C);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
+        cache.object_cache.insert(object_c.id.clone(), object_c);
 
         run(&coloc, &mut cache);
 
-        let a = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(
             a.colocalized_with.contains_key(&CLASS_B),
             "A and B don't overlap the excluded class, so they should still colocalize"
@@ -992,14 +992,14 @@ mod tests {
             size_unit: SizeUnits::Pixels,
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&coloc, &mut cache);
 
-        let a = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
+        let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(a.colocalized_with.contains_key(&CLASS_B));
     }
 }

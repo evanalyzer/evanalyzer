@@ -1,5 +1,5 @@
 use crate::UiState;
-use crate::editor::roi_list_controller::RoiListController;
+use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::prelude::*;
 use crate::{
@@ -26,7 +26,7 @@ struct ClassificationModelBridge {
 pub struct ClassificationController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
-    pub(crate) roi_list_controller: Arc<RoiListController>,
+    pub(crate) object_list_controller: Arc<ObjectListController>,
     pub(crate) viewport_controller: Arc<ViewportController>,
 }
 
@@ -34,13 +34,13 @@ impl ClassificationController {
     pub fn new(
         ui: slint::Weak<AppWindow>,
         app_state: Arc<UiState>,
-        roi_list_controller: Arc<RoiListController>,
+        object_list_controller: Arc<ObjectListController>,
         viewport_controller: Arc<ViewportController>,
     ) -> Self {
         Self {
             ui,
             app_state: app_state.clone(),
-            roi_list_controller,
+            object_list_controller,
             viewport_controller,
         }
     }
@@ -67,8 +67,8 @@ impl ClassificationController {
                 .on_apply_classification_settings(move |class_settings| {
                     manager.update_class_settings_in_project(class_settings);
                     manager.sync_classification_to_slint();
-                    manager.roi_list_controller.sync_rois_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_rois();
+                    manager.object_list_controller.sync_objects_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
                 });
 
             // Auto add class
@@ -79,7 +79,7 @@ impl ClassificationController {
                     project.delete_all_classes();
                     project.auto_add_classes_based_on_image_meta();
                     manager.sync_classification_to_slint();
-                    manager.roi_list_controller.sync_rois_to_slint();
+                    manager.object_list_controller.sync_objects_to_slint();
                 });
 
             // Auto add class
@@ -89,7 +89,7 @@ impl ClassificationController {
                     let mut project = manager.app_state.get_project_write();
                     project.auto_add_classes_based_on_image_meta();
                     manager.sync_classification_to_slint();
-                    manager.roi_list_controller.sync_rois_to_slint();
+                    manager.object_list_controller.sync_objects_to_slint();
                 });
 
             // Edit class
@@ -142,7 +142,7 @@ impl ClassificationController {
                         .get_project_write()
                         .toggle_class_visibility(AssignObjectClass!(class_id));
                     manager.sync_classification_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_rois();
+                    manager.viewport_controller.trigger_image_redraw_objects();
                 });
 
             // Toggle hide/show unclassified ROIs
@@ -152,10 +152,10 @@ impl ClassificationController {
                     manager
                         .app_state
                         .get_project_write()
-                        .toggle_hide_unclassified_rois();
+                        .toggle_hide_unclassified_objects();
                     manager.sync_classification_to_slint();
-                    manager.roi_list_controller.sync_rois_to_slint();
-                    manager.viewport_controller.trigger_image_redraw_rois();
+                    manager.object_list_controller.sync_objects_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
                 });
         }
     }
@@ -189,9 +189,9 @@ impl ClassificationController {
                     .classes
                     .iter()
                     .filter(|c| project.is_class_visible(&c.id))
-                    .map(|c| project.count_rois_for_class(&c.id) as i32)
+                    .map(|c| project.count_objects_for_class(&c.id) as i32)
                     .sum();
-                let hide_unclassified = project.hide_unclassified_rois();
+                let hide_unclassified = project.hide_unclassified_objects();
                 drop(project);
 
                 let bridge = Rc::new(ClassificationModelBridge {
@@ -202,7 +202,7 @@ impl ClassificationController {
                 let class_state = ui.global::<ClassificationState>();
                 class_state.set_classes_list(model_rc);
                 class_state.set_total_visible_objects(total_visible);
-                class_state.set_hide_unclassified_rois(hide_unclassified);
+                class_state.set_hide_unclassified_objects(hide_unclassified);
             }
         }) {
             warn!("Failed to sync classification to Slint: {}", e);
@@ -325,7 +325,7 @@ impl Model for ClassificationModelBridge {
             let r = ((c.color >> 16) & 0xff) as u8;
             let g = ((c.color >> 8) & 0xff) as u8;
             let b = (c.color & 0xff) as u8;
-            let count = project.count_rois_for_class(&c.id) as i32;
+            let count = project.count_objects_for_class(&c.id) as i32;
             let visible = project.is_class_visible(&c.id);
             ClassItemData {
                 id: c.id.to_i32(),

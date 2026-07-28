@@ -76,18 +76,18 @@ impl PipelineResultExporter for CsvExporter {
 
         // --- Phase 1: Dynamic Channel Extraction ---
         let mut channel_ids: Vec<i32> = cache
-            .roi_cache
+            .object_cache
             .values()
-            .flat_map(|roi| roi.intensities.keys().cloned())
+            .flat_map(|object| object.intensities.keys().cloned())
             .collect();
         channel_ids.sort();
         channel_ids.dedup();
 
         // --- Phase 2: Dynamic Colocalization Class Extraction ---
         let mut coloc_classes: Vec<ObjectClass> = cache
-            .roi_cache
+            .object_cache
             .values()
-            .flat_map(|roi| roi.colocalized_with.keys().cloned())
+            .flat_map(|object| object.colocalized_with.keys().cloned())
             .collect();
         coloc_classes.sort_by_key(|c| format!("{:?}", c));
         coloc_classes.dedup();
@@ -184,21 +184,21 @@ impl PipelineResultExporter for CsvExporter {
         // Max pixel value for the bit depth (e.g. 65535 for 16-bit)
         let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
 
-        for roi in cache.roi_cache.values() {
-            let perimeter = roi.get_perimeter();
-            let ellipse = roi.get_ellipse();
-            let solidity = roi.get_solidity();
-            let centroid = roi.get_centroid();
-            let feret = roi.get_feret_diameter();
-            let min_feret = roi.get_min_feret_diameter();
+        for object in cache.object_cache.values() {
+            let perimeter = object.get_perimeter();
+            let ellipse = object.get_ellipse();
+            let solidity = object.get_solidity();
+            let centroid = object.get_centroid();
+            let feret = object.get_feret_diameter();
+            let min_feret = object.get_min_feret_diameter();
 
-            let parent_id = roi
+            let parent_id = object
                 .parent_id
                 .as_ref()
                 .map(|id| id.to_string())
                 .unwrap_or_default();
 
-            let children = roi
+            let children = object
                 .children
                 .iter()
                 .map(|id| id.to_string())
@@ -207,42 +207,42 @@ impl PipelineResultExporter for CsvExporter {
 
             let mut row = vec![
                 format!("{:?}", cache.image_rel_path),
-                format!("{}", roi.plane.c),
-                format!("{}", roi.plane.z),
-                format!("{}", roi.plane.t),
+                format!("{}", object.plane.c),
+                format!("{}", object.plane.z),
+                format!("{}", object.plane.t),
                 // Identity & Lineage
-                roi.id.to_string(),
-                roi.segmentation_class.to_string(),
-                roi.object_class.iter().map(|c| self.class_label(c)).collect::<Vec<_>>().join(","),
+                object.id.to_string(),
+                object.segmentation_class.to_string(),
+                object.object_class.iter().map(|c| self.class_label(c)).collect::<Vec<_>>().join(","),
                 parent_id,
                 children,
-                roi.track.id.0.to_string(),
+                object.track.id.0.to_string(),
                 // Centroid px & nm
                 format!("{:.2}", centroid.0),
                 format!("{:.2}", centroid.1),
                 format!("{:.2}", centroid.0 as f64 * px.px_size_x as f64),
                 format!("{:.2}", centroid.1 as f64 * px.px_size_y as f64),
                 // Bounding box px & nm
-                roi.bbox[0].to_string(),
-                roi.bbox[1].to_string(),
-                roi.bbox[2].to_string(),
-                roi.bbox[3].to_string(),
-                format!("{:.2}", roi.bbox[0] as f32 * px.px_size_x),
-                format!("{:.2}", roi.bbox[1] as f32 * px.px_size_y),
-                format!("{:.2}", roi.bbox[2] as f32 * px.px_size_x),
-                format!("{:.2}", roi.bbox[3] as f32 * px.px_size_y),
+                object.bbox[0].to_string(),
+                object.bbox[1].to_string(),
+                object.bbox[2].to_string(),
+                object.bbox[3].to_string(),
+                format!("{:.2}", object.bbox[0] as f32 * px.px_size_x),
+                format!("{:.2}", object.bbox[1] as f32 * px.px_size_y),
+                format!("{:.2}", object.bbox[2] as f32 * px.px_size_x),
+                format!("{:.2}", object.bbox[3] as f32 * px.px_size_y),
                 // Area px & nm²
-                roi.area.to_string(),
-                format!("{:.2}", roi.area as f32 * px.px_size_x * px.px_size_y),
+                object.area.to_string(),
+                format!("{:.2}", object.area as f32 * px.px_size_x * px.px_size_y),
                 // Perimeter px & nm
                 format!("{:.2}", perimeter),
                 format!("{:.2}", perimeter * px_len),
                 // Shape descriptors
-                format!("{:.4}", roi.circularity()),
+                format!("{:.4}", object.circularity()),
                 format!("{:.4}", solidity),
-                format!("{:.4}", roi.get_aspect_ratio()),
-                format!("{:.4}", roi.get_roundness(perimeter)),
-                format!("{:.4}", roi.get_compactness(perimeter)),
+                format!("{:.4}", object.get_aspect_ratio()),
+                format!("{:.4}", object.get_roundness(perimeter)),
+                format!("{:.4}", object.get_compactness(perimeter)),
                 // Ellipse px & nm
                 format!("{:.2}", ellipse.major),
                 format!("{:.2}", ellipse.minor),
@@ -256,7 +256,7 @@ impl PipelineResultExporter for CsvExporter {
                 format!("{:.2}", feret * px_len),
                 format!("{:.2}", min_feret * px_len),
                 // Boundary
-                roi.touches_edge.to_string(),
+                object.touches_edge.to_string(),
                 // Pixel sizes
                 format!("{:.4}", px.px_size_x),
                 format!("{:.4}", px.px_size_y),
@@ -265,8 +265,8 @@ impl PipelineResultExporter for CsvExporter {
             ];
 
             for ch in &channel_ids {
-                if let Some(intensity) = roi.intensities.get(ch) {
-                    let mean_raw = intensity.sum_intensity / (roi.area as f64).max(1.0);
+                if let Some(intensity) = object.intensities.get(ch) {
+                    let mean_raw = intensity.sum_intensity / (object.area as f64).max(1.0);
                     let min_raw = intensity.min_intensity as f64;
                     let max_raw = intensity.max_intensity as f64;
 
@@ -285,7 +285,7 @@ impl PipelineResultExporter for CsvExporter {
             }
 
             for class in &coloc_classes {
-                if let Some(ids) = roi.colocalized_with.get(class) {
+                if let Some(ids) = object.colocalized_with.get(class) {
                     let id_strings: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
                     row.push(id_strings.join(","));
                 } else {
@@ -364,25 +364,25 @@ mod tests {
 
         let mut cache_a = PipelineCache::default();
         cache_a.image_rel_path = PathBuf::from("image_a.tif");
-        let mut roi_a = crate::roi::Roi::new(crate::roi::RoiInit {
+        let mut object_a = crate::object::Object::new(crate::object::ObjectInit {
             id: evanalyzer_cfg::core_types::ObjectId::next(),
             area: 10,
             bbox: [0, 0, 3, 3],
             ..Default::default()
         });
-        roi_a.plane.t = 0;
-        cache_a.roi_cache.insert(roi_a.id.clone(), roi_a);
+        object_a.plane.t = 0;
+        cache_a.object_cache.insert(object_a.id.clone(), object_a);
 
         let mut cache_b = PipelineCache::default();
         cache_b.image_rel_path = PathBuf::from("image_b.tif");
-        let mut roi_b = crate::roi::Roi::new(crate::roi::RoiInit {
+        let mut object_b = crate::object::Object::new(crate::object::ObjectInit {
             id: evanalyzer_cfg::core_types::ObjectId::next(),
             area: 20,
             bbox: [1, 1, 4, 4],
             ..Default::default()
         });
-        roi_b.plane.t = 0;
-        cache_b.roi_cache.insert(roi_b.id.clone(), roi_b);
+        object_b.plane.t = 0;
+        cache_b.object_cache.insert(object_b.id.clone(), object_b);
 
         exporter.export(&cache_a).expect("first export should succeed");
         exporter.export(&cache_b).expect("second export should succeed");

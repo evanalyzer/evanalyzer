@@ -211,7 +211,7 @@ impl ViewportImageController {
             std::time::Duration::from_millis(150),
             move || {
                 self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
-                self_in.viewport_controller.trigger_image_redraw_rois();
+                self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
 
@@ -247,7 +247,7 @@ impl ViewportImageController {
             std::time::Duration::from_millis(150),
             move || {
                 self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
-                self_in.viewport_controller.trigger_image_redraw_rois();
+                self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
 
@@ -279,7 +279,7 @@ impl ViewportImageController {
             std::time::Duration::from_millis(150),
             move || {
                 self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
-                self_in.viewport_controller.trigger_image_redraw_rois();
+                self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
 

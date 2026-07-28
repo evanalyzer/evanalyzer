@@ -19,7 +19,7 @@
 use crate::{
     ImagePlane,
     algos::ImageAlgorithm,
-    roi::{Roi, RoiInit},
+    object::{Object, ObjectInit},
 };
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{
@@ -247,20 +247,20 @@ impl ImageAlgorithm for Voronoi {
         // --- Phase 1: Collect filtered center objects and their seed coordinates ---
         // Seed point is the bounding-box centre, matching the C++ reference implementation.
         let centers: Vec<(ObjectId, f64, f64)> = cache
-            .roi_cache
+            .object_cache
             .values()
-            .filter(|roi| {
-                roi.has_object_class(&self.centers)
+            .filter(|object| {
+                object.has_object_class(&self.centers)
                     && self
                         .center_filter_classes
                         .iter()
-                        .all(|f| roi.has_object_class(f))
+                        .all(|f| object.has_object_class(f))
             })
-            .map(|roi| {
-                let [x_min, y_min, x_max, y_max] = roi.bbox;
+            .map(|object| {
+                let [x_min, y_min, x_max, y_max] = object.bbox;
                 let cx = (x_min + x_max) as f64 / 2.0;
                 let cy = (y_min + y_max) as f64 / 2.0;
-                (roi.id.clone(), cx, cy)
+                (object.id.clone(), cx, cy)
             })
             .collect();
 
@@ -268,11 +268,11 @@ impl ImageAlgorithm for Voronoi {
             return Ok(());
         }
 
-        // --- Phase 2: Collect mask ROI references ---
+        // --- Phase 2: Collect mask object references ---
         let has_mask = self.mask != ObjectClass::Unset;
-        let mask_rois: Vec<&Roi> = if has_mask {
+        let mask_objects: Vec<&Object> = if has_mask {
             cache
-                .roi_cache
+                .object_cache
                 .values()
                 .filter(|r| {
                     r.has_object_class(&self.mask)
@@ -301,7 +301,7 @@ impl ImageAlgorithm for Voronoi {
                 let y = off_y + ty;
 
                 // Skip pixels outside the mask when a mask is configured.
-                if has_mask && !mask_rois.iter().any(|mr| mr.is_part_of(x, y)) {
+                if has_mask && !mask_objects.iter().any(|mr| mr.is_part_of(x, y)) {
                     continue;
                 }
 
@@ -317,13 +317,13 @@ impl ImageAlgorithm for Voronoi {
             }
         }
 
-        // --- Phase 4: Build one ROI per center from its assigned pixel set ---
+        // --- Phase 4: Build one object per center from its assigned pixel set ---
         // Each region's plane comes from its own seeding center, not from
         // `ctx.image`: when Voronoi runs in a separate, Scratchpad-sourced
         // pipeline (the recommended setup for a pure object-manipulation step
         // with no pixel input), `ctx.image` is a freshly allocated buffer with
         // no plane metadata at all, while the center ROIs - read from
-        // `cache.roi_cache`, which does survive across pipelines - already carry
+        // `cache.object_cache`, which does survive across pipelines - already carry
         // the correct z/c/t from whichever pipeline originally extracted them.
         let fallback_plane = ImagePlane {
             z: -1,
@@ -332,7 +332,7 @@ impl ImageAlgorithm for Voronoi {
         };
 
         // Collect new ROIs before mutating the cache.
-        let mut new_rois: Vec<Roi> = Vec::new();
+        let mut new_objects: Vec<Object> = Vec::new();
 
         for (i, pixels) in center_pixels.iter().enumerate() {
             if pixels.is_empty() {
@@ -342,7 +342,7 @@ impl ImageAlgorithm for Voronoi {
             let x_min = pixels.iter().map(|(x, _)| *x).min().unwrap();
             let y_min = pixels.iter().map(|(_, y)| *y).min().unwrap();
             // bbox convention: bbox[2]/[3] are INCLUSIVE maximum pixel coordinates,
-            // matching the convention used by extract_rois and the renderer.
+            // matching the convention used by extract_objects and the renderer.
             // The mask stride is therefore (bbox[2] - bbox[0] + 1).
             let x_max = pixels.iter().map(|(x, _)| *x).max().unwrap();
             let y_max = pixels.iter().map(|(_, y)| *y).max().unwrap();
@@ -401,11 +401,11 @@ impl ImageAlgorithm for Voronoi {
 
             let (center_id, _, _) = &centers[i];
             let plane = cache
-                .roi_cache
+                .object_cache
                 .get(center_id)
-                .map(|center_roi| center_roi.plane)
+                .map(|center_object| center_object.plane)
                 .unwrap_or(fallback_plane);
-            let mut roi = Roi::new(RoiInit {
+            let mut object = Object::new(ObjectInit {
                 id: ObjectId::next(),
                 segmentation_class: SegmentationClass::MANUAL_ANNOTATED,
                 bbox: [x_min, y_min, x_max, y_max],
@@ -421,17 +421,17 @@ impl ImageAlgorithm for Voronoi {
                 parent_id: Some(center_id.clone()),
                 ..Default::default()
             });
-            roi.add_object_class(self.output_class);
-            // `Roi::new` only derives geometry from the mask; Voronoi regions never
-            // pass through `ExtractRois` (the step that normally samples pixel data),
+            object.add_object_class(self.output_class);
+            // `Object::new` only derives geometry from the mask; Voronoi regions never
+            // pass through `ExtractObjects` (the step that normally samples pixel data),
             // so they need their own intensity measurement pass here.
-            roi.intensities = roi.measure_intensities(ctx, cache);
-            new_rois.push(roi);
+            object.intensities = object.measure_intensities(ctx, cache);
+            new_objects.push(object);
         }
 
         // --- Phase 5: Insert the new ROIs into the cache ---
-        for roi in new_rois {
-            cache.roi_cache.insert(roi.id.clone(), roi);
+        for object in new_objects {
+            cache.object_cache.insert(object.id.clone(), object);
         }
 
         Ok(())
@@ -552,14 +552,14 @@ mod tests {
         .unwrap()
     }
 
-    fn make_filled_roi(id: u128, bbox: [u32; 4], class: ObjectClass) -> Roi {
+    fn make_filled_object(id: u128, bbox: [u32; 4], class: ObjectClass) -> Object {
         let [x_min, y_min, x_max, y_max] = bbox;
         // bbox uses inclusive convention: width = xmax - xmin + 1
         let w = (x_max - x_min + 1) as usize;
         let h = (y_max - y_min + 1) as usize;
         let area = w * h;
         let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
-        let mut roi = Roi::new(RoiInit {
+        let mut object = Object::new(ObjectInit {
             id: ObjectId(id),
             bbox,
             mask_data,
@@ -567,8 +567,8 @@ mod tests {
             plane: ImagePlane::default(),
             ..Default::default()
         });
-        roi.add_object_class(class);
-        roi
+        object.add_object_class(class);
+        object
     }
 
     fn default_voronoi() -> Voronoi {
@@ -585,9 +585,9 @@ mod tests {
         }
     }
 
-    fn voronoi_rois(cache: &PipelineCache) -> Vec<&Roi> {
+    fn voronoi_objects(cache: &PipelineCache) -> Vec<&Object> {
         cache
-            .roi_cache
+            .object_cache
             .values()
             .filter(|r| r.has_object_class(&OUTPUT_CLASS))
             .collect()
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn voronoi_regions_have_measured_intensities() {
-        // Regression test: Voronoi regions never pass through ExtractRois (the step
+        // Regression test: Voronoi regions never pass through ExtractObjects (the step
         // that normally samples pixel data), so without their own measurement pass
         // they'd be left with empty intensities.
         const CHANNEL: i32 = 0;
@@ -632,14 +632,14 @@ mod tests {
             CHANNEL,
         );
 
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, center_bbox(5, 5), CENTER_CLASS),
+            make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
         );
 
         run(&default_voronoi(), &mut ctx, &mut cache);
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].area, 100);
         let intensity = regions[0]
@@ -692,14 +692,14 @@ mod tests {
         );
 
         // A center near the middle of the tile, in absolute (full-image) coordinates.
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, center_bbox(110, 110), CENTER_CLASS),
+            make_filled_object(ID_A, center_bbox(110, 110), CENTER_CLASS),
         );
 
         run(&default_voronoi(), &mut ctx, &mut cache);
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
         let [x_min, y_min, x_max, y_max] = regions[0].bbox;
         assert!(
@@ -724,21 +724,21 @@ mod tests {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
         run(&default_voronoi(), &mut ctx, &mut cache);
-        assert!(voronoi_rois(&cache).is_empty());
+        assert!(voronoi_objects(&cache).is_empty());
     }
 
     #[test]
     fn single_center_covers_full_image() {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, center_bbox(5, 5), CENTER_CLASS),
+            make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
         );
 
         run(&default_voronoi(), &mut ctx, &mut cache);
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].area, 100);
     }
@@ -747,18 +747,18 @@ mod tests {
     fn two_centers_partition_image_without_overlap_or_gap() {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, center_bbox(2, 5), CENTER_CLASS),
+            make_filled_object(ID_A, center_bbox(2, 5), CENTER_CLASS),
         );
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_B),
-            make_filled_roi(ID_B, center_bbox(7, 5), CENTER_CLASS),
+            make_filled_object(ID_B, center_bbox(7, 5), CENTER_CLASS),
         );
 
         run(&default_voronoi(), &mut ctx, &mut cache);
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 2);
 
         let total: usize = regions.iter().map(|r| r.area).sum();
@@ -773,9 +773,9 @@ mod tests {
     fn max_radius_limits_assigned_pixels() {
         let mut ctx = make_ctx(20, 20);
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, center_bbox(10, 10), CENTER_CLASS),
+            make_filled_object(ID_A, center_bbox(10, 10), CENTER_CLASS),
         );
 
         run(
@@ -787,7 +787,7 @@ mod tests {
             &mut cache,
         );
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
 
         let expected: usize = (0u32..20)
@@ -805,13 +805,13 @@ mod tests {
     fn mask_clips_voronoi_region() {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, center_bbox(5, 5), CENTER_CLASS),
+            make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
         );
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_MASK),
-            make_filled_roi(ID_MASK, [2, 2, 7, 7], MASK_CLASS), // inclusive [2,7] = 6 wide → 6×6=36
+            make_filled_object(ID_MASK, [2, 2, 7, 7], MASK_CLASS), // inclusive [2,7] = 6 wide → 6×6=36
         );
 
         run(
@@ -823,7 +823,7 @@ mod tests {
             &mut cache,
         );
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].area, 36);
     }
@@ -832,9 +832,9 @@ mod tests {
     fn edge_exclusion_discards_border_touching_regions() {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, center_bbox(5, 5), CENTER_CLASS),
+            make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
         );
 
         run(
@@ -846,34 +846,34 @@ mod tests {
             &mut cache,
         );
 
-        assert!(voronoi_rois(&cache).is_empty());
+        assert!(voronoi_objects(&cache).is_empty());
     }
 
     #[test]
     fn edge_exclusion_off_keeps_border_region() {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, center_bbox(5, 5), CENTER_CLASS),
+            make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
         );
 
         run(&default_voronoi(), &mut ctx, &mut cache);
 
-        assert_eq!(voronoi_rois(&cache).len(), 1);
+        assert_eq!(voronoi_objects(&cache).len(), 1);
     }
 
     #[test]
     fn center_exclusion_discards_region_when_seed_outside_mask() {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, [0, 4, 1, 6], CENTER_CLASS),
+            make_filled_object(ID_A, [0, 4, 1, 6], CENTER_CLASS),
         );
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_MASK),
-            make_filled_roi(ID_MASK, [2, 0, 4, 10], MASK_CLASS),
+            make_filled_object(ID_MASK, [2, 0, 4, 10], MASK_CLASS),
         );
 
         run(
@@ -886,20 +886,20 @@ mod tests {
             &mut cache,
         );
 
-        assert!(voronoi_rois(&cache).is_empty());
+        assert!(voronoi_objects(&cache).is_empty());
     }
 
     #[test]
     fn center_exclusion_off_keeps_region_even_when_seed_outside_mask() {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_A),
-            make_filled_roi(ID_A, [0, 4, 1, 6], CENTER_CLASS),
+            make_filled_object(ID_A, [0, 4, 1, 6], CENTER_CLASS),
         );
-        cache.roi_cache.insert(
+        cache.object_cache.insert(
             ObjectId(ID_MASK),
-            make_filled_roi(ID_MASK, [2, 0, 3, 9], MASK_CLASS), // inclusive [2,3]×[0,9] = 2×10=20
+            make_filled_object(ID_MASK, [2, 0, 3, 9], MASK_CLASS), // inclusive [2,3]×[0,9] = 2×10=20
         );
 
         run(
@@ -911,7 +911,7 @@ mod tests {
             &mut cache,
         );
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].area, 20);
     }
@@ -922,12 +922,12 @@ mod tests {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
 
-        let roi_a = make_filled_roi(ID_A, center_bbox(2, 5), CENTER_CLASS);
-        let mut roi_b = make_filled_roi(ID_B, center_bbox(7, 5), CENTER_CLASS);
-        roi_b.add_object_class(FILTER_CLASS);
+        let object_a = make_filled_object(ID_A, center_bbox(2, 5), CENTER_CLASS);
+        let mut object_b = make_filled_object(ID_B, center_bbox(7, 5), CENTER_CLASS);
+        object_b.add_object_class(FILTER_CLASS);
 
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(
             &Voronoi {
@@ -938,7 +938,7 @@ mod tests {
             &mut cache,
         );
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].area, 100);
     }
@@ -947,18 +947,18 @@ mod tests {
     fn region_plane_comes_from_its_center_not_from_ctx_image() {
         // Simulates Voronoi running in a separate, Scratchpad-sourced pipeline:
         // `ctx.image` carries no plane metadata at all (`make_ctx` always builds
-        // it with `plane: None`), while the center ROI - surviving in
-        // `cache.roi_cache` from an earlier pipeline - carries a real plane.
+        // it with `plane: None`), while the center object - surviving in
+        // `cache.object_cache` from an earlier pipeline - carries a real plane.
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
         let center_plane = ImagePlane { z: 3, c: 1, t: 2 };
-        let mut roi_a = make_filled_roi(ID_A, center_bbox(5, 5), CENTER_CLASS);
-        roi_a.plane = center_plane;
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
+        let mut object_a = make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS);
+        object_a.plane = center_plane;
+        cache.object_cache.insert(object_a.id.clone(), object_a);
 
         run(&default_voronoi(), &mut ctx, &mut cache);
 
-        let regions = voronoi_rois(&cache);
+        let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
         assert_eq!(
             regions[0].plane, center_plane,

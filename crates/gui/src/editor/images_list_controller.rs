@@ -1,10 +1,10 @@
 use crate::UiState;
 use crate::editor::histogram_controller::HistogramController;
 use crate::editor::image_meta_controller::ImageMetaController;
-use crate::editor::roi_list_controller::RoiListController;
+use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::helper::size_formater::format_bytes;
-use crate::{AppWindow, DialogType, GlobalAppState, RoiHighlightBox, ViewportRoiState};
+use crate::{AppWindow, DialogType, GlobalAppState, ObjectHighlightBox, ViewportObjectState};
 use crate::{ImageItemData, ImagesListState};
 use evanalyzer_app::extensions::project_ext::{ProjectExt, SelectNewProjectRootAction};
 use log::{debug, info, warn};
@@ -22,7 +22,7 @@ pub struct ImagesListController {
     pub(crate) _histogram_controller: Arc<HistogramController>,
     pub(crate) image_meta_controller: Arc<ImageMetaController>,
     pub(crate) image_controller_state: Arc<ImagesListControllerState>,
-    pub(crate) roi_list_controller: Arc<RoiListController>,
+    pub(crate) object_list_controller: Arc<ObjectListController>,
 }
 
 impl ImagesListController {
@@ -32,7 +32,7 @@ impl ImagesListController {
         viewport_controller: Arc<ViewportController>,
         histogram_controller: Arc<HistogramController>,
         image_meta_controller: Arc<ImageMetaController>,
-        roi_list_controller: Arc<RoiListController>,
+        object_list_controller: Arc<ObjectListController>,
     ) -> Self {
         Self {
             ui,
@@ -43,7 +43,7 @@ impl ImagesListController {
             image_controller_state: Arc::new(ImagesListControllerState {
                 image_filter_text: RwLock::new(String::new()),
             }),
-            roi_list_controller,
+            object_list_controller,
         }
     }
 
@@ -73,14 +73,14 @@ impl ImagesListController {
             {
                 warn!("Failed to sync image meta to slint!");
             }
-            self.roi_list_controller.sync_rois_to_slint();
+            self.object_list_controller.sync_objects_to_slint();
             self.set_selected_image_index_in_slint_images_list(image_path.clone(), true);
             self.viewport_controller.trigger_new_image_redraw();
-            // Remove possible existing markers and the results-table ROI highlight
+            // Remove possible existing markers and the results-table object highlight
             if let Some(ui) = self.ui.upgrade() {
-                let roi_state = ui.global::<ViewportRoiState>();
-                roi_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
-                roi_state.set_roi_highlight(RoiHighlightBox::default());
+                let object_state = ui.global::<ViewportObjectState>();
+                object_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
+                object_state.set_object_highlight(ObjectHighlightBox::default());
             }
         } else if let Some(parent) = parent_dir {
             self.change_image_root(&parent, Some(image_path));
@@ -110,23 +110,23 @@ impl ImagesListController {
 
     /// Opens the image identified by `rel_path` (as stored in a results file) and
     /// paints `bbox_px` (`[xmin, ymin, xmax, ymax]`, in image pixels) as a
-    /// highlight box in the viewport. Used when a ROI row is selected in the
+    /// highlight box in the viewport. Used when a object row is selected in the
     /// results table so the user can locate the object in its source image.
-    pub fn open_image_and_highlight_roi(self: &Arc<Self>, rel_path: &PathBuf, bbox_px: [u32; 4]) {
+    pub fn open_image_and_highlight_object(self: &Arc<Self>, rel_path: &PathBuf, bbox_px: [u32; 4]) {
         self.open_new_image_from_rel_path(rel_path);
 
         // `open_new_image` clears any previous highlight, so set ours afterwards.
         let [xmin, ymin, xmax, ymax] = bbox_px;
-        let highlight = RoiHighlightBox {
+        let highlight = ObjectHighlightBox {
             x_px: xmin as f32,
             y_px: ymin as f32,
-            // +1 so a single-pixel ROI is still visible (max pixel is inclusive).
+            // +1 so a single-pixel object is still visible (max pixel is inclusive).
             w_px: (xmax.saturating_sub(xmin) + 1) as f32,
             h_px: (ymax.saturating_sub(ymin) + 1) as f32,
             active: true,
         };
         if let Some(ui) = self.ui.upgrade() {
-            ui.global::<ViewportRoiState>().set_roi_highlight(highlight);
+            ui.global::<ViewportObjectState>().set_object_highlight(highlight);
         }
     }
 
@@ -251,7 +251,7 @@ impl ImagesListController {
             // Scan the filesystem without holding the project lock - opening
             // an `ImageReader` per file can take seconds on a plate-sized
             // folder, and holding the write guard for that long stalls every
-            // other thread that needs the project (viewport render, ROI
+            // other thread that needs the project (viewport render, object
             // edits, dirty-tracking). Only the fast in-memory apply step
             // below needs the lock.
             let root_folder = manager.app_state.get_project().images.root.clone();
@@ -280,7 +280,7 @@ impl ImagesListController {
                     warn!("Failed to sync image meta to slint!");
                 }
 
-                manager.roi_list_controller.sync_rois_to_slint();
+                manager.object_list_controller.sync_objects_to_slint();
                 manager.set_selected_image_index_in_slint_images_list(path, true);
                 manager.viewport_controller.trigger_new_image_redraw();
             }
@@ -427,7 +427,7 @@ impl ImagesListController {
                 path: entry.rel_path.to_string_lossy().to_string().into(),
                 image_dimension: "".into(),
                 image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
-                // TODO: /*!entry.rois.lock().expect("poisoned").is_empty(),*/
+                // TODO: /*!entry.objects.lock().expect("poisoned").is_empty(),*/
                 has_annotations: false,
             })
             .collect();
@@ -447,7 +447,7 @@ impl ImagesListController {
     /// Marks the image at `selected_absolute_path` as selected in the Slint list.
     /// When `scroll_to` is true the list is also scrolled to bring that row into
     /// view — used when selection is driven from outside the list (results-table
-    /// ROI selection, folder scan) and the row may be off-screen.
+    /// object selection, folder scan) and the row may be off-screen.
     pub(crate) fn set_selected_image_index_in_slint_images_list(
         &self,
         selected_absolute_path: PathBuf,

@@ -3,7 +3,7 @@ pub enum TaskDispatch {
     HighRes,
     LowRes,
     HighResAndLowRes,
-    Rois,
+    Objects,
 }
 
 #[derive(Debug, Clone)]

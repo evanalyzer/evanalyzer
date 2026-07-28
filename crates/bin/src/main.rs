@@ -4,7 +4,6 @@ use args::{TopCommand, parse_args};
 use env_logger::Builder;
 use evanalyzer_app::{Frontend, ProjectOwner};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_core::CoreConfig;
 use log::LevelFilter;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,8 +22,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     builder.init();
 
-    // Core init - JVM heap is sized from available system RAM, see CoreConfig::default()
-    evanalyzer_core::init(CoreConfig::default())?;
+    // No eager JVM init here: it's started lazily on first actual image read
+    // (see `ensure_java_wrapper` in evanalyzer_core), so `--help` and other
+    // JVM-free invocations aren't stuck waiting on it, and the GUI's window
+    // shows up without blocking on it either - see `evanalyzer_gui::run`,
+    // which warms it up on a background thread right after creating the
+    // window instead.
 
     let args = parse_args();
 

@@ -18,21 +18,21 @@ pub mod prelude {
 
 pub mod result {
     pub use crate::results::results_chart::{
-        compute_heatmap, compute_histogram, compute_scatter, plottable_columns, render_heatmap,
-        render_histogram, render_scatter, save_heatmap_png, save_histogram_png,
-        save_rendered_chart_png, save_scatter_png, ChartHitTester, ColorBy, HeatmapCell,
-        HeatmapColorScheme, HeatmapData, HeatmapMetric, HeatmapRange, HistogramBucket,
-        HistogramData, HistogramSeries, RenderedChart, ScatterData, ScatterPoint,
+        ChartHitTester, ColorBy, HeatmapCell, HeatmapColorScheme, HeatmapData, HeatmapMetric,
+        HeatmapRange, HistogramBucket, HistogramData, HistogramSeries, RenderedChart, ScatterData,
+        ScatterPoint, compute_heatmap, compute_histogram, compute_scatter, plottable_columns,
+        render_heatmap, render_histogram, render_scatter, save_heatmap_png, save_histogram_png,
+        save_rendered_chart_png, save_scatter_png,
     };
     pub use crate::results::results_exporter::ResultsExporter;
     pub use crate::results::results_loader::{
-        AggFunc, ColumnSpec, DatabaseFilter, DisplayRow, GroupBy, GroupConfig, ResultsLoader,
-        RoiRow, aggregate_rois_sql, aggregate_rows, build_coloc_detail_column_specs,
-        build_column_specs, coloc_filter_label_any, coloc_filter_label_no,
-        coloc_filter_label_with, coloc_partner_ids, discover_channels,
-        discover_coloc_detail_columns, flatten_coloc_rows, sort_display_rows, to_display_row,
+        AggFunc, ColumnSpec, DatabaseFilter, DisplayRow, GroupBy, GroupConfig, ObjectRow,
+        ResultsLoader, aggregate_objects_sql, aggregate_rows, build_coloc_detail_column_specs,
+        build_column_specs, coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with,
+        coloc_partner_ids, discover_channels, discover_coloc_detail_columns, flatten_coloc_rows,
+        sort_display_rows, to_display_row,
     };
     pub use crate::results::results_window::{
-        EvictEdge, PageRowCounts, RowWindow, DEFAULT_WINDOW_PAGES,
+        DEFAULT_WINDOW_PAGES, EvictEdge, PageRowCounts, RowWindow,
     };
 }

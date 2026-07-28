@@ -301,14 +301,14 @@
         {
           "enabled": true,
           "command": {
-            "type": "extractRois",
+            "type": "extractObjects",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyRois",
+            "type": "classifyObjects",
             "originSegmentation": [
               1
             ],
@@ -421,14 +421,14 @@
         {
           "enabled": true,
           "command": {
-            "type": "extractRois",
+            "type": "extractObjects",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyRois",
+            "type": "classifyObjects",
             "originSegmentation": [
               1
             ],
@@ -549,14 +549,14 @@
         {
           "enabled": true,
           "command": {
-            "type": "extractRois",
+            "type": "extractObjects",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyRois",
+            "type": "classifyObjects",
             "originSegmentation": [
               1
             ],
@@ -672,14 +672,14 @@
         {
           "enabled": true,
           "command": {
-            "type": "extractRois",
+            "type": "extractObjects",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyRois",
+            "type": "classifyObjects",
             "originSegmentation": [
               1
             ],

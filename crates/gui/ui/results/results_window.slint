@@ -1096,7 +1096,7 @@ component ResultsToolbar inherits Rectangle {
                 label: "View";
                 icon-color: #4A90E2;
                 active: ResultsState.view_mode == ResultsViewMode.chart
-                     || ResultsState.view_mode == ResultsViewMode.coloc_table;
+                    || ResultsState.view_mode == ResultsViewMode.coloc_table;
                 clicked => { view-popup.show(); }
             }
 
@@ -1126,7 +1126,7 @@ component ResultsToolbar inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => {
                                 // When leaving coloc_table, trigger a normal reload to
-                                // restore per-ROI columns/rows (group_apply re-uses the
+                                // restore per-object columns/rows (group_apply re-uses the
                                 // current group config, which may be none = plain table).
                                 if (ResultsState.view_mode == ResultsViewMode.coloc_table) {
                                     ResultsState.loading_more = true;
@@ -1567,8 +1567,8 @@ component ResultsStatusBar inherits Rectangle {
                 horizontal-stretch: 1;
             }
 
-            if ResultsState.selected_roi_id != 0: Text {
-                text: "ROI \{ResultsState.selected_roi_id}";
+            if ResultsState.selected_object_id != 0: Text {
+                text: "object \{ResultsState.selected_object_id}";
                 font-size: 11px;
                 font-family: Theme.font-mono;
                 color: Theme.accent;
@@ -1616,7 +1616,7 @@ export component ResultsWindow inherits Window {
         }
 
         if ResultsState.view_mode == ResultsViewMode.table
-        || ResultsState.view_mode == ResultsViewMode.coloc_table: ResultsTable {
+            || ResultsState.view_mode == ResultsViewMode.coloc_table: ResultsTable {
             vertical-stretch: 1;
             background: Theme.panel;
         }

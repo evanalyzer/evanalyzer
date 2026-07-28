@@ -1,4 +1,4 @@
-use crate::{image::ImageContainer, pipeline::pipeline::PipelineImageMeta, roi::Roi};
+use crate::{image::ImageContainer, pipeline::pipeline::PipelineImageMeta, object::Object};
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId, ObjectId};
 use kornia_apriltag::utils::Point2d;
 use kornia_image::Image;
@@ -140,7 +140,7 @@ impl ImageCache {
     /// Resolves the registered channel images into flat pixel slices ready for
     /// direct-index sampling, paired with whether each is RGB (needing luminance
     /// conversion via [`sample_channel_pixel`]). Shared by every algorithm that
-    /// samples per-channel intensities for a set of pixels (`ExtractRois`,
+    /// samples per-channel intensities for a set of pixels (`ExtractObjects`,
     /// colocalization intersection ROIs, ...) so the channel resolution and the
     /// RGB-luminance formula live in exactly one place.
     pub fn resolve_channel_views(&self) -> Vec<(i32, bool, &[f32])> {
@@ -168,6 +168,6 @@ pub fn sample_channel_pixel(is_rgb: bool, slice: &[f32], sample: usize) -> f32 {
 #[derive(Default)]
 pub struct PipelineCache {
     pub image_cache: ImageCache,
-    pub roi_cache: BTreeMap<ObjectId, Roi>,
+    pub object_cache: BTreeMap<ObjectId, Object>,
     pub image_rel_path: PathBuf,
 }

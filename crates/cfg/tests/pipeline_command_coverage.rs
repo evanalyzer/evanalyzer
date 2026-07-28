@@ -328,7 +328,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
     let expected: [(&str, &[CommandCategory]); 31] = [
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
-        ("ClassifyRois", &[Classify]),
+        ("ClassifyObjects", &[Classify]),
         ("Colocalization", &[Classify]),
         ("ColorFilterCommand", &[Segment, Preprocess]),
         ("ConnectedComponents", &[Object, Measure]),
@@ -336,7 +336,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("EdgeDetectionCanny", &[Segment, Preprocess]),
         ("EdgeDetectionSobel", &[Segment, Preprocess]),
         ("EnhanceContrast", &[Segment, Preprocess]),
-        ("ExtractRois", &[Classify]),
+        ("ExtractObjects", &[Classify]),
         ("GaussianBlur", &[Segment, Preprocess]),
         ("Hessian", &[Segment, Preprocess]),
         ("ImageCache", &[Segment, Preprocess]),
@@ -345,14 +345,14 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Laplacian", &[Segment, Preprocess]),
         ("MedianSubtract", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),
+        ("ObjectMath", &[Classify]),
         ("RankFilter", &[Segment, Preprocess]),
-        ("RoiMath", &[Classify]),
         ("RollingBall", &[Segment, Preprocess]),
         ("SaveImage", &[Segment, Preprocess]),
         ("AI Stardist Segmentation", &[Measure]),
         ("StructureTensor", &[Segment, Preprocess]),
         ("Threshold", &[Object]),
-        ("TransformRois", &[Classify]),
+        ("TransformObjects", &[Classify]),
         ("AI UNet Segmentation", &[Object]),
         ("Voronoi", &[Classify]),
         ("Watershed", &[Measure]),
@@ -408,7 +408,7 @@ fn to_summary_formats_gaussian_blur_kernel_and_sigma() {
 }
 
 #[test]
-fn to_summary_formats_classify_rois_criteria() {
+fn to_summary_formats_classify_objects_criteria() {
     let mut cmd = default_command(2).unwrap();
     cmd.apply_param_change("min_area", "10");
     cmd.apply_param_change("min_eccentricity", "0.1");
@@ -421,14 +421,14 @@ fn to_summary_formats_classify_rois_criteria() {
 }
 
 #[test]
-fn to_summary_formats_roi_math_operation() {
-    let mut cmd = default_command(20).unwrap();
+fn to_summary_formats_object_math_operation() {
+    let mut cmd = default_command(19).unwrap();
     cmd.apply_param_change("operation", "Xor");
     assert_eq!(cmd.to_summary(), "Operation: Xor");
 }
 
 #[test]
-fn to_summary_formats_transform_rois_function() {
+fn to_summary_formats_transform_objects_function() {
     let mut cmd = default_command(26).unwrap();
     cmd.apply_param_change("function", "Shrink");
     assert_eq!(cmd.to_summary(), "Function: Shrink");
@@ -452,12 +452,12 @@ fn apply_param_change_dropdown_fields_cycle_through_every_option() {
         // `apply_param_change` can't reconstruct from a bare string (see
         // `apply_param_change_rank_filter_ignores_unknown_filter_type_value`
         // below), so cycling through every option would fail here.
-        (20, "operation"),     // RoiMath
+        (19, "operation"),     // ObjectMath
         (21, "ball_type"),     // RollingBall
         (22, "source"),        // SaveImage
         (24, "mode"),          // StructureTensor
-        (2, "match_handling"), // ClassifyRois
-        (26, "function"),      // TransformRois
+        (2, "match_handling"), // ClassifyObjects
+        (26, "function"),      // TransformObjects
         (27, "output_mode"),   // UNet
     ];
     for &(id, field) in dropdown_fields {
@@ -488,9 +488,9 @@ fn apply_param_change_dropdown_fields_cycle_through_every_option() {
 fn apply_param_change_unit_fields_toggle_both_variants() {
     // SizeUnits fields.
     for (id, field) in [
-        (2, "size_unit"),  // ClassifyRois
+        (2, "size_unit"),  // ClassifyObjects
         (3, "size_unit"),  // Colocalization
-        (20, "size_unit"), // RoiMath
+        (19, "size_unit"), // ObjectMath
         (28, "unit"),      // Voronoi
     ] {
         let mut cmd = default_command(id).unwrap();
@@ -521,14 +521,14 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
     // One ObjClass field from each variant that has one, covering the
     // `"-1"` (Unset) branch and the `value.parse::<u32>()` (Valid) branch.
     let obj_class_fields: &[(i32, &str)] = &[
-        (2, "output_class"),                // ClassifyRois
-        (2, "overlapping_with"),            // ClassifyRois
+        (2, "output_class"),                // ClassifyObjects
+        (2, "overlapping_with"),            // ClassifyObjects
         (3, "class_for_overlapping_areas"), // Colocalization
-        (20, "input_class"),                // RoiMath
-        (20, "other_class"),                // RoiMath
-        (20, "output_class"),               // RoiMath
-        (26, "input_class"),                // TransformRois
-        (26, "output_class"),               // TransformRois
+        (19, "input_class"),                // ObjectMath
+        (19, "other_class"),                // ObjectMath
+        (19, "output_class"),               // ObjectMath
+        (26, "input_class"),                // TransformObjects
+        (26, "output_class"),               // TransformObjects
         (28, "centers"),                    // Voronoi
         (28, "mask"),                       // Voronoi
         (28, "output_class"),               // Voronoi
@@ -557,11 +557,11 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
 #[test]
 fn apply_param_change_multi_obj_class_fields_support_comma_lists_and_toggle() {
     let multi_obj_class_fields: &[(i32, &str)] = &[
-        (2, "input_classes"),          // ClassifyRois
+        (2, "input_classes"),          // ClassifyObjects
         (3, "classes_to_coloc"),       // Colocalization
         (3, "filter_classes"),         // Colocalization
         (3, "exclude_classes"),        // Colocalization
-        (20, "other_filter_classes"),  // RoiMath
+        (19, "other_filter_classes"),  // ObjectMath
         (28, "center_filter_classes"), // Voronoi
         (28, "mask_filter_classes"),   // Voronoi
     ];
@@ -596,8 +596,8 @@ fn apply_param_change_multi_obj_class_fields_support_comma_lists_and_toggle() {
 }
 
 #[test]
-fn apply_param_change_transform_rois_switches_through_every_function_kind() {
-    let mut cmd = default_command(26).unwrap(); // TransformRois
+fn apply_param_change_transform_objects_switches_through_every_function_kind() {
+    let mut cmd = default_command(26).unwrap(); // TransformObjects
 
     cmd.apply_param_change("function", "Scale");
     cmd.apply_param_change("function.factor", "2.5");
@@ -664,7 +664,7 @@ fn apply_param_change_dropdown_fields_ignore_unknown_values() {
         (15, "mode", "Manual"),                      // IntensityTransformation
         (18, "op", "Erode"),                         // MorphologicalCommand
         (18, "kernel_shape", "Ellipse"),             // MorphologicalCommand
-        (20, "operation", "Or"),                     // RoiMath
+        (19, "operation", "Or"),                     // ObjectMath
         (21, "ball_type", "Paraboloid"),             // RollingBall
         (22, "source", "Instance Map"),              // SaveImage
         (24, "mode", "Coherence"),                   // StructureTensor
@@ -781,7 +781,7 @@ fn apply_param_change_rank_filter_ignores_unknown_filter_type_value() {
     // recognize it as a target value - the field is left unchanged rather
     // than panicking. This documents that (deliberate) gap rather than
     // treating it as a bug.
-    let mut cmd = default_command(19).unwrap(); // RankFilter
+    let mut cmd = default_command(20).unwrap(); // RankFilter
     cmd.apply_param_change("filter_type", "Median");
     assert_eq!(param_value(&cmd, "filter_type"), "Median");
     cmd.apply_param_change("filter_type", "Outliers");
