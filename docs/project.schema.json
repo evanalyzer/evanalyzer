@@ -269,7 +269,7 @@
         "measure"
       ]
     },
-    "ClassificationClassifyRoisClassifyMatchHandlingSettings": {
+    "ClassificationClassifyObjectsClassifyMatchHandlingSettings": {
       "type": "string",
       "enum": [
         "ADD_OUTPUT_CLASS_IF_MATCH",
@@ -284,8 +284,8 @@
         "RECLASSIFY_IF_NOT_MATCH"
       ]
     },
-    "ClassificationMathRoiRoiSetOperationSettings": {
-      "description": "Boolean set operation applied between an `input_class` ROI (\"A\") and the union of\n its overlapping `other_class` ROIs (\"B\").",
+    "ClassificationObjectMathObjectSetOperationSettings": {
+      "description": "Boolean set operation applied between an `input_class` object (\"A\") and the union of\n its overlapping `other_class` ROIs (\"B\").",
       "oneOf": [
         {
           "description": "Intersection: pixels present in both A and B. With no overlapping B, the\nresult is empty - there is nothing to keep regardless of `keep_unmatched`.",
@@ -323,11 +323,11 @@
         "classes"
       ]
     },
-    "ClassificationTransformRoisTransformFunctionSettings": {
+    "ClassificationTransformObjectsTransformFunctionSettings": {
       "description": "Each variant carries only the parameters it actually uses, so there's no shared field whose\n meaning shifts depending on which function is selected (e.g. a \"factor\" that's a unitless\n multiplier for `Scale` but a length in `size_unit` for `SnapArea`).",
       "oneOf": [
         {
-          "description": "Scale the ROI by the given scale factor.\n\nShape keeps and center of the ROI keeps the same, it is just shrinked or expanded.",
+          "description": "Scale the object by the given scale factor.\n\nShape keeps and center of the object keeps the same, it is just shrinked or expanded.",
           "type": "object",
           "properties": {
             "factor": {
@@ -348,11 +348,11 @@
           ]
         },
         {
-          "description": "Draws a circle around the ROI which is `extra_size` bigger than the ROI's bounding box.",
+          "description": "Draws a circle around the object which is `extra_size` bigger than the object's bounding box.",
           "type": "object",
           "properties": {
             "extraSize": {
-              "description": "Size added on top of the ROI's bounding-box diameter",
+              "description": "Size added on top of the object's bounding-box diameter",
               "type": "number",
               "format": "float",
               "maximum": 65535,
@@ -374,7 +374,7 @@
           ]
         },
         {
-          "description": "Draws a circle around the ROI's bounding box, with `min_diameter` as the minimum diameter.",
+          "description": "Draws a circle around the object's bounding box, with `min_diameter` as the minimum diameter.",
           "type": "object",
           "properties": {
             "minDiameter": {
@@ -400,11 +400,11 @@
           ]
         },
         {
-          "description": "Draws a circle with exactly `diameter` as diameter around the ROI.\n\nIf `diameter` is 0, the ROI's bounding box is used as the diameter instead.",
+          "description": "Draws a circle with exactly `diameter` as diameter around the object.\n\nIf `diameter` is 0, the object's bounding box is used as the diameter instead.",
           "type": "object",
           "properties": {
             "diameter": {
-              "description": "Circle diameter (0 = use the ROI's bounding box)",
+              "description": "Circle diameter (0 = use the object's bounding box)",
               "type": "number",
               "format": "float",
               "maximum": 65535,
@@ -426,7 +426,7 @@
           ]
         },
         {
-          "description": "Replaces the ROI with the ellipse fitted to its mask.",
+          "description": "Replaces the object with the ellipse fitted to its mask.",
           "type": "object",
           "properties": {
             "scale": {
@@ -447,7 +447,7 @@
           ]
         },
         {
-          "description": "Grows the ROI outward by `margin`, following its actual contour (standard flat\ndilation with a disk structuring element) - unlike `Scale`, irregular shapes\ngrow by a uniform margin instead of being stretched proportionally.",
+          "description": "Grows the object outward by `margin`, following its actual contour (standard flat\ndilation with a disk structuring element) - unlike `Scale`, irregular shapes\ngrow by a uniform margin instead of being stretched proportionally.",
           "type": "object",
           "properties": {
             "margin": {
@@ -473,7 +473,7 @@
           ]
         },
         {
-          "description": "Shrinks the ROI inward by `margin`, following its actual contour (standard flat\nerosion with a disk structuring element).",
+          "description": "Shrinks the object inward by `margin`, following its actual contour (standard flat\nerosion with a disk structuring element).",
           "type": "object",
           "properties": {
             "margin": {
@@ -500,12 +500,12 @@
         }
       ]
     },
-    "ClassifyRoisSettings": {
+    "ClassifyObjectsSettings": {
       "description": "Classifies ROIs based on morphological and intensity features.\n\n This command applies rule-based classification logic to assign object classes\n to extracted ROIs. Classification is performed using configurable criteria\n including area, shape descriptors, and intensity statistics.",
       "type": "object",
       "properties": {
         "allowEdgeTouching": {
-          "description": "Whether ROI can touch image edge",
+          "description": "Whether object can touch image edge",
           "type": "boolean",
           "default": true
         },
@@ -519,7 +519,7 @@
         },
         "matchHandling": {
           "description": "What to do with object class labels after criteria evaluation\n\n Controls whether the output class is added or existing classes are removed,\n and whether the action is triggered on a criteria **match** or a **non-match**:\n\n - **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n - **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.",
-          "$ref": "#/$defs/ClassificationClassifyRoisClassifyMatchHandlingSettings",
+          "$ref": "#/$defs/ClassificationClassifyObjectsClassifyMatchHandlingSettings",
           "default": "REMOVE_ALL_CLASSES_IF_NOT_MATCH"
         },
         "maxArea": {
@@ -640,19 +640,19 @@
           "default": "UNSET"
         },
         "overlappingWith": {
-          "description": "Additional criterion: the object must intersect an ROI carrying this class\n\n If unset (the default) this filter is not applied. When set, an object only\n satisfies the overall criteria if it also overlaps at least one ROI carrying this\n class by at least `min_intersection_area`. Combine with e.g.\n `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\n or `AddOutputClassIfMatch` to tag objects that do.",
+          "description": "Additional criterion: the object must intersect an object carrying this class\n\n If unset (the default) this filter is not applied. When set, an object only\n satisfies the overall criteria if it also overlaps at least one object carrying this\n class by at least `min_intersection_area`. Combine with e.g.\n `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\n or `AddOutputClassIfMatch` to tag objects that do.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         },
         "sizeUnit": {
-          "description": "Unit to use for roi extraction",
+          "description": "Unit to use for object extraction",
           "$ref": "#/$defs/SizeUnits",
           "default": "nm"
         }
       }
     },
     "ColocalizationSettings": {
-      "description": "Calculates spatial colocalization and intersections between specified object classes.\n\n This command scans the ROI cache, groups objects by their designated classes,\n and performs spatial overlap analysis. It records colocalization relationships\n between intersecting entities and can optionally generate new child ROIs representing\n the precise intersection regions.",
+      "description": "Calculates spatial colocalization and intersections between specified object classes.\n\n This command scans the object cache, groups objects by their designated classes,\n and performs spatial overlap analysis. It records colocalization relationships\n between intersecting entities and can optionally generate new child ROIs representing\n the precise intersection regions.",
       "type": "object",
       "properties": {
         "allowMultiObjectColoc": {
@@ -660,7 +660,7 @@
           "type": "boolean"
         },
         "classForOverlappingAreas": {
-          "description": "Class of the overlapping area if needed\n\n If defined the overlapping coloc area is added as new ROI and labeled with this class",
+          "description": "Class of the overlapping area if needed\n\n If defined the overlapping coloc area is added as new object and labeled with this class",
           "$ref": "#/$defs/ObjectClass"
         },
         "classesToColoc": {
@@ -671,7 +671,7 @@
           }
         },
         "excludeClasses": {
-          "description": "Classes an object must NOT overlap to be considered colocalized.\n\n An object that otherwise satisfies `classes_to_coloc` is excluded entirely\n (no relation recorded, no intersection ROI created) if it also overlaps any\n object from one of these classes with at least `min_coloc_area`. Leave empty\n (the default) to disable this filter - exclusion is opt-in.\n\n Example: to find objects colocalizing with class 1 and 2 but *not* 3, set\n `classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.",
+          "description": "Classes an object must NOT overlap to be considered colocalized.\n\n An object that otherwise satisfies `classes_to_coloc` is excluded entirely\n (no relation recorded, no intersection object created) if it also overlaps any\n object from one of these classes with at least `min_coloc_area`. Leave empty\n (the default) to disable this filter - exclusion is opt-in.\n\n Example: to find objects colocalizing with class 1 and 2 but *not* 3, set\n `classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.",
           "type": "array",
           "default": [],
           "items": {
@@ -814,8 +814,8 @@
         "equalizeHistogram"
       ]
     },
-    "ExtractRoisSettings": {
-      "description": "Represents a bounded region of interest extracted from a labeled image.\n A command to extract spatial statistics and bounding boxes from labeled objects.",
+    "ExtractObjectsSettings": {
+      "description": "Represents a bounded object extracted from a labeled image.\n A command to extract spatial statistics and bounding boxes from labeled objects.",
       "type": "object",
       "properties": {
         "maxObjectsBeforeFail": {
@@ -1244,23 +1244,23 @@
       "type": "object",
       "properties": {
         "avgIntensity": {
-          "description": "Average pixel intensity in the ROI",
+          "description": "Average pixel intensity in the object",
           "type": "number",
           "format": "float",
           "default": 0.0
         },
         "maxIntensity": {
-          "description": "Maximum pixel intensity in the ROI",
+          "description": "Maximum pixel intensity in the object",
           "type": "number",
           "format": "float"
         },
         "minIntensity": {
-          "description": "Minimum pixel intensity in the ROI",
+          "description": "Minimum pixel intensity in the object",
           "type": "number",
           "format": "float"
         },
         "sumIntensity": {
-          "description": "Sum of all pixel intensities in the ROI",
+          "description": "Sum of all pixel intensities in the object",
           "type": "number",
           "format": "double"
         }
@@ -1622,6 +1622,198 @@
       "format": "uint128",
       "minimum": 0
     },
+    "ObjectMathSettings": {
+      "description": "Computes a boolean set operation between two object classes, object pair by\n object pair.\n\n When more than one `other_class` object overlaps a given input object, all of them\n are unioned into a single \"B\" before the operation is applied, so the result\n doesn't depend on the order they'd otherwise be combined in.",
+      "type": "object",
+      "properties": {
+        "inputClass": {
+          "description": "ROIs carrying this class are the left-hand operand (\"A\").",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "keepUnmatched": {
+          "description": "When an input object has no qualifying overlapping partner: keep it unchanged in\n the output (true), or drop it entirely - no output for it at all - (false).\n\n Note this is a policy override, not the literal mathematical result: e.g. for\n `And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\n still leaves A untouched rather than emitting a zero-area object.",
+          "type": "boolean",
+          "default": true
+        },
+        "minOverlapArea": {
+          "description": "Minimum overlap area before an `other_class` object is treated as a partner\n of an input object; objects overlapping less than this are ignored.",
+          "type": "number",
+          "format": "float",
+          "default": 2.0
+        },
+        "operation": {
+          "description": "Boolean set operation to apply",
+          "$ref": "#/$defs/ClassificationObjectMathObjectSetOperationSettings",
+          "default": "AND"
+        },
+        "otherClass": {
+          "description": "ROIs carrying this class are the right-hand operand (\"B\").",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "otherFilterClasses": {
+          "description": "Optional additional label filters applied to `other_class` objects.\n\n Only `other_class` objects that carry all listed classes are used.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "outputClass": {
+          "description": "If unset, the result replaces the input object in place.\n\n If set, a new object carrying this class is created for each input object instead,\n leaving the input object untouched.",
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
+        },
+        "sizeUnit": {
+          "description": "Size unit for `min_overlap_area`",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "px"
+        }
+      }
+    },
+    "ObjectMetricSettings": {
+      "type": "object",
+      "properties": {
+        "area": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "bbox": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        "cStack": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          }
+        },
+        "colocalizedWith": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ObjectId"
+            }
+          }
+        },
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "intensities": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^-?\\d+$": {
+              "$ref": "#/$defs/IntensitySettings"
+            }
+          }
+        },
+        "maskData": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          }
+        },
+        "objectClass": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          },
+          "uniqueItems": true
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "perimeter": {
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
+        "segmentationClass": {
+          "$ref": "#/$defs/SegmentationClass"
+        },
+        "sumX": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sumX2": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sumXy": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sumY": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sumY2": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tStack": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "touchesEdge": {
+          "type": "boolean"
+        },
+        "track": {
+          "$ref": "#/$defs/TrackSettings"
+        },
+        "zStack": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "id",
+        "segmentationClass",
+        "objectClass",
+        "colocalizedWith",
+        "children",
+        "track",
+        "area",
+        "bbox",
+        "maskData",
+        "touchesEdge",
+        "sumX",
+        "sumY",
+        "sumX2",
+        "sumY2",
+        "sumXy",
+        "intensities",
+        "zStack",
+        "cStack",
+        "tStack"
+      ]
+    },
     "PipelineCommand": {
       "oneOf": [
         {
@@ -1655,10 +1847,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "classifyRois"
+              "const": "classifyObjects"
             }
           },
-          "$ref": "#/$defs/ClassifyRoisSettings",
+          "$ref": "#/$defs/ClassifyObjectsSettings",
           "required": [
             "type"
           ]
@@ -1759,10 +1951,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "extractRois"
+              "const": "extractObjects"
             }
           },
-          "$ref": "#/$defs/ExtractRoisSettings",
+          "$ref": "#/$defs/ExtractObjectsSettings",
           "required": [
             "type"
           ]
@@ -1876,10 +2068,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "rankFilter"
+              "const": "objectMath"
             }
           },
-          "$ref": "#/$defs/RankFilterSettings",
+          "$ref": "#/$defs/ObjectMathSettings",
           "required": [
             "type"
           ]
@@ -1889,10 +2081,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "roiMath"
+              "const": "rankFilter"
             }
           },
-          "$ref": "#/$defs/RoiMathSettings",
+          "$ref": "#/$defs/RankFilterSettings",
           "required": [
             "type"
           ]
@@ -1967,10 +2159,10 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "transformRois"
+              "const": "transformObjects"
             }
           },
-          "$ref": "#/$defs/TransformRoisSettings",
+          "$ref": "#/$defs/TransformObjectsSettings",
           "required": [
             "type"
           ]
@@ -2197,198 +2389,6 @@
         "filterType"
       ]
     },
-    "RoiMathSettings": {
-      "description": "Computes a boolean set operation between two object classes, object pair by\n object pair.\n\n When more than one `other_class` object overlaps a given input ROI, all of them\n are unioned into a single \"B\" before the operation is applied, so the result\n doesn't depend on the order they'd otherwise be combined in.",
-      "type": "object",
-      "properties": {
-        "inputClass": {
-          "description": "ROIs carrying this class are the left-hand operand (\"A\").",
-          "$ref": "#/$defs/ObjectClass",
-          "default": "UNSET"
-        },
-        "keepUnmatched": {
-          "description": "When an input ROI has no qualifying overlapping partner: keep it unchanged in\n the output (true), or drop it entirely - no output for it at all - (false).\n\n Note this is a policy override, not the literal mathematical result: e.g. for\n `And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\n still leaves A untouched rather than emitting a zero-area ROI.",
-          "type": "boolean",
-          "default": true
-        },
-        "minOverlapArea": {
-          "description": "Minimum overlap area before an `other_class` object is treated as a partner\n of an input ROI; objects overlapping less than this are ignored.",
-          "type": "number",
-          "format": "float",
-          "default": 2.0
-        },
-        "operation": {
-          "description": "Boolean set operation to apply",
-          "$ref": "#/$defs/ClassificationMathRoiRoiSetOperationSettings",
-          "default": "AND"
-        },
-        "otherClass": {
-          "description": "ROIs carrying this class are the right-hand operand (\"B\").",
-          "$ref": "#/$defs/ObjectClass",
-          "default": "UNSET"
-        },
-        "otherFilterClasses": {
-          "description": "Optional additional label filters applied to `other_class` objects.\n\n Only `other_class` objects that carry all listed classes are used.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ObjectClass"
-          }
-        },
-        "outputClass": {
-          "description": "If unset, the result replaces the input ROI in place.\n\n If set, a new ROI carrying this class is created for each input ROI instead,\n leaving the input ROI untouched.",
-          "$ref": "#/$defs/ObjectClass",
-          "default": "UNSET"
-        },
-        "sizeUnit": {
-          "description": "Size unit for `min_overlap_area`",
-          "$ref": "#/$defs/SizeUnits",
-          "default": "px"
-        }
-      }
-    },
-    "RoiSettings": {
-      "type": "object",
-      "properties": {
-        "area": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "bbox": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "maxItems": 4,
-          "minItems": 4
-        },
-        "cStack": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "children": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ObjectId"
-          }
-        },
-        "colocalizedWith": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/ObjectId"
-            }
-          }
-        },
-        "id": {
-          "$ref": "#/$defs/ObjectId"
-        },
-        "intensities": {
-          "type": "object",
-          "additionalProperties": false,
-          "patternProperties": {
-            "^-?\\d+$": {
-              "$ref": "#/$defs/IntensitySettings"
-            }
-          }
-        },
-        "maskData": {
-          "type": "array",
-          "items": {
-            "type": "boolean"
-          }
-        },
-        "objectClass": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ObjectClass"
-          },
-          "uniqueItems": true
-        },
-        "parentId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ObjectId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "perimeter": {
-          "type": "number",
-          "format": "float",
-          "default": 0.0
-        },
-        "segmentationClass": {
-          "$ref": "#/$defs/SegmentationClass"
-        },
-        "sumX": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sumX2": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sumXy": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sumY": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "sumY2": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "tStack": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "touchesEdge": {
-          "type": "boolean"
-        },
-        "track": {
-          "$ref": "#/$defs/TrackSettings"
-        },
-        "zStack": {
-          "type": "integer",
-          "format": "int32"
-        }
-      },
-      "required": [
-        "id",
-        "segmentationClass",
-        "objectClass",
-        "colocalizedWith",
-        "children",
-        "track",
-        "area",
-        "bbox",
-        "maskData",
-        "touchesEdge",
-        "sumX",
-        "sumY",
-        "sumX2",
-        "sumY2",
-        "sumXy",
-        "intensities",
-        "zStack",
-        "cStack",
-        "tStack"
-      ]
-    },
     "RollingBallSettings": {
       "description": "Removes non-uniform background illumination by calculating a local intensity baseline.\n\n This algorithm models the image as a 3D intensity landscape and conceptually rolls\n a sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\n intensity peaks (true signal objects) but follows the sweeping, lower-frequency\n curves of background variations. The path traced by the ball establishes a local\n baseline map that is subtracted from the original image to isolate foreground features.",
       "type": "object",
@@ -2547,14 +2547,14 @@
           "format": "uint64",
           "minimum": 0
         },
-        "pixelSizes": {
-          "$ref": "#/$defs/PixelSizeSettings"
-        },
-        "rois": {
+        "objects": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RoiSettings"
+            "$ref": "#/$defs/ObjectMetricSettings"
           }
+        },
+        "pixelSizes": {
+          "$ref": "#/$defs/PixelSizeSettings"
         },
         "selectedChannel": {
           "type": [
@@ -2589,7 +2589,7 @@
         "imageWidth",
         "imageHeight",
         "pixelSizes",
-        "rois"
+        "objects"
       ]
     },
     "SizeUnits": {
@@ -2749,6 +2749,12 @@
         "id": {
           "$ref": "#/$defs/TrackId"
         },
+        "objectIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          }
+        },
         "parentTrack": {
           "anyOf": [
             {
@@ -2758,26 +2764,20 @@
               "type": "null"
             }
           ]
-        },
-        "roiIds": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ObjectId"
-          }
         }
       },
       "required": [
         "id",
-        "roiIds"
+        "objectIds"
       ]
     },
-    "TransformRoisSettings": {
-      "description": "Transforms given ROIs and either replaces the old ones or creates new ones.\n\n This command applies a geometric transform (scale, circle, fitted ellipse) to every ROI\n carrying `input_class`. The transformed shape keeps the original ROI's bounding-box center.\n If `output_class` is unset (or equal to `input_class`) the input ROI is replaced in place;\n otherwise a new ROI carrying `output_class` is created alongside the untouched input ROI.",
+    "TransformObjectsSettings": {
+      "description": "Transforms given ROIs and either replaces the old ones or creates new ones.\n\n This command applies a geometric transform (scale, circle, fitted ellipse) to every object\n carrying `input_class`. The transformed shape keeps the original object's bounding-box center.\n If `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\n otherwise a new object carrying `output_class` is created alongside the untouched input object.",
       "type": "object",
       "properties": {
         "function": {
-          "description": "Geometric transform applied to each input ROI",
-          "$ref": "#/$defs/ClassificationTransformRoisTransformFunctionSettings",
+          "description": "Geometric transform applied to each input object",
+          "$ref": "#/$defs/ClassificationTransformObjectsTransformFunctionSettings",
           "default": {
             "factor": 1.0,
             "type": "scale"
@@ -2789,7 +2789,7 @@
           "default": "UNSET"
         },
         "outputClass": {
-          "description": "If unset, the transformed shape replaces the input ROI in place.\n\n If set, a new ROI carrying this class is created for each transformed input ROI instead,\n leaving the input ROI untouched.",
+          "description": "If unset, the transformed shape replaces the input object in place.\n\n If set, a new object carrying this class is created for each transformed input object instead,\n leaving the input object untouched.",
           "$ref": "#/$defs/ObjectClass",
           "default": "UNSET"
         }

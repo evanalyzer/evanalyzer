@@ -28,7 +28,7 @@ pub enum FiltersRollingBallBallTypeSettings {
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ClassificationClassifyRoisClassifyMatchHandlingSettings {
+pub enum ClassificationClassifyObjectsClassifyMatchHandlingSettings {
     #[default]
     AddOutputClassIfMatch,
     AddOutputClassIfNotMatch,
@@ -136,6 +136,26 @@ pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
     Close,
 }
 
+///  Boolean set operation applied between an `input_class` object ("A") and the union of
+///  its overlapping `other_class` ROIs ("B").
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ClassificationObjectMathObjectSetOperationSettings {
+    /// Intersection: pixels present in both A and B. With no overlapping B, the
+    /// result is empty - there is nothing to keep regardless of `keep_unmatched`.
+    #[default]
+    And,
+    /// Union: pixels present in A or B (or both). The result can extend beyond A's
+    /// own bounding box into B's territory.
+    Or,
+    /// Symmetric difference: pixels present in exactly one of A, B (the overlap
+    /// itself is excluded). Like `Or`, the result can extend beyond A's bbox.
+    Xor,
+    /// Set difference: pixels in A that are NOT in B (A \ B). The classic use case
+    /// is deriving a cytoplasm-only region from a whole-cell mask and its nucleus.
+    Subtract,
+}
+
 ///  The mathematical or logical operation to perform between two images.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -189,26 +209,6 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     /// Replaces a pixel only if it deviates from the neighborhood median
     /// by more than the specified threshold.
     Outliers(f32),
-}
-
-///  Boolean set operation applied between an `input_class` ROI ("A") and the union of
-///  its overlapping `other_class` ROIs ("B").
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ClassificationMathRoiRoiSetOperationSettings {
-    /// Intersection: pixels present in both A and B. With no overlapping B, the
-    /// result is empty - there is nothing to keep regardless of `keep_unmatched`.
-    #[default]
-    And,
-    /// Union: pixels present in A or B (or both). The result can extend beyond A's
-    /// own bounding box into B's territory.
-    Or,
-    /// Symmetric difference: pixels present in exactly one of A, B (the overlap
-    /// itself is excluded). Like `Or`, the result can extend beyond A's bbox.
-    Xor,
-    /// Set difference: pixels in A that are NOT in B (A \ B). The classic use case
-    /// is deriving a cytoplasm-only region from a whole-cell mask and its nucleus.
-    Subtract,
 }
 
 ///  The specific calculation to extract from the Structure Tensor.
@@ -282,26 +282,26 @@ pub enum SegmentationThresholdThresholdMethodSettings {
 ///  multiplier for `Scale` but a length in `size_unit` for `SnapArea`).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum ClassificationTransformRoisTransformFunctionSettings {
-    /// Scale the ROI by the given scale factor.
+pub enum ClassificationTransformObjectsTransformFunctionSettings {
+    /// Scale the object by the given scale factor.
     ///
-    /// Shape keeps and center of the ROI keeps the same, it is just shrinked or expanded.
+    /// Shape keeps and center of the object keeps the same, it is just shrinked or expanded.
     #[serde(rename_all = "camelCase")]
     Scale {
         ///  Unitless scale factor
         #[schemars(range(min = 0, max = 65535))]
         factor: f32,
     },
-    /// Draws a circle around the ROI which is `extra_size` bigger than the ROI's bounding box.
+    /// Draws a circle around the object which is `extra_size` bigger than the object's bounding box.
     #[serde(rename_all = "camelCase")]
     SnapArea {
-        ///  Size added on top of the ROI's bounding-box diameter
+        ///  Size added on top of the object's bounding-box diameter
         #[schemars(range(min = 0, max = 65535))]
         extra_size: f32,
         ///  Unit `extra_size` is expressed in
         unit: SizeUnits,
     },
-    /// Draws a circle around the ROI's bounding box, with `min_diameter` as the minimum diameter.
+    /// Draws a circle around the object's bounding box, with `min_diameter` as the minimum diameter.
     #[serde(rename_all = "camelCase")]
     MinCircle {
         ///  Minimum circle diameter
@@ -310,25 +310,25 @@ pub enum ClassificationTransformRoisTransformFunctionSettings {
         ///  Unit `min_diameter` is expressed in
         unit: SizeUnits,
     },
-    /// Draws a circle with exactly `diameter` as diameter around the ROI.
+    /// Draws a circle with exactly `diameter` as diameter around the object.
     ///
-    /// If `diameter` is 0, the ROI's bounding box is used as the diameter instead.
+    /// If `diameter` is 0, the object's bounding box is used as the diameter instead.
     #[serde(rename_all = "camelCase")]
     DrawCircle {
-        ///  Circle diameter (0 = use the ROI's bounding box)
+        ///  Circle diameter (0 = use the object's bounding box)
         #[schemars(range(min = 0, max = 65535))]
         diameter: f32,
         ///  Unit `diameter` is expressed in
         unit: SizeUnits,
     },
-    /// Replaces the ROI with the ellipse fitted to its mask.
+    /// Replaces the object with the ellipse fitted to its mask.
     #[serde(rename_all = "camelCase")]
     FittingEllipse {
         ///  Unitless scale factor for the fitted ellipse
         #[schemars(range(min = 0, max = 65535))]
         scale: f32,
     },
-    /// Grows the ROI outward by `margin`, following its actual contour (standard flat
+    /// Grows the object outward by `margin`, following its actual contour (standard flat
     /// dilation with a disk structuring element) - unlike `Scale`, irregular shapes
     /// grow by a uniform margin instead of being stretched proportionally.
     #[serde(rename_all = "camelCase")]
@@ -339,7 +339,7 @@ pub enum ClassificationTransformRoisTransformFunctionSettings {
         ///  Unit `margin` is expressed in
         unit: SizeUnits,
     },
-    /// Shrinks the ROI inward by `margin`, following its actual contour (standard flat
+    /// Shrinks the object inward by `margin`, following its actual contour (standard flat
     /// erosion with a disk structuring element).
     #[serde(rename_all = "camelCase")]
     Shrink {
@@ -351,7 +351,7 @@ pub enum ClassificationTransformRoisTransformFunctionSettings {
     },
 }
 
-impl Default for ClassificationTransformRoisTransformFunctionSettings {
+impl Default for ClassificationTransformObjectsTransformFunctionSettings {
     fn default() -> Self {
         Self::Scale { factor: 1.0f32 }
     }
@@ -1263,25 +1263,25 @@ impl Default for WatershedSettings {
 
 // ============ MEASURE ============
 
-fn _serde_default_extractrois_max_objects_before_fail() -> i32 {
+fn _serde_default_extractobjects_max_objects_before_fail() -> i32 {
     100000i32
 }
-///  Represents a bounded region of interest extracted from a labeled image.
+///  Represents a bounded object extracted from a labeled image.
 ///  A command to extract spatial statistics and bounding boxes from labeled objects.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct ExtractRoisSettings {
+pub struct ExtractObjectsSettings {
     ///  Maximum allowed ROIs to extract.
     ///
     ///  If this limit is exceeded the pipeline fails.
     ///  This is a protection against memory overload.
     #[schemars(range(min = 100000, max = 100000))]
-    #[serde(default = "_serde_default_extractrois_max_objects_before_fail")]
+    #[serde(default = "_serde_default_extractobjects_max_objects_before_fail")]
     pub max_objects_before_fail: i32,
 }
 
-impl Default for ExtractRoisSettings {
+impl Default for ExtractObjectsSettings {
     fn default() -> Self {
         Self {
             max_objects_before_fail: 100000i32,
@@ -1299,7 +1299,7 @@ impl Default for ExtractRoisSettings {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct ClassifyRoisSettings {
+pub struct ClassifyObjectsSettings {
     ///  Apply only to objects with this given segmentation class
     ///
     ///  The segmentation class value is assigned to each pixel in the image
@@ -1322,16 +1322,16 @@ pub struct ClassifyRoisSettings {
     ///  - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
     ///  - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
     ///  - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
-    pub match_handling: ClassificationClassifyRoisClassifyMatchHandlingSettings,
+    pub match_handling: ClassificationClassifyObjectsClassifyMatchHandlingSettings,
     ///  Class label assigned to (or removed from) objects by the chosen operation
     ///
     ///  Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
     ///  Has no effect when the selected operation only manipulates input classes or clears all classes.
     pub output_class: ObjectClass,
-    ///  Additional criterion: the object must intersect an ROI carrying this class
+    ///  Additional criterion: the object must intersect an object carrying this class
     ///
     ///  If unset (the default) this filter is not applied. When set, an object only
-    ///  satisfies the overall criteria if it also overlaps at least one ROI carrying this
+    ///  satisfies the overall criteria if it also overlaps at least one object carrying this
     ///  class by at least `min_intersection_area`. Combine with e.g.
     ///  `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
     ///  or `AddOutputClassIfMatch` to tag objects that do.
@@ -1341,7 +1341,7 @@ pub struct ClassifyRoisSettings {
     ///  Has no effect while `overlapping_with` is Unset.
     #[schemars(range(min = 0, max = 2147483600))]
     pub min_intersection_area: f32,
-    ///  Unit to use for roi extraction
+    ///  Unit to use for object extraction
     pub size_unit: SizeUnits,
     ///  Minimum area size
     ///
@@ -1433,21 +1433,20 @@ pub struct ClassifyRoisSettings {
     ///  When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.
     #[schemars(range(min = 0, max = 2147483600))]
     pub max_feret: f32,
-    ///  Whether ROI can touch image edge
+    ///  Whether object can touch image edge
     pub allow_edge_touching: bool,
 }
 
-impl Default for ClassifyRoisSettings {
+impl Default for ClassifyObjectsSettings {
     fn default() -> Self {
         Self {
             origin_segmentation: vec![],
             input_classes: vec![],
-            match_handling:
-                ClassificationClassifyRoisClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch,
-            output_class: ObjectClass::Unset,
-            overlapping_with: ObjectClass::Unset,
+            match_handling: ClassificationClassifyObjectsClassifyMatchHandlingSettings :: RemoveAllClassesIfNotMatch,
+            output_class: ObjectClass :: Unset,
+            overlapping_with: ObjectClass :: Unset,
             min_intersection_area: 0.0f32,
-            size_unit: SizeUnits::NanoMeter,
+            size_unit: SizeUnits :: NanoMeter,
             min_area: 0.0f32,
             max_area: 2147483648.0f32,
             min_circularity: 0.0f32,
@@ -1470,7 +1469,7 @@ fn _serde_default_colocalization_exclude_classes() -> Vec<ObjectClass> {
 }
 ///  Calculates spatial colocalization and intersections between specified object classes.
 ///
-///  This command scans the ROI cache, groups objects by their designated classes,
+///  This command scans the object cache, groups objects by their designated classes,
 ///  and performs spatial overlap analysis. It records colocalization relationships
 ///  between intersecting entities and can optionally generate new child ROIs representing
 ///  the precise intersection regions.
@@ -1485,12 +1484,12 @@ pub struct ColocalizationSettings {
     pub filter_classes: Vec<ObjectClass>,
     ///  Class of the overlapping area if needed
     ///
-    ///  If defined the overlapping coloc area is added as new ROI and labeled with this class
+    ///  If defined the overlapping coloc area is added as new object and labeled with this class
     pub class_for_overlapping_areas: ObjectClass,
     ///  Classes an object must NOT overlap to be considered colocalized.
     ///
     ///  An object that otherwise satisfies `classes_to_coloc` is excluded entirely
-    ///  (no relation recorded, no intersection ROI created) if it also overlaps any
+    ///  (no relation recorded, no intersection object created) if it also overlaps any
     ///  object from one of these classes with at least `min_coloc_area`. Leave empty
     ///  (the default) to disable this filter - exclusion is opt-in.
     ///
@@ -1508,15 +1507,15 @@ pub struct ColocalizationSettings {
 ///  Computes a boolean set operation between two object classes, object pair by
 ///  object pair.
 ///
-///  When more than one `other_class` object overlaps a given input ROI, all of them
+///  When more than one `other_class` object overlaps a given input object, all of them
 ///  are unioned into a single "B" before the operation is applied, so the result
 ///  doesn't depend on the order they'd otherwise be combined in.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct RoiMathSettings {
+pub struct ObjectMathSettings {
     ///  Boolean set operation to apply
-    pub operation: ClassificationMathRoiRoiSetOperationSettings,
+    pub operation: ClassificationObjectMathObjectSetOperationSettings,
     ///  ROIs carrying this class are the left-hand operand ("A").
     pub input_class: ObjectClass,
     ///  ROIs carrying this class are the right-hand operand ("B").
@@ -1528,26 +1527,26 @@ pub struct RoiMathSettings {
     ///  Size unit for `min_overlap_area`
     pub size_unit: SizeUnits,
     ///  Minimum overlap area before an `other_class` object is treated as a partner
-    ///  of an input ROI; objects overlapping less than this are ignored.
+    ///  of an input object; objects overlapping less than this are ignored.
     pub min_overlap_area: f32,
-    ///  If unset, the result replaces the input ROI in place.
+    ///  If unset, the result replaces the input object in place.
     ///
-    ///  If set, a new ROI carrying this class is created for each input ROI instead,
-    ///  leaving the input ROI untouched.
+    ///  If set, a new object carrying this class is created for each input object instead,
+    ///  leaving the input object untouched.
     pub output_class: ObjectClass,
-    ///  When an input ROI has no qualifying overlapping partner: keep it unchanged in
+    ///  When an input object has no qualifying overlapping partner: keep it unchanged in
     ///  the output (true), or drop it entirely - no output for it at all - (false).
     ///
     ///  Note this is a policy override, not the literal mathematical result: e.g. for
     ///  `And`, the true result of "A and nothing" is empty, but `keep_unmatched = true`
-    ///  still leaves A untouched rather than emitting a zero-area ROI.
+    ///  still leaves A untouched rather than emitting a zero-area object.
     pub keep_unmatched: bool,
 }
 
-impl Default for RoiMathSettings {
+impl Default for ObjectMathSettings {
     fn default() -> Self {
         Self {
-            operation: ClassificationMathRoiRoiSetOperationSettings::default(),
+            operation: ClassificationObjectMathObjectSetOperationSettings::default(),
             input_class: ObjectClass::default(),
             other_class: ObjectClass::default(),
             other_filter_classes: vec![],
@@ -1561,29 +1560,29 @@ impl Default for RoiMathSettings {
 
 ///  Transforms given ROIs and either replaces the old ones or creates new ones.
 ///
-///  This command applies a geometric transform (scale, circle, fitted ellipse) to every ROI
-///  carrying `input_class`. The transformed shape keeps the original ROI's bounding-box center.
-///  If `output_class` is unset (or equal to `input_class`) the input ROI is replaced in place;
-///  otherwise a new ROI carrying `output_class` is created alongside the untouched input ROI.
+///  This command applies a geometric transform (scale, circle, fitted ellipse) to every object
+///  carrying `input_class`. The transformed shape keeps the original object's bounding-box center.
+///  If `output_class` is unset (or equal to `input_class`) the input object is replaced in place;
+///  otherwise a new object carrying `output_class` is created alongside the untouched input object.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
-pub struct TransformRoisSettings {
-    ///  Geometric transform applied to each input ROI
-    pub function: ClassificationTransformRoisTransformFunctionSettings,
+pub struct TransformObjectsSettings {
+    ///  Geometric transform applied to each input object
+    pub function: ClassificationTransformObjectsTransformFunctionSettings,
     ///  ROIs carrying this class are the input to the transform
     pub input_class: ObjectClass,
-    ///  If unset, the transformed shape replaces the input ROI in place.
+    ///  If unset, the transformed shape replaces the input object in place.
     ///
-    ///  If set, a new ROI carrying this class is created for each transformed input ROI instead,
-    ///  leaving the input ROI untouched.
+    ///  If set, a new object carrying this class is created for each transformed input object instead,
+    ///  leaving the input object untouched.
     pub output_class: ObjectClass,
 }
 
-impl Default for TransformRoisSettings {
+impl Default for TransformObjectsSettings {
     fn default() -> Self {
         Self {
-            function: ClassificationTransformRoisTransformFunctionSettings::default(),
+            function: ClassificationTransformObjectsTransformFunctionSettings::default(),
             input_class: ObjectClass::default(),
             output_class: ObjectClass::Unset,
         }

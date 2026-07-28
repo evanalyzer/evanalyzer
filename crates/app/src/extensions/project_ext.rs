@@ -1,10 +1,9 @@
 use crate::extensions::classification_ext::ClassificationExt;
-use crate::extensions::roi_ext::RoiExt;
+use crate::extensions::object_ext::ObjectExt;
 use crate::extensions::utils::{get_relative_key, is_in_root, wavelength_to_rgb_u32};
 use crate::project_owner::{ProjectTmpSettings, ProjectWithRuntime};
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::ImageAddress;
-use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackSettings,
@@ -12,6 +11,9 @@ use evanalyzer_cfg::settings::images_settings::{
 use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
 use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
+use evanalyzer_cfg::{
+    PIPELINE_EXTENSIONS, PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS,
+};
 use evanalyzer_cfg::{
     core_types::ObjectClass,
     settings::{
@@ -21,7 +23,8 @@ use evanalyzer_cfg::{
     },
 };
 use evanalyzer_cfg::{
-    core_types::SegmentationClass, object_class_set_from_u32, settings::roi_settings::RoiSettings,
+    core_types::SegmentationClass, object_class_set_from_u32,
+    settings::object_settings::ObjectMetricSettings,
 };
 use evanalyzer_core::{ImageMeta, ImageReader, ReadMode, SUPPORTED_IMAGE_FORMATS};
 use human_sort::compare;
@@ -68,12 +71,12 @@ pub enum SaveProjectActions {
 }
 
 pub trait ProjectExt {
-    fn add_class_to_roi(&mut self, id: ObjectId, object_class: ObjectClass);
-    fn remove_class_from_roi(&mut self, id: ObjectId, object_class: &ObjectClass);
-    fn add_roi(&mut self, roi: &RoiSettings);
-    fn get_rois(&self) -> Option<&[RoiSettings]>;
-    fn delete_roi(&mut self, id: ObjectId);
-    fn get_reference_roi(&self) -> Option<Vec<RoiSettings>>;
+    fn add_class_to_object(&mut self, id: ObjectId, object_class: ObjectClass);
+    fn remove_class_from_object(&mut self, id: ObjectId, object_class: &ObjectClass);
+    fn add_object(&mut self, object: &ObjectMetricSettings);
+    fn get_objects(&self) -> Option<&[ObjectMetricSettings]>;
+    fn delete_object(&mut self, id: ObjectId);
+    fn get_reference_object(&self) -> Option<Vec<ObjectMetricSettings>>;
     fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class>;
     fn get_current_relative_path(&self) -> Option<PathBuf>;
     fn with_current_image_mut<F, R>(&mut self, f: F) -> Option<R>
@@ -192,67 +195,67 @@ pub trait ProjectExt {
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass);
     fn is_class_visible(&self, class_id: &ObjectClass) -> bool;
-    fn count_rois_for_class(&self, class_id: &ObjectClass) -> usize;
+    fn count_objects_for_class(&self, class_id: &ObjectClass) -> usize;
 
-    fn toggle_hide_unclassified_rois(&mut self);
-    fn hide_unclassified_rois(&self) -> bool;
+    fn toggle_hide_unclassified_objects(&mut self);
+    fn hide_unclassified_objects(&self) -> bool;
 }
 
 impl ProjectExt for ProjectWithRuntime {
-    /// Adds an object class to a specific ROI by its ID.
+    /// Adds an object class to a specific object by its ID.
     ///
-    /// This method finds the ROI with the given ID in the currently selected image series
+    /// This method finds the object with the given ID in the currently selected image series
     /// and adds the specified object class to it.
     ///
     /// # Arguments
-    /// * `id` - The ObjectId of the ROI to modify
-    /// * `object_class` - The ObjectClass to add to the ROI
-    fn add_class_to_roi(&mut self, id: ObjectId, object_class: ObjectClass) {
+    /// * `id` - The ObjectId of the object to modify
+    /// * `object_class` - The ObjectClass to add to the object
+    fn add_class_to_object(&mut self, id: ObjectId, object_class: ObjectClass) {
         if let Some(series) = self.get_selected_image_series_mut() {
-            if let Some(roi) = series.rois.iter_mut().find(|roi| roi.id == id) {
-                roi.add_object_class(object_class);
+            if let Some(object) = series.objects.iter_mut().find(|object| object.id == id) {
+                object.add_object_class(object_class);
             }
         }
     }
 
-    /// Removes an object class from a specific ROI by its ID.
+    /// Removes an object class from a specific object by its ID.
     ///
-    /// This method finds the ROI with the given ID in the currently selected image series
+    /// This method finds the object with the given ID in the currently selected image series
     /// and removes the specified object class from it.
     ///
     /// # Arguments
-    /// * `id` - The ObjectId of the ROI to modify
-    /// * `object_class` - The ObjectClass to remove from the ROI
-    fn remove_class_from_roi(&mut self, id: ObjectId, object_class: &ObjectClass) {
+    /// * `id` - The ObjectId of the object to modify
+    /// * `object_class` - The ObjectClass to remove from the object
+    fn remove_class_from_object(&mut self, id: ObjectId, object_class: &ObjectClass) {
         if let Some(series) = self.get_selected_image_series_mut() {
-            if let Some(roi) = series.rois.iter_mut().find(|roi| roi.id == id) {
-                roi.remove_object_class(object_class);
+            if let Some(object) = series.objects.iter_mut().find(|object| object.id == id) {
+                object.remove_object_class(object_class);
             }
         }
     }
 
-    fn add_roi(&mut self, roi: &RoiSettings) {
+    fn add_object(&mut self, object: &ObjectMetricSettings) {
         if let Some(series) = self.get_selected_image_series_mut() {
-            series.rois.push(roi.clone());
+            series.objects.push(object.clone());
         }
     }
 
-    fn get_rois(&self) -> Option<&[RoiSettings]> {
+    fn get_objects(&self) -> Option<&[ObjectMetricSettings]> {
         self.get_selected_image_series()
-            .map(|series| series.rois.as_slice())
+            .map(|series| series.objects.as_slice())
     }
 
-    fn delete_roi(&mut self, id: ObjectId) {
+    fn delete_object(&mut self, id: ObjectId) {
         if let Some(series) = self.get_selected_image_series_mut() {
-            series.rois.retain(|roi| roi.id != id);
+            series.objects.retain(|object| object.id != id);
         }
     }
 
-    fn get_reference_roi(&self) -> Option<Vec<RoiSettings>> {
-        let mut rois = Vec::new();
+    fn get_reference_object(&self) -> Option<Vec<ObjectMetricSettings>> {
+        let mut objects = Vec::new();
 
-        // Helper to generate a circular ROI
-        let create_circle_roi = |id: u128, x_start: usize, y_start: usize| {
+        // Helper to generate a circular object
+        let create_circle_object = |id: u128, x_start: usize, y_start: usize| {
             let width = 5;
             let height = 5;
             let radius = 2.0f32;
@@ -271,7 +274,7 @@ impl ProjectExt for ProjectWithRuntime {
                     }
                 }
             }
-            RoiSettings {
+            ObjectMetricSettings {
                 id: ObjectId(id),
                 bbox: [
                     x_start as u32,
@@ -299,9 +302,9 @@ impl ProjectExt for ProjectWithRuntime {
             let x = ((col * spacing) + (spacing / 2)) as usize;
             let y = ((row * spacing) + (spacing / 2)) as usize;
 
-            rois.push(create_circle_roi(i + 1, x, y));
+            objects.push(create_circle_object(i + 1, x, y));
         }
-        Some(rois)
+        Some(objects)
     }
 
     fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class> {
@@ -960,7 +963,7 @@ impl ProjectExt for ProjectWithRuntime {
                     },
                     z_stack: None,
                     t_stack: None,
-                    rois: Vec::new(),
+                    objects: Vec::new(),
                 };
 
                 file_size_approx_bytes += image_width * image_height * nr_bits as u64;
@@ -1202,7 +1205,10 @@ impl ProjectExt for ProjectWithRuntime {
         let template: PipelineTemplate = match serde_json::from_str(&data) {
             Ok(template) => template,
             Err(err) => {
-                warn!("Could not parse pipeline template {:?}: {}", template_file, err);
+                warn!(
+                    "Could not parse pipeline template {:?}: {}",
+                    template_file, err
+                );
                 return;
             }
         };
@@ -1259,24 +1265,24 @@ impl ProjectExt for ProjectWithRuntime {
         !self.tmp_settings.hidden_classes.contains(class_id)
     }
 
-    fn toggle_hide_unclassified_rois(&mut self) {
-        self.tmp_settings.hide_unclassified_rois = !self.tmp_settings.hide_unclassified_rois;
+    fn toggle_hide_unclassified_objects(&mut self) {
+        self.tmp_settings.hide_unclassified_objects = !self.tmp_settings.hide_unclassified_objects;
     }
 
-    fn hide_unclassified_rois(&self) -> bool {
-        self.tmp_settings.hide_unclassified_rois
+    fn hide_unclassified_objects(&self) -> bool {
+        self.tmp_settings.hide_unclassified_objects
     }
 
-    fn count_rois_for_class(&self, class_id: &ObjectClass) -> usize {
+    fn count_objects_for_class(&self, class_id: &ObjectClass) -> usize {
         let manual = self
-            .get_rois()
+            .get_objects()
             .unwrap_or_default()
             .iter()
             .filter(|r| r.object_class.contains(class_id))
             .count();
         let preview = self
             .tmp_settings
-            .preview_rois
+            .preview_objects
             .iter()
             .filter(|r| r.object_class.contains(class_id))
             .count();
@@ -1405,18 +1411,38 @@ mod tests {
         let rel_path = PathBuf::from("img.tif");
 
         let channels = BTreeMap::from([
-            (0, ChannelSettings { name: "Ch0".into(), emission_wave_length: 488.0, visible: None, histogram: None }),
-            (1, ChannelSettings { name: "Ch1".into(), emission_wave_length: 561.0, visible: None, histogram: None }),
+            (
+                0,
+                ChannelSettings {
+                    name: "Ch0".into(),
+                    emission_wave_length: 488.0,
+                    visible: None,
+                    histogram: None,
+                },
+            ),
+            (
+                1,
+                ChannelSettings {
+                    name: "Ch1".into(),
+                    emission_wave_length: 561.0,
+                    visible: None,
+                    histogram: None,
+                },
+            ),
         ]);
         let series = SeriesSettings {
             selected_channel: None,
             image_width: 2,
             image_height: 2,
             channels,
-            pixel_sizes: PixelSizeSettings { x: 0.5, y: 0.5, z: 1.0 },
+            pixel_sizes: PixelSizeSettings {
+                x: 0.5,
+                y: 0.5,
+                z: 1.0,
+            },
             z_stack: None,
             t_stack: None,
-            rois: Vec::new(),
+            objects: Vec::new(),
         };
         project.images.list.insert(
             rel_path.clone(),
@@ -1432,46 +1458,67 @@ mod tests {
     }
 
     fn class(id: u32, name: &str) -> Class {
-        Class { id: ObjectClass::Valid(id), name: name.into(), ..Default::default() }
+        Class {
+            id: ObjectClass::Valid(id),
+            name: name.into(),
+            ..Default::default()
+        }
     }
 
-    // -- ROIs -----------------------------------------------------------
+    // -- objects -----------------------------------------------------------
 
     #[test]
-    fn add_get_delete_roi_round_trip() {
+    fn add_get_delete_object_round_trip() {
         let mut project = project_with_one_image();
-        assert_eq!(project.get_rois().unwrap().len(), 0);
+        assert_eq!(project.get_objects().unwrap().len(), 0);
 
-        project.add_roi(&RoiSettings { id: ObjectId(1), ..Default::default() });
-        project.add_roi(&RoiSettings { id: ObjectId(2), ..Default::default() });
-        assert_eq!(project.get_rois().unwrap().len(), 2);
+        project.add_object(&ObjectMetricSettings {
+            id: ObjectId(1),
+            ..Default::default()
+        });
+        project.add_object(&ObjectMetricSettings {
+            id: ObjectId(2),
+            ..Default::default()
+        });
+        assert_eq!(project.get_objects().unwrap().len(), 2);
 
-        project.delete_roi(ObjectId(1));
-        let remaining = project.get_rois().unwrap();
+        project.delete_object(ObjectId(1));
+        let remaining = project.get_objects().unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, ObjectId(2));
     }
 
     #[test]
-    fn roi_mutations_are_a_no_op_without_a_selected_image() {
+    fn object_mutations_are_a_no_op_without_a_selected_image() {
         let mut project = ProjectWithRuntime::default();
-        assert!(project.get_rois().is_none());
+        assert!(project.get_objects().is_none());
         // Must not panic even though there's nothing to add to.
-        project.add_roi(&RoiSettings::default());
-        project.delete_roi(ObjectId(1));
-        assert!(project.get_rois().is_none());
+        project.add_object(&ObjectMetricSettings::default());
+        project.delete_object(ObjectId(1));
+        assert!(project.get_objects().is_none());
     }
 
     #[test]
-    fn add_and_remove_class_from_roi() {
+    fn add_and_remove_class_from_object() {
         let mut project = project_with_one_image();
-        project.add_roi(&RoiSettings { id: ObjectId(1), ..Default::default() });
+        project.add_object(&ObjectMetricSettings {
+            id: ObjectId(1),
+            ..Default::default()
+        });
 
-        project.add_class_to_roi(ObjectId(1), ObjectClass::Valid(3));
-        assert!(project.get_rois().unwrap()[0].object_class.contains(&ObjectClass::Valid(3)));
+        project.add_class_to_object(ObjectId(1), ObjectClass::Valid(3));
+        assert!(
+            project.get_objects().unwrap()[0]
+                .object_class
+                .contains(&ObjectClass::Valid(3))
+        );
 
-        project.remove_class_from_roi(ObjectId(1), &ObjectClass::Valid(3));
-        assert!(!project.get_rois().unwrap()[0].object_class.contains(&ObjectClass::Valid(3)));
+        project.remove_class_from_object(ObjectId(1), &ObjectClass::Valid(3));
+        assert!(
+            !project.get_objects().unwrap()[0]
+                .object_class
+                .contains(&ObjectClass::Valid(3))
+        );
     }
 
     // -- Classes ----------------------------------------------------------
@@ -1507,7 +1554,10 @@ mod tests {
     fn toggle_class_visibility_is_a_flip_flop() {
         let mut project = ProjectWithRuntime::default();
         let c = ObjectClass::Valid(1);
-        assert!(project.is_class_visible(&c), "classes are visible by default");
+        assert!(
+            project.is_class_visible(&c),
+            "classes are visible by default"
+        );
 
         project.toggle_class_visibility(c.clone());
         assert!(!project.is_class_visible(&c));
@@ -1517,30 +1567,40 @@ mod tests {
     }
 
     #[test]
-    fn toggle_hide_unclassified_rois_is_a_flip_flop() {
+    fn toggle_hide_unclassified_objects_is_a_flip_flop() {
         let mut project = ProjectWithRuntime::default();
-        let initial = project.hide_unclassified_rois();
-        project.toggle_hide_unclassified_rois();
-        assert_eq!(project.hide_unclassified_rois(), !initial);
-        project.toggle_hide_unclassified_rois();
-        assert_eq!(project.hide_unclassified_rois(), initial);
+        let initial = project.hide_unclassified_objects();
+        project.toggle_hide_unclassified_objects();
+        assert_eq!(project.hide_unclassified_objects(), !initial);
+        project.toggle_hide_unclassified_objects();
+        assert_eq!(project.hide_unclassified_objects(), initial);
     }
 
     #[test]
-    fn count_rois_for_class_counts_both_series_and_preview_rois() {
+    fn count_objects_for_class_counts_both_series_and_preview_objects() {
         let mut project = project_with_one_image();
         let target = ObjectClass::Valid(5);
 
-        project.add_roi(&RoiSettings { id: ObjectId(1), object_class: [target.clone()].into(), ..Default::default() });
-        project.add_roi(&RoiSettings { id: ObjectId(2), ..Default::default() });
-        project.tmp_settings.preview_rois.push(RoiSettings {
-            id: ObjectId(3),
+        project.add_object(&ObjectMetricSettings {
+            id: ObjectId(1),
             object_class: [target.clone()].into(),
             ..Default::default()
         });
+        project.add_object(&ObjectMetricSettings {
+            id: ObjectId(2),
+            ..Default::default()
+        });
+        project
+            .tmp_settings
+            .preview_objects
+            .push(ObjectMetricSettings {
+                id: ObjectId(3),
+                object_class: [target.clone()].into(),
+                ..Default::default()
+            });
 
-        assert_eq!(project.count_rois_for_class(&target), 2);
-        assert_eq!(project.count_rois_for_class(&ObjectClass::Valid(999)), 0);
+        assert_eq!(project.count_objects_for_class(&target), 2);
+        assert_eq!(project.count_objects_for_class(&ObjectClass::Valid(999)), 0);
     }
 
     // -- Pixel sizes: series-level, then global override, then reset ------
@@ -1558,15 +1618,27 @@ mod tests {
 
         project.set_image_pixel_size_settings(0.1, 0.2, 0.3);
         let px = project.get_pixel_sizes();
-        assert_eq!((px.x, px.y, px.z), (0.1, 0.2, 0.3), "falls back to the series value");
+        assert_eq!(
+            (px.x, px.y, px.z),
+            (0.1, 0.2, 0.3),
+            "falls back to the series value"
+        );
 
         project.set_global_pixel_size_settings(9.0, 9.0, 9.0);
         let px = project.get_pixel_sizes();
-        assert_eq!((px.x, px.y, px.z), (9.0, 9.0, 9.0), "global overrides series");
+        assert_eq!(
+            (px.x, px.y, px.z),
+            (9.0, 9.0, 9.0),
+            "global overrides series"
+        );
 
         project.reset_global_pixel_size_settings();
         let px = project.get_pixel_sizes();
-        assert_eq!((px.x, px.y, px.z), (0.1, 0.2, 0.3), "clearing global falls back to series again");
+        assert_eq!(
+            (px.x, px.y, px.z),
+            (0.1, 0.2, 0.3),
+            "clearing global falls back to series again"
+        );
     }
 
     // -- Channel visibility -------------------------------------------------
@@ -1586,7 +1658,11 @@ mod tests {
 
         let vis = project.get_image_channel_visibilities();
         assert_eq!(vis.get(&0), Some(&false));
-        assert_eq!(vis.get(&1), Some(&true), "untouched channel keeps its default");
+        assert_eq!(
+            vis.get(&1),
+            Some(&true),
+            "untouched channel keeps its default"
+        );
 
         let visible_only = project.get_image_channel_visibilities_vec();
         assert!(!visible_only.contains(&0));
@@ -1617,7 +1693,10 @@ mod tests {
             project.get_image_absolute_path_from_relative(Path::new("img.tif")),
             Some(PathBuf::from("/data/images/img.tif"))
         );
-        assert_eq!(project.get_image_absolute_path_from_relative(Path::new("unknown.tif")), None);
+        assert_eq!(
+            project.get_image_absolute_path_from_relative(Path::new("unknown.tif")),
+            None
+        );
     }
 
     #[test]
@@ -1680,10 +1759,17 @@ mod tests {
 
         // No extension given - save_project_as should append the project one.
         let requested = dir.path().join("myproject");
-        project.save_project_as(&requested).expect("save should succeed");
+        project
+            .save_project_as(&requested)
+            .expect("save should succeed");
 
-        let expected = dir.path().join(format!("myproject.{}", PROJECT_FILE_EXTENSIONS));
-        assert!(expected.exists(), "file should be written with the project extension appended");
+        let expected = dir
+            .path()
+            .join(format!("myproject.{}", PROJECT_FILE_EXTENSIONS));
+        assert!(
+            expected.exists(),
+            "file should be written with the project extension appended"
+        );
         assert_eq!(project.tmp_settings.current_project, Some(expected.clone()));
 
         // save_project() (no path arg) should now reuse that recorded path.
@@ -1695,13 +1781,13 @@ mod tests {
     }
 
     #[test]
-    fn loaded_project_round_trips_rois_and_classes() {
+    fn loaded_project_round_trips_objects_and_classes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("full.evaproj");
 
         let mut project = project_with_one_image();
         project.classification.classes.push(class(1, "Nucleus"));
-        project.add_roi(&RoiSettings {
+        project.add_object(&ObjectMetricSettings {
             id: ObjectId(1),
             area: 1234,
             object_class: [ObjectClass::Valid(1)].into(),
@@ -1715,9 +1801,9 @@ mod tests {
         // `load_project` doesn't select an image on its own - it only loads
         // `settings`, leaving `tmp_settings` at its defaults.
         assert_eq!(loaded.get_current_image_path_cloned(), None);
-        let rois = &loaded.images.list.get(Path::new("img.tif")).unwrap().series[&0].rois;
-        assert_eq!(rois.len(), 1);
-        assert_eq!(rois[0].area, 1234);
+        let objects = &loaded.images.list.get(Path::new("img.tif")).unwrap().series[&0].objects;
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].area, 1234);
     }
 
     // -- Pipeline management ---------------------------------------------
@@ -1737,7 +1823,10 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         project.add_pipeline(pipeline(1));
         project.add_pipeline(pipeline(2));
-        assert_eq!(project.pipelines.iter().map(|p| p.id).collect::<Vec<_>>(), vec![PipelineId(1), PipelineId(2)]);
+        assert_eq!(
+            project.pipelines.iter().map(|p| p.id).collect::<Vec<_>>(),
+            vec![PipelineId(1), PipelineId(2)]
+        );
     }
 
     #[test]
@@ -1748,23 +1837,38 @@ mod tests {
         project.add_pipeline(pipeline(3));
 
         project.move_pipeline_up(PipelineId(2));
-        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![2, 1, 3]);
+        assert_eq!(
+            project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(),
+            vec![2, 1, 3]
+        );
 
         // Already first: no-op.
         project.move_pipeline_up(PipelineId(2));
-        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![2, 1, 3]);
+        assert_eq!(
+            project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(),
+            vec![2, 1, 3]
+        );
 
         project.move_pipeline_down(PipelineId(2));
-        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
 
         // Already last: no-op.
         project.move_pipeline_down(PipelineId(3));
-        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
 
         // Unknown id: no-op, no panic.
         project.move_pipeline_up(PipelineId(99));
         project.move_pipeline_down(PipelineId(99));
-        assert_eq!(project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            project.pipelines.iter().map(|p| p.id.0).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]
@@ -1786,8 +1890,14 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         let mut p = pipeline(1);
         p.steps = vec![
-            PipelineStepSettings { enabled: true, command: PipelineCommand::Blur(Default::default()) },
-            PipelineStepSettings { enabled: true, command: PipelineCommand::Blur(Default::default()) },
+            PipelineStepSettings {
+                enabled: true,
+                command: PipelineCommand::Blur(Default::default()),
+            },
+            PipelineStepSettings {
+                enabled: true,
+                command: PipelineCommand::Blur(Default::default()),
+            },
         ];
         project.add_pipeline(p);
 
@@ -1805,7 +1915,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.evapipe");
         let template = evanalyzer_cfg::settings::templates::PipelineTemplate {
-            meta: evanalyzer_cfg::settings::meta_data::MetaData { name: "Imported".into(), ..Default::default() },
+            meta: evanalyzer_cfg::settings::meta_data::MetaData {
+                name: "Imported".into(),
+                ..Default::default()
+            },
             pipeline_steps: vec![],
         };
         std::fs::write(&path, serde_json::to_string(&template).unwrap()).unwrap();
@@ -1815,7 +1928,11 @@ mod tests {
         project.add_pipeline_from_template_file(&path);
 
         assert_eq!(project.pipelines.len(), 2);
-        assert_eq!(project.pipelines[1].id, PipelineId(6), "next id must be max(existing) + 1");
+        assert_eq!(
+            project.pipelines[1].id,
+            PipelineId(6),
+            "next id must be max(existing) + 1"
+        );
         assert_eq!(project.pipelines[1].name.as_deref(), Some("Imported"));
     }
 
@@ -1845,12 +1962,16 @@ mod tests {
 
         let template = evanalyzer_cfg::settings::templates::ProjectTemplate {
             meta: Default::default(),
-            classification: evanalyzer_cfg::settings::classification_settings::ClassificationSettings {
-                classes: vec![class(9, "Fresh")],
-            },
+            classification:
+                evanalyzer_cfg::settings::classification_settings::ClassificationSettings {
+                    classes: vec![class(9, "Fresh")],
+                },
             plate: Default::default(),
             pipelines: vec![evanalyzer_cfg::settings::templates::PipelineTemplate {
-                meta: evanalyzer_cfg::settings::meta_data::MetaData { name: "P1".into(), ..Default::default() },
+                meta: evanalyzer_cfg::settings::meta_data::MetaData {
+                    name: "P1".into(),
+                    ..Default::default()
+                },
                 pipeline_steps: vec![],
             }],
         };
@@ -1859,7 +1980,11 @@ mod tests {
         assert_eq!(project.classification.classes.len(), 1);
         assert_eq!(project.classification.classes[0].name, "Fresh");
         assert_eq!(project.pipelines.len(), 1);
-        assert_eq!(project.pipelines[0].id, PipelineId(1), "ids are renumbered from 1, not carried over from the old pipelines");
+        assert_eq!(
+            project.pipelines[0].id,
+            PipelineId(1),
+            "ids are renumbered from 1, not carried over from the old pipelines"
+        );
         assert_eq!(project.pipelines[0].name.as_deref(), Some("P1"));
     }
 
@@ -1896,12 +2021,41 @@ mod tests {
 
     fn sample_image_meta(channel_name: &str, wavelength: f32) -> ImageMeta {
         let mut resolutions = BTreeMap::new();
-        resolutions.insert(0, evanalyzer_core::PyramidInfo { width: 4, height: 4, nr_bits: 8, ..Default::default() });
+        resolutions.insert(
+            0,
+            evanalyzer_core::PyramidInfo {
+                width: 4,
+                height: 4,
+                nr_bits: 8,
+                ..Default::default()
+            },
+        );
         let mut channels = BTreeMap::new();
-        channels.insert(0, evanalyzer_core::ChannelInfo { name: channel_name.into(), emission_wave_length: wavelength, ..Default::default() });
+        channels.insert(
+            0,
+            evanalyzer_core::ChannelInfo {
+                name: channel_name.into(),
+                emission_wave_length: wavelength,
+                ..Default::default()
+            },
+        );
         let mut series = BTreeMap::new();
-        series.insert(0, evanalyzer_core::ImageInfo { nr_c_stacks: 1, nr_z_stacks: 1, nr_t_stacks: 1, resolutions, channels, ..Default::default() });
-        ImageMeta { name: "meta".into(), series, ..Default::default() }
+        series.insert(
+            0,
+            evanalyzer_core::ImageInfo {
+                nr_c_stacks: 1,
+                nr_z_stacks: 1,
+                nr_t_stacks: 1,
+                resolutions,
+                channels,
+                ..Default::default()
+            },
+        );
+        ImageMeta {
+            name: "meta".into(),
+            series,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1923,7 +2077,12 @@ mod tests {
 
         let action = project.add_image(Path::new("/data/plate1/well_A1/img.tif"), &meta);
         assert_eq!(action, ProjectAction::Success);
-        assert!(project.images.list.contains_key(Path::new("well_A1/img.tif")));
+        assert!(
+            project
+                .images
+                .list
+                .contains_key(Path::new("well_A1/img.tif"))
+        );
     }
 
     #[test]
@@ -1947,7 +2106,10 @@ mod tests {
         project.add_image_to_list(Path::new("img.tif"), Path::new("/abs/img.tif"), &second);
 
         let entry = project.images.list.get(Path::new("img.tif")).unwrap();
-        assert_eq!(entry.series[&0].channels[&0].name, "Ch0", "the second insert must be a no-op");
+        assert_eq!(
+            entry.series[&0].channels[&0].name, "Ch0",
+            "the second insert must be a no-op"
+        );
     }
 
     #[test]
@@ -1962,7 +2124,11 @@ mod tests {
         assert_eq!(series.image_height, 4);
         assert_eq!(series.channels[&0].name, "DAPI");
         assert_eq!(series.channels[&0].emission_wave_length, 461.0);
-        assert_eq!(entry.file_size, 4 * 4 * 8, "approximate size is width * height * bits");
+        assert_eq!(
+            entry.file_size,
+            4 * 4 * 8,
+            "approximate size is width * height * bits"
+        );
     }
 
     // -- Series / channel selection ---------------------------------------
@@ -1982,19 +2148,34 @@ mod tests {
     fn get_selected_image_series_mut_allows_editing_the_active_series() {
         let mut project = project_with_one_image();
         project.get_selected_image_series_mut().unwrap().image_width = 999;
-        assert_eq!(project.get_selected_image_series().unwrap().image_width, 999);
+        assert_eq!(
+            project.get_selected_image_series().unwrap().image_width,
+            999
+        );
     }
 
     #[test]
     fn selected_channel_prefers_local_over_global_over_zero() {
         let mut project = project_with_one_image();
-        assert_eq!(project.get_selected_image_channel_idx(), 0, "defaults to 0 with nothing set");
+        assert_eq!(
+            project.get_selected_image_channel_idx(),
+            0,
+            "defaults to 0 with nothing set"
+        );
 
         project.set_global_selected_channel(&1);
-        assert_eq!(project.get_selected_image_channel_idx(), 1, "falls back to the global setting");
+        assert_eq!(
+            project.get_selected_image_channel_idx(),
+            1,
+            "falls back to the global setting"
+        );
 
         project.set_image_selected_channel(&0);
-        assert_eq!(project.get_selected_image_channel_idx(), 0, "a local override wins over global");
+        assert_eq!(
+            project.get_selected_image_channel_idx(),
+            0,
+            "a local override wins over global"
+        );
         assert_eq!(project.get_selected_image_channel().unwrap().name, "Ch0");
     }
 
@@ -2005,13 +2186,25 @@ mod tests {
         let mut project = project_with_one_image();
         assert!(project.get_z_stack().is_none());
 
-        let global = ZStackSettings { z_projection: ZStackHandling::MaxIntensity, z_range: None };
+        let global = ZStackSettings {
+            z_projection: ZStackHandling::MaxIntensity,
+            z_range: None,
+        };
         project.set_global_z_stack(&global);
-        assert_eq!(project.get_z_stack().unwrap().z_projection, ZStackHandling::MaxIntensity);
+        assert_eq!(
+            project.get_z_stack().unwrap().z_projection,
+            ZStackHandling::MaxIntensity
+        );
 
-        let local = ZStackSettings { z_projection: ZStackHandling::SumIntensity, z_range: None };
+        let local = ZStackSettings {
+            z_projection: ZStackHandling::SumIntensity,
+            z_range: None,
+        };
         project.set_image_z_stack(&local);
-        assert_eq!(project.get_z_stack().unwrap().z_projection, ZStackHandling::SumIntensity);
+        assert_eq!(
+            project.get_z_stack().unwrap().z_projection,
+            ZStackHandling::SumIntensity
+        );
     }
 
     #[test]
@@ -2019,13 +2212,27 @@ mod tests {
         let mut project = project_with_one_image();
         assert!(project.get_t_stack().is_none());
 
-        let global = TStackSettings { stack_handling: TStackHandling::AllStacks, playback_speed: 1.0, t_stack: 0 };
+        let global = TStackSettings {
+            stack_handling: TStackHandling::AllStacks,
+            playback_speed: 1.0,
+            t_stack: 0,
+        };
         project.set_global_t_stack(&global);
-        assert_eq!(project.get_t_stack().unwrap().stack_handling, TStackHandling::AllStacks);
+        assert_eq!(
+            project.get_t_stack().unwrap().stack_handling,
+            TStackHandling::AllStacks
+        );
 
-        let local = TStackSettings { stack_handling: TStackHandling::SingleStack, playback_speed: 1.0, t_stack: 3 };
+        let local = TStackSettings {
+            stack_handling: TStackHandling::SingleStack,
+            playback_speed: 1.0,
+            t_stack: 3,
+        };
         project.set_image_t_stack(&local);
-        assert_eq!(project.get_t_stack().unwrap().stack_handling, TStackHandling::SingleStack);
+        assert_eq!(
+            project.get_t_stack().unwrap().stack_handling,
+            TStackHandling::SingleStack
+        );
     }
 
     // -- Histogram settings -------------------------------------------------
@@ -2047,7 +2254,10 @@ mod tests {
         project.set_image_selected_channel(&1);
         project.set_image_histogram_settings_for_active_channel(0.2, 0.8, 0.0, 1.0);
 
-        assert_eq!(project.get_histograms_from_selected_channel().unwrap().min, 0.2);
+        assert_eq!(
+            project.get_histograms_from_selected_channel().unwrap().min,
+            0.2
+        );
         assert!(project.get_image_channel_histograms()[&0].is_none());
     }
 
@@ -2067,15 +2277,29 @@ mod tests {
 
         project.auto_add_classes_based_on_image_meta();
 
-        let names: Vec<&str> = project.classification.classes.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<&str> = project
+            .classification
+            .classes
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"Ch0"));
         assert!(names.contains(&"Ch1"));
         // `add_class` (via `ClassificationExt`) assigns each one a fresh,
         // unique id - the `ObjectClass::Unset` built in the collected `Class`
         // is only a placeholder that gets overwritten there, not the final id.
-        let ids: Vec<u32> = project.classification.classes.iter().filter_map(|c| c.id.to_u32()).collect();
-        assert_eq!(ids.len(), 2, "both classes must have been assigned a real Valid id");
+        let ids: Vec<u32> = project
+            .classification
+            .classes
+            .iter()
+            .filter_map(|c| c.id.to_u32())
+            .collect();
+        assert_eq!(
+            ids.len(),
+            2,
+            "both classes must have been assigned a real Valid id"
+        );
     }
 
     // -- misc getters ---------------------------------------------------
@@ -2096,8 +2320,19 @@ mod tests {
     #[test]
     fn find_image_mut_allows_editing_and_rest_current_image_path_clears_the_selection() {
         let mut project = project_with_one_image();
-        project.find_image_mut(&PathBuf::from("img.tif")).unwrap().file_size = 777;
-        assert_eq!(project.images.list.get(Path::new("img.tif")).unwrap().file_size, 777);
+        project
+            .find_image_mut(&PathBuf::from("img.tif"))
+            .unwrap()
+            .file_size = 777;
+        assert_eq!(
+            project
+                .images
+                .list
+                .get(Path::new("img.tif"))
+                .unwrap()
+                .file_size,
+            777
+        );
 
         assert!(project.get_current_image_path_cloned().is_some());
         project.rest_current_image_path();
@@ -2118,26 +2353,38 @@ mod tests {
     fn with_current_series_mut_returns_none_when_the_selected_series_is_missing() {
         let mut project = project_with_one_image();
         project.set_active_series(&99);
-        assert!(project.with_current_series_mut(|series| series.image_width).is_none());
+        assert!(
+            project
+                .with_current_series_mut(|series| series.image_width)
+                .is_none()
+        );
     }
 
-    // -- get_reference_roi --------------------------------------------------
+    // -- get_reference_object --------------------------------------------------
 
     #[test]
-    fn get_reference_roi_generates_a_grid_of_circular_rois() {
+    fn get_reference_object_generates_a_grid_of_circular_objects() {
         let project = ProjectWithRuntime::default();
-        let rois = project.get_reference_roi().expect("always returns Some");
-        assert_eq!(rois.len(), 30000);
+        let objects = project.get_reference_object().expect("always returns Some");
+        assert_eq!(objects.len(), 30000);
 
-        let first = &rois[0];
+        let first = &objects[0];
         assert_eq!(first.id, ObjectId(1));
         assert_eq!(first.area, 31415);
-        assert_eq!(first.mask_data.len(), 5 * 5, "a 5x5 mask per ROI");
-        assert_eq!(first.bbox[2] - first.bbox[0], 5, "bbox width matches the ROI width");
-        assert_eq!(first.bbox[3] - first.bbox[1], 5, "bbox height matches the ROI height");
+        assert_eq!(first.mask_data.len(), 5 * 5, "a 5x5 mask per object");
+        assert_eq!(
+            first.bbox[2] - first.bbox[0],
+            5,
+            "bbox width matches the object width"
+        );
+        assert_eq!(
+            first.bbox[3] - first.bbox[1],
+            5,
+            "bbox height matches the object height"
+        );
         assert_eq!(first.segmentation_class, SegmentationClass(1));
 
-        let last = &rois[rois.len() - 1];
+        let last = &objects[objects.len() - 1];
         assert_eq!(last.id, ObjectId(30000));
     }
 
@@ -2200,7 +2447,9 @@ mod tests {
 
     #[test]
     fn collect_images_at_root_returns_empty_for_a_missing_directory() {
-        assert!(collect_images_at_root(Path::new("/definitely/does/not/exist/anywhere")).is_empty());
+        assert!(
+            collect_images_at_root(Path::new("/definitely/does/not/exist/anywhere")).is_empty()
+        );
     }
 
     #[test]
@@ -2279,11 +2528,18 @@ mod tests {
         p.name = Some("MyPipe".into());
         project.add_pipeline(p);
 
-        let meta = evanalyzer_cfg::settings::meta_data::MetaData { name: "Tmpl".into(), ..Default::default() };
+        let meta = evanalyzer_cfg::settings::meta_data::MetaData {
+            name: "Tmpl".into(),
+            ..Default::default()
+        };
         let path = dir.path().join("out");
-        project.save_project_as_template(meta, &path).expect("save should succeed");
+        project
+            .save_project_as_template(meta, &path)
+            .expect("save should succeed");
 
-        let expected = dir.path().join(format!("out.{}", PROJECT_FILE_TEMPLATE_EXTENSIONS));
+        let expected = dir
+            .path()
+            .join(format!("out.{}", PROJECT_FILE_TEMPLATE_EXTENSIONS));
         assert!(expected.exists());
         let content = std::fs::read_to_string(&expected).unwrap();
         let parsed: ProjectTemplate = serde_json::from_str(&content).unwrap();
@@ -2298,13 +2554,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut project = ProjectWithRuntime::default();
         let mut p = pipeline(1);
-        p.steps = vec![PipelineStepSettings { enabled: true, command: PipelineCommand::Blur(Default::default()) }];
+        p.steps = vec![PipelineStepSettings {
+            enabled: true,
+            command: PipelineCommand::Blur(Default::default()),
+        }];
         project.add_pipeline(p);
         project.add_pipeline(pipeline(2));
 
-        let meta = evanalyzer_cfg::settings::meta_data::MetaData { name: "StepTmpl".into(), ..Default::default() };
+        let meta = evanalyzer_cfg::settings::meta_data::MetaData {
+            name: "StepTmpl".into(),
+            ..Default::default()
+        };
         let path = dir.path().join("pipe");
-        project.save_pipeline_as_template(meta, PipelineId(1), &path).expect("save should succeed");
+        project
+            .save_pipeline_as_template(meta, PipelineId(1), &path)
+            .expect("save should succeed");
 
         let expected = dir.path().join(format!("pipe.{}", PIPELINE_EXTENSIONS));
         assert!(expected.exists());
@@ -2344,7 +2608,9 @@ mod tests {
 
         let created = project.new_project(&path).expect("should succeed");
 
-        let expected = dir.path().join(format!("newproj.{}", PROJECT_FILE_EXTENSIONS));
+        let expected = dir
+            .path()
+            .join(format!("newproj.{}", PROJECT_FILE_EXTENSIONS));
         assert!(expected.exists());
         assert_eq!(created.tmp_settings.current_project, Some(expected));
         assert!(created.classification.classes.is_empty());
@@ -2359,7 +2625,8 @@ mod tests {
 
         let settings = ProjectSettings::default();
         let mut value = serde_json::to_value(&settings).unwrap();
-        value["schemaVersion"] = serde_json::json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION + 1);
+        value["schemaVersion"] =
+            serde_json::json!(evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION + 1);
         std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
 
         match load_project(&path) {

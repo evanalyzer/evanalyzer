@@ -1,6 +1,6 @@
 use crate::args::{ColumnsArgs, ViewArgs};
 use crate::commands::common::{build_database_filter, discover_columns};
-use crate::table::print_roi_table;
+use crate::table::print_object_table;
 use evanalyzer_app::result::{
     ResultsLoader, build_column_specs, discover_channels, plottable_columns, to_display_row,
 };
@@ -16,21 +16,21 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
     let z_range = loader.get_z_stack_range().unwrap_or(None);
 
     let filter = build_database_filter(&args.filter, args.channels, args.page, args.limit);
-    let rois = loader.get_rois(filter)?;
+    let objects = loader.get_objects(filter)?;
 
     let (channels, coloc_partner_classes) = if args.channels {
-        (discover_channels(&rois), loader.get_coloc_partner_class_names()?)
+        (discover_channels(&objects), loader.get_coloc_partner_class_names()?)
     } else {
         (vec![], vec![])
     };
     let specs = build_column_specs(&channels, &coloc_partner_classes);
 
     if args.json {
-        let rows: Vec<_> = rois
+        let rows: Vec<_> = objects
             .iter()
             .enumerate()
-            .map(|(i, roi)| {
-                let display = to_display_row(i, roi, &specs);
+            .map(|(i, object)| {
+                let display = to_display_row(i, object, &specs);
                 serde_json::Value::Object(
                     specs
                         .iter()
@@ -65,16 +65,16 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
     }
     println!();
 
-    if rois.is_empty() {
+    if objects.is_empty() {
         println!("(no rows match)");
         return Ok(());
     }
 
-    print_roi_table(&specs, &rois);
+    print_object_table(&specs, &objects);
     println!(
         "\nPage {} - {} row(s) shown. Use --page/--limit to page through more, --channels to add intensities.",
         args.page,
-        rois.len()
+        objects.len()
     );
     Ok(())
 }

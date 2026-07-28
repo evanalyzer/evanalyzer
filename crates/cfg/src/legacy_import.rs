@@ -13,11 +13,11 @@
 //! Two import-time expansions are structural, not just field renames:
 //! - The old app extracted ROIs automatically as part of running `$threshold` /
 //!   `$watershed`; this codebase requires explicit `ConnectedComponents` +
-//!   `ExtractRois` steps afterwards. These are inserted automatically right after
+//!   `ExtractObjects` steps afterwards. These are inserted automatically right after
 //!   the last segmentation step in a run of them.
 //! - The old `$classify` step held a *list* of model classes, each with a *list* of
-//!   filters; this codebase's `ClassifyRois` is one filter per step. Each
-//!   (model class × filter) pair becomes its own `ClassifyRois` step.
+//!   filters; this codebase's `ClassifyObjects` is one filter per step. Each
+//!   (model class × filter) pair becomes its own `ClassifyObjects` step.
 
 use crate::core_types::{ImageAddress, ObjectClass, PipelineId, SegmentationClass, SizeUnits};
 use crate::legacy_schema::*;
@@ -436,7 +436,7 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
     let mut steps: Vec<PipelineStepSettings> = Vec::new();
     // True right after converting a `$threshold`/`$watershed` step: the old app
     // extracted ROIs as a side effect of those; this app needs explicit
-    // ConnectedComponents + ExtractRois steps, inserted just before whatever
+    // ConnectedComponents + ExtractObjects steps, inserted just before whatever
     // comes next (or at the end of the pipeline).
     let mut pending_segmentation = false;
 
@@ -477,7 +477,7 @@ fn push_segmentation_followup(steps: &mut Vec<PipelineStepSettings>) {
     });
     steps.push(PipelineStepSettings {
         enabled: true,
-        command: PipelineCommand::ExtractRois(ExtractRoisSettings::default()),
+        command: PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
     });
 }
 
@@ -1010,7 +1010,7 @@ fn convert_classifier(
         for filter in &model_class.filters {
             if filter.intensity.min_intensity >= 0.0 || filter.intensity.max_intensity >= 0.0 {
                 warnings.push(format!(
-                    "{context}: '$classify' intensity filter has no equivalent in ClassifyRois - dropped"
+                    "{context}: '$classify' intensity filter has no equivalent in ClassifyObjects - dropped"
                 ));
             }
             let output_class = resolve_class(
@@ -1020,13 +1020,13 @@ fn convert_classifier(
                 "classify output class",
                 warnings,
             );
-            out.push(PipelineCommand::ClassifyRois(ClassifyRoisSettings {
+            out.push(PipelineCommand::ClassifyObjects(ClassifyObjectsSettings {
                 origin_segmentation: vec![SegmentationClass(
                     model_class.pixel_class_id.max(0) as u32
                 )],
                 input_classes: vec![],
                 match_handling:
-                    ClassificationClassifyRoisClassifyMatchHandlingSettings::AddOutputClassIfMatch,
+                    ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch,
                 output_class,
                 overlapping_with: ObjectClass::Unset,
                 min_intersection_area: 0.0,
@@ -1076,23 +1076,25 @@ fn convert_object_transform(
     );
 
     let function = match s.function.as_str() {
-        "Scale" => ClassificationTransformRoisTransformFunctionSettings::Scale { factor: s.factor },
-        "SnapArea" => ClassificationTransformRoisTransformFunctionSettings::SnapArea {
+        "Scale" => {
+            ClassificationTransformObjectsTransformFunctionSettings::Scale { factor: s.factor }
+        }
+        "SnapArea" => ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
             extra_size: s.factor,
             unit: SizeUnits::Pixels,
         },
         // Old's `factor` for circle functions is documented as a *radius*; the
         // new fields take a *diameter*.
-        "CircleMin" => ClassificationTransformRoisTransformFunctionSettings::MinCircle {
+        "CircleMin" => ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
             min_diameter: s.factor * 2.0,
             unit: SizeUnits::Pixels,
         },
-        "Circle" => ClassificationTransformRoisTransformFunctionSettings::DrawCircle {
+        "Circle" => ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
             diameter: s.factor * 2.0,
             unit: SizeUnits::Pixels,
         },
         "FitEllipse" => {
-            ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale: 1.0 }
+            ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 1.0 }
         }
         other => {
             warnings.push(format!(
@@ -1102,11 +1104,13 @@ fn convert_object_transform(
         }
     };
 
-    vec![PipelineCommand::TransformRois(TransformRoisSettings {
-        function,
-        input_class,
-        output_class,
-    })]
+    vec![PipelineCommand::TransformObjects(
+        TransformObjectsSettings {
+            function,
+            input_class,
+            output_class,
+        },
+    )]
 }
 
 fn convert_save_image(s: &LegacyImageSaverSettings) -> PipelineCommand {
@@ -1232,8 +1236,8 @@ mod tests {
                 PipelineCommand::Threshold(_) => "Threshold",
                 PipelineCommand::Watershed(_) => "Watershed",
                 PipelineCommand::ConnectedComponents(_) => "ConnectedComponents",
-                PipelineCommand::ExtractRois(_) => "ExtractRois",
-                PipelineCommand::ClassifyRois(_) => "ClassifyRois",
+                PipelineCommand::ExtractObjects(_) => "ExtractObjects",
+                PipelineCommand::ClassifyObjects(_) => "ClassifyObjects",
                 PipelineCommand::SaveImage(_) => "SaveImage",
                 _ => "Other",
             })
@@ -1247,24 +1251,24 @@ mod tests {
                 "Threshold",
                 "Watershed",
                 "ConnectedComponents",
-                "ExtractRois",
-                "ClassifyRois",
+                "ExtractObjects",
+                "ClassifyObjects",
                 "SaveImage",
             ]
         );
     }
 
     #[test]
-    fn classify_rois_carries_the_metrics_filter() {
+    fn classify_objects_carries_the_metrics_filter() {
         let outcome = import_legacy_project(&sample_project_json()).unwrap();
         let classify = outcome.project.pipelines[0]
             .steps
             .iter()
             .find_map(|s| match &s.command {
-                PipelineCommand::ClassifyRois(c) => Some(c),
+                PipelineCommand::ClassifyObjects(c) => Some(c),
                 _ => None,
             })
-            .expect("a ClassifyRois step");
+            .expect("a ClassifyObjects step");
 
         assert_eq!(classify.min_area, 50.0);
         assert_eq!(classify.output_class, ObjectClass::Valid(1));
@@ -1317,10 +1321,10 @@ mod tests {
             .steps
             .iter()
             .find_map(|s| match &s.command {
-                PipelineCommand::TransformRois(c) => Some(c),
+                PipelineCommand::TransformObjects(c) => Some(c),
                 _ => None,
             })
-            .expect("a TransformRois step");
+            .expect("a TransformObjects step");
         assert_eq!(transform.input_class, ObjectClass::Valid(7));
         assert_eq!(transform.output_class, ObjectClass::Valid(7));
     }
@@ -1454,7 +1458,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_with_multiple_filters_expands_into_one_classify_rois_step_per_filter() {
+    fn classify_with_multiple_filters_expands_into_one_classify_objects_step_per_filter() {
         let json = pipeline_with_step(
             r#"{ "$classify": { "modelClasses": [ {
                 "filters": [
@@ -1470,10 +1474,10 @@ mod tests {
         assert_eq!(steps.len(), 2);
         for step in steps {
             match &step.command {
-                PipelineCommand::ClassifyRois(c) => {
+                PipelineCommand::ClassifyObjects(c) => {
                     assert_eq!(c.origin_segmentation, vec![SegmentationClass(3)]);
                 }
-                other => panic!("expected ClassifyRois, got {other:?}"),
+                other => panic!("expected ClassifyObjects, got {other:?}"),
             }
         }
     }
@@ -2354,7 +2358,7 @@ mod tests {
     }
 
     #[test]
-    fn threshold_with_no_model_classes_produces_no_threshold_command_but_still_extracts_rois() {
+    fn threshold_with_no_model_classes_produces_no_threshold_command_but_still_extracts_objects() {
         let json = pipeline_with_step(r#"{ "$threshold": { "modelClasses": [] } }"#);
         let outcome = import_legacy_project(&json).unwrap();
         let steps = &outcome.project.pipelines[0].steps;
@@ -2363,7 +2367,10 @@ mod tests {
             steps[0].command,
             PipelineCommand::ConnectedComponents(_)
         ));
-        assert!(matches!(steps[1].command, PipelineCommand::ExtractRois(_)));
+        assert!(matches!(
+            steps[1].command,
+            PipelineCommand::ExtractObjects(_)
+        ));
     }
 
     #[test]
@@ -2450,14 +2457,14 @@ mod tests {
         );
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
-            PipelineCommand::TransformRois(s) => assert_eq!(
+            PipelineCommand::TransformObjects(s) => assert_eq!(
                 s.function,
-                ClassificationTransformRoisTransformFunctionSettings::SnapArea {
+                ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
                     extra_size: 3.0,
                     unit: SizeUnits::Pixels,
                 }
             ),
-            other => panic!("expected TransformRois, got {other:?}"),
+            other => panic!("expected TransformObjects, got {other:?}"),
         }
 
         let json = pipeline_with_step(
@@ -2465,14 +2472,14 @@ mod tests {
         );
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
-            PipelineCommand::TransformRois(s) => assert_eq!(
+            PipelineCommand::TransformObjects(s) => assert_eq!(
                 s.function,
-                ClassificationTransformRoisTransformFunctionSettings::MinCircle {
+                ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
                     min_diameter: 6.0,
                     unit: SizeUnits::Pixels,
                 }
             ),
-            other => panic!("expected TransformRois, got {other:?}"),
+            other => panic!("expected TransformObjects, got {other:?}"),
         }
 
         let json = pipeline_with_step(
@@ -2480,14 +2487,14 @@ mod tests {
         );
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
-            PipelineCommand::TransformRois(s) => assert_eq!(
+            PipelineCommand::TransformObjects(s) => assert_eq!(
                 s.function,
-                ClassificationTransformRoisTransformFunctionSettings::DrawCircle {
+                ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
                     diameter: 6.0,
                     unit: SizeUnits::Pixels,
                 }
             ),
-            other => panic!("expected TransformRois, got {other:?}"),
+            other => panic!("expected TransformObjects, got {other:?}"),
         }
     }
 
@@ -2498,11 +2505,13 @@ mod tests {
         );
         let outcome = import_legacy_project(&json).unwrap();
         match only_command(&outcome) {
-            PipelineCommand::TransformRois(s) => assert_eq!(
+            PipelineCommand::TransformObjects(s) => assert_eq!(
                 s.function,
-                ClassificationTransformRoisTransformFunctionSettings::FittingEllipse { scale: 1.0 }
+                ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse {
+                    scale: 1.0
+                }
             ),
-            other => panic!("expected TransformRois, got {other:?}"),
+            other => panic!("expected TransformObjects, got {other:?}"),
         }
     }
 

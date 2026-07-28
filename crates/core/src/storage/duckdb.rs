@@ -1,5 +1,5 @@
+use crate::object::Intensity;
 use crate::pipeline::pipeline_cache::PipelineCache;
-use crate::roi::Intensity;
 use crate::storage::PipelineResultExporter;
 use duckdb::types::Value;
 use duckdb::{Connection, params};
@@ -76,7 +76,7 @@ impl DuckDbExporter {
 // ---------------------------------------------------------------------------
 
 const CREATE_TABLES: &str = "
-CREATE TABLE IF NOT EXISTS rois (
+CREATE TABLE IF NOT EXISTS objects (
     image_name           VARCHAR NOT NULL,
     image_rel_path       VARCHAR NOT NULL,
     c_stack              INTEGER,
@@ -135,8 +135,8 @@ CREATE TABLE IF NOT EXISTS coloc_stats (
     source_class        VARCHAR NOT NULL,
     target_class        VARCHAR NOT NULL,
     n_colocalized       UBIGINT,
-    avg_targets_per_roi DOUBLE,
-    total_source_rois   UBIGINT
+    avg_targets_per_object DOUBLE,
+    total_source_objects   UBIGINT
 );
 ";
 
@@ -212,8 +212,8 @@ struct ColocStat {
     source_class: String,
     target_class: String,
     n_colocalized: u64,
-    avg_targets_per_roi: f64,
-    total_source_rois: u64,
+    avg_targets_per_object: f64,
+    total_source_objects: u64,
 }
 
 fn compute_coloc_stats(
@@ -221,17 +221,17 @@ fn compute_coloc_stats(
     label: &dyn Fn(&ObjectClass) -> String,
 ) -> Vec<ColocStat> {
     let mut total_per_class: HashMap<String, u64> = HashMap::new();
-    for roi in cache.roi_cache.values() {
-        for class in &roi.object_class {
+    for object in cache.object_cache.values() {
+        for class in &object.object_class {
             *total_per_class.entry(label(class)).or_default() += 1;
         }
     }
 
     let mut agg: HashMap<(String, String), (u64, u64)> = HashMap::new();
-    for roi in cache.roi_cache.values() {
-        for src_class in &roi.object_class {
+    for object in cache.object_cache.values() {
+        for src_class in &object.object_class {
             let src = label(src_class);
-            for (tgt_class, ids) in &roi.colocalized_with {
+            for (tgt_class, ids) in &object.colocalized_with {
                 if ids.is_empty() {
                     continue;
                 }
@@ -247,8 +247,8 @@ fn compute_coloc_stats(
         .map(|((src_class, tgt_class), (n_coloc, sum_targets))| {
             let total = *total_per_class.get(&src_class).unwrap_or(&1);
             ColocStat {
-                avg_targets_per_roi: sum_targets as f64 / total.max(1) as f64,
-                total_source_rois: total,
+                avg_targets_per_object: sum_targets as f64 / total.max(1) as f64,
+                total_source_objects: total,
                 n_colocalized: n_coloc,
                 source_class: src_class,
                 target_class: tgt_class,
@@ -281,7 +281,7 @@ impl PipelineResultExporter for DuckDbExporter {
 
         let label = |c: &ObjectClass| self.class_label(c);
 
-        // --- ROI rows via Appender ---
+        // --- object rows via Appender ---
         // List columns (object_class_name, object_class_id, children, parent_id)
         // are stored as VARCHAR JSON strings; the read query casts them back to
         // typed arrays so the reader code needs no changes.
@@ -289,20 +289,20 @@ impl PipelineResultExporter for DuckDbExporter {
         // constant memory usage regardless of how many images are processed.
         {
             let mut app = conn
-                .appender("rois")
+                .appender("objects")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
-            for roi in cache.roi_cache.values() {
-                // get_perimeter()/get_ellipse() are precomputed at ROI creation on the
-                // parallel workers (see Roi::finalize_geometry), so here on the single
+            for object in cache.object_cache.values() {
+                // get_perimeter()/get_ellipse() are precomputed at object creation on the
+                // parallel workers (see Object::finalize_geometry), so here on the single
                 // writer thread they are just field reads. We pull each into a local and
                 // derive the dependent metrics (circularity/roundness from the perimeter;
                 // min_feret/aspect_ratio from the ellipse) to build the row from one read.
-                let perimeter_f32 = roi.get_perimeter();
+                let perimeter_f32 = object.get_perimeter();
                 let perimeter = perimeter_f32 as f64;
-                let ellipse = roi.get_ellipse();
-                let centroid = roi.get_centroid();
-                let feret = roi.get_feret_diameter() as f64;
+                let ellipse = object.get_ellipse();
+                let centroid = object.get_centroid();
+                let feret = object.get_feret_diameter() as f64;
                 let min_feret = ellipse.minor as f64;
                 let aspect_ratio = if ellipse.minor > 0.0 {
                     (ellipse.major / ellipse.minor) as f64
@@ -310,16 +310,16 @@ impl PipelineResultExporter for DuckDbExporter {
                     1.0
                 };
 
-                let parent_id: Option<String> = roi.parent_id.as_ref().map(|id| id.to_string());
-                let track_id: u64 = roi.track.id.0;
+                let parent_id: Option<String> = object.parent_id.as_ref().map(|id| id.to_string());
+                let track_id: u64 = object.track.id.0;
 
-                let object_class_names: Vec<String> = roi
+                let object_class_names: Vec<String> = object
                     .object_class
                     .iter()
                     .filter(|c| **c != ObjectClass::Unset)
                     .map(|c| label(c))
                     .collect();
-                let object_class_ids: Vec<i32> = roi
+                let object_class_ids: Vec<i32> = object
                     .object_class
                     .iter()
                     .filter_map(|c| match c {
@@ -328,28 +328,28 @@ impl PipelineResultExporter for DuckDbExporter {
                     })
                     .collect();
                 let children_ids: Vec<String> =
-                    roi.children.iter().map(|id| id.to_string()).collect();
+                    object.children.iter().map(|id| id.to_string()).collect();
 
                 let object_class_names_json = json_string_array(&object_class_names);
                 let object_class_ids_json = json_int_array(&object_class_ids);
                 let children_json = json_string_array(&children_ids);
-                let coloc_json = coloc_to_json(&roi.colocalized_with, &label);
-                let intensities_json = intensities_to_json(&roi.intensities, bit_max);
+                let coloc_json = coloc_to_json(&object.colocalized_with, &label);
+                let intensities_json = intensities_to_json(&object.intensities, bit_max);
 
-                let seg_class_name = roi.segmentation_class.to_string();
-                let seg_class_id = roi.segmentation_class.0 as i32;
-                let object_id = roi.id.to_string();
+                let seg_class_name = object.segmentation_class.to_string();
+                let seg_class_id = object.segmentation_class.0 as i32;
+                let object_id = object.id.to_string();
                 let centroid_x_px = centroid.0 as f64;
                 let centroid_y_px = centroid.1 as f64;
                 let perimeter_nm = perimeter * px_len;
-                let area_px = roi.area as u64;
-                let area_nm2 = roi.area as f64 * pxx * pxy;
+                let area_px = object.area as u64;
+                let area_nm2 = object.area as f64 * pxx * pxy;
                 // circularity and roundness use the identical 4π·area/perimeter² formula,
                 // so compute it once from the perimeter local. (get_roundness also guards
-                // perimeter == 0, which roi.circularity() does not.)
-                let roundness = roi.get_roundness(perimeter_f32) as f64;
+                // perimeter == 0, which object.circularity() does not.)
+                let roundness = object.get_roundness(perimeter_f32) as f64;
                 let circularity = roundness;
-                let compactness = roi.get_compactness(perimeter_f32) as f64;
+                let compactness = object.get_compactness(perimeter_f32) as f64;
                 let feret_nm = feret * px_len;
                 let min_feret_nm = min_feret * px_len;
                 let px_size_z = px.px_size_z as f64;
@@ -357,9 +357,9 @@ impl PipelineResultExporter for DuckDbExporter {
                 app.append_row(params![
                     &image_name,                   // image_name
                     &image_rel,                    // image_rel_path
-                    roi.plane.c,                   // c_stack
-                    roi.plane.z,                   // z_stack
-                    roi.plane.t,                   // t_stack
+                    object.plane.c,                // c_stack
+                    object.plane.z,                // z_stack
+                    object.plane.t,                // t_stack
                     &object_id,                    // object_id (VARCHAR → UUID column)
                     &seg_class_name,               // seg_class_name
                     seg_class_id,                  // seg_class_id
@@ -372,20 +372,20 @@ impl PipelineResultExporter for DuckDbExporter {
                     centroid_y_px,                 // centroid_y_px
                     centroid_x_px * pxx,           // centroid_x_nm
                     centroid_y_px * pxy,           // centroid_y_nm
-                    roi.bbox[0],                   // bbox_xmin_px
-                    roi.bbox[1],                   // bbox_ymin_px
-                    roi.bbox[2],                   // bbox_xmax_px
-                    roi.bbox[3],                   // bbox_ymax_px
-                    roi.bbox[0] as f64 * pxx,      // bbox_xmin_nm
-                    roi.bbox[1] as f64 * pxy,      // bbox_ymin_nm
-                    roi.bbox[2] as f64 * pxx,      // bbox_xmax_nm
-                    roi.bbox[3] as f64 * pxy,      // bbox_ymax_nm
+                    object.bbox[0],                // bbox_xmin_px
+                    object.bbox[1],                // bbox_ymin_px
+                    object.bbox[2],                // bbox_xmax_px
+                    object.bbox[3],                // bbox_ymax_px
+                    object.bbox[0] as f64 * pxx,   // bbox_xmin_nm
+                    object.bbox[1] as f64 * pxy,   // bbox_ymin_nm
+                    object.bbox[2] as f64 * pxx,   // bbox_xmax_nm
+                    object.bbox[3] as f64 * pxy,   // bbox_ymax_nm
                     area_px,                       // area_px
                     area_nm2,                      // area_nm2
                     perimeter,                     // perimeter_px
                     perimeter_nm,                  // perimeter_nm
                     circularity,                   // circularity
-                    roi.get_solidity() as f64,     // solidity
+                    object.get_solidity() as f64,  // solidity
                     aspect_ratio,                  // aspect_ratio
                     roundness,                     // roundness
                     compactness,                   // compactness
@@ -399,7 +399,7 @@ impl PipelineResultExporter for DuckDbExporter {
                     min_feret,                     // min_feret_px
                     feret_nm,                      // feret_diameter_nm
                     min_feret_nm,                  // min_feret_nm
-                    roi.touches_edge,              // touches_edge
+                    object.touches_edge,           // touches_edge
                     pxx,                           // pixel_size_x_nm
                     pxy,                           // pixel_size_y_nm
                     px_size_z,                     // pixel_size_z_nm
@@ -425,8 +425,8 @@ impl PipelineResultExporter for DuckDbExporter {
                     s.source_class,
                     s.target_class,
                     s.n_colocalized,
-                    s.avg_targets_per_roi,
-                    s.total_source_rois,
+                    s.avg_targets_per_object,
+                    s.total_source_objects,
                 ])
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
@@ -440,9 +440,9 @@ impl PipelineResultExporter for DuckDbExporter {
 // DuckDbReader
 // ---------------------------------------------------------------------------
 
-/// Flat DTO for a row in the `rois` table.
+/// Flat DTO for a row in the `objects` table.
 #[derive(Debug, Clone)]
-pub struct RoiRow {
+pub struct ObjectRow {
     pub image_name: String,
     pub image_rel_path: String,
     pub c_stack: Option<i32>,
@@ -475,18 +475,18 @@ pub struct RoiRow {
     pub intensities_json: String,
     pub coloc_json: String,
     /// Pixel-space bounding box `[xmin, ymin, xmax, ymax]`, used to highlight the
-    /// ROI in the editor viewport when its results row is selected.
+    /// object in the editor viewport when its results row is selected.
     pub bbox_px: [u32; 4],
 }
 
-/// Filter criteria for [`DuckDbReader::get_rois`].
+/// Filter criteria for [`DuckDbReader::get_objects`].
 ///
 /// For `image_filter`, `class_filter` and `coloc_filter`:
 /// - `None`       → no restriction (return all)
 /// - `Some([])`   → active filter with nothing selected → return 0 rows
 /// - `Some([..])` → return only rows matching these values
 #[derive(Debug, Clone)]
-pub struct RoiFilter {
+pub struct ObjectFilter {
     pub image_filter: Option<Vec<String>>,
     pub class_filter: Option<Vec<String>>,
     /// Restricts to rows whose colocalization status label ("Yes"/"No") is in this set.
@@ -516,7 +516,7 @@ pub struct RoiFilter {
     pub sort_ascending: bool,
 }
 
-impl Default for RoiFilter {
+impl Default for ObjectFilter {
     fn default() -> Self {
         Self {
             image_filter: None,
@@ -535,18 +535,18 @@ impl Default for RoiFilter {
 }
 
 // ---------------------------------------------------------------------------
-// Grouped/aggregated queries (see `DuckDbReader::aggregate_rois`)
+// Grouped/aggregated queries (see `DuckDbReader::aggregate_objects`)
 // ---------------------------------------------------------------------------
 
-/// How to compute each ROI's grouping key in [`DuckDbReader::aggregate_rois`].
+/// How to compute each object's grouping key in [`DuckDbReader::aggregate_objects`].
 /// Kept free of `evanalyzer_app` types (`GroupBy`/`GroupConfig`) so the core
 /// crate doesn't depend on the app crate — the app-side orchestration
-/// (`aggregate_rois_sql` in `results_loader.rs`) translates `GroupBy` into one
+/// (`aggregate_objects_sql` in `results_loader.rs`) translates `GroupBy` into one
 /// of these.
 pub enum GroupKeyMode {
     /// Group by `image_name` directly (covers both `GroupBy::None` and
     /// `GroupBy::Image` — grouping by image is meaningless when there's no
-    /// grouping at all, but `aggregate_rois` is only ever called when
+    /// grouping at all, but `aggregate_objects` is only ever called when
     /// `group_by != GroupBy::None`).
     Image,
     /// Group by a precomputed `image_rel_path -> key` mapping (`GroupBy::Folder`).
@@ -558,21 +558,24 @@ pub enum GroupKeyMode {
     ImageRelPathMap(HashMap<String, String>),
     /// Group by a regex applied to `image_name` (`GroupBy::Regex`). `pattern`
     /// must already be a syntactically valid RE2 pattern (validated by the
-    /// caller via the `regex` crate before calling `aggregate_rois` — DuckDB
+    /// caller via the `regex` crate before calling `aggregate_objects` — DuckDB
     /// uses RE2 internally too, so a pattern Rust's `regex` crate accepts
     /// should also be accepted here). `has_capture_group` selects whether the
     /// grouping key is capture group 1 or the whole match (group 0) — mirrors
     /// `results_loader.rs`'s `group_key`, which prefers the first capture
     /// group and falls back to the whole match when the pattern has none.
     /// Rows whose `image_name` doesn't match `pattern` are dropped entirely.
-    Regex { pattern: String, has_capture_group: bool },
+    Regex {
+        pattern: String,
+        has_capture_group: bool,
+    },
 }
 
-/// Describes one grouped/aggregated query for [`DuckDbReader::aggregate_rois`].
+/// Describes one grouped/aggregated query for [`DuckDbReader::aggregate_objects`].
 pub struct AggregateSpec {
     pub key_mode: GroupKeyMode,
-    /// Fans each ROI out into one bucket per class it carries (mirrors
-    /// `results_loader.rs`'s `roi_classes`/`GroupConfig::group_by_class`).
+    /// Fans each object out into one bucket per class it carries (mirrors
+    /// `results_loader.rs`'s `object_classes`/`GroupConfig::group_by_class`).
     pub group_by_class: bool,
     /// Additionally splits each group into a colocalizing and a
     /// non-colocalizing bucket (mirrors `GroupConfig::split_colocalized`).
@@ -588,7 +591,7 @@ pub struct AggregateSpec {
     pub agg_fns: Vec<&'static str>,
 }
 
-/// One grouped/aggregated result row from [`DuckDbReader::aggregate_rois`].
+/// One grouped/aggregated result row from [`DuckDbReader::aggregate_objects`].
 pub struct AggregatedRow {
     pub group_key: String,
     /// `Some(_)` iff `AggregateSpec::group_by_class` was set.
@@ -598,8 +601,8 @@ pub struct AggregatedRow {
     pub count: i64,
     /// One entry per `(metric_id, agg_fn)` pair in
     /// `AggregateSpec::metric_ids` × `AggregateSpec::agg_fns` order
-    /// (metric-major). `None` means every contributing ROI was NULL for that
-    /// metric (e.g. a channel column no ROI in the bucket has intensity data
+    /// (metric-major). `None` means every contributing object was NULL for that
+    /// metric (e.g. a channel column no object in the bucket has intensity data
     /// for) — SQL aggregate functions skip NULL inputs the same way
     /// `results_loader.rs`'s `apply_agg` only ever collects `Some` values, so
     /// an all-NULL bucket and an all-absent bucket mean the same thing.
@@ -608,20 +611,20 @@ pub struct AggregatedRow {
 
 /// SQL expression computing the same display class string used throughout the
 /// results table/filters/export: the joined `object_class_name` list, falling
-/// back to `seg_class_name` when a ROI carries no object classes.
+/// back to `seg_class_name` when a object carries no object classes.
 fn class_case_expr() -> &'static str {
     "CASE WHEN json_array_length(object_class_name) = 0 \
      THEN COALESCE(seg_class_name, '') \
      ELSE array_to_string(CAST(object_class_name AS VARCHAR[]), ', ') END"
 }
 
-/// SQL expression producing the per-ROI list of classes to fan out over for
+/// SQL expression producing the per-object list of classes to fan out over for
 /// `AggregateSpec::group_by_class` — mirrors `class_case_expr`'s fallback to
 /// `seg_class_name`, but as a one-or-more-element array (via `UNNEST` in the
 /// `FROM` clause) instead of a single comma-joined string, so a multi-class
-/// ROI contributes to each of its classes' group buckets separately (matching
-/// `results_loader.rs`'s `roi_classes`). Always yields at least one element,
-/// even when a ROI carries no object classes, so the `UNNEST` cross join
+/// object contributes to each of its classes' group buckets separately (matching
+/// `results_loader.rs`'s `object_classes`). Always yields at least one element,
+/// even when a object carries no object classes, so the `UNNEST` cross join
 /// never silently drops a row.
 fn class_fanout_expr() -> &'static str {
     "CASE WHEN json_array_length(object_class_name) = 0 \
@@ -629,7 +632,7 @@ fn class_fanout_expr() -> &'static str {
      ELSE CAST(object_class_name AS VARCHAR[]) END"
 }
 
-/// SQL expression for one of `RoiRow`'s scaled per-channel intensity stats
+/// SQL expression for one of `ObjectRow`'s scaled per-channel intensity stats
 /// (`min_scaled` / `max_scaled` / `mean_scaled` / `sum_scaled`, see `intensities_to_json`).
 ///
 /// Uses the scalar-path form of `json_extract` (a single string path), not
@@ -637,16 +640,16 @@ fn class_fanout_expr() -> &'static str {
 /// returns a JSON array of results (one per requested path) rather than a
 /// scalar, and extracting a field from that array via `->>` throws a
 /// "Malformed JSON" error the moment any row's `intensities_json` is missing
-/// the requested channel key (e.g. a ROI with no measured intensities at all,
+/// the requested channel key (e.g. a object with no measured intensities at all,
 /// whose `intensities_json` is `"{}"`) — a real crash on sort-by-channel-column
-/// today for any file where even one ROI lacks that channel's data. The
+/// today for any file where even one object lacks that channel's data. The
 /// scalar form instead yields SQL NULL for a missing key, matching how
 /// `parse_intensities`/`metric_value` already treat "channel absent" in Rust.
 fn channel_stat_expr(ch: i32, stat: &str) -> String {
     format!("CAST(json_extract(intensities_json, '{ch}') ->> '{stat}' AS DOUBLE)")
 }
 
-/// SQL expression for the number of `class`-colocalizing partners a ROI has —
+/// SQL expression for the number of `class`-colocalizing partners a object has —
 /// the same value the `coloc_partner__{class}__count` results-table column shows.
 ///
 /// `coloc_json` is stored as a native DuckDB `JSON` column, and the `->`
@@ -666,7 +669,7 @@ fn coloc_partner_count_expr(class: &str) -> String {
 /// comma-joined `coloc_partner__{class}__ids` text column).
 fn column_order_expr(col_id: &str) -> Option<String> {
     match col_id {
-        "roi_id" => Some("object_id".to_string()),
+        "object_id" => Some("object_id".to_string()),
         "image" => Some("image_name".to_string()),
         "class" => Some(class_case_expr().to_string()),
         "area_px" => Some("area_px".to_string()),
@@ -708,7 +711,7 @@ fn sql_in_list(items: &[String]) -> String {
 fn stack_range(conn: &Connection, column: &str) -> Result<Option<(i32, i32)>, InternalErrors> {
     let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
     let sql = format!(
-        "SELECT MIN({column}), MAX({column}), COUNT(DISTINCT {column}) FROM rois WHERE {column} IS NOT NULL"
+        "SELECT MIN({column}), MAX({column}), COUNT(DISTINCT {column}) FROM objects WHERE {column} IS NOT NULL"
     );
     let mut stmt = conn.prepare(&sql).map_err(err)?;
     let (min, max, distinct_count): (Option<i32>, Option<i32>, i64) = stmt
@@ -726,11 +729,11 @@ fn stack_range(conn: &Connection, column: &str) -> Result<Option<(i32, i32)>, In
 // ---------------------------------------------------------------------------
 // Coloc filter vocabulary
 //
-// `RoiFilter::coloc_filter` items are one of three kinds of label, matched
+// `ObjectFilter::coloc_filter` items are one of three kinds of label, matched
 // literally against the value coming back from the GUI's filter popup:
-//   - "No"                          -> ROI has no colocalization partners
-//   - "Yes (any class)"             -> ROI colocalizes with at least one class
-//   - "Colocalizes with <class>"    -> ROI colocalizes with that specific class
+//   - "No"                          -> object has no colocalization partners
+//   - "Yes (any class)"             -> object colocalizes with at least one class
+//   - "Colocalizes with <class>"    -> object colocalizes with that specific class
 // These helpers are the single source of truth for that vocabulary so the SQL
 // builder below and the GUI (which populates the filter popup) never drift.
 // ---------------------------------------------------------------------------
@@ -751,7 +754,7 @@ fn parse_coloc_filter_with(label: &str) -> Option<&str> {
     label.strip_prefix("Colocalizes with ")
 }
 
-/// SQL boolean expression for "this ROI has at least one recorded
+/// SQL boolean expression for "this object has at least one recorded
 /// colocalization partner".
 ///
 /// `coloc_json` is a native DuckDB `JSON` column. Comparing it directly to a
@@ -788,22 +791,25 @@ fn coloc_filter_condition(label: &str) -> String {
 
 /// True if any of `filter`'s `Option<Vec<_>>` fields is `Some(&[])` — an active
 /// filter with nothing selected, which always means zero matching rows. Shared
-/// by [`DuckDbReader::get_rois`] and [`DuckDbReader::aggregate_rois`] so both
+/// by [`DuckDbReader::get_objects`] and [`DuckDbReader::aggregate_objects`] so both
 /// short-circuit identically instead of hitting the database for a query that
 /// can never return anything.
-fn filter_has_empty_selection(filter: &RoiFilter) -> bool {
+fn filter_has_empty_selection(filter: &ObjectFilter) -> bool {
     filter.image_filter.as_deref().is_some_and(|v| v.is_empty())
         || filter.class_filter.as_deref().is_some_and(|v| v.is_empty())
         || filter.coloc_filter.as_deref().is_some_and(|v| v.is_empty())
-        || filter.object_id_filter.as_deref().is_some_and(|v| v.is_empty())
+        || filter
+            .object_id_filter
+            .as_deref()
+            .is_some_and(|v| v.is_empty())
 }
 
 /// Builds the list of SQL boolean conditions `filter` implies (unjoined).
-/// Shared by [`DuckDbReader::get_rois`] and [`DuckDbReader::aggregate_rois`]
+/// Shared by [`DuckDbReader::get_objects`] and [`DuckDbReader::aggregate_objects`]
 /// so the two queries can never drift on what a given filter means;
-/// `aggregate_rois` also appends its own `regexp_matches` condition on top of
+/// `aggregate_objects` also appends its own `regexp_matches` condition on top of
 /// this list before joining, for `GroupKeyMode::Regex`.
-fn filter_conditions(filter: &RoiFilter) -> Vec<String> {
+fn filter_conditions(filter: &ObjectFilter) -> Vec<String> {
     let mut conditions: Vec<String> = Vec::new();
 
     if let Some(images) = &filter.image_filter {
@@ -818,7 +824,7 @@ fn filter_conditions(filter: &RoiFilter) -> Vec<String> {
     }
     if let Some(labels) = &filter.coloc_filter {
         // Every entry `Colocalization` ever writes into `colocalized_with` has a non-empty
-        // ID list (see coloc_rois.rs), so `coloc_json` is exactly "{}" / empty iff the ROI
+        // ID list (see coloc_objects.rs), so `coloc_json` is exactly "{}" / empty iff the object
         // has no colocalization partner — no need to parse the object to check.
         let fragments: Vec<String> = labels.iter().map(|l| coloc_filter_condition(l)).collect();
         conditions.push(format!("({})", fragments.join(" OR ")));
@@ -853,7 +859,7 @@ fn where_clause_from(conditions: &[String]) -> String {
 
 /// Builds the `WHERE ...` clause (or `""` if `filter` has no active
 /// conditions) for `filter`.
-fn build_where_clause(filter: &RoiFilter) -> String {
+fn build_where_clause(filter: &ObjectFilter) -> String {
     where_clause_from(&filter_conditions(filter))
 }
 
@@ -862,7 +868,7 @@ pub struct DuckDbReader {
     conn: Connection,
 }
 
-fn roi_select_sql(fetch_intensities: bool) -> String {
+fn object_select_sql(fetch_intensities: bool) -> String {
     let intensities_expr = if fetch_intensities {
         "intensities_json"
     } else {
@@ -883,16 +889,16 @@ fn roi_select_sql(fetch_intensities: bool) -> String {
                 major_axis_px, minor_axis_px,\n\
                 touches_edge, {intensities_expr}, coloc_json,\n\
                 bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px\n\
-         FROM rois"
+         FROM objects"
     )
 }
 
-/// Builds the shared `WHERE`/`ORDER BY` clauses for [`DuckDbReader::get_rois`]
-/// and [`DuckDbReader::stream_rois`]. `object_id` is always the final
+/// Builds the shared `WHERE`/`ORDER BY` clauses for [`DuckDbReader::get_objects`]
+/// and [`DuckDbReader::stream_objects`]. `object_id` is always the final
 /// tiebreaker so results stay stably ordered even when many rows share the
-/// same sort-column value (load-bearing for `get_rois`'s page stability, and
-/// for `stream_rois`'s callers being able to assert on row order).
-fn where_and_order(filter: &RoiFilter) -> (String, String) {
+/// same sort-column value (load-bearing for `get_objects`'s page stability, and
+/// for `stream_objects`'s callers being able to assert on row order).
+fn where_and_order(filter: &ObjectFilter) -> (String, String) {
     let where_clause = build_where_clause(filter);
     let order_by = match filter.sort_column.as_deref().and_then(column_order_expr) {
         Some(expr) => format!(
@@ -911,7 +917,7 @@ impl DuckDbReader {
     }
 
     /// Returns ROIs matching `filter`, with optional pagination.
-    pub fn get_rois(&self, filter: &RoiFilter) -> Result<Vec<RoiRow>, InternalErrors> {
+    pub fn get_objects(&self, filter: &ObjectFilter) -> Result<Vec<ObjectRow>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
 
         if filter_has_empty_selection(filter) {
@@ -932,26 +938,26 @@ impl DuckDbReader {
 
         let sql = format!(
             "{} {} {order_by} {}",
-            roi_select_sql(filter.fetch_intensities),
+            object_select_sql(filter.fetch_intensities),
             where_clause,
             pagination
         );
         let mut stmt = self.conn.prepare(&sql).map_err(err)?;
-        stmt.query_map([], map_roi_row)
+        stmt.query_map([], map_object_row)
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)
     }
 
-    /// Streams every ROI matching `filter` to `on_row`, one at a time, in
+    /// Streams every object matching `filter` to `on_row`, one at a time, in
     /// `filter`'s sort order, via a single sorted scan over the whole
     /// matching set. `filter.page_size`/`filter.page` are ignored.
     ///
-    /// Unlike [`Self::get_rois`], which applies `LIMIT`/`OFFSET` and is the
+    /// Unlike [`Self::get_objects`], which applies `LIMIT`/`OFFSET` and is the
     /// right tool for the interactive table's random-access paging (jumping
     /// straight to an arbitrary page), this is for callers - like a full
     /// export - that always walk the entire matching set start to finish.
-    /// Repeatedly calling `get_rois` with an increasing `OFFSET` to do that
+    /// Repeatedly calling `get_objects` with an increasing `OFFSET` to do that
     /// re-sorts and re-scans everything already returned on every single
     /// call, so total cost grows quadratically with the number of matching
     /// rows; this does the sort/scan exactly once.
@@ -961,10 +967,10 @@ impl DuckDbReader {
     /// methods only ever hold the connection open for the duration of one
     /// call, so nesting a second, fully-executed query inside the first
     /// one's row callback is safe.
-    pub fn stream_rois(
+    pub fn stream_objects(
         &self,
-        filter: &RoiFilter,
-        mut on_row: impl FnMut(RoiRow) -> Result<(), InternalErrors>,
+        filter: &ObjectFilter,
+        mut on_row: impl FnMut(ObjectRow) -> Result<(), InternalErrors>,
     ) -> Result<(), InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
 
@@ -973,10 +979,14 @@ impl DuckDbReader {
         }
 
         let (where_clause, order_by) = where_and_order(filter);
-        let sql = format!("{} {} {order_by}", roi_select_sql(filter.fetch_intensities), where_clause);
+        let sql = format!(
+            "{} {} {order_by}",
+            object_select_sql(filter.fetch_intensities),
+            where_clause
+        );
 
         let mut stmt = self.conn.prepare(&sql).map_err(err)?;
-        let rows = stmt.query_map([], map_roi_row).map_err(err)?;
+        let rows = stmt.query_map([], map_object_row).map_err(err)?;
         for row in rows {
             on_row(row.map_err(err)?)?;
         }
@@ -987,13 +997,13 @@ impl DuckDbReader {
     /// image/class/coloc/object_id/t/z restrictions (`page_size`/`page`/
     /// `sort_column` are ignored — this is never paginated). Cheap: proportional
     /// to the number of distinct images, not the number of ROIs. Used to
-    /// precompute a `GroupKeyMode::ImageRelPathMap` for [`Self::aggregate_rois`]
+    /// precompute a `GroupKeyMode::ImageRelPathMap` for [`Self::aggregate_objects`]
     /// (`GroupBy::Folder`'s directory-splitting logic stays in Rust — see
     /// `folder_of` in `results_loader.rs` — since `std::path::Path::parent()`'s
     /// semantics have no faithful single SQL expression).
     pub fn get_distinct_images(
         &self,
-        filter: &RoiFilter,
+        filter: &ObjectFilter,
     ) -> Result<Vec<(String, String)>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
 
@@ -1003,7 +1013,7 @@ impl DuckDbReader {
 
         let where_clause = build_where_clause(filter);
         let sql = format!(
-            "SELECT DISTINCT image_rel_path, image_name FROM rois {where_clause} \
+            "SELECT DISTINCT image_rel_path, image_name FROM objects {where_clause} \
              ORDER BY image_rel_path"
         );
         let mut stmt = self.conn.prepare(&sql).map_err(err)?;
@@ -1021,9 +1031,9 @@ impl DuckDbReader {
     /// Returns one [`AggregatedRow`] per group, in the same order
     /// `aggregate_rows` would (group key, then class, then colocalized flag,
     /// all ascending) — callers rely on this order matching exactly.
-    pub fn aggregate_rois(
+    pub fn aggregate_objects(
         &self,
-        filter: &RoiFilter,
+        filter: &ObjectFilter,
         spec: &AggregateSpec,
     ) -> Result<Vec<AggregatedRow>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
@@ -1050,27 +1060,30 @@ impl DuckDbReader {
                     format!("CASE image_rel_path {} ELSE '(root)' END", cases.join(" "))
                 }
             }
-            GroupKeyMode::Regex { pattern, has_capture_group } => {
+            GroupKeyMode::Regex {
+                pattern,
+                has_capture_group,
+            } => {
                 // Rows that don't match are dropped entirely (not grouped under
                 // an empty/NULL key) — `regexp_extract` alone can't distinguish
                 // "matched, captured empty string" from "no match", so that's
                 // enforced by the separate `regexp_matches` condition below.
                 conditions.push(format!("regexp_matches(image_name, '{}')", esc(pattern)));
                 let group_idx = if *has_capture_group { 1 } else { 0 };
-                format!("regexp_extract(image_name, '{}', {group_idx})", esc(pattern))
+                format!(
+                    "regexp_extract(image_name, '{}', {group_idx})",
+                    esc(pattern)
+                )
             }
         };
 
-        // `FROM rois[, UNNEST(...) AS u(group_class)]` — UNNEST is only valid
+        // `FROM objects[, UNNEST(...) AS u(group_class)]` — UNNEST is only valid
         // here as a lateral cross join in the FROM clause, not in the SELECT
         // list combined with GROUP BY (DuckDB rejects that form outright).
         let from_clause = if spec.group_by_class {
-            format!(
-                "rois, UNNEST({}) AS u(group_class)",
-                class_fanout_expr()
-            )
+            format!("objects, UNNEST({}) AS u(group_class)", class_fanout_expr())
         } else {
-            "rois".to_string()
+            "objects".to_string()
         };
 
         let mut select_cols = vec![format!("{group_key_expr} AS group_key")];
@@ -1178,7 +1191,7 @@ impl DuckDbReader {
     pub fn get_class_names(&self) -> Result<Vec<String>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let sql = format!(
-            "SELECT DISTINCT {} AS class_str FROM rois ORDER BY class_str",
+            "SELECT DISTINCT {} AS class_str FROM objects ORDER BY class_str",
             class_case_expr()
         );
         let mut stmt = self.conn.prepare(&sql).map_err(err)?;
@@ -1189,14 +1202,14 @@ impl DuckDbReader {
     }
 
     /// Returns the `(min, max)` of `t_stack` present in the file, or `None`
-    /// when there's nothing to step through — either every ROI's `t_stack` is
+    /// when there's nothing to step through — either every object's `t_stack` is
     /// NULL (no time axis) or they all share the same single value.
     pub fn get_t_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
         stack_range(&self.conn, "t_stack")
     }
 
     /// Returns the `(min, max)` of `z_stack` present in the file, or `None`
-    /// when there's nothing to step through — either every ROI's `z_stack` is
+    /// when there's nothing to step through — either every object's `z_stack` is
     /// NULL (no depth axis) or they all share the same single value.
     pub fn get_z_stack_range(&self) -> Result<Option<(i32, i32)>, InternalErrors> {
         stack_range(&self.conn, "z_stack")
@@ -1207,7 +1220,7 @@ impl DuckDbReader {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut stmt = self
             .conn
-            .prepare("SELECT DISTINCT image_name FROM rois ORDER BY image_name")
+            .prepare("SELECT DISTINCT image_name FROM objects ORDER BY image_name")
             .map_err(err)?;
         stmt.query_map([], |row| row.get(0))
             .map_err(err)?
@@ -1215,7 +1228,7 @@ impl DuckDbReader {
             .map_err(err)
     }
 
-    /// Returns all distinct partner-class labels appearing as keys in any ROI's
+    /// Returns all distinct partner-class labels appearing as keys in any object's
     /// `coloc_json`, sorted alphabetically. Used to populate the "Colocalizes
     /// with <class>" entries of the coloc filter popup.
     pub fn get_coloc_partner_class_names(&self) -> Result<Vec<String>, InternalErrors> {
@@ -1229,7 +1242,7 @@ impl DuckDbReader {
         // *literal* to JSON to perform the comparison rather than the other
         // way around.
         let sql = format!(
-            "SELECT DISTINCT UNNEST(json_keys(coloc_json)) AS k FROM rois WHERE {} ORDER BY k",
+            "SELECT DISTINCT UNNEST(json_keys(coloc_json)) AS k FROM objects WHERE {} ORDER BY k",
             coloc_is_colocalized_expr()
         );
         let mut stmt = self.conn.prepare(&sql).map_err(err)?;
@@ -1240,8 +1253,8 @@ impl DuckDbReader {
     }
 }
 
-fn map_roi_row(row: &duckdb::Row<'_>) -> duckdb::Result<RoiRow> {
-    Ok(RoiRow {
+fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
+    Ok(ObjectRow {
         image_name: row.get(0)?,
         image_rel_path: row.get(1)?,
         c_stack: row.get(2)?,
@@ -1306,18 +1319,18 @@ fn extract_int_list(val: Value) -> Vec<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::roi::{Roi, RoiInit};
+    use crate::object::{Object, ObjectInit};
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
     use tempfile::TempDir;
 
-    fn make_filled_roi(id: u128, bbox: [u32; 4]) -> Roi {
+    fn make_filled_object(id: u128, bbox: [u32; 4]) -> Object {
         let [x_min, y_min, x_max, y_max] = bbox;
         let w = (x_max - x_min + 1) as usize;
         let h = (y_max - y_min + 1) as usize;
         let area = w * h;
         let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
-        Roi::new(RoiInit {
+        Object::new(ObjectInit {
             id: ObjectId(id),
             bbox,
             mask_data,
@@ -1326,20 +1339,20 @@ mod tests {
         })
     }
 
-    fn make_filled_roi_at_plane(id: u128, bbox: [u32; 4], t: i32, z: i32) -> Roi {
-        let mut roi = make_filled_roi(id, bbox);
-        roi.plane.t = t;
-        roi.plane.z = z;
-        roi
+    fn make_filled_object_at_plane(id: u128, bbox: [u32; 4], t: i32, z: i32) -> Object {
+        let mut object = make_filled_object(id, bbox);
+        object.plane.t = t;
+        object.plane.z = z;
+        object
     }
 
-    fn export_and_open(rois: Vec<Roi>) -> (TempDir, DuckDbReader) {
+    fn export_and_open(objects: Vec<Object>) -> (TempDir, DuckDbReader) {
         let dir = TempDir::new().expect("failed to create temp dir");
         let path = dir.path().join("results.duckdb");
 
         let mut cache = PipelineCache::default();
-        for roi in rois {
-            cache.roi_cache.insert(roi.id.clone(), roi);
+        for object in objects {
+            cache.object_cache.insert(object.id.clone(), object);
         }
 
         let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
@@ -1350,23 +1363,23 @@ mod tests {
         (dir, reader)
     }
 
-    /// Like `export_and_open`, but each `(image_rel_path, rois)` pair is
+    /// Like `export_and_open`, but each `(image_rel_path, objects)` pair is
     /// exported as its own image (mirroring real usage — `PipelineCache`
     /// carries one `image_rel_path` per `export()` call), so the fixture can
-    /// span more than one distinct image. Needed for `aggregate_rois` tests
+    /// span more than one distinct image. Needed for `aggregate_objects` tests
     /// (`GroupBy::Image`/`Folder`/`Regex` are meaningless with only one image).
-    fn export_multi_image_and_open(images: Vec<(&str, Vec<Roi>)>) -> (TempDir, DuckDbReader) {
+    fn export_multi_image_and_open(images: Vec<(&str, Vec<Object>)>) -> (TempDir, DuckDbReader) {
         let dir = TempDir::new().expect("failed to create temp dir");
         let path = dir.path().join("results.duckdb");
 
         let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
-        for (image_rel_path, rois) in images {
+        for (image_rel_path, objects) in images {
             let mut cache = PipelineCache {
                 image_rel_path: image_rel_path.into(),
                 ..Default::default()
             };
-            for roi in rois {
-                cache.roi_cache.insert(roi.id.clone(), roi);
+            for object in objects {
+                cache.object_cache.insert(object.id.clone(), object);
             }
             exporter.export(&cache).expect("export failed");
         }
@@ -1377,15 +1390,13 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_rois_groups_by_image_and_averages() {
-        let a1 = make_filled_roi(1, [0, 0, 9, 9]); // area_px = 100
-        let a2 = make_filled_roi(2, [0, 0, 19, 9]); // area_px = 200
-        let b1 = make_filled_roi(3, [0, 0, 29, 9]); // area_px = 300
+    fn aggregate_objects_groups_by_image_and_averages() {
+        let a1 = make_filled_object(1, [0, 0, 9, 9]); // area_px = 100
+        let a2 = make_filled_object(2, [0, 0, 19, 9]); // area_px = 200
+        let b1 = make_filled_object(3, [0, 0, 29, 9]); // area_px = 300
 
-        let (_dir, reader) = export_multi_image_and_open(vec![
-            ("img_a.tif", vec![a1, a2]),
-            ("img_b.tif", vec![b1]),
-        ]);
+        let (_dir, reader) =
+            export_multi_image_and_open(vec![("img_a.tif", vec![a1, a2]), ("img_b.tif", vec![b1])]);
 
         let spec = AggregateSpec {
             key_mode: GroupKeyMode::Image,
@@ -1394,7 +1405,9 @@ mod tests {
             metric_ids: vec!["area_px".to_string()],
             agg_fns: vec!["AVG"],
         };
-        let rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+        let rows = reader
+            .aggregate_objects(&ObjectFilter::default(), &spec)
+            .unwrap();
 
         assert_eq!(rows.len(), 2, "one row per image");
         assert_eq!(rows[0].group_key, "img_a.tif");
@@ -1406,11 +1419,11 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_rois_group_by_class_fans_out_multi_class_roi() {
+    fn aggregate_objects_group_by_class_fans_out_multi_class_object() {
         const CLASS_A: ObjectClass = ObjectClass::Valid(1);
         const CLASS_B: ObjectClass = ObjectClass::Valid(2);
 
-        let mut multi = make_filled_roi(1, [0, 0, 9, 9]);
+        let mut multi = make_filled_object(1, [0, 0, 9, 9]);
         multi.add_object_class(CLASS_A);
         multi.add_object_class(CLASS_B);
 
@@ -1423,10 +1436,16 @@ mod tests {
             metric_ids: vec![],
             agg_fns: vec![],
         };
-        let mut rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+        let mut rows = reader
+            .aggregate_objects(&ObjectFilter::default(), &spec)
+            .unwrap();
         rows.sort_by(|a, b| a.group_class.cmp(&b.group_class));
 
-        assert_eq!(rows.len(), 2, "a ROI carrying two classes contributes to both buckets");
+        assert_eq!(
+            rows.len(),
+            2,
+            "a object carrying two classes contributes to both buckets"
+        );
         assert_eq!(rows[0].group_class.as_deref(), Some("class_1"));
         assert_eq!(rows[0].count, 1);
         assert_eq!(rows[1].group_class.as_deref(), Some("class_2"));
@@ -1434,13 +1453,12 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_rois_split_colocalized_produces_two_buckets() {
-        let mut coloc = make_filled_roi(1, [0, 0, 9, 9]);
+    fn aggregate_objects_split_colocalized_produces_two_buckets() {
+        let mut coloc = make_filled_object(1, [0, 0, 9, 9]);
         coloc.add_colocalizing_object(ObjectClass::Valid(9), ObjectId(99));
-        let not_coloc = make_filled_roi(2, [0, 0, 9, 9]);
+        let not_coloc = make_filled_object(2, [0, 0, 9, 9]);
 
-        let (_dir, reader) =
-            export_multi_image_and_open(vec![("img.tif", vec![coloc, not_coloc])]);
+        let (_dir, reader) = export_multi_image_and_open(vec![("img.tif", vec![coloc, not_coloc])]);
 
         let spec = AggregateSpec {
             key_mode: GroupKeyMode::Image,
@@ -1449,9 +1467,15 @@ mod tests {
             metric_ids: vec![],
             agg_fns: vec![],
         };
-        let rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+        let rows = reader
+            .aggregate_objects(&ObjectFilter::default(), &spec)
+            .unwrap();
 
-        assert_eq!(rows.len(), 2, "one colocalizing + one non-colocalizing bucket");
+        assert_eq!(
+            rows.len(),
+            2,
+            "one colocalizing + one non-colocalizing bucket"
+        );
         // false < true, matching Rust's Option<bool> BTreeMap ordering.
         assert_eq!(rows[0].colocalized, Some(false));
         assert_eq!(rows[0].count, 1);
@@ -1460,10 +1484,10 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_rois_regex_groups_by_capture_and_drops_non_matching() {
-        let a1 = make_filled_roi(1, [0, 0, 9, 9]);
-        let a2 = make_filled_roi(2, [0, 0, 9, 9]);
-        let control = make_filled_roi(3, [0, 0, 9, 9]);
+    fn aggregate_objects_regex_groups_by_capture_and_drops_non_matching() {
+        let a1 = make_filled_object(1, [0, 0, 9, 9]);
+        let a2 = make_filled_object(2, [0, 0, 9, 9]);
+        let control = make_filled_object(3, [0, 0, 9, 9]);
 
         let (_dir, reader) = export_multi_image_and_open(vec![
             ("A1_01.tif", vec![a1]),
@@ -1481,19 +1505,25 @@ mod tests {
             metric_ids: vec![],
             agg_fns: vec![],
         };
-        let rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+        let rows = reader
+            .aggregate_objects(&ObjectFilter::default(), &spec)
+            .unwrap();
 
-        assert_eq!(rows.len(), 1, "non-matching 'control.tif' must be dropped, not its own group");
+        assert_eq!(
+            rows.len(),
+            1,
+            "non-matching 'control.tif' must be dropped, not its own group"
+        );
         assert_eq!(rows[0].group_key, "A1");
         assert_eq!(rows[0].count, 2);
     }
 
     #[test]
-    fn aggregate_rois_all_null_metric_bucket_is_none() {
-        // Neither ROI has any intensities_json, so any channel metric is NULL
+    fn aggregate_objects_all_null_metric_bucket_is_none() {
+        // Neither object has any intensities_json, so any channel metric is NULL
         // for every contributing row in the bucket.
-        let a1 = make_filled_roi(1, [0, 0, 9, 9]);
-        let a2 = make_filled_roi(2, [0, 0, 9, 9]);
+        let a1 = make_filled_object(1, [0, 0, 9, 9]);
+        let a2 = make_filled_object(2, [0, 0, 9, 9]);
         let (_dir, reader) = export_multi_image_and_open(vec![("img.tif", vec![a1, a2])]);
 
         let spec = AggregateSpec {
@@ -1503,7 +1533,9 @@ mod tests {
             metric_ids: vec!["ch0_min_bit".to_string()],
             agg_fns: vec!["AVG"],
         };
-        let rows = reader.aggregate_rois(&RoiFilter::default(), &spec).unwrap();
+        let rows = reader
+            .aggregate_objects(&ObjectFilter::default(), &spec)
+            .unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(
@@ -1521,14 +1553,14 @@ mod tests {
         let coloc_id = ObjectId(ID_COLOC).to_string();
         let not_coloc_id = ObjectId(ID_NOT_COLOC).to_string();
 
-        let mut coloc_roi = make_filled_roi(ID_COLOC, [0, 0, 1, 1]);
-        coloc_roi.add_colocalizing_object(PARTNER_CLASS, ObjectId(99));
-        let not_coloc_roi = make_filled_roi(ID_NOT_COLOC, [5, 5, 6, 6]);
+        let mut coloc_object = make_filled_object(ID_COLOC, [0, 0, 1, 1]);
+        coloc_object.add_colocalizing_object(PARTNER_CLASS, ObjectId(99));
+        let not_coloc_object = make_filled_object(ID_NOT_COLOC, [5, 5, 6, 6]);
 
-        let (_dir, reader) = export_and_open(vec![coloc_roi, not_coloc_roi]);
+        let (_dir, reader) = export_and_open(vec![coloc_object, not_coloc_object]);
 
         let yes = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 coloc_filter: Some(vec![coloc_filter_label_any().into()]),
                 ..Default::default()
             })
@@ -1537,7 +1569,7 @@ mod tests {
         assert_eq!(yes[0].object_id, coloc_id);
 
         let no = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 coloc_filter: Some(vec![coloc_filter_label_no().into()]),
                 ..Default::default()
             })
@@ -1545,11 +1577,11 @@ mod tests {
         assert_eq!(no.len(), 1);
         assert_eq!(no[0].object_id, not_coloc_id);
 
-        let all = reader.get_rois(&RoiFilter::default()).unwrap();
+        let all = reader.get_objects(&ObjectFilter::default()).unwrap();
         assert_eq!(all.len(), 2, "no coloc_filter set → both rows returned");
 
         let none_selected = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 coloc_filter: Some(vec![]),
                 ..Default::default()
             })
@@ -1567,16 +1599,16 @@ mod tests {
         let id_a = ObjectId(ID_A).to_string();
         let id_b = ObjectId(ID_B).to_string();
 
-        let roi_a = make_filled_roi(ID_A, [0, 0, 1, 1]);
-        let roi_b = make_filled_roi(ID_B, [5, 5, 6, 6]);
-        let (_dir, reader) = export_and_open(vec![roi_a, roi_b]);
+        let object_a = make_filled_object(ID_A, [0, 0, 1, 1]);
+        let object_b = make_filled_object(ID_B, [5, 5, 6, 6]);
+        let (_dir, reader) = export_and_open(vec![object_a, object_b]);
 
         // Single id: exact match, and the round-tripped `object_id` string is
         // byte-identical to `ObjectId::to_string()` — confirms `CAST(object_id
         // AS VARCHAR)` produces the same lowercase-dashed format written at
         // export time, not just "a filter that happens to work".
         let single = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 object_id_filter: Some(vec![id_a.clone()]),
                 ..Default::default()
             })
@@ -1586,7 +1618,7 @@ mod tests {
 
         // Two ids: both returned, in the default object_id order.
         let both = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 object_id_filter: Some(vec![id_b.clone(), id_a.clone()]),
                 ..Default::default()
             })
@@ -1597,7 +1629,7 @@ mod tests {
 
         // Unknown id: no rows.
         let unknown = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 object_id_filter: Some(vec![ObjectId(999).to_string()]),
                 ..Default::default()
             })
@@ -1607,7 +1639,7 @@ mod tests {
         // Active filter with nothing selected → 0 rows, same convention as the
         // other filters.
         let none_selected = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 object_id_filter: Some(vec![]),
                 ..Default::default()
             })
@@ -1624,11 +1656,11 @@ mod tests {
         const PARTNER_C: ObjectClass = ObjectClass::Valid(3);
         let id_with_b = ObjectId(ID_WITH_B).to_string();
 
-        let mut roi_with_b = make_filled_roi(ID_WITH_B, [0, 0, 1, 1]);
-        roi_with_b.add_colocalizing_object(PARTNER_B, ObjectId(99));
-        let mut roi_with_c = make_filled_roi(ID_WITH_C, [5, 5, 6, 6]);
-        roi_with_c.add_colocalizing_object(PARTNER_C, ObjectId(98));
-        // A ROI with no colocalization at all (`coloc_json` = "{}") sitting
+        let mut object_with_b = make_filled_object(ID_WITH_B, [0, 0, 1, 1]);
+        object_with_b.add_colocalizing_object(PARTNER_B, ObjectId(99));
+        let mut object_with_c = make_filled_object(ID_WITH_C, [5, 5, 6, 6]);
+        object_with_c.add_colocalizing_object(PARTNER_C, ObjectId(98));
+        // A object with no colocalization at all (`coloc_json` = "{}") sitting
         // alongside colocalizing ones — regression coverage for a real bug
         // where `coloc_json` (a native DuckDB JSON column) compared directly
         // to a string literal like `''`/`'{}'` made DuckDB try to parse the
@@ -1636,16 +1668,19 @@ mod tests {
         // scanned regardless of that row's own value (reproduced on Windows,
         // and reproducible here too once exercised — see
         // `coloc_is_colocalized_expr`'s doc comment for the full story).
-        let roi_no_coloc = make_filled_roi(ID_NO_COLOC, [10, 10, 11, 11]);
+        let object_no_coloc = make_filled_object(ID_NO_COLOC, [10, 10, 11, 11]);
 
-        let (_dir, reader) = export_and_open(vec![roi_with_b, roi_with_c, roi_no_coloc]);
+        let (_dir, reader) = export_and_open(vec![object_with_b, object_with_c, object_no_coloc]);
 
         // class_label() falls back to "class_{n}" when no name map is provided.
         let partner_classes = reader.get_coloc_partner_class_names().unwrap();
-        assert_eq!(partner_classes, vec!["class_2".to_string(), "class_3".to_string()]);
+        assert_eq!(
+            partner_classes,
+            vec!["class_2".to_string(), "class_3".to_string()]
+        );
 
         let with_b = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 coloc_filter: Some(vec![coloc_filter_label_with("class_2")]),
                 ..Default::default()
             })
@@ -1655,19 +1690,19 @@ mod tests {
     }
 
     #[test]
-    fn get_rois_sorts_by_requested_column() {
+    fn get_objects_sorts_by_requested_column() {
         const ID_SMALL: u128 = 1;
         const ID_LARGE: u128 = 2;
         let small_id = ObjectId(ID_SMALL).to_string();
         let large_id = ObjectId(ID_LARGE).to_string();
 
         // bbox [0,0,1,1] -> 2x2 = 4px; bbox [0,0,9,9] -> 10x10 = 100px.
-        let small = make_filled_roi(ID_SMALL, [0, 0, 1, 1]);
-        let large = make_filled_roi(ID_LARGE, [0, 0, 9, 9]);
+        let small = make_filled_object(ID_SMALL, [0, 0, 1, 1]);
+        let large = make_filled_object(ID_LARGE, [0, 0, 9, 9]);
         let (_dir, reader) = export_and_open(vec![large, small]);
 
         let asc = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 sort_column: Some("area_px".into()),
                 sort_ascending: true,
                 ..Default::default()
@@ -1679,7 +1714,7 @@ mod tests {
         );
 
         let desc = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 sort_column: Some("area_px".into()),
                 sort_ascending: false,
                 ..Default::default()
@@ -1692,13 +1727,13 @@ mod tests {
     }
 
     #[test]
-    fn get_rois_sorts_by_channel_column_when_some_rois_have_no_intensities() {
+    fn get_objects_sorts_by_channel_column_when_some_objects_have_no_intensities() {
         // Regression test for a latent bug in `channel_stat_expr`: sorting by a
         // channel column used to throw "Malformed JSON" the moment any row's
         // `intensities_json` was `"{}"` (no measured intensities at all), because
         // the old bracket-form `json_extract(col, ['0'])` returns a JSON array
         // wrapping a NULL rather than a scalar NULL, which `->>` can't handle.
-        use crate::roi::Intensity;
+        use crate::object::Intensity;
         use indexmap::IndexMap;
 
         const ID_NO_INTENSITY: u128 = 1;
@@ -1706,8 +1741,8 @@ mod tests {
         let no_intensity_id = ObjectId(ID_NO_INTENSITY).to_string();
         let has_intensity_id = ObjectId(ID_HAS_INTENSITY).to_string();
 
-        let no_intensity = make_filled_roi(ID_NO_INTENSITY, [0, 0, 1, 1]);
-        let mut has_intensity = make_filled_roi(ID_HAS_INTENSITY, [0, 0, 1, 1]);
+        let no_intensity = make_filled_object(ID_NO_INTENSITY, [0, 0, 1, 1]);
+        let mut has_intensity = make_filled_object(ID_HAS_INTENSITY, [0, 0, 1, 1]);
         has_intensity.intensities = IndexMap::from([(
             0,
             Intensity {
@@ -1722,7 +1757,7 @@ mod tests {
         let (_dir, reader) = export_and_open(vec![no_intensity, has_intensity]);
 
         let asc = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 sort_column: Some("ch0_min_bit".into()),
                 sort_ascending: true,
                 ..Default::default()
@@ -1737,13 +1772,13 @@ mod tests {
     }
 
     #[test]
-    fn get_rois_unsortable_column_falls_back_to_object_id_order() {
-        let roi_a = make_filled_roi(1, [0, 0, 1, 1]);
-        let roi_b = make_filled_roi(2, [0, 0, 1, 1]);
-        let (_dir, reader) = export_and_open(vec![roi_b, roi_a]);
+    fn get_objects_unsortable_column_falls_back_to_object_id_order() {
+        let object_a = make_filled_object(1, [0, 0, 1, 1]);
+        let object_b = make_filled_object(2, [0, 0, 1, 1]);
+        let (_dir, reader) = export_and_open(vec![object_b, object_a]);
 
         let rows = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 sort_column: Some("coloc_partner__ClassA__ids".into()),
                 ..Default::default()
             })
@@ -1756,10 +1791,10 @@ mod tests {
     }
 
     #[test]
-    fn stack_range_is_none_when_every_roi_shares_one_value() {
-        let roi_a = make_filled_roi_at_plane(1, [0, 0, 1, 1], 0, 0);
-        let roi_b = make_filled_roi_at_plane(2, [5, 5, 6, 6], 0, 0);
-        let (_dir, reader) = export_and_open(vec![roi_a, roi_b]);
+    fn stack_range_is_none_when_every_object_shares_one_value() {
+        let object_a = make_filled_object_at_plane(1, [0, 0, 1, 1], 0, 0);
+        let object_b = make_filled_object_at_plane(2, [5, 5, 6, 6], 0, 0);
+        let (_dir, reader) = export_and_open(vec![object_a, object_b]);
 
         assert_eq!(reader.get_t_stack_range().unwrap(), None);
         assert_eq!(reader.get_z_stack_range().unwrap(), None);
@@ -1767,28 +1802,28 @@ mod tests {
 
     #[test]
     fn stack_range_reports_min_max_when_values_differ() {
-        let roi_t0 = make_filled_roi_at_plane(1, [0, 0, 1, 1], 0, 3);
-        let roi_t2 = make_filled_roi_at_plane(2, [5, 5, 6, 6], 2, 3);
-        let roi_t5 = make_filled_roi_at_plane(3, [9, 9, 10, 10], 5, 7);
-        let (_dir, reader) = export_and_open(vec![roi_t0, roi_t2, roi_t5]);
+        let object_t0 = make_filled_object_at_plane(1, [0, 0, 1, 1], 0, 3);
+        let object_t2 = make_filled_object_at_plane(2, [5, 5, 6, 6], 2, 3);
+        let object_t5 = make_filled_object_at_plane(3, [9, 9, 10, 10], 5, 7);
+        let (_dir, reader) = export_and_open(vec![object_t0, object_t2, object_t5]);
 
         assert_eq!(reader.get_t_stack_range().unwrap(), Some((0, 5)));
         assert_eq!(reader.get_z_stack_range().unwrap(), Some((3, 7)));
     }
 
     #[test]
-    fn get_rois_filters_by_t_stack_and_z_stack() {
+    fn get_objects_filters_by_t_stack_and_z_stack() {
         const ID_T0: u128 = 1;
         const ID_T2: u128 = 2;
         let id_t0 = ObjectId(ID_T0).to_string();
         let id_t2 = ObjectId(ID_T2).to_string();
 
-        let roi_t0 = make_filled_roi_at_plane(ID_T0, [0, 0, 1, 1], 0, 1);
-        let roi_t2 = make_filled_roi_at_plane(ID_T2, [5, 5, 6, 6], 2, 4);
-        let (_dir, reader) = export_and_open(vec![roi_t0, roi_t2]);
+        let object_t0 = make_filled_object_at_plane(ID_T0, [0, 0, 1, 1], 0, 1);
+        let object_t2 = make_filled_object_at_plane(ID_T2, [5, 5, 6, 6], 2, 4);
+        let (_dir, reader) = export_and_open(vec![object_t0, object_t2]);
 
         let only_t0 = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 t_stack_filter: Some(0),
                 ..Default::default()
             })
@@ -1797,7 +1832,7 @@ mod tests {
         assert_eq!(only_t0[0].object_id, id_t0);
 
         let only_z4 = reader
-            .get_rois(&RoiFilter {
+            .get_objects(&ObjectFilter {
                 z_stack_filter: Some(4),
                 ..Default::default()
             })
@@ -1805,8 +1840,11 @@ mod tests {
         assert_eq!(only_z4.len(), 1);
         assert_eq!(only_z4[0].object_id, id_t2);
 
-        let both_unset = reader.get_rois(&RoiFilter::default()).unwrap();
-        assert_eq!(both_unset.len(), 2, "no t/z filter set -> every frame returned");
+        let both_unset = reader.get_objects(&ObjectFilter::default()).unwrap();
+        assert_eq!(
+            both_unset.len(),
+            2,
+            "no t/z filter set -> every frame returned"
+        );
     }
 }
-

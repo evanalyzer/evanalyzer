@@ -25,7 +25,7 @@ const JVM_HEAP_RAM_FRACTION: f64 = 0.125;
 
 /// Rough estimate of the peak RAM one parallel worker (one whole image, or
 /// one tile when previewing a single whole-slide image) can need: loaded
-/// channel planes, pipeline intermediate/scratch buffers and ROI masks for a
+/// channel planes, pipeline intermediate/scratch buffers and object masks for a
 /// 4096px tile across several channels. This is a heuristic guardrail against
 /// over-committing on low-RAM machines, not a measured per-pipeline bound.
 const ESTIMATED_RAM_PER_WORKER_BYTES: u64 = 1_500_000_000;
@@ -34,7 +34,7 @@ const ESTIMATED_RAM_PER_WORKER_BYTES: u64 = 1_500_000_000;
 /// parsed OME metadata/tile index (plus, if memoized, the deserialized
 /// `.bfmemo` state) and headroom for one in-flight tile buffer. Much lighter
 /// than [`ESTIMATED_RAM_PER_WORKER_BYTES`] - a reader has no pipeline
-/// scratch buffers or ROI masks - so reader-pool sizing is a separate,
+/// scratch buffers or object masks - so reader-pool sizing is a separate,
 /// smaller budget from [`recommended_parallelism`]. Heuristic guardrail, not
 /// a measured bound.
 const ESTIMATED_RAM_PER_READER_BYTES: u64 = 150_000_000;

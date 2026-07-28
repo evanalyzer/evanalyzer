@@ -114,7 +114,7 @@ mod tests {
     /// detect a structural change and trigger a full resync instead of patching one row.
     mod rich_enum_settings {
         use crate::settings::pipeline_command::PipelineCommand;
-        use crate::settings::pipeline_command_settings::TransformRoisSettings;
+        use crate::settings::pipeline_command_settings::TransformObjectsSettings;
 
         fn names(cmd: &PipelineCommand) -> Vec<String> {
             cmd.to_parameters().into_iter().map(|p| p.name).collect()
@@ -122,7 +122,7 @@ mod tests {
 
         #[test]
         fn switching_variant_changes_the_field_set() {
-            let mut cmd = PipelineCommand::TransformRois(TransformRoisSettings::default());
+            let mut cmd = PipelineCommand::TransformObjects(TransformObjectsSettings::default());
             assert_eq!(
                 names(&cmd),
                 vec!["function", "function.factor", "input_class", "output_class"],
@@ -145,7 +145,7 @@ mod tests {
 
         #[test]
         fn setting_a_variant_field_does_not_change_the_active_variant() {
-            let mut cmd = PipelineCommand::TransformRois(TransformRoisSettings::default());
+            let mut cmd = PipelineCommand::TransformObjects(TransformObjectsSettings::default());
             cmd.apply_param_change("function", "Draw Circle");
             cmd.apply_param_change("function.diameter", "12.5");
 
@@ -163,7 +163,7 @@ mod tests {
 
         #[test]
         fn to_summary_reflects_the_active_variant() {
-            let mut cmd = PipelineCommand::TransformRois(TransformRoisSettings::default());
+            let mut cmd = PipelineCommand::TransformObjects(TransformObjectsSettings::default());
             assert_eq!(cmd.to_summary(), "Function: Scale");
             cmd.apply_param_change("function", "Fitting Ellipse");
             assert_eq!(cmd.to_summary(), "Function: Fitting Ellipse");
@@ -174,7 +174,7 @@ mod tests {
         /// alongside the variant's own fields), not the externally-tagged shape plain enums use.
         #[test]
         fn json_round_trips_through_the_internally_tagged_shape() {
-            let mut cmd = PipelineCommand::TransformRois(TransformRoisSettings::default());
+            let mut cmd = PipelineCommand::TransformObjects(TransformObjectsSettings::default());
             cmd.apply_param_change("function", "Snap Area");
             cmd.apply_param_change("function.extra_size", "7.5");
 

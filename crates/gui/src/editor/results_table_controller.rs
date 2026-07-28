@@ -4,14 +4,14 @@ use crate::{
     ResultsListState, ResultsRow, ResultsState, ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
-    aggregate_rois_sql, build_coloc_detail_column_specs, build_column_specs,
-    coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with, coloc_partner_ids,
-    compute_heatmap, compute_histogram, compute_scatter, discover_channels,
-    discover_coloc_detail_columns, flatten_coloc_rows, plottable_columns, render_heatmap,
-    render_histogram, render_scatter, save_rendered_chart_png, sort_display_rows, to_display_row,
-    AggFunc, ColorBy, ColumnSpec, DatabaseFilter, EvictEdge, GroupBy, GroupConfig,
-    HeatmapColorScheme, HeatmapMetric, HeatmapRange, PageRowCounts, RenderedChart, ResultsExporter,
-    ResultsLoader, RoiRow, RowWindow, DEFAULT_WINDOW_PAGES,
+    AggFunc, ColorBy, ColumnSpec, DEFAULT_WINDOW_PAGES, DatabaseFilter, EvictEdge, GroupBy,
+    GroupConfig, HeatmapColorScheme, HeatmapMetric, HeatmapRange, ObjectRow, PageRowCounts,
+    RenderedChart, ResultsExporter, ResultsLoader, RowWindow, aggregate_objects_sql,
+    build_coloc_detail_column_specs, build_column_specs, coloc_filter_label_any,
+    coloc_filter_label_no, coloc_filter_label_with, coloc_partner_ids, compute_heatmap,
+    compute_histogram, compute_scatter, discover_channels, discover_coloc_detail_columns,
+    flatten_coloc_rows, plottable_columns, render_heatmap, render_histogram, render_scatter,
+    save_rendered_chart_png, sort_display_rows, to_display_row,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use log::warn;
@@ -29,7 +29,7 @@ const CHART_HEIGHT: u32 = 560;
 const SCATTER_MAX_POINTS: usize = 5_000;
 
 /// Sentinel shown as the first entry of the heatmap "Color by" picker —
-/// picking it colors cells by ROI count instead of averaging a column.
+/// picking it colors cells by object count instead of averaging a column.
 const HEATMAP_METRIC_COUNT_LABEL: &str = "Count (ROIs per cell)";
 
 /// Chart picks read off `ResultsState` on the UI thread before handing off to
@@ -69,13 +69,13 @@ pub struct ResultsTableController {
     pub(crate) app_state: Arc<UiState>,
     pub(crate) image_list_controller: Arc<ImagesListController>,
     pub(crate) path: Arc<Mutex<Option<PathBuf>>>,
-    /// The window of currently-loaded per-ROI pages, used to map a selected
-    /// row back to its source ROI (image + bounding box) by `object_id` —
+    /// The window of currently-loaded per-object pages, used to map a selected
+    /// row back to its source object (image + bounding box) by `object_id` —
     /// bounded to `DEFAULT_WINDOW_PAGES` pages, evicting the oldest page from
     /// the opposite scroll edge as new pages load, so scrolling through a huge
     /// file doesn't hold it all in memory. Empty while a grouped/aggregated or
     /// coloc-detail view is active (neither supports row selection).
-    pub(crate) displayed_rois: Arc<Mutex<RowWindow>>,
+    pub(crate) displayed_objects: Arc<Mutex<RowWindow>>,
     pub(crate) channels: Arc<Mutex<Vec<i32>>>,
     pub(crate) column_specs: Arc<Mutex<Vec<ColumnSpec>>>,
     /// User-resized column widths (logical px), keyed by column id. Pure presentation
@@ -115,7 +115,7 @@ pub struct ResultsTableController {
     /// the first time; from then on it persists visibility choices across
     /// re-entries into coloc-detail mode (see `bg_reload_coloc_detail`).
     pub(crate) coloc_detail_column_specs: Arc<Mutex<Vec<ColumnSpec>>>,
-    /// Bounds the coloc-detail flat table's memory the same way `displayed_rois`
+    /// Bounds the coloc-detail flat table's memory the same way `displayed_objects`
     /// bounds the normal table's, evicting the oldest source page's flattened
     /// rows once the window exceeds `DEFAULT_WINDOW_PAGES`. Lighter than
     /// `RowWindow` since this view never supports row selection — nothing
@@ -139,7 +139,7 @@ impl ResultsTableController {
             app_state,
             image_list_controller,
             path: Arc::new(Mutex::new(None)),
-            displayed_rois: Arc::new(Mutex::new(RowWindow::new(DEFAULT_WINDOW_PAGES))),
+            displayed_objects: Arc::new(Mutex::new(RowWindow::new(DEFAULT_WINDOW_PAGES))),
             channels: Arc::new(Mutex::new(Vec::new())),
             column_specs: Arc::new(Mutex::new(Vec::new())),
             column_widths: Arc::new(Mutex::new(HashMap::new())),
@@ -214,14 +214,16 @@ impl ResultsTableController {
         state.on_t_stack_changed(cb!(on_t_stack_changed, i32, bool));
         state.on_z_stack_changed(cb!(on_z_stack_changed, i32, bool));
 
-        state.on_roi_row_selected(cb!(on_roi_row_selected, SharedString));
+        state.on_object_row_selected(cb!(on_object_row_selected, SharedString));
 
         // --- chart_render_requested: read picks on the UI thread, render in --
         // the background (mirrors group_apply's read-then-spawn split).
         {
             let this = Arc::clone(self);
             state.on_chart_render_requested(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
 
                 // One-shot read of the window's current physical size, taken
@@ -242,8 +244,10 @@ impl ResultsTableController {
                 const CHROME_HEIGHT_LOGICAL: f32 = 48.0 + 1.0 + 44.0 + 1.0 + 32.0 + 1.0;
                 let chrome_height_physical = (CHROME_HEIGHT_LOGICAL * scale) as u32;
                 let render_width = physical.width.max(CHART_WIDTH);
-                let render_height =
-                    physical.height.saturating_sub(chrome_height_physical).max(CHART_HEIGHT);
+                let render_height = physical
+                    .height
+                    .saturating_sub(chrome_height_physical)
+                    .max(CHART_HEIGHT);
 
                 let config = ChartRenderConfig {
                     kind: state.get_chart_kind(),
@@ -318,8 +322,12 @@ impl ResultsTableController {
             let this = Arc::clone(self);
             state.on_chart_point_lookup(move |mouse_x, mouse_y, area_width, area_height| {
                 let guard = this.last_chart.lock().unwrap();
-                let Some(last) = guard.as_ref() else { return SharedString::new() };
-                let Some(tester) = last.chart.hit_test.as_ref() else { return SharedString::new() };
+                let Some(last) = guard.as_ref() else {
+                    return SharedString::new();
+                };
+                let Some(tester) = last.chart.hit_test.as_ref() else {
+                    return SharedString::new();
+                };
 
                 let (bmp_w, bmp_h) = (last.chart.width as f32, last.chart.height as f32);
                 if area_width <= 0.0 || area_height <= 0.0 || bmp_w <= 0.0 || bmp_h <= 0.0 {
@@ -350,7 +358,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_group_apply(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
 
                 // Switching back from coloc detail to normal view.
@@ -513,7 +523,7 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_load_previous_rows(move || {
-                // Coloc-detail rows never populate `displayed_rois`/windowing
+                // Coloc-detail rows never populate `displayed_objects`/windowing
                 // (no row selection in that view), so there's nothing to
                 // backfill there yet.
                 if *this.coloc_detail_mode.lock().unwrap() {
@@ -528,7 +538,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_copy_to_clipboard(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
 
                 let cols: Vec<_> = (0..state.get_columns().row_count())
@@ -576,7 +588,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_dialog_open(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
 
                 // Clear each checklist's filter box so a search left over
@@ -630,9 +644,10 @@ impl ResultsTableController {
 
                 state.set_export_combo_name(SharedString::new());
                 state.set_export_format("csv".into());
-                state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(
-                    Vec::<ExportBatchItem>::new(),
-                )));
+                state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(Vec::<
+                    ExportBatchItem,
+                >::new(
+                ))));
                 state.set_export_status(SharedString::new());
                 state.set_export_running(false);
                 state.set_export_progress_current(0);
@@ -646,8 +661,12 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_dialog_close(move || {
-                let Some(window) = this.ui.upgrade() else { return };
-                window.global::<ResultsState>().set_export_dialog_active(false);
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
+                window
+                    .global::<ResultsState>()
+                    .set_export_dialog_active(false);
             });
         }
 
@@ -655,9 +674,12 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_class_item_toggled(move |label: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
-                let items = toggle_item_by_label(&model_to_vec(&state.get_export_class_items()), &label);
+                let items =
+                    toggle_item_by_label(&model_to_vec(&state.get_export_class_items()), &label);
                 let search = state.get_export_class_search_text().to_string();
                 apply_export_class_checklist(&state, items, &search);
             });
@@ -667,7 +689,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_class_select_all(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_class_items()), true);
                 let search = state.get_export_class_search_text().to_string();
@@ -677,7 +701,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_class_clear_all(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_class_items()), false);
                 let search = state.get_export_class_search_text().to_string();
@@ -689,7 +715,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_class_search_changed(move |search: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = model_to_vec(&state.get_export_class_items());
                 state.set_export_class_displayed_items(to_model(filter_checklist_by_search(
@@ -703,9 +731,12 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_image_item_toggled(move |label: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
-                let items = toggle_item_by_label(&model_to_vec(&state.get_export_image_items()), &label);
+                let items =
+                    toggle_item_by_label(&model_to_vec(&state.get_export_image_items()), &label);
                 let search = state.get_export_image_search_text().to_string();
                 apply_export_image_checklist(&state, items, &search);
             });
@@ -715,7 +746,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_image_select_all(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_image_items()), true);
                 let search = state.get_export_image_search_text().to_string();
@@ -725,7 +758,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_image_clear_all(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_image_items()), false);
                 let search = state.get_export_image_search_text().to_string();
@@ -737,7 +772,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_image_search_changed(move |search: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = model_to_vec(&state.get_export_image_items());
                 state.set_export_image_displayed_items(to_model(filter_checklist_by_search(
@@ -751,7 +788,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_style_selected(move |style: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 state.set_export_style(style.clone());
                 // The column set is about to change entirely (table vs.
@@ -787,7 +826,9 @@ impl ResultsTableController {
                 }
                 state.set_export_status("Loading coloc-detail columns...".into());
 
-                let Some(path) = this.path.lock().unwrap().clone() else { return };
+                let Some(path) = this.path.lock().unwrap().clone() else {
+                    return;
+                };
                 let image_filter = this.image_filter.lock().unwrap().clone();
                 let t_stack_filter = *this.t_stack_filter.lock().unwrap();
                 let z_stack_filter = *this.z_stack_filter.lock().unwrap();
@@ -821,7 +862,11 @@ impl ResultsTableController {
                             return;
                         }
                         let search = state.get_export_column_search_text().to_string();
-                        apply_export_column_checklist(&state, column_items_from_specs(&specs), &search);
+                        apply_export_column_checklist(
+                            &state,
+                            column_items_from_specs(&specs),
+                            &search,
+                        );
                         state.set_export_has_intensity(has_intensity_columns(&specs));
                         state.set_export_status(SharedString::new());
                     });
@@ -833,7 +878,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_column_item_toggled(move |label: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items =
                     toggle_item_by_label(&model_to_vec(&state.get_export_column_items()), &label);
@@ -846,7 +893,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_column_select_all(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_column_items()), true);
                 let search = state.get_export_column_search_text().to_string();
@@ -856,7 +905,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_column_clear_all(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = set_all_checked(&model_to_vec(&state.get_export_column_items()), false);
                 let search = state.get_export_column_search_text().to_string();
@@ -868,7 +919,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_column_search_changed(move |search: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = model_to_vec(&state.get_export_column_items());
                 state.set_export_column_displayed_items(to_model(filter_checklist_by_search(
@@ -884,12 +937,19 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_column_group_toggle(move |group: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let current = model_to_vec(&state.get_export_column_items());
-                let currently_all_checked = group_all_checked_for_search(&current, group.as_str(), "");
-                let items =
-                    set_group_checked_for_search(&current, group.as_str(), "", !currently_all_checked);
+                let currently_all_checked =
+                    group_all_checked_for_search(&current, group.as_str(), "");
+                let items = set_group_checked_for_search(
+                    &current,
+                    group.as_str(),
+                    "",
+                    !currently_all_checked,
+                );
                 let search = state.get_export_column_search_text().to_string();
                 apply_export_column_checklist(&state, items, &search);
             });
@@ -901,7 +961,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_column_intensity_preset(move |preset: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = apply_intensity_preset(
                     model_to_vec(&state.get_export_column_items()),
@@ -916,7 +978,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_column_apply_group_to_all(move |group: SharedString| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let items = apply_coloc_group_template(
                     model_to_vec(&state.get_export_column_items()),
@@ -931,21 +995,32 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_add_batch(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
 
                 let items = model_to_vec(&state.get_export_class_items());
-                let selected: Vec<String> =
-                    items.iter().filter(|i| i.checked).map(|i| i.label.to_string()).collect();
+                let selected: Vec<String> = items
+                    .iter()
+                    .filter(|i| i.checked)
+                    .map(|i| i.label.to_string())
+                    .collect();
                 if selected.is_empty() {
                     state.set_export_status("Pick at least one class before adding.".into());
                     return;
                 }
                 let all_selected = selected.len() == items.len();
-                let classes_label =
-                    if all_selected { "All classes".to_string() } else { selected.join(", ") };
-                let classes: Vec<SharedString> =
-                    if all_selected { Vec::new() } else { selected.iter().map(SharedString::from).collect() };
+                let classes_label = if all_selected {
+                    "All classes".to_string()
+                } else {
+                    selected.join(", ")
+                };
+                let classes: Vec<SharedString> = if all_selected {
+                    Vec::new()
+                } else {
+                    selected.iter().map(SharedString::from).collect()
+                };
 
                 let image_items = model_to_vec(&state.get_export_image_items());
                 let selected_images: Vec<String> = image_items
@@ -1007,7 +1082,10 @@ impl ResultsTableController {
                     classes_label: classes_label.into(),
                     format: state.get_export_format(),
                     images: slint::ModelRc::new(slint::VecModel::from(
-                        selected_images.iter().map(SharedString::from).collect::<Vec<_>>(),
+                        selected_images
+                            .iter()
+                            .map(SharedString::from)
+                            .collect::<Vec<_>>(),
                     )),
                     images_label: images_label.into(),
                     each_image: state.get_export_each_image(),
@@ -1027,7 +1105,9 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_remove_batch(move |idx: i32| {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 let mut batches = export_batches_to_vec(&state.get_export_batches());
                 if idx >= 0 && (idx as usize) < batches.len() {
@@ -1311,8 +1391,12 @@ impl ResultsTableController {
                 if let Some(flag) = this.export_cancel_flag.lock().unwrap().as_ref() {
                     flag.store(true, Ordering::Relaxed);
                 }
-                let Some(window) = this.ui.upgrade() else { return };
-                window.global::<ResultsState>().set_export_status("Cancelling...".into());
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
+                window
+                    .global::<ResultsState>()
+                    .set_export_status("Cancelling...".into());
             });
         }
 
@@ -1322,10 +1406,16 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_as_displayed(move || {
-                let Some(path) = this.path.lock().unwrap().clone() else { return };
+                let Some(path) = this.path.lock().unwrap().clone() else {
+                    return;
+                };
                 let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
 
-                let default_name = if is_coloc_detail { "coloc_detail.csv" } else { "results.csv" };
+                let default_name = if is_coloc_detail {
+                    "coloc_detail.csv"
+                } else {
+                    "results.csv"
+                };
                 let Some(export_path) = rfd::FileDialog::new()
                     .add_filter("CSV", &["csv"])
                     .add_filter("Excel", &["xlsx"])
@@ -1347,7 +1437,9 @@ impl ResultsTableController {
                 let group = this.group_config.lock().unwrap().clone();
                 let base_specs = this.column_specs.lock().unwrap().clone();
 
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
                 state.set_export_status("Exporting...".into());
 
@@ -1387,7 +1479,9 @@ impl ResultsTableController {
                     let ui = this.ui.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(window) = ui.upgrade() else { return };
-                        window.global::<ResultsState>().set_export_status(status.into());
+                        window
+                            .global::<ResultsState>()
+                            .set_export_status(status.into());
                     });
                 });
             });
@@ -1401,19 +1495,26 @@ impl ResultsTableController {
         {
             let this = Arc::clone(self);
             state.on_export_add_batch_from_table(move || {
-                let Some(window) = this.ui.upgrade() else { return };
+                let Some(window) = this.ui.upgrade() else {
+                    return;
+                };
                 let state = window.global::<ResultsState>();
 
                 let is_coloc_detail = *this.coloc_detail_mode.lock().unwrap();
                 let group_cfg = this.group_config.lock().unwrap().clone();
-                let (group_by, group_regex) = match live_group_by_for_batch(is_coloc_detail, &group_cfg) {
-                    Ok(pair) => pair,
-                    Err(msg) => {
-                        state.set_export_status(msg.into());
-                        return;
-                    }
+                let (group_by, group_regex) =
+                    match live_group_by_for_batch(is_coloc_detail, &group_cfg) {
+                        Ok(pair) => pair,
+                        Err(msg) => {
+                            state.set_export_status(msg.into());
+                            return;
+                        }
+                    };
+                let style = if is_coloc_detail {
+                    "coloc_detail"
+                } else {
+                    "table"
                 };
-                let style = if is_coloc_detail { "coloc_detail" } else { "table" };
 
                 let class_filter = this.class_filter.lock().unwrap().clone();
                 let classes: Vec<SharedString> = class_filter
@@ -1421,8 +1522,15 @@ impl ResultsTableController {
                     .iter()
                     .map(SharedString::from)
                     .collect();
-                let classes_label =
-                    if classes.is_empty() { "As displayed".to_string() } else { classes.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ") };
+                let classes_label = if classes.is_empty() {
+                    "As displayed".to_string()
+                } else {
+                    classes
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
 
                 // Unlike `classes`, `images` must always be a concrete list
                 // (never empty) — if the live table has no image filter set,
@@ -1432,10 +1540,11 @@ impl ResultsTableController {
                     .iter()
                     .map(|i| i.label.to_string())
                     .collect();
-                let images: Vec<SharedString> = images_from_live_filter(image_filter, &all_known_images)
-                    .iter()
-                    .map(SharedString::from)
-                    .collect();
+                let images: Vec<SharedString> =
+                    images_from_live_filter(image_filter, &all_known_images)
+                        .iter()
+                        .map(SharedString::from)
+                        .collect();
                 let images_label = "As displayed".to_string();
 
                 let specs = if is_coloc_detail {
@@ -1447,13 +1556,21 @@ impl ResultsTableController {
                 let columns: Vec<SharedString> = if all_visible {
                     Vec::new()
                 } else {
-                    specs.iter().filter(|c| c.visible).map(|c| SharedString::from(c.label.as_str())).collect()
+                    specs
+                        .iter()
+                        .filter(|c| c.visible)
+                        .map(|c| SharedString::from(c.label.as_str()))
+                        .collect()
                 };
 
                 let name = {
                     let n = state.get_export_combo_name().to_string();
                     let n = n.trim();
-                    if !n.is_empty() { n.to_string() } else { "AsDisplayed".to_string() }
+                    if !n.is_empty() {
+                        n.to_string()
+                    } else {
+                        "AsDisplayed".to_string()
+                    }
                 };
 
                 let mut batches = export_batches_to_vec(&state.get_export_batches());
@@ -1504,7 +1621,7 @@ impl ResultsTableController {
         *self.coloc_detail_mode.lock().unwrap() = false;
         self.coloc_detail_column_specs.lock().unwrap().clear();
         self.coloc_detail_page_rows.lock().unwrap().reset();
-        self.displayed_rois.lock().unwrap().reset();
+        self.displayed_objects.lock().unwrap().reset();
 
         let ui = self.ui.clone();
         let app_ui = self.app_state.ui_handle.clone();
@@ -1512,12 +1629,12 @@ impl ResultsTableController {
         let all_loaded_arc = Arc::clone(&self.all_loaded);
         let column_specs_arc = Arc::clone(&self.column_specs);
         let column_widths_arc = Arc::clone(&self.column_widths);
-        let displayed_rois_arc = Arc::clone(&self.displayed_rois);
+        let displayed_objects_arc = Arc::clone(&self.displayed_objects);
 
         std::thread::spawn(move || {
             let loader = ResultsLoader::new(&path);
 
-            let first_page = loader.get_rois(DatabaseFilter {
+            let first_page = loader.get_objects(DatabaseFilter {
                 page_size: PAGE_SIZE,
                 ..Default::default()
             });
@@ -1530,18 +1647,18 @@ impl ResultsTableController {
             let z_range = loader.get_z_stack_range().unwrap_or(None);
 
             match (first_page, img_names, cls_names, coloc_partner_classes) {
-                (Ok(rois), Ok(img_names), Ok(cls_names), Ok(coloc_partner_classes)) => {
-                    let channels = discover_channels(&rois);
+                (Ok(objects), Ok(img_names), Ok(cls_names), Ok(coloc_partner_classes)) => {
+                    let channels = discover_channels(&objects);
                     let specs = build_column_specs(&channels, &coloc_partner_classes);
-                    let all_loaded = rois.len() < PAGE_SIZE;
+                    let all_loaded = objects.len() < PAGE_SIZE;
 
                     *channels_arc.lock().unwrap() = channels;
                     *all_loaded_arc.lock().unwrap() = all_loaded;
                     *column_specs_arc.lock().unwrap() = specs.clone();
                     {
-                        let mut window = displayed_rois_arc.lock().unwrap();
+                        let mut window = displayed_objects_arc.lock().unwrap();
                         window.reset();
-                        window.note_appended(0, &rois);
+                        window.note_appended(0, &objects);
                     }
 
                     let _ = slint::invoke_from_event_loop(move || {
@@ -1551,7 +1668,7 @@ impl ResultsTableController {
                         if let Some(window) = ui.upgrade() {
                             let state = window.global::<ResultsState>();
 
-                            let slint_rows: Vec<ResultsRow> = rois
+                            let slint_rows: Vec<ResultsRow> = objects
                                 .iter()
                                 .enumerate()
                                 .map(|(i, r)| to_slint_row(to_display_row(i, r, &specs)))
@@ -1560,8 +1677,7 @@ impl ResultsTableController {
                             let widths = column_widths_arc.lock().unwrap().clone();
                             let slint_cols: Vec<ResultsColumnDef> =
                                 specs_to_slint_cols(&specs, &widths);
-                            let visible_count =
-                                specs.iter().filter(|c| c.visible).count() as i32;
+                            let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
                             let total_width: f32 = slint_cols
                                 .iter()
                                 .filter(|c| c.visible)
@@ -1581,17 +1697,17 @@ impl ResultsTableController {
                                     .collect(),
                             );
 
-                            state.set_columns(slint::ModelRc::new(
-                                slint::VecModel::from(slint_cols),
-                            ));
+                            state.set_columns(slint::ModelRc::new(slint::VecModel::from(
+                                slint_cols,
+                            )));
                             state.set_visible_column_count(visible_count);
                             state.set_columns_total_width(total_width);
-                            state.set_column_items(slint::ModelRc::new(
-                                slint::VecModel::from(column_items.clone()),
-                            ));
-                            state.set_column_popup(slint::ModelRc::new(
-                                slint::VecModel::from(column_items),
-                            ));
+                            state.set_column_items(slint::ModelRc::new(slint::VecModel::from(
+                                column_items.clone(),
+                            )));
+                            state.set_column_popup(slint::ModelRc::new(slint::VecModel::from(
+                                column_items,
+                            )));
                             state.set_column_popup_all_checked(true);
 
                             let image_items = names_to_filter_items(&img_names);
@@ -1622,7 +1738,9 @@ impl ResultsTableController {
                                 coloc_filter_label_any().to_string(),
                             ];
                             coloc_labels.extend(
-                                coloc_partner_classes.iter().map(|c| coloc_filter_label_with(c)),
+                                coloc_partner_classes
+                                    .iter()
+                                    .map(|c| coloc_filter_label_with(c)),
                             );
                             let coloc_items = names_to_filter_items(&coloc_labels);
                             state.set_filter_coloc_items(slint::ModelRc::new(
@@ -1674,9 +1792,7 @@ impl ResultsTableController {
                             state.set_z_stack_show_all(true);
                             state.set_all_rows_loaded(all_loaded);
                             state.set_loading_more(false);
-                            state.set_rows(slint::ModelRc::new(slint::VecModel::from(
-                                slint_rows,
-                            )));
+                            state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
                             let _ = window.show();
                         }
                     });
@@ -1694,20 +1810,17 @@ impl ResultsTableController {
     }
 
     // -------------------------------------------------------------------------
-    // Reload dispatch: grouped (aggregated) vs. paginated per-ROI view
+    // Reload dispatch: grouped (aggregated) vs. paginated per-object view
     // -------------------------------------------------------------------------
 
     /// Spawns the appropriate background reload based on the active view:
-    /// coloc-detail flat table, grouped/aggregated, or plain paginated per-ROI.
+    /// coloc-detail flat table, grouped/aggregated, or plain paginated per-object.
     /// Checking `coloc_detail_mode` first means row filters (image/class/coloc)
     /// applied while the coloc-detail view is active reload *that* view instead
     /// of silently falling back to the normal table.
     fn spawn_reload(this: Arc<Self>) {
         let coloc_detail = *this.coloc_detail_mode.lock().unwrap();
-        let grouped = !matches!(
-            this.group_config.lock().unwrap().group_by,
-            GroupBy::None
-        );
+        let grouped = !matches!(this.group_config.lock().unwrap().group_by, GroupBy::None);
         std::thread::spawn(move || {
             if coloc_detail {
                 Self::bg_reload_coloc_detail_page0(this);
@@ -1744,16 +1857,16 @@ impl ResultsTableController {
         let t_stack_filter = *this.t_stack_filter.lock().unwrap();
         let z_stack_filter = *this.z_stack_filter.lock().unwrap();
         let config = this.group_config.lock().unwrap().clone();
-        // Per-ROI specs carry the column-visibility selection; only visible
+        // Per-object specs carry the column-visibility selection; only visible
         // metrics become grouped columns.
         let base_specs = this.column_specs.lock().unwrap().clone();
         let sort_column = this.sort_column.lock().unwrap().clone();
         let sort_ascending = *this.sort_ascending.lock().unwrap();
 
         let loader = ResultsLoader::new(&path);
-        // Aggregation is computed directly in DuckDB (see `aggregate_rois_sql`)
+        // Aggregation is computed directly in DuckDB (see `aggregate_objects_sql`)
         // instead of fetching every matching row into Rust first.
-        match aggregate_rois_sql(
+        match aggregate_objects_sql(
             &loader,
             DatabaseFilter {
                 object_id_filter: None,
@@ -1773,7 +1886,7 @@ impl ResultsTableController {
         ) {
             Ok((specs, mut display_rows)) => {
                 // The grouped view is fully materialized in memory (unlike the
-                // paginated per-ROI view), so sorting it is a plain in-memory
+                // paginated per-object view), so sorting it is a plain in-memory
                 // sort rather than another DB round-trip.
                 if let Some(col) = &sort_column {
                     sort_display_rows(&mut display_rows, &specs, col, sort_ascending);
@@ -1781,8 +1894,8 @@ impl ResultsTableController {
                 // Grouped view is never paginated.
                 *this.all_loaded.lock().unwrap() = true;
                 // Grouped rows aggregate many ROIs, so there is no single source
-                // ROI to open/highlight when one is selected.
-                this.displayed_rois.lock().unwrap().reset();
+                // object to open/highlight when one is selected.
+                this.displayed_objects.lock().unwrap().reset();
                 let widths = this.column_widths.lock().unwrap().clone();
 
                 let _ = slint::invoke_from_event_loop(move || {
@@ -1798,9 +1911,7 @@ impl ResultsTableController {
                             .map(|c| c.width)
                             .sum();
 
-                        state.set_columns(slint::ModelRc::new(slint::VecModel::from(
-                            slint_cols,
-                        )));
+                        state.set_columns(slint::ModelRc::new(slint::VecModel::from(slint_cols)));
                         state.set_visible_column_count(visible_count);
                         state.set_columns_total_width(total_width);
                         state.set_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
@@ -1826,7 +1937,7 @@ impl ResultsTableController {
     /// single-shot implementation, this never loads more than one page of
     /// source ROIs, nor more partner ROIs than that page actually references
     /// (via `DatabaseFilter::object_id_filter` — see `coloc_partner_ids`),
-    /// instead of every ROI in the image regardless of relevance.
+    /// instead of every object in the image regardless of relevance.
     fn bg_reload_coloc_detail_page0(this: Arc<Self>) {
         let ui = this.ui.clone();
         let finish = |ui: slint::Weak<ResultsWindow>| {
@@ -1864,7 +1975,10 @@ impl ResultsTableController {
             match discover_coloc_detail_columns(&loader, &base_filter) {
                 Ok(cols) => cols,
                 Err(e) => {
-                    warn!("bg_reload_coloc_detail_page0 (column discovery) failed: {:?}", e);
+                    warn!(
+                        "bg_reload_coloc_detail_page0 (column discovery) failed: {:?}",
+                        e
+                    );
                     finish(ui);
                     return;
                 }
@@ -1873,7 +1987,7 @@ impl ResultsTableController {
         let mut specs = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
         // Carry over the visibility the user already chose: on the very
         // first entry into coloc-detail mode this session, inherit from
-        // the normal per-ROI column filter (columns like roi_id/area_px/
+        // the normal per-object column filter (columns like object_id/area_px/
         // circularity/ch* share the same ids in both specs); after that,
         // prefer whatever was chosen while already in coloc-detail mode
         // (e.g. via `column_filter_apply`), so a filter set here isn't
@@ -1889,7 +2003,7 @@ impl ResultsTableController {
         }
         *this.coloc_detail_column_specs.lock().unwrap() = specs.clone();
 
-        match loader.get_rois(DatabaseFilter {
+        match loader.get_objects(DatabaseFilter {
             page_size: PAGE_SIZE,
             page: 0,
             needs_intensities: true,
@@ -1899,7 +2013,10 @@ impl ResultsTableController {
                 let partner_page = match Self::fetch_coloc_partners(&loader, &source_page) {
                     Ok(p) => p,
                     Err(e) => {
-                        warn!("bg_reload_coloc_detail_page0 (partner fetch) failed: {:?}", e);
+                        warn!(
+                            "bg_reload_coloc_detail_page0 (partner fetch) failed: {:?}",
+                            e
+                        );
                         finish(ui);
                         return;
                     }
@@ -1909,7 +2026,7 @@ impl ResultsTableController {
                 let display_rows = flatten_coloc_rows(&source_page, &partner_page, &specs);
 
                 // Row selection doesn't apply to the flat coloc view.
-                this.displayed_rois.lock().unwrap().reset();
+                this.displayed_objects.lock().unwrap().reset();
                 *this.all_loaded.lock().unwrap() = all_loaded;
                 {
                     let mut page_rows = this.coloc_detail_page_rows.lock().unwrap();
@@ -1937,8 +2054,11 @@ impl ResultsTableController {
                             display_rows.into_iter().map(to_slint_row).collect();
                         let slint_cols = specs_to_slint_cols(&specs, &widths);
                         let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
-                        let total_width: f32 =
-                            slint_cols.iter().filter(|c| c.visible).map(|c| c.width).sum();
+                        let total_width: f32 = slint_cols
+                            .iter()
+                            .filter(|c| c.visible)
+                            .map(|c| c.width)
+                            .sum();
 
                         state.set_columns(slint::ModelRc::new(slint::VecModel::from(slint_cols)));
                         state.set_visible_column_count(visible_count);
@@ -1967,20 +2087,20 @@ impl ResultsTableController {
     }
 
     /// Fetches exactly the colocalization partner ROIs referenced by
-    /// `source_page`'s `coloc_json`, instead of every ROI in the image —
+    /// `source_page`'s `coloc_json`, instead of every object in the image —
     /// `object_id_filter` alone, with no other filter fields, since an
     /// explicit id list is already unambiguous (adding the source-side
     /// image/class/coloc filters back on top would risk incorrectly
     /// excluding a partner that doesn't itself match those filters).
     fn fetch_coloc_partners(
         loader: &ResultsLoader,
-        source_page: &[RoiRow],
-    ) -> Result<Vec<RoiRow>, InternalErrors> {
+        source_page: &[ObjectRow],
+    ) -> Result<Vec<ObjectRow>, InternalErrors> {
         let ids = coloc_partner_ids(source_page);
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        loader.get_rois(DatabaseFilter {
+        loader.get_objects(DatabaseFilter {
             object_id_filter: Some(ids),
             page_size: 0,
             needs_intensities: true,
@@ -2020,7 +2140,7 @@ impl ResultsTableController {
         });
 
         let loader = ResultsLoader::new(&path);
-        match loader.get_rois(DatabaseFilter {
+        match loader.get_objects(DatabaseFilter {
             image_filter,
             class_filter,
             coloc_filter,
@@ -2072,10 +2192,14 @@ impl ResultsTableController {
                             // pages (flatten_coloc_rows numbers each page from 1).
                             let base = vec_model.row_count() as i32;
                             for mut row in display_rows {
-                                row.roi_id += base;
+                                row.object_id_int += base;
                                 vec_model.push(to_slint_row(row));
                             }
-                            if let Some(EvictEdge { from_front: true, row_count }) = evict {
+                            if let Some(EvictEdge {
+                                from_front: true,
+                                row_count,
+                            }) = evict
+                            {
                                 for _ in 0..row_count {
                                     vec_model.remove(0);
                                 }
@@ -2129,7 +2253,7 @@ impl ResultsTableController {
         let ui = this.ui.clone();
 
         let loader = ResultsLoader::new(&path);
-        match loader.get_rois(DatabaseFilter {
+        match loader.get_objects(DatabaseFilter {
             image_filter,
             class_filter,
             coloc_filter,
@@ -2142,19 +2266,19 @@ impl ResultsTableController {
             sort_column,
             sort_ascending,
         }) {
-            Ok(rois) => {
-                let all_loaded = rois.len() < PAGE_SIZE;
+            Ok(objects) => {
+                let all_loaded = objects.len() < PAGE_SIZE;
                 *this.all_loaded.lock().unwrap() = all_loaded;
                 {
-                    let mut window = this.displayed_rois.lock().unwrap();
+                    let mut window = this.displayed_objects.lock().unwrap();
                     window.reset();
-                    window.note_appended(0, &rois);
+                    window.note_appended(0, &objects);
                 }
                 let widths = this.column_widths.lock().unwrap().clone();
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
-                        let slint_rows: Vec<ResultsRow> = rois
+                        let slint_rows: Vec<ResultsRow> = objects
                             .iter()
                             .enumerate()
                             .map(|(i, r)| to_slint_row(to_display_row(i, r, &specs)))
@@ -2162,7 +2286,7 @@ impl ResultsTableController {
                         let state = window.global::<ResultsState>();
                         // A full reload always starts fresh at the top.
                         state.set_at_top_loaded(true);
-                        // Restore the per-ROI columns (grouped mode may have replaced them).
+                        // Restore the per-object columns (grouped mode may have replaced them).
                         let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
                         let slint_cols = specs_to_slint_cols(&specs, &widths);
                         let total_width: f32 = slint_cols
@@ -2227,7 +2351,7 @@ impl ResultsTableController {
         });
 
         let loader = ResultsLoader::new(&path);
-        match loader.get_rois(DatabaseFilter {
+        match loader.get_objects(DatabaseFilter {
             image_filter,
             class_filter,
             coloc_filter,
@@ -2240,14 +2364,18 @@ impl ResultsTableController {
             sort_column,
             sort_ascending,
         }) {
-            Ok(new_rois) => {
-                let all_loaded = new_rois.len() < PAGE_SIZE;
+            Ok(new_objects) => {
+                let all_loaded = new_objects.len() < PAGE_SIZE;
                 *this.all_loaded.lock().unwrap() = all_loaded;
                 // Position is derived from the page number, not the model's
                 // current length — required so ids stay unique/stable once
                 // eviction can remove rows from the front (see `RowWindow`).
                 let base = next_page * PAGE_SIZE;
-                let evict = this.displayed_rois.lock().unwrap().note_appended(next_page, &new_rois);
+                let evict = this
+                    .displayed_objects
+                    .lock()
+                    .unwrap()
+                    .note_appended(next_page, &new_objects);
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
@@ -2259,10 +2387,18 @@ impl ResultsTableController {
                             // Append first, then evict — the model never
                             // observes rows disappearing before they
                             // conceptually existed.
-                            for (i, roi) in new_rois.iter().enumerate() {
-                                vec_model.push(to_slint_row(to_display_row(base + i, roi, &specs)));
+                            for (i, object) in new_objects.iter().enumerate() {
+                                vec_model.push(to_slint_row(to_display_row(
+                                    base + i,
+                                    object,
+                                    &specs,
+                                )));
                             }
-                            if let Some(EvictEdge { from_front: true, row_count }) = evict {
+                            if let Some(EvictEdge {
+                                from_front: true,
+                                row_count,
+                            }) = evict
+                            {
                                 for _ in 0..row_count {
                                     vec_model.remove(0);
                                 }
@@ -2302,7 +2438,7 @@ impl ResultsTableController {
             return;
         };
 
-        let Some(oldest) = this.displayed_rois.lock().unwrap().oldest_loaded_page() else {
+        let Some(oldest) = this.displayed_objects.lock().unwrap().oldest_loaded_page() else {
             return;
         };
         if oldest == 0 {
@@ -2338,7 +2474,7 @@ impl ResultsTableController {
         });
 
         let loader = ResultsLoader::new(&path);
-        match loader.get_rois(DatabaseFilter {
+        match loader.get_objects(DatabaseFilter {
             image_filter,
             class_filter,
             coloc_filter,
@@ -2351,11 +2487,11 @@ impl ResultsTableController {
             sort_column,
             sort_ascending,
         }) {
-            Ok(prev_rois) => {
+            Ok(prev_objects) => {
                 let base = prev_page * PAGE_SIZE;
                 let (evict, at_top) = {
-                    let mut window = this.displayed_rois.lock().unwrap();
-                    let evict = window.note_prepended(prev_page, &prev_rois);
+                    let mut window = this.displayed_objects.lock().unwrap();
+                    let evict = window.note_prepended(prev_page, &prev_objects);
                     (evict, window.oldest_loaded_page() == Some(0))
                 };
 
@@ -2367,11 +2503,17 @@ impl ResultsTableController {
                             model.as_any().downcast_ref::<slint::VecModel<ResultsRow>>()
                         {
                             // Insert in reverse so the final order is correct.
-                            for (i, roi) in prev_rois.iter().enumerate().rev() {
-                                vec_model
-                                    .insert(0, to_slint_row(to_display_row(base + i, roi, &specs)));
+                            for (i, object) in prev_objects.iter().enumerate().rev() {
+                                vec_model.insert(
+                                    0,
+                                    to_slint_row(to_display_row(base + i, object, &specs)),
+                                );
                             }
-                            if let Some(EvictEdge { from_front: false, row_count }) = evict {
+                            if let Some(EvictEdge {
+                                from_front: false,
+                                row_count,
+                            }) = evict
+                            {
                                 // Tail eviction needs no scroll compensation —
                                 // removing from the end doesn't shift anything
                                 // above the current viewport.
@@ -2380,7 +2522,7 @@ impl ResultsTableController {
                                 }
                             }
                         }
-                        state.set_front_row_delta(-(prev_rois.len() as i32));
+                        state.set_front_row_delta(-(prev_objects.len() as i32));
                         state.set_at_top_loaded(at_top);
                         state.set_loading_more(false);
                     }
@@ -2407,7 +2549,9 @@ impl ResultsTableController {
         *self.current_page.lock().unwrap() = 0;
         *self.all_loaded.lock().unwrap() = false;
 
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         window.global::<ResultsState>().set_loading_more(true);
 
         Self::spawn_reload(Arc::clone(self));
@@ -2422,7 +2566,9 @@ impl ResultsTableController {
         *self.current_page.lock().unwrap() = 0;
         *self.all_loaded.lock().unwrap() = false;
 
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         window.global::<ResultsState>().set_loading_more(true);
 
         Self::spawn_reload(Arc::clone(self));
@@ -2433,40 +2579,42 @@ impl ResultsTableController {
         *self.current_page.lock().unwrap() = 0;
         *self.all_loaded.lock().unwrap() = false;
 
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         window.global::<ResultsState>().set_loading_more(true);
 
         Self::spawn_reload(Arc::clone(self));
     }
 
     // -------------------------------------------------------------------------
-    // Row selection: open the ROI's image and highlight its bounding box
+    // Row selection: open the object's image and highlight its bounding box
     // -------------------------------------------------------------------------
 
-    /// A per-ROI row was selected. Looks the source ROI up by its stable
+    /// A per-object row was selected. Looks the source object up by its stable
     /// `object_id` (not a positional array index — the loaded window can
     /// evict pages, so a position would silently go stale), then opens its
-    /// source image in the editor and paints the ROI's bounding box.
-    /// Grouped/aggregated/coloc-detail rows have no source ROI (`object_id`
+    /// source image in the editor and paints the object's bounding box.
+    /// Grouped/aggregated/coloc-detail rows have no source object (`object_id`
     /// is `""`), so the lookup misses and the selection is ignored.
-    fn on_roi_row_selected(&self, object_id: SharedString) {
+    fn on_object_row_selected(&self, object_id: SharedString) {
         if object_id.is_empty() {
             return;
         }
-        let roi = {
-            let window = self.displayed_rois.lock().unwrap();
+        let object = {
+            let window = self.displayed_objects.lock().unwrap();
             match window.get(object_id.as_str()) {
-                Some(roi) => roi.clone(),
+                Some(object) => object.clone(),
                 None => return,
             }
         };
-        if roi.image_rel_path.is_empty() {
-            warn!("Selected ROI has no image path; cannot open it");
+        if object.image_rel_path.is_empty() {
+            warn!("Selected object has no image path; cannot open it");
             return;
         }
-        let rel_path = PathBuf::from(&roi.image_rel_path);
+        let rel_path = PathBuf::from(&object.image_rel_path);
         self.image_list_controller
-            .open_image_and_highlight_roi(&rel_path, roi.bbox_px);
+            .open_image_and_highlight_object(&rel_path, object.bbox_px);
     }
 
     // -------------------------------------------------------------------------
@@ -2474,7 +2622,9 @@ impl ResultsTableController {
     // -------------------------------------------------------------------------
 
     fn toggle_image_label(&self, label: SharedString) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let current = model_to_vec(&state.get_filter_image_items());
         let current_popup = model_to_vec(&state.get_filter_image_popup());
@@ -2488,7 +2638,9 @@ impl ResultsTableController {
 
     fn image_search_changed(&self, search: SharedString) {
         *self.image_search.lock().unwrap() = search.to_string();
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let current = model_to_vec(&state.get_filter_image_items());
         let popup = filter_popup_by_search(&current, search.as_str());
@@ -2497,7 +2649,9 @@ impl ResultsTableController {
     }
 
     fn image_select_all(&self) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.image_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_filter_image_items());
@@ -2510,7 +2664,9 @@ impl ResultsTableController {
     }
 
     fn image_clear_all(&self) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.image_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_filter_image_items());
@@ -2527,7 +2683,9 @@ impl ResultsTableController {
     // -------------------------------------------------------------------------
 
     fn toggle_class_label(&self, label: SharedString) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let current = model_to_vec(&state.get_filter_class_items());
         let current_popup = model_to_vec(&state.get_filter_class_popup());
@@ -2541,7 +2699,9 @@ impl ResultsTableController {
 
     fn class_search_changed(&self, search: SharedString) {
         *self.class_search.lock().unwrap() = search.to_string();
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let current = model_to_vec(&state.get_filter_class_items());
         let popup = filter_popup_by_search(&current, search.as_str());
@@ -2550,7 +2710,9 @@ impl ResultsTableController {
     }
 
     fn class_select_all(&self) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.class_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_filter_class_items());
@@ -2563,7 +2725,9 @@ impl ResultsTableController {
     }
 
     fn class_clear_all(&self) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.class_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_filter_class_items());
@@ -2580,7 +2744,9 @@ impl ResultsTableController {
     // -------------------------------------------------------------------------
 
     fn toggle_coloc_label(&self, label: SharedString) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let current = model_to_vec(&state.get_filter_coloc_items());
         let current_popup = model_to_vec(&state.get_filter_coloc_popup());
@@ -2594,7 +2760,9 @@ impl ResultsTableController {
 
     fn coloc_search_changed(&self, search: SharedString) {
         *self.coloc_search.lock().unwrap() = search.to_string();
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let current = model_to_vec(&state.get_filter_coloc_items());
         let popup = filter_popup_by_search(&current, search.as_str());
@@ -2603,7 +2771,9 @@ impl ResultsTableController {
     }
 
     fn coloc_select_all(&self) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.coloc_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_filter_coloc_items());
@@ -2616,7 +2786,9 @@ impl ResultsTableController {
     }
 
     fn coloc_clear_all(&self) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.coloc_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_filter_coloc_items());
@@ -2633,7 +2805,9 @@ impl ResultsTableController {
     // -------------------------------------------------------------------------
 
     fn toggle_column_label(&self, label: SharedString) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let current = model_to_vec(&state.get_column_items());
         let current_popup = model_to_vec(&state.get_column_popup());
@@ -2646,7 +2820,9 @@ impl ResultsTableController {
 
     fn column_search_changed(&self, search: SharedString) {
         *self.column_search.lock().unwrap() = search.to_string();
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let current = model_to_vec(&state.get_column_items());
         let popup = filter_popup_by_search(&current, search.as_str());
@@ -2655,7 +2831,9 @@ impl ResultsTableController {
     }
 
     fn column_select_all(&self) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.column_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_column_items());
@@ -2667,7 +2845,9 @@ impl ResultsTableController {
     }
 
     fn column_clear_all(&self) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.column_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_column_items());
@@ -2683,12 +2863,13 @@ impl ResultsTableController {
     /// `(Select All)` is — searching first, then toggling the group, only
     /// affects the rows currently visible.
     fn column_group_toggle(&self, group: SharedString) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let search = self.column_search.lock().unwrap().clone();
         let current = model_to_vec(&state.get_column_items());
-        let currently_all_checked =
-            group_all_checked_for_search(&current, group.as_str(), &search);
+        let currently_all_checked = group_all_checked_for_search(&current, group.as_str(), &search);
         let items =
             set_group_checked_for_search(&current, group.as_str(), &search, !currently_all_checked);
         let popup = filter_popup_by_search(&items, &search);
@@ -2707,7 +2888,9 @@ impl ResultsTableController {
     /// coloc-detail path). Otherwise it updates `ResultsState.columns` /
     /// `visible_column_count` directly.
     fn column_filter_apply(self: &Arc<Self>) {
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
 
         // Build label→checked map from the authoritative column_items list.
@@ -2751,10 +2934,7 @@ impl ResultsTableController {
             heatmap_metric_options(&specs),
         )));
 
-        let grouped = !matches!(
-            self.group_config.lock().unwrap().group_by,
-            GroupBy::None
-        );
+        let grouped = !matches!(self.group_config.lock().unwrap().group_by, GroupBy::None);
         if grouped {
             // Re-aggregate so the grouped columns track the visible metrics.
             state.set_loading_more(true);
@@ -2763,7 +2943,11 @@ impl ResultsTableController {
             let widths = self.column_widths.lock().unwrap().clone();
             let slint_cols = specs_to_slint_cols(&specs, &widths);
             let visible_count = specs.iter().filter(|c| c.visible).count() as i32;
-            let total_width: f32 = slint_cols.iter().filter(|c| c.visible).map(|c| c.width).sum();
+            let total_width: f32 = slint_cols
+                .iter()
+                .filter(|c| c.visible)
+                .map(|c| c.width)
+                .sum();
             state.set_columns(slint::ModelRc::new(slint::VecModel::from(slint_cols)));
             state.set_visible_column_count(visible_count);
             state.set_columns_total_width(total_width);
@@ -2771,7 +2955,7 @@ impl ResultsTableController {
     }
 
     /// Live-updates one column's width as the user drags its header's resize handle.
-    /// Operates directly on whatever `ResultsState.columns` currently holds — the per-ROI
+    /// Operates directly on whatever `ResultsState.columns` currently holds — the per-object
     /// specs or a grouped/aggregated column list — so it works in both view modes without
     /// needing to know which is active. The chosen width is also remembered in
     /// `column_widths` so it survives the next reload/filter/group-apply.
@@ -2788,7 +2972,9 @@ impl ResultsTableController {
             .unwrap()
             .insert(col_id.to_string(), clamped);
 
-        let Some(window) = self.ui.upgrade() else { return };
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
         let state = window.global::<ResultsState>();
         let model = state.get_columns();
         if let Some(vec_model) = model
@@ -2820,10 +3006,13 @@ impl ResultsTableController {
     /// Stashes a freshly rendered chart so a later "Save chart" click can
     /// write out exactly these pixels without re-rendering.
     fn cache_last_chart(&self, chart: &RenderedChart, kind: ResultsChartKind) {
-        self.last_chart.lock().unwrap().replace(LastChart { chart: chart.clone(), kind });
+        self.last_chart.lock().unwrap().replace(LastChart {
+            chart: chart.clone(),
+            kind,
+        });
     }
 
-    /// Fetches every ROI matching the current filters (mirrors
+    /// Fetches every object matching the current filters (mirrors
     /// `bg_reload_grouped`'s "aggregation needs every matching row" fetch),
     /// computes the requested chart in `evanalyzer_app::result` (the same
     /// functions a future CLI export command would call), renders it with
@@ -2837,12 +3026,18 @@ impl ResultsTableController {
                 let Some(window) = ui.upgrade() else { return };
                 let state = window.global::<ResultsState>();
                 if let Some(chart) = chart {
-                    let mut buf =
-                        slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(chart.width, chart.height);
+                    let mut buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(
+                        chart.width,
+                        chart.height,
+                    );
                     {
                         let slice = buf.make_mut_slice();
                         for (px, rgb) in slice.iter_mut().zip(chart.rgb.chunks_exact(3)) {
-                            *px = slint::Rgb8Pixel { r: rgb[0], g: rgb[1], b: rgb[2] };
+                            *px = slint::Rgb8Pixel {
+                                r: rgb[0],
+                                g: rgb[1],
+                                b: rgb[2],
+                            };
                         }
                     }
                     state.set_chart_image(slint::Image::from_rgb8(buf));
@@ -2865,11 +3060,15 @@ impl ResultsTableController {
             return;
         };
 
-        // Per-ROI specs carry the visible-column selection; chart axis picks
+        // Per-object specs carry the visible-column selection; chart axis picks
         // are resolved against them (label -> column id) below.
         let specs = this.column_specs.lock().unwrap().clone();
-        let resolve_id =
-            |label: &str| specs.iter().find(|c| c.label == label).map(|c| c.id.clone());
+        let resolve_id = |label: &str| {
+            specs
+                .iter()
+                .find(|c| c.label == label)
+                .map(|c| c.id.clone())
+        };
 
         let image_filter = this.image_filter.lock().unwrap().clone();
         let class_filter = this.class_filter.lock().unwrap().clone();
@@ -2878,8 +3077,8 @@ impl ResultsTableController {
         let z_stack_filter = *this.z_stack_filter.lock().unwrap();
 
         let loader = ResultsLoader::new(&path);
-        // A chart summarizes every matching ROI, not just a loaded page.
-        let rois = match loader.get_rois(DatabaseFilter {
+        // A chart summarizes every matching object, not just a loaded page.
+        let objects = match loader.get_objects(DatabaseFilter {
             image_filter,
             class_filter,
             coloc_filter,
@@ -2892,7 +3091,7 @@ impl ResultsTableController {
             sort_column: None,
             sort_ascending: true,
         }) {
-            Ok(rois) => rois,
+            Ok(objects) => objects,
             Err(e) => {
                 warn!("bg_render_chart failed to load ROIs: {:?}", e);
                 report("Failed to load data for the chart.".into(), None);
@@ -2900,7 +3099,7 @@ impl ResultsTableController {
             }
         };
 
-        if rois.is_empty() {
+        if objects.is_empty() {
             report("No ROIs match the current filters.".into(), None);
             return;
         }
@@ -2912,7 +3111,7 @@ impl ResultsTableController {
                     return;
                 };
                 let Some(data) = compute_histogram(
-                    &rois,
+                    &objects,
                     &col_id,
                     &specs,
                     config.bucket_count.max(1),
@@ -2948,15 +3147,24 @@ impl ResultsTableController {
                     report("Pick X and Y columns to plot.".into(), None);
                     return;
                 };
-                let Some(data) =
-                    compute_scatter(&rois, &x_id, &y_id, config.color_by, &specs, SCATTER_MAX_POINTS)
-                else {
+                let Some(data) = compute_scatter(
+                    &objects,
+                    &x_id,
+                    &y_id,
+                    config.color_by,
+                    &specs,
+                    SCATTER_MAX_POINTS,
+                ) else {
                     report("No numeric data for these columns.".into(), None);
                     return;
                 };
                 let status = match data.sampled_from {
                     Some(total) => {
-                        format!("Showing {} of {} points (sampled).", data.points.len(), total)
+                        format!(
+                            "Showing {} of {} points (sampled).",
+                            data.points.len(),
+                            total
+                        )
                     }
                     None => String::new(),
                 };
@@ -2976,7 +3184,7 @@ impl ResultsTableController {
                 // one image's coordinate space as-is would silently mix
                 // unrelated images together rather than just look odd, so
                 // require the user to filter down to a single image first.
-                let image_count = rois
+                let image_count = objects
                     .iter()
                     .map(|r| r.image_name.as_str())
                     .collect::<std::collections::HashSet<_>>()
@@ -3002,7 +3210,7 @@ impl ResultsTableController {
                     };
                     HeatmapMetric::Average(col_id)
                 };
-                let Some(data) = compute_heatmap(&rois, &metric, &specs, config.cell_size_px)
+                let Some(data) = compute_heatmap(&objects, &metric, &specs, config.cell_size_px)
                 else {
                     report("No data to bin into a heatmap.".into(), None);
                     return;
@@ -3073,7 +3281,7 @@ fn selected_aggs(state: &ResultsState) -> Vec<AggFunc> {
 fn to_slint_row(row: evanalyzer_app::result::DisplayRow) -> ResultsRow {
     let values: Vec<SharedString> = row.values.into_iter().map(SharedString::from).collect();
     ResultsRow {
-        roi_id: row.roi_id,
+        object_id_int: row.object_id_int,
         object_id: row.object_id.into(),
         values: slint::ModelRc::new(slint::VecModel::from(values)),
         stripe: row.stripe,
@@ -3100,7 +3308,10 @@ fn heatmap_metric_options(specs: &[ColumnSpec]) -> Vec<SharedString> {
 
 /// Labels for the heatmap's "Colors" scheme picker, in `HeatmapColorScheme::all()` order.
 fn heatmap_color_scheme_options() -> Vec<SharedString> {
-    HeatmapColorScheme::all().iter().map(|s| SharedString::from(s.label())).collect()
+    HeatmapColorScheme::all()
+        .iter()
+        .map(|s| SharedString::from(s.label()))
+        .collect()
 }
 
 /// Seeds the export dialog's "Columns to export" checklist from a column
@@ -3138,10 +3349,14 @@ fn column_items_from_specs(specs: &[ColumnSpec]) -> Vec<FilterItem> {
 /// pick columns per class, not just colocalization-columns-as-a-whole.
 fn export_column_group(col_id: &str) -> String {
     if let Some(rest) = col_id.strip_prefix("coloc_partner__") {
-        return rest.rsplit_once("__").map_or(String::new(), |(class, _)| format!("Coloc {class}"));
+        return rest
+            .rsplit_once("__")
+            .map_or(String::new(), |(class, _)| format!("Coloc {class}"));
     }
     if let Some(rest) = col_id.strip_prefix("coloc_detail__") {
-        return rest.rsplit_once("__").map_or(String::new(), |(class, _)| format!("Coloc {class}"));
+        return rest
+            .rsplit_once("__")
+            .map_or(String::new(), |(class, _)| format!("Coloc {class}"));
     }
     if col_id.starts_with("ch") {
         return "Intensity".to_string();
@@ -3172,7 +3387,7 @@ fn apply_intensity_preset(items: Vec<FilterItem>, preset: &str) -> Vec<FilterIte
 
 /// Copies `source_group`'s checked pattern onto every "Coloc *" group,
 /// matching by field *position* within each group rather than by label
-/// (labels differ per class, e.g. "Coloc ClassA ROI ID" vs "Coloc ClassB ROI
+/// (labels differ per class, e.g. "Coloc ClassA object ID" vs "Coloc ClassB object
 /// ID", but every class shares the same field layout/order by construction —
 /// see `build_column_specs`/`build_coloc_detail_column_specs`). A no-op for
 /// any group outside the "Coloc " family (e.g. "Intensity", which is always
@@ -3181,8 +3396,11 @@ fn apply_coloc_group_template(items: Vec<FilterItem>, source_group: &str) -> Vec
     if !source_group.starts_with("Coloc ") {
         return items;
     }
-    let template: Vec<bool> =
-        items.iter().filter(|i| i.group.as_str() == source_group).map(|i| i.checked).collect();
+    let template: Vec<bool> = items
+        .iter()
+        .filter(|i| i.group.as_str() == source_group)
+        .map(|i| i.checked)
+        .collect();
     if template.is_empty() {
         return items;
     }
@@ -3272,7 +3490,10 @@ fn group_config_from_dialog(group_by: &str, regex: String) -> GroupConfig {
     }
 }
 
-fn specs_to_slint_cols(specs: &[ColumnSpec], widths: &HashMap<String, f32>) -> Vec<ResultsColumnDef> {
+fn specs_to_slint_cols(
+    specs: &[ColumnSpec],
+    widths: &HashMap<String, f32>,
+) -> Vec<ResultsColumnDef> {
     specs
         .iter()
         .map(|c| ResultsColumnDef {
@@ -3331,7 +3552,12 @@ fn total_count(items: &[FilterItem]) -> i32 {
 /// since Slint treats a function calling itself as a binding loop and
 /// refuses to compile it.
 fn checked_labels(items: &[FilterItem], cap: usize) -> Vec<SharedString> {
-    items.iter().filter(|i| i.checked).take(cap).map(|i| i.label.clone()).collect()
+    items
+        .iter()
+        .filter(|i| i.checked)
+        .take(cap)
+        .map(|i| i.label.clone())
+        .collect()
 }
 
 /// The export dialog ChecklistBox's search-filtered display list. Slint has
@@ -3372,7 +3598,9 @@ fn apply_export_checklist(
     set_checked_count(checked_count(&items));
     set_total_count(total_count(&items));
     set_displayed_items(to_model(filter_checklist_by_search(&items, search)));
-    set_chip_labels(slint::ModelRc::new(slint::VecModel::from(checked_labels(&items, 4))));
+    set_chip_labels(slint::ModelRc::new(slint::VecModel::from(checked_labels(
+        &items, 4,
+    ))));
     set_items(to_model(items));
 }
 
@@ -3436,8 +3664,10 @@ fn toggle_item_by_label(items: &[FilterItem], label: &str) -> Vec<FilterItem> {
 }
 
 fn sync_popup_checked(items: &[FilterItem], popup: &[FilterItem]) -> Vec<FilterItem> {
-    let lookup: BTreeMap<&str, bool> =
-        items.iter().map(|i| (i.label.as_str(), i.checked)).collect();
+    let lookup: BTreeMap<&str, bool> = items
+        .iter()
+        .map(|i| (i.label.as_str(), i.checked))
+        .collect();
     popup
         .iter()
         .map(|item| {
@@ -3485,7 +3715,9 @@ fn set_all_checked(items: &[FilterItem], checked: bool) -> Vec<FilterItem> {
 }
 
 fn export_batches_to_vec(model: &slint::ModelRc<ExportBatchItem>) -> Vec<ExportBatchItem> {
-    (0..model.row_count()).filter_map(|i| model.row_data(i)).collect()
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .collect()
 }
 
 /// Plain, `Send`able copy of one queued `ExportBatchItem` — the Slint struct
@@ -3529,7 +3761,13 @@ fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .trim()
         .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.trim().to_string();
     // A name made up entirely of characters we just replaced (e.g. "///")
@@ -3635,8 +3873,8 @@ fn mark_group_headers(items: Vec<FilterItem>) -> Vec<FilterItem> {
             let is_header =
                 !item.group.is_empty() && prev_group.as_deref() != Some(item.group.as_str());
             item.group_header = is_header;
-            item.group_all_checked = is_header
-                && *group_checked.get(item.group.as_str()).unwrap_or(&false);
+            item.group_all_checked =
+                is_header && *group_checked.get(item.group.as_str()).unwrap_or(&false);
             prev_group = Some(item.group.to_string());
             item
         })
@@ -3684,7 +3922,12 @@ mod tests {
     use super::*;
 
     fn spec(id: &str, label: &str, visible: bool) -> ColumnSpec {
-        ColumnSpec { id: id.into(), label: label.into(), filterable: false, visible }
+        ColumnSpec {
+            id: id.into(),
+            label: label.into(),
+            filterable: false,
+            visible,
+        }
     }
 
     #[test]
@@ -3700,14 +3943,28 @@ mod tests {
         let items = vec![plain_item("A", true), plain_item("B", false)];
         let popup = vec![plain_item("B", true), plain_item("C", false)];
         let synced = sync_popup_checked(&items, &popup);
-        assert_eq!(synced.len(), 2, "popup's own item set is unchanged, only checked state moves");
-        assert!(!synced.iter().find(|i| i.label == "B").unwrap().checked, "B took items' false");
-        assert!(!synced.iter().find(|i| i.label == "C").unwrap().checked, "C has no match in items, unchanged");
+        assert_eq!(
+            synced.len(),
+            2,
+            "popup's own item set is unchanged, only checked state moves"
+        );
+        assert!(
+            !synced.iter().find(|i| i.label == "B").unwrap().checked,
+            "B took items' false"
+        );
+        assert!(
+            !synced.iter().find(|i| i.label == "C").unwrap().checked,
+            "C has no match in items, unchanged"
+        );
     }
 
     #[test]
     fn filter_popup_by_search_is_case_insensitive_substring() {
-        let items = vec![plain_item("Alpha", true), plain_item("beta", true), plain_item("gamma", true)];
+        let items = vec![
+            plain_item("Alpha", true),
+            plain_item("beta", true),
+            plain_item("gamma", true),
+        ];
         let filtered = filter_popup_by_search(&items, "ETA");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].label, "beta");
@@ -3724,7 +3981,10 @@ mod tests {
         let items = vec![plain_item("Alpha", true), plain_item("beta", true)];
         let result = set_checked_for_search(&items, "alp", false);
         assert!(!result.iter().find(|i| i.label == "Alpha").unwrap().checked);
-        assert!(result.iter().find(|i| i.label == "beta").unwrap().checked, "non-matching item untouched");
+        assert!(
+            result.iter().find(|i| i.label == "beta").unwrap().checked,
+            "non-matching item untouched"
+        );
     }
 
     #[test]
@@ -3736,11 +3996,23 @@ mod tests {
 
     #[test]
     fn carry_over_visibility_matches_by_id_and_ignores_unknown_columns() {
-        let mut fresh = vec![spec("roi_id", "ROI ID", true), spec("ch0_avg_bit", "Ch0 Avg", true)];
-        let prev = vec![spec("ch0_avg_bit", "Ch0 Avg", false), spec("stale_id", "Gone Now", false)];
+        let mut fresh = vec![
+            spec("object_id", "object ID", true),
+            spec("ch0_avg_bit", "Ch0 Avg", true),
+        ];
+        let prev = vec![
+            spec("ch0_avg_bit", "Ch0 Avg", false),
+            spec("stale_id", "Gone Now", false),
+        ];
         carry_over_visibility(&mut fresh, &prev);
-        assert!(fresh[0].visible, "roi_id has no match in prev, keeps its fresh default");
-        assert!(!fresh[1].visible, "ch0_avg_bit's prior hidden state carried over");
+        assert!(
+            fresh[0].visible,
+            "object_id has no match in prev, keeps its fresh default"
+        );
+        assert!(
+            !fresh[1].visible,
+            "ch0_avg_bit's prior hidden state carried over"
+        );
     }
 
     #[test]
@@ -3774,36 +4046,57 @@ mod tests {
 
     #[test]
     fn column_group_buckets_by_id_prefix() {
-        assert_eq!(column_group("coloc_detail__ClassA__roi_id"), "Colocalization");
+        assert_eq!(
+            column_group("coloc_detail__ClassA__object_id"),
+            "Colocalization"
+        );
         assert_eq!(column_group("ch0_avg_bit"), "Intensity");
-        assert_eq!(column_group("coloc_partner__ClassA__count"), "Colocalization");
-        assert_eq!(column_group("roi_id"), "");
+        assert_eq!(
+            column_group("coloc_partner__ClassA__count"),
+            "Colocalization"
+        );
+        assert_eq!(column_group("object_id"), "");
     }
 
     #[test]
     fn group_all_checked_and_set_group_checked_for_search_are_scoped_to_group_and_search() {
         let items = vec![
-            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Min", true) },
-            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Max", false) },
-            FilterItem { group: "Other".into(), ..plain_item("Something", false) },
+            FilterItem {
+                group: "Intensity".into(),
+                ..plain_item("Ch0 Min", true)
+            },
+            FilterItem {
+                group: "Intensity".into(),
+                ..plain_item("Ch0 Max", false)
+            },
+            FilterItem {
+                group: "Other".into(),
+                ..plain_item("Something", false)
+            },
         ];
-        assert!(!group_all_checked_for_search(&items, "Intensity", ""), "Ch0 Max is unchecked");
+        assert!(
+            !group_all_checked_for_search(&items, "Intensity", ""),
+            "Ch0 Max is unchecked"
+        );
 
         // Search-scoped: only "Ch0 Min" matches "min", and it's already checked.
         assert!(group_all_checked_for_search(&items, "Intensity", "min"));
 
         let updated = set_group_checked_for_search(&items, "Intensity", "max", true);
         assert!(updated[0].checked, "Ch0 Min was already checked");
-        assert!(updated[1].checked, "Ch0 Max matched the search and got checked");
+        assert!(
+            updated[1].checked,
+            "Ch0 Max matched the search and got checked"
+        );
         assert!(!updated[2].checked, "Other group untouched");
     }
 
     #[test]
     fn plottable_column_labels_only_lists_visible_numeric_columns() {
         let specs = vec![
-            spec("roi_id", "ROI ID", true),         // not numeric
-            spec("area_px", "Area (px)", true),      // numeric, visible
-            spec("ch0_avg_bit", "Ch0 Avg", false),   // numeric, hidden
+            spec("object_id", "object ID", true),  // not numeric
+            spec("area_px", "Area (px)", true),    // numeric, visible
+            spec("ch0_avg_bit", "Ch0 Avg", false), // numeric, hidden
         ];
         let labels = plottable_column_labels(&specs);
         assert_eq!(labels, vec![SharedString::from("Area (px)")]);
@@ -3826,8 +4119,16 @@ mod tests {
 
     #[test]
     fn has_intensity_columns_checks_for_a_ch_prefixed_id() {
-        assert!(has_intensity_columns(&[spec("ch0_avg_bit", "Ch0 Avg", true)]));
-        assert!(!has_intensity_columns(&[spec("roi_id", "ROI ID", true)]));
+        assert!(has_intensity_columns(&[spec(
+            "ch0_avg_bit",
+            "Ch0 Avg",
+            true
+        )]));
+        assert!(!has_intensity_columns(&[spec(
+            "object_id",
+            "object ID",
+            true
+        )]));
         assert!(!has_intensity_columns(&[]));
     }
 
@@ -3852,17 +4153,22 @@ mod tests {
             "sanity: every column starts visible"
         );
 
-        // 2. Simulate `column_filter_apply`: the user unchecks ClassA's "ROI ID"
+        // 2. Simulate `column_filter_apply`: the user unchecks ClassA's "object ID"
         //    column in the Columns popup. This mutation matches by *label*.
-        let visibility: BTreeMap<String, bool> =
-            [("Coloc ClassA ROI ID".to_string(), false)].into_iter().collect();
+        let visibility: BTreeMap<String, bool> = [("Coloc ClassA object ID".to_string(), false)]
+            .into_iter()
+            .collect();
         for spec in specs.iter_mut() {
             if let Some(&visible) = visibility.get(&spec.label) {
                 spec.visible = visible;
             }
         }
         assert!(
-            !specs.iter().find(|c| c.id == "coloc_detail__ClassA__roi_id").unwrap().visible,
+            !specs
+                .iter()
+                .find(|c| c.id == "coloc_detail__ClassA__object_id")
+                .unwrap()
+                .visible,
             "sanity: the mutation actually hid the column"
         );
 
@@ -3872,18 +4178,24 @@ mod tests {
         let mut fresh = build_coloc_detail_column_specs(&channels, &coloc_partner_classes);
         carry_over_visibility(&mut fresh, &specs);
 
-        let carried = fresh.iter().find(|c| c.id == "coloc_detail__ClassA__roi_id").unwrap();
+        let carried = fresh
+            .iter()
+            .find(|c| c.id == "coloc_detail__ClassA__object_id")
+            .unwrap();
         assert!(
             !carried.visible,
             "the hidden column must stay hidden across a reload, not reset to visible"
         );
-        // An unrelated column (ClassB's ROI ID) must be unaffected.
-        let unrelated = fresh.iter().find(|c| c.id == "coloc_detail__ClassB__roi_id").unwrap();
+        // An unrelated column (ClassB's object ID) must be unaffected.
+        let unrelated = fresh
+            .iter()
+            .find(|c| c.id == "coloc_detail__ClassB__object_id")
+            .unwrap();
         assert!(unrelated.visible);
 
         // 4. Confirm the value itself renders blank for the hidden column,
         //    using the real flatten/format path.
-        let mut src = evanalyzer_app::result::RoiRow {
+        let mut src = evanalyzer_app::result::ObjectRow {
             image_name: "img.tif".into(),
             image_rel_path: String::new(),
             c_stack: None,
@@ -3923,10 +4235,13 @@ mod tests {
 
         let rows = flatten_coloc_rows(&[src], &[partner], &fresh);
         assert_eq!(rows.len(), 1);
-        let col_idx = fresh.iter().position(|c| c.id == "coloc_detail__ClassA__roi_id").unwrap();
+        let col_idx = fresh
+            .iter()
+            .position(|c| c.id == "coloc_detail__ClassA__object_id")
+            .unwrap();
         assert_eq!(
             rows[0].values[col_idx], "",
-            "hidden column's value must render blank, not the partner's actual roi_id"
+            "hidden column's value must render blank, not the partner's actual object_id"
         );
     }
 
@@ -3965,7 +4280,11 @@ mod tests {
         let xlsx = unique_export_path(folder, "GroupABC", "xlsx", &mut used);
 
         assert_eq!(csv, folder.join("GroupABC.csv"));
-        assert_eq!(xlsx, folder.join("GroupABC.xlsx"), "different extensions never collide");
+        assert_eq!(
+            xlsx,
+            folder.join("GroupABC.xlsx"),
+            "different extensions never collide"
+        );
     }
 
     #[test]
@@ -3983,35 +4302,75 @@ mod tests {
     #[test]
     fn column_items_from_specs_checked_state_mirrors_visibility() {
         let specs = vec![
-            ColumnSpec { id: "roi_id".into(), label: "ROI ID".into(), filterable: false, visible: true },
-            ColumnSpec { id: "area_px".into(), label: "Area (px²)".into(), filterable: false, visible: false },
+            ColumnSpec {
+                id: "object_id".into(),
+                label: "object ID".into(),
+                filterable: false,
+                visible: true,
+            },
+            ColumnSpec {
+                id: "area_px".into(),
+                label: "Area (px²)".into(),
+                filterable: false,
+                visible: false,
+            },
         ];
         let items = column_items_from_specs(&specs);
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].label, SharedString::from("ROI ID"));
+        assert_eq!(items[0].label, SharedString::from("object ID"));
         assert!(items[0].checked);
         assert_eq!(items[1].label, SharedString::from("Area (px²)"));
-        assert!(!items[1].checked, "hidden columns must start unchecked in the export dialog");
+        assert!(
+            !items[1].checked,
+            "hidden columns must start unchecked in the export dialog"
+        );
     }
 
     #[test]
     fn export_column_group_buckets_intensity_and_per_partner_class_coloc_columns() {
         assert_eq!(export_column_group("ch0_min_bit"), "Intensity");
         assert_eq!(export_column_group("ch12_sum_bit"), "Intensity");
-        assert_eq!(export_column_group("coloc_partner__ClassA__count"), "Coloc ClassA");
-        assert_eq!(export_column_group("coloc_partner__ClassB__ids"), "Coloc ClassB");
-        assert_eq!(export_column_group("coloc_detail__ClassA__ch0_avg_bit"), "Coloc ClassA");
-        assert_eq!(export_column_group("coloc_detail__ClassA__roi_id"), "Coloc ClassA");
-        assert_eq!(export_column_group("roi_id"), "");
+        assert_eq!(
+            export_column_group("coloc_partner__ClassA__count"),
+            "Coloc ClassA"
+        );
+        assert_eq!(
+            export_column_group("coloc_partner__ClassB__ids"),
+            "Coloc ClassB"
+        );
+        assert_eq!(
+            export_column_group("coloc_detail__ClassA__ch0_avg_bit"),
+            "Coloc ClassA"
+        );
+        assert_eq!(
+            export_column_group("coloc_detail__ClassA__object_id"),
+            "Coloc ClassA"
+        );
+        assert_eq!(export_column_group("object_id"), "");
         assert_eq!(export_column_group("area_px"), "");
     }
 
     #[test]
     fn column_items_from_specs_marks_group_headers_for_intensity_and_coloc_columns() {
         let specs = vec![
-            ColumnSpec { id: "roi_id".into(), label: "ROI ID".into(), filterable: false, visible: true },
-            ColumnSpec { id: "ch0_min_bit".into(), label: "Ch0 Min (bit)".into(), filterable: false, visible: true },
-            ColumnSpec { id: "ch0_max_bit".into(), label: "Ch0 Max (bit)".into(), filterable: false, visible: true },
+            ColumnSpec {
+                id: "object_id".into(),
+                label: "object ID".into(),
+                filterable: false,
+                visible: true,
+            },
+            ColumnSpec {
+                id: "ch0_min_bit".into(),
+                label: "Ch0 Min (bit)".into(),
+                filterable: false,
+                visible: true,
+            },
+            ColumnSpec {
+                id: "ch0_max_bit".into(),
+                label: "Ch0 Max (bit)".into(),
+                filterable: false,
+                visible: true,
+            },
             ColumnSpec {
                 id: "coloc_partner__ClassA__count".into(),
                 label: "Coloc w/ ClassA (#)".into(),
@@ -4021,15 +4380,25 @@ mod tests {
         ];
         let items = column_items_from_specs(&specs);
 
-        assert_eq!(items[0].group, SharedString::new(), "ungrouped column has no header");
+        assert_eq!(
+            items[0].group,
+            SharedString::new(),
+            "ungrouped column has no header"
+        );
         assert!(!items[0].group_header);
 
         assert_eq!(items[1].group, SharedString::from("Intensity"));
-        assert!(items[1].group_header, "first item of a group run is the header");
+        assert!(
+            items[1].group_header,
+            "first item of a group run is the header"
+        );
         assert!(items[1].group_all_checked);
 
         assert_eq!(items[2].group, SharedString::from("Intensity"));
-        assert!(!items[2].group_header, "second item of the same group is not a header");
+        assert!(
+            !items[2].group_header,
+            "second item of the same group is not a header"
+        );
 
         assert_eq!(items[3].group, SharedString::from("Coloc ClassA"));
         assert!(items[3].group_header, "a new group starts a new header");
@@ -4053,16 +4422,22 @@ mod tests {
         // doesn't insert a synthetic row), item[2] is another Intensity
         // column that's unchecked.
         let items = mark_group_headers(vec![
-            plain_item("ROI ID", true),
-            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Min (bit)", true) },
-            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Max (bit)", false) },
+            plain_item("object ID", true),
+            FilterItem {
+                group: "Intensity".into(),
+                ..plain_item("Ch0 Min (bit)", true)
+            },
+            FilterItem {
+                group: "Intensity".into(),
+                ..plain_item("Ch0 Max (bit)", false)
+            },
         ]);
         assert!(items[1].group_header, "sanity: item[1] is the group header");
 
         // The header item is still a real, individually exportable column
         // (`ChecklistBox` gives it its own checkbox alongside the section
         // banner), so it counts like any other row: 3 real columns, 2 of
-        // them checked (ROI ID and the header item, Ch0 Min).
+        // them checked (object ID and the header item, Ch0 Min).
         assert_eq!(total_count(&items), 3);
         assert_eq!(checked_count(&items), 2);
     }
@@ -4071,7 +4446,11 @@ mod tests {
     fn checked_count_and_total_count_agree_with_plain_ungrouped_lists() {
         // Classes/Images never set `group`, so every item stays
         // `group_header: false` and nothing gets excluded.
-        let items = vec![plain_item("A", true), plain_item("B", false), plain_item("C", true)];
+        let items = vec![
+            plain_item("A", true),
+            plain_item("B", false),
+            plain_item("C", true),
+        ];
         assert_eq!(checked_count(&items), 2);
         assert_eq!(total_count(&items), 3);
     }
@@ -4080,8 +4459,14 @@ mod tests {
     fn filter_checklist_by_search_is_case_insensitive_and_keeps_group_headers() {
         let items = mark_group_headers(vec![
             plain_item("Area", true),
-            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Min (bit)", true) },
-            FilterItem { group: "Intensity".into(), ..plain_item("Ch0 Max (bit)", false) },
+            FilterItem {
+                group: "Intensity".into(),
+                ..plain_item("Ch0 Min (bit)", true)
+            },
+            FilterItem {
+                group: "Intensity".into(),
+                ..plain_item("Ch0 Max (bit)", false)
+            },
         ]);
         assert!(items[1].group_header, "sanity: item[1] is the group header");
 
@@ -4102,18 +4487,33 @@ mod tests {
         // "Misc" group) - it doesn't match "sum", but must stay so the
         // section banner still renders above the column that does match.
         let items = mark_group_headers(vec![
-            FilterItem { group: "Misc".into(), ..plain_item("Area", true) },
-            FilterItem { group: "Misc".into(), ..plain_item("Sum", true) },
+            FilterItem {
+                group: "Misc".into(),
+                ..plain_item("Area", true)
+            },
+            FilterItem {
+                group: "Misc".into(),
+                ..plain_item("Sum", true)
+            },
         ]);
         assert!(items[0].group_header);
 
         let filtered = filter_checklist_by_search(&items, "sum");
         let labels: Vec<&str> = filtered.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["Area", "Sum"], "header row is kept even though its own label doesn't match");
+        assert_eq!(
+            labels,
+            vec!["Area", "Sum"],
+            "header row is kept even though its own label doesn't match"
+        );
     }
 
     fn intensity_items() -> Vec<FilterItem> {
-        let labels = ["Ch0 Min (bit)", "Ch0 Max (bit)", "Ch0 Avg (bit)", "Ch0 Sum (bit)"];
+        let labels = [
+            "Ch0 Min (bit)",
+            "Ch0 Max (bit)",
+            "Ch0 Avg (bit)",
+            "Ch0 Sum (bit)",
+        ];
         labels
             .iter()
             .map(|l| FilterItem {
@@ -4135,8 +4535,11 @@ mod tests {
     #[test]
     fn apply_intensity_preset_avg_sum_checks_only_avg_and_sum() {
         let items = apply_intensity_preset(intensity_items(), "avg_sum");
-        let checked: Vec<&str> =
-            items.iter().filter(|i| i.checked).map(|i| i.label.as_str()).collect();
+        let checked: Vec<&str> = items
+            .iter()
+            .filter(|i| i.checked)
+            .map(|i| i.label.as_str())
+            .collect();
         assert_eq!(checked, ["Ch0 Avg (bit)", "Ch0 Sum (bit)"]);
     }
 
@@ -4159,7 +4562,10 @@ mod tests {
             group_all_checked: false,
         });
         let items = apply_intensity_preset(items, "none");
-        assert!(items.last().unwrap().checked, "non-Intensity columns must be unaffected");
+        assert!(
+            items.last().unwrap().checked,
+            "non-Intensity columns must be unaffected"
+        );
     }
 
     fn coloc_item(label: &str, group: &str, checked: bool) -> FilterItem {
@@ -4175,17 +4581,24 @@ mod tests {
     #[test]
     fn apply_coloc_group_template_copies_checked_pattern_by_position_across_classes() {
         let items = vec![
-            coloc_item("Coloc ClassA ROI ID", "Coloc ClassA", true),
+            coloc_item("Coloc ClassA object ID", "Coloc ClassA", true),
             coloc_item("Coloc ClassA Area (px²)", "Coloc ClassA", false),
             coloc_item("Coloc ClassA Circularity", "Coloc ClassA", true),
-            coloc_item("Coloc ClassB ROI ID", "Coloc ClassB", true),
+            coloc_item("Coloc ClassB object ID", "Coloc ClassB", true),
             coloc_item("Coloc ClassB Area (px²)", "Coloc ClassB", true),
             coloc_item("Coloc ClassB Circularity", "Coloc ClassB", true),
         ];
         let items = apply_coloc_group_template(items, "Coloc ClassA");
-        let class_b: Vec<bool> =
-            items.iter().filter(|i| i.group.as_str() == "Coloc ClassB").map(|i| i.checked).collect();
-        assert_eq!(class_b, vec![true, false, true], "ClassB must mirror ClassA field-by-field");
+        let class_b: Vec<bool> = items
+            .iter()
+            .filter(|i| i.group.as_str() == "Coloc ClassB")
+            .map(|i| i.checked)
+            .collect();
+        assert_eq!(
+            class_b,
+            vec![true, false, true],
+            "ClassB must mirror ClassA field-by-field"
+        );
     }
 
     #[test]
@@ -4194,19 +4607,25 @@ mod tests {
         let after = apply_coloc_group_template(items.clone(), "Intensity");
         let before: Vec<bool> = items.iter().map(|i| i.checked).collect();
         let after: Vec<bool> = after.iter().map(|i| i.checked).collect();
-        assert_eq!(before, after, "Intensity is a singleton section — nothing to propagate to");
+        assert_eq!(
+            before, after,
+            "Intensity is a singleton section — nothing to propagate to"
+        );
     }
 
     #[test]
     fn apply_coloc_group_template_leaves_other_sections_untouched() {
         let mut items = vec![
-            coloc_item("Coloc ClassA ROI ID", "Coloc ClassA", false),
-            coloc_item("Coloc ClassB ROI ID", "Coloc ClassB", true),
+            coloc_item("Coloc ClassA object ID", "Coloc ClassA", false),
+            coloc_item("Coloc ClassB object ID", "Coloc ClassB", true),
         ];
         items.extend(intensity_items());
         let items = apply_coloc_group_template(items, "Coloc ClassA");
         assert!(
-            items.iter().filter(|i| i.group.as_str() == "Intensity").all(|i| i.checked),
+            items
+                .iter()
+                .filter(|i| i.group.as_str() == "Intensity")
+                .all(|i| i.checked),
             "Intensity columns must be unaffected by a Coloc-group propagate"
         );
     }
@@ -4247,7 +4666,10 @@ mod tests {
             ("none".to_string(), String::new())
         );
 
-        let image_cfg = GroupConfig { group_by: GroupBy::Image, ..GroupConfig::default() };
+        let image_cfg = GroupConfig {
+            group_by: GroupBy::Image,
+            ..GroupConfig::default()
+        };
         assert_eq!(
             live_group_by_for_batch(false, &image_cfg).unwrap(),
             ("image".to_string(), String::new())
@@ -4266,7 +4688,10 @@ mod tests {
 
     #[test]
     fn live_group_by_for_batch_rejects_folder_grouping() {
-        let folder_cfg = GroupConfig { group_by: GroupBy::Folder, ..GroupConfig::default() };
+        let folder_cfg = GroupConfig {
+            group_by: GroupBy::Folder,
+            ..GroupConfig::default()
+        };
         assert!(live_group_by_for_batch(false, &folder_cfg).is_err());
     }
 
@@ -4280,7 +4705,10 @@ mod tests {
     fn images_from_live_filter_uses_the_live_filter_when_set() {
         let known = vec!["image_01.tif".to_string(), "image_02.tif".to_string()];
         let filtered = vec!["image_01.tif".to_string()];
-        assert_eq!(images_from_live_filter(Some(filtered.clone()), &known), filtered);
+        assert_eq!(
+            images_from_live_filter(Some(filtered.clone()), &known),
+            filtered
+        );
     }
 
     #[test]

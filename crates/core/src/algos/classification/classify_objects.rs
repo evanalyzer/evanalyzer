@@ -10,13 +10,13 @@
 //! Licensed under the **AGPL-3.0**.
 //!
 //! ## Overview
-//! This module implements ROI classification algorithms that assign object classes
+//! This module implements object classification algorithms that assign object classes
 //! to regions of interest based on configurable criteria and machine learning models.
 
 use crate::{
     algos::ImageAlgorithm,
     image::PixelSizes,
-    roi::Roi, // ... other imports
+    object::Object, // ... other imports
 };
 use evanalyzer_cfg::core_types::{
     InternalErrors,
@@ -28,9 +28,9 @@ use macros::CommandsMeta;
 
 #[derive(CommandsMeta)]
 pub enum ClassifyMatchHandling {
-    #[cmdsmeta(display_name = "Add tag on match")]
+    #[cmdsmeta(display_name = "Add class on match")]
     AddOutputClassIfMatch,
-    #[cmdsmeta(display_name = "Add tag on mismatch")]
+    #[cmdsmeta(display_name = "Add class on mismatch")]
     AddOutputClassIfNotMatch,
 
     #[cmdsmeta(display_name = "Remove class on match", visible = false)]
@@ -38,14 +38,14 @@ pub enum ClassifyMatchHandling {
     #[cmdsmeta(display_name = "Remove class on mismatch", visible = false)]
     RemoveInputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove tag on match")]
+    #[cmdsmeta(display_name = "Remove output class on match")]
     RemoveOutputClassIfMatch,
-    #[cmdsmeta(display_name = "Remove tag on mismatch")]
+    #[cmdsmeta(display_name = "Remove output class on mismatch")]
     RemoveOutputClassIfNotMatch,
 
-    #[cmdsmeta(display_name = "Remove ROIs matching criteria")]
+    #[cmdsmeta(display_name = "Remove objects matching criteria")]
     RemoveAllClassesIfMatch,
-    #[cmdsmeta(display_name = "Keep ROIs matching criteria")]
+    #[cmdsmeta(display_name = "Keep objects matching criteria")]
     RemoveAllClassesIfNotMatch,
 
     #[cmdsmeta(display_name = "Reclassify on match")]
@@ -61,7 +61,7 @@ pub enum ClassifyMatchHandling {
 /// including area, shape descriptors, and intensity statistics.
 #[derive(CommandsMeta)]
 #[cmdsmeta(category = "classify")]
-pub struct ClassifyRois {
+pub struct ClassifyObjects {
     /// Apply only to objects with this given segmentation class
     ///
     /// The segmentation class value is assigned to each pixel in the image
@@ -98,10 +98,10 @@ pub struct ClassifyRois {
     #[cmdsmeta(default = ObjectClass::Unset, display_name = "Output Tag")]
     pub output_class: ObjectClass,
 
-    /// Additional criterion: the object must intersect an ROI carrying this class
+    /// Additional criterion: the object must intersect an object carrying this class
     ///
     /// If unset (the default) this filter is not applied. When set, an object only
-    /// satisfies the overall criteria if it also overlaps at least one ROI carrying this
+    /// satisfies the overall criteria if it also overlaps at least one object carrying this
     /// class by at least `min_intersection_area`. Combine with e.g.
     /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
     /// or `AddOutputClassIfMatch` to tag objects that do.
@@ -114,7 +114,7 @@ pub struct ClassifyRois {
     #[cmdsmeta(default = 0, min = 0.0, max = 2147483648.0, summary = false)]
     pub min_intersection_area: f32,
 
-    /// Unit to use for roi extraction
+    /// Unit to use for object extraction
     #[cmdsmeta(
         default = SizeUnits::NanoMeter,
     )]
@@ -234,12 +234,12 @@ pub struct ClassifyRois {
     )]
     pub max_feret: f32,
 
-    /// Whether ROI can touch image edge
+    /// Whether object can touch image edge
     #[cmdsmeta(default = true, summary = true)]
     pub allow_edge_touching: bool,
 }
 
-impl Default for ClassifyRois {
+impl Default for ClassifyObjects {
     fn default() -> Self {
         Self {
             min_area: 0.0,
@@ -266,7 +266,7 @@ impl Default for ClassifyRois {
     }
 }
 
-impl ImageAlgorithm for ClassifyRois {
+impl ImageAlgorithm for ClassifyObjects {
     fn execute(
         &self,
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
@@ -279,90 +279,97 @@ impl ImageAlgorithm for ClassifyRois {
             .to_pixel(self.min_intersection_area, pixel_area_size_nm);
 
         // ROIs carrying the class the overlap criterion checks against. Collected once
-        // up front since evaluating it below needs to read other `roi_cache` entries while
+        // up front since evaluating it below needs to read other `object_cache` entries while
         // the entry under evaluation is also being read - the two can't interleave with the
         // mutation pass further down, which needs a mutable borrow of the same map.
         let overlap_candidates: Vec<ObjectId> = if self.overlapping_with == Unset {
             Vec::new()
         } else {
             cache
-                .roi_cache
+                .object_cache
                 .values()
-                .filter(|roi| roi.has_object_class(&self.overlapping_with))
-                .map(|roi| roi.id.clone())
+                .filter(|object| object.has_object_class(&self.overlapping_with))
+                .map(|object| object.id.clone())
                 .collect()
         };
 
         let evaluations: Vec<(ObjectId, bool)> = cache
-            .roi_cache
+            .object_cache
             .values()
-            .filter(|roi| self.input_classes.is_empty() || roi.has_object_classes(&self.input_classes))
-            .map(|roi| {
-                let matches = self.matches_criteria(roi, px_size)
-                    && self.matches_overlap(roi, cache, &overlap_candidates, min_intersection_px);
-                (roi.id.clone(), matches)
+            .filter(|object| {
+                self.input_classes.is_empty() || object.has_object_classes(&self.input_classes)
+            })
+            .map(|object| {
+                let matches = self.matches_criteria(object, px_size)
+                    && self.matches_overlap(
+                        object,
+                        cache,
+                        &overlap_candidates,
+                        min_intersection_px,
+                    );
+                (object.id.clone(), matches)
             })
             .collect();
 
         for (id, matches) in evaluations {
-            let Some(roi) = cache.roi_cache.get_mut(&id) else {
+            let Some(object) = cache.object_cache.get_mut(&id) else {
                 continue;
             };
             match self.match_handling {
                 ClassifyMatchHandling::AddOutputClassIfMatch => {
                     if matches {
-                        roi.add_object_class(self.output_class.clone());
+                        object.add_object_class(self.output_class.clone());
                     }
                 }
                 ClassifyMatchHandling::AddOutputClassIfNotMatch => {
                     if !matches {
-                        roi.add_object_class(self.output_class.clone());
+                        object.add_object_class(self.output_class.clone());
                     }
                 }
                 ClassifyMatchHandling::RemoveInputClassIfMatch => {
                     if matches {
                         for class in &self.input_classes {
-                            roi.remove_object_class(class);
+                            object.remove_object_class(class);
                         }
                     }
                 }
                 ClassifyMatchHandling::RemoveInputClassIfNotMatch => {
                     if !matches {
                         for class in &self.input_classes {
-                            roi.remove_object_class(class);
+                            object.remove_object_class(class);
                         }
                     }
                 }
                 ClassifyMatchHandling::RemoveOutputClassIfMatch => {
                     if matches {
-                        roi.remove_object_class(&self.output_class);
+                        object.remove_object_class(&self.output_class);
                     }
                 }
                 ClassifyMatchHandling::RemoveOutputClassIfNotMatch => {
                     if !matches {
-                        roi.remove_object_class(&self.output_class);
+                        object.remove_object_class(&self.output_class);
                     }
                 }
                 ClassifyMatchHandling::RemoveAllClassesIfMatch => {
                     if matches {
-                        roi.object_class.clear();
+                        object.object_class.clear();
                     }
                 }
                 ClassifyMatchHandling::RemoveAllClassesIfNotMatch => {
                     if !matches {
-                        roi.object_class.clear();
+                        object.object_class.clear();
                     }
                 }
                 ClassifyMatchHandling::ReclassifyIfMatch => {
                     if matches {
-                        roi.object_class.clear();
-                        roi.add_object_class(self.output_class.clone());
+                        object.object_class.clear();
+                        object.add_object_class(self.output_class.clone());
                     }
                 }
                 ClassifyMatchHandling::ReclassifyIfNotMatch => {
                     if !matches {
-                        roi.object_class.clear();
-                        roi.add_object_class(self.output_class.clone());
+                        object.object_class.clear();
+                        object.add_object_class(self.output_class.clone());
                     }
                 }
             }
@@ -372,53 +379,53 @@ impl ImageAlgorithm for ClassifyRois {
     }
 
     fn name(&self) -> &'static str {
-        "ClassifyRois"
+        "ClassifyObjects"
     }
 }
 
-impl ClassifyRois {
-    /// Evaluates whether an ROI matches the classification criteria.
+impl ClassifyObjects {
+    /// Evaluates whether an object matches the classification criteria.
     ///
     /// # Arguments
-    /// * `roi` - The ROI to evaluate
+    /// * `object` - The object to evaluate
     ///
     /// # Returns
-    /// `true` if the ROI matches all criteria, `false` otherwise
-    fn matches_criteria(&self, roi: &Roi, pixel_sizes: &PixelSizes) -> bool {
+    /// `true` if the object matches all criteria, `false` otherwise
+    fn matches_criteria(&self, object: &Object, pixel_sizes: &PixelSizes) -> bool {
         let pixel_area_size_nm = pixel_sizes.px_size_x * pixel_sizes.px_size_y;
         let min_area_px = self.size_unit.to_pixel(self.min_area, pixel_area_size_nm);
         let max_area_px = self.size_unit.to_pixel(self.max_area, pixel_area_size_nm);
 
         // Check area
-        if roi.area < min_area_px || roi.area > max_area_px {
+        if object.area < min_area_px || object.area > max_area_px {
             return false;
         }
 
         // Check edge touching
-        if roi.touches_edge && !self.allow_edge_touching {
+        if object.touches_edge && !self.allow_edge_touching {
             return false;
         }
 
         // Check circularity
-        let circularity = roi.circularity();
+        let circularity = object.circularity();
         if circularity < self.min_circularity || circularity > self.max_circularity {
             return false;
         }
 
         // Check solidity
-        let solidity = roi.get_solidity();
+        let solidity = object.get_solidity();
         if solidity < self.min_solidity || solidity > self.max_solidity {
             return false;
         }
 
         // Check aspect ratio
-        let aspect_ratio = roi.get_aspect_ratio();
+        let aspect_ratio = object.get_aspect_ratio();
         if aspect_ratio < self.min_aspect_ratio || aspect_ratio > self.max_aspect_ratio {
             return false;
         }
 
         // Check eccentricity (from ellipse fitting)
-        let ellipse = roi.get_ellipse();
+        let ellipse = object.get_ellipse();
         if ellipse.eccentricity < self.min_eccentricity
             || ellipse.eccentricity > self.max_eccentricity
         {
@@ -426,7 +433,7 @@ impl ClassifyRois {
         }
 
         // Check Feret diameter
-        let feret = roi.get_feret_diameter();
+        let feret = object.get_feret_diameter();
         if feret < self.min_feret || feret > self.max_feret {
             return false;
         }
@@ -434,12 +441,12 @@ impl ClassifyRois {
         true
     }
 
-    /// Checks the `overlapping_with` criterion: whether `roi` intersects at least one of
+    /// Checks the `overlapping_with` criterion: whether `object` intersects at least one of
     /// `candidates` (ROIs carrying the `overlapping_with` class) by at least
     /// `min_intersection_px`. Always true when `overlapping_with` is Unset (filter disabled).
     fn matches_overlap(
         &self,
-        roi: &Roi,
+        object: &Object,
         cache: &crate::pipeline::pipeline_cache::PipelineCache,
         candidates: &[ObjectId],
         min_intersection_px: usize,
@@ -449,11 +456,11 @@ impl ClassifyRois {
         }
 
         candidates.iter().any(|other_id| {
-            *other_id != roi.id
+            *other_id != object.id
                 && cache
-                    .roi_cache
+                    .object_cache
                     .get(other_id)
-                    .and_then(|other| roi.overlaps(other))
+                    .and_then(|other| object.overlaps(other))
                     .is_some_and(|intersection| intersection.area >= min_intersection_px)
         })
     }
@@ -465,13 +472,13 @@ mod tests {
 
     use super::*;
     use crate::{
+        ImageContainer, ImagePlane, ManagedImage,
         image::PixelSizes,
+        object::ObjectInit,
         pipeline::{
             pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
             pipeline_context::PipelineContext,
         },
-        roi::RoiInit,
-        ImageContainer, ImagePlane, ManagedImage,
     };
     use bitvec::prelude::*;
     use kornia_apriltag::utils::Point2d;
@@ -481,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_classification_criteria_default() {
-        let criteria = ClassifyRois::default();
+        let criteria = ClassifyObjects::default();
         assert_eq!(criteria.min_area, 0.0);
         assert_eq!(criteria.max_area, 2147483600.0);
         assert!(criteria.allow_edge_touching);
@@ -523,14 +530,14 @@ mod tests {
         .unwrap()
     }
 
-    fn make_filled_roi(id: u128, bbox: [u32; 4], class: ObjectClass) -> Roi {
+    fn make_filled_object(id: u128, bbox: [u32; 4], class: ObjectClass) -> Object {
         let [x_min, y_min, x_max, y_max] = bbox;
         // bbox uses inclusive convention: width = xmax - xmin + 1
         let w = (x_max - x_min + 1) as usize;
         let h = (y_max - y_min + 1) as usize;
         let area = w * h;
         let mask_data = BitVec::<u64, Lsb0>::repeat(true, area);
-        let mut roi = Roi::new(RoiInit {
+        let mut object = Object::new(ObjectInit {
             id: ObjectId(id),
             bbox,
             mask_data,
@@ -538,8 +545,8 @@ mod tests {
             plane: ImagePlane::default(),
             ..Default::default()
         });
-        roi.add_object_class(class);
-        roi
+        object.add_object_class(class);
+        object
     }
 
     const CLASS_A: ObjectClass = ObjectClass::Valid(1);
@@ -547,7 +554,7 @@ mod tests {
     const ID_A: u128 = 100_000;
     const ID_B: u128 = 200_000;
 
-    fn run(cmd: &ClassifyRois, cache: &mut PipelineCache) {
+    fn run(cmd: &ClassifyObjects, cache: &mut PipelineCache) {
         cmd.execute(&mut make_ctx(), cache).unwrap();
     }
 
@@ -555,66 +562,86 @@ mod tests {
     fn overlapping_with_unset_by_default_does_not_filter() {
         // Two non-overlapping ROIs, no overlap criterion configured: the criteria (which are
         // otherwise wide open) must match both, exactly as before this feature existed.
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [10, 10, 14, 14], CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        let object_b = make_filled_object(ID_B, [10, 10, 14, 14], CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&cmd, &mut cache);
 
-        assert!(cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A));
-        assert!(cache.roi_cache.get(&ObjectId(ID_B)).unwrap().has_object_class(&CLASS_B));
+        assert!(
+            cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .has_object_class(&CLASS_A)
+        );
+        assert!(
+            cache
+                .object_cache
+                .get(&ObjectId(ID_B))
+                .unwrap()
+                .has_object_class(&CLASS_B)
+        );
     }
 
     #[test]
-    fn overlapping_with_removes_class_from_non_intersecting_roi() {
+    fn overlapping_with_removes_class_from_non_intersecting_object() {
         // A doesn't overlap B, so with `overlapping_with: CLASS_B` set, A fails the criteria
         // and RemoveAllClassesIfNotMatch strips its class.
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             overlapping_with: CLASS_B,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [10, 10, 14, 14], CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        let object_b = make_filled_object(ID_B, [10, 10, 14, 14], CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&cmd, &mut cache);
 
         assert!(
-            !cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A),
-            "A doesn't intersect any CLASS_B ROI, so it should fail the criteria"
+            !cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .has_object_class(&CLASS_A),
+            "A doesn't intersect any CLASS_B object, so it should fail the criteria"
         );
     }
 
     #[test]
-    fn overlapping_with_keeps_class_on_intersecting_roi() {
+    fn overlapping_with_keeps_class_on_intersecting_object() {
         // A overlaps B, so with `overlapping_with: CLASS_B` set, A passes the criteria and
         // keeps its class.
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             overlapping_with: CLASS_B,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
         // A=[0,4]x[0,4], B=[2,6]x[2,6] -> overlap [2,4]x[2,4]
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [2, 2, 6, 6], CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        let object_b = make_filled_object(ID_B, [2, 2, 6, 6], CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&cmd, &mut cache);
 
         assert!(
-            cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A),
-            "A intersects a CLASS_B ROI, so it should pass the criteria"
+            cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .has_object_class(&CLASS_A),
+            "A intersects a CLASS_B object, so it should pass the criteria"
         );
     }
 
@@ -622,7 +649,7 @@ mod tests {
     fn min_intersection_area_rejects_too_small_an_overlap() {
         // A and B overlap by a single pixel ([4,4]x[4,4] = 1 px), but min_intersection_area
         // demands at least 4 - too small an overlap must not count as a match.
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             overlapping_with: CLASS_B,
             min_intersection_area: 4.0,
             size_unit: SizeUnits::Pixels,
@@ -631,15 +658,19 @@ mod tests {
         };
         let mut cache = PipelineCache::default();
         // A=[0,4]x[0,4], B=[4,8]x[4,8] -> overlap is the single pixel (4,4)
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
-        let roi_b = make_filled_roi(ID_B, [4, 4, 8, 8], CLASS_B);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
-        cache.roi_cache.insert(roi_b.id.clone(), roi_b);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        let object_b = make_filled_object(ID_B, [4, 4, 8, 8], CLASS_B);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
+        cache.object_cache.insert(object_b.id.clone(), object_b);
 
         run(&cmd, &mut cache);
 
         assert!(
-            !cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A),
+            !cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .has_object_class(&CLASS_A),
             "overlap area (1px) is below min_intersection_area (4px), so A should fail"
         );
     }
@@ -649,173 +680,236 @@ mod tests {
     // variants, each previously untested. `min_circularity: 2.0` is an
     // unreachable bound (circularity tops out at 1.0) used to force
     // `matches == false` for the "IfNotMatch" cases, since a lone filled
-    // rectangular ROI otherwise passes the wide-open default criteria.
+    // rectangular object otherwise passes the wide-open default criteria.
 
     #[test]
     fn add_output_class_if_match_adds_alongside_the_existing_class() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             output_class: CLASS_B,
             match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        cache.object_cache.insert(
+            ObjectId(ID_A),
+            make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+        );
         run(&cmd, &mut cache);
 
-        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(roi.has_object_class(&CLASS_A), "original class must be kept, not replaced");
-        assert!(roi.has_object_class(&CLASS_B));
+        let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(
+            object.has_object_class(&CLASS_A),
+            "original class must be kept, not replaced"
+        );
+        assert!(object.has_object_class(&CLASS_B));
     }
 
     #[test]
     fn add_output_class_if_not_match_only_fires_when_criteria_fail() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             output_class: CLASS_B,
             min_circularity: 2.0,
             match_handling: ClassifyMatchHandling::AddOutputClassIfNotMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        cache.object_cache.insert(
+            ObjectId(ID_A),
+            make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+        );
         run(&cmd, &mut cache);
 
-        assert!(cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_B));
+        assert!(
+            cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .has_object_class(&CLASS_B)
+        );
     }
 
     #[test]
     fn remove_input_class_if_match_strips_listed_input_classes_only() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             input_classes: vec![CLASS_A],
             match_handling: ClassifyMatchHandling::RemoveInputClassIfMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        let mut roi = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
-        roi.add_object_class(CLASS_B);
-        cache.roi_cache.insert(ObjectId(ID_A), roi);
+        let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        object.add_object_class(CLASS_B);
+        cache.object_cache.insert(ObjectId(ID_A), object);
         run(&cmd, &mut cache);
 
-        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(!roi.has_object_class(&CLASS_A), "listed input class must be removed");
-        assert!(roi.has_object_class(&CLASS_B), "class not in input_classes must survive");
+        let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(
+            !object.has_object_class(&CLASS_A),
+            "listed input class must be removed"
+        );
+        assert!(
+            object.has_object_class(&CLASS_B),
+            "class not in input_classes must survive"
+        );
     }
 
     #[test]
     fn remove_input_class_if_not_match_only_fires_when_criteria_fail() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             input_classes: vec![CLASS_A],
             min_circularity: 2.0,
             match_handling: ClassifyMatchHandling::RemoveInputClassIfNotMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        cache.object_cache.insert(
+            ObjectId(ID_A),
+            make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+        );
         run(&cmd, &mut cache);
 
-        assert!(!cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A));
+        assert!(
+            !cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .has_object_class(&CLASS_A)
+        );
     }
 
     #[test]
     fn remove_output_class_if_match_strips_only_the_output_class() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             output_class: CLASS_A,
             match_handling: ClassifyMatchHandling::RemoveOutputClassIfMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        let mut roi = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
-        roi.add_object_class(CLASS_B);
-        cache.roi_cache.insert(ObjectId(ID_A), roi);
+        let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        object.add_object_class(CLASS_B);
+        cache.object_cache.insert(ObjectId(ID_A), object);
         run(&cmd, &mut cache);
 
-        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(!roi.has_object_class(&CLASS_A));
-        assert!(roi.has_object_class(&CLASS_B), "only the output class should be touched");
+        let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(!object.has_object_class(&CLASS_A));
+        assert!(
+            object.has_object_class(&CLASS_B),
+            "only the output class should be touched"
+        );
     }
 
     #[test]
     fn remove_output_class_if_not_match_only_fires_when_criteria_fail() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             output_class: CLASS_A,
             min_circularity: 2.0,
             match_handling: ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        cache.object_cache.insert(
+            ObjectId(ID_A),
+            make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+        );
         run(&cmd, &mut cache);
 
-        assert!(!cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A));
+        assert!(
+            !cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .has_object_class(&CLASS_A)
+        );
     }
 
     #[test]
     fn remove_all_classes_if_match_clears_every_class() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        let mut roi = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
-        roi.add_object_class(CLASS_B);
-        cache.roi_cache.insert(ObjectId(ID_A), roi);
+        let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        object.add_object_class(CLASS_B);
+        cache.object_cache.insert(ObjectId(ID_A), object);
         run(&cmd, &mut cache);
 
-        assert!(cache.roi_cache.get(&ObjectId(ID_A)).unwrap().object_class.is_empty());
+        assert!(
+            cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .object_class
+                .is_empty()
+        );
     }
 
     #[test]
     fn reclassify_if_match_replaces_every_class_with_the_output_class() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             output_class: CLASS_B,
             match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        cache.object_cache.insert(
+            ObjectId(ID_A),
+            make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+        );
         run(&cmd, &mut cache);
 
-        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(!roi.has_object_class(&CLASS_A));
-        assert!(roi.has_object_class(&CLASS_B));
-        assert_eq!(roi.object_class.len(), 1, "reclassify should leave exactly the output class");
+        let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(!object.has_object_class(&CLASS_A));
+        assert!(object.has_object_class(&CLASS_B));
+        assert_eq!(
+            object.object_class.len(),
+            1,
+            "reclassify should leave exactly the output class"
+        );
     }
 
     #[test]
     fn reclassify_if_not_match_only_fires_when_criteria_fail() {
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             output_class: CLASS_B,
             min_circularity: 2.0,
             match_handling: ClassifyMatchHandling::ReclassifyIfNotMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        cache.roi_cache.insert(ObjectId(ID_A), make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A));
+        cache.object_cache.insert(
+            ObjectId(ID_A),
+            make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
+        );
         run(&cmd, &mut cache);
 
-        let roi = cache.roi_cache.get(&ObjectId(ID_A)).unwrap();
-        assert!(!roi.has_object_class(&CLASS_A));
-        assert!(roi.has_object_class(&CLASS_B));
+        let object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
+        assert!(!object.has_object_class(&CLASS_A));
+        assert!(object.has_object_class(&CLASS_B));
     }
 
     #[test]
     fn overlapping_with_ignores_self_intersection() {
-        // The overlap candidate bucket can legitimately include the ROI being evaluated
-        // itself (e.g. `overlapping_with` set to one of the ROI's own classes). It must not
+        // The overlap candidate bucket can legitimately include the object being evaluated
+        // itself (e.g. `overlapping_with` set to one of the object's own classes). It must not
         // be allowed to "intersect itself" to pass the criteria.
-        let cmd = ClassifyRois {
+        let cmd = ClassifyObjects {
             overlapping_with: CLASS_A,
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
         let mut cache = PipelineCache::default();
-        let roi_a = make_filled_roi(ID_A, [0, 0, 4, 4], CLASS_A);
-        cache.roi_cache.insert(roi_a.id.clone(), roi_a);
+        let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
+        cache.object_cache.insert(object_a.id.clone(), object_a);
 
         run(&cmd, &mut cache);
 
         assert!(
-            !cache.roi_cache.get(&ObjectId(ID_A)).unwrap().has_object_class(&CLASS_A),
-            "a lone ROI must not be considered as intersecting itself"
+            !cache
+                .object_cache
+                .get(&ObjectId(ID_A))
+                .unwrap()
+                .has_object_class(&CLASS_A),
+            "a lone object must not be considered as intersecting itself"
         );
     }
 }

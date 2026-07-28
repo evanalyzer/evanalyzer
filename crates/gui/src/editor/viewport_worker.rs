@@ -58,7 +58,7 @@ impl ViewportWorker {
         let configs = [
             ("HighResWorker", TaskDispatch::HighRes),
             ("LowResWorker", TaskDispatch::LowRes),
-            ("RoiWorker", TaskDispatch::Rois),
+            ("ObjectWorker", TaskDispatch::Objects),
         ];
 
         for (name, dispatch) in configs {
@@ -107,8 +107,8 @@ impl ViewportWorker {
                 false,
             ),
             _ => (
-                &self.viewport_controller.drawing_tasks.roi_task.task_count,
-                &self.viewport_controller.drawing_tasks.roi_task,
+                &self.viewport_controller.drawing_tasks.object_task.task_count,
+                &self.viewport_controller.drawing_tasks.object_task,
                 false,
             ),
         };
@@ -116,9 +116,9 @@ impl ViewportWorker {
         loop {
             let mut task = wait_for_task(&drawing_task_container);
 
-            // --- ROI scope: simple path, no image processing ---
-            if scope == TaskDispatch::Rois {
-                self.viewport_controller.sync_rois_to_slint_viewport();
+            // --- object scope: simple path, no image processing ---
+            if scope == TaskDispatch::Objects {
+                self.viewport_controller.sync_objects_to_slint_viewport();
                 continue;
             }
 
@@ -422,7 +422,7 @@ impl ViewportWorker {
                 // Windows.  By resampling the visible region into a viewport-sized
                 // buffer drawn at (0,0) with scale 1:1, the renderer never scales
                 // or offsets a large image, so the picture lines up with the
-                // screen-space ROI overlay exactly on every platform.
+                // screen-space object overlay exactly on every platform.
                 let vp_w = prepared.viewport_width.max(1.0) as usize;
                 let vp_h = prepared.viewport_height.max(1.0) as usize;
                 if screen_buffer.width() as usize != vp_w || screen_buffer.height() as usize != vp_h

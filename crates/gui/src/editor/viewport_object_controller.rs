@@ -3,16 +3,16 @@ use crate::MarkerData;
 use crate::PointSlint;
 use crate::ToolState;
 use crate::UiState;
-use crate::ViewportRoiState;
+use crate::ViewportObjectState;
 use crate::editor::images_list_controller::ImagesListController;
-use crate::editor::roi_list_controller::RoiListController;
+use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_controller::ViewportController;
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_app::extensions::roi_ext::RoiExt;
-use evanalyzer_core::{ImageContainer, Roi};
+use evanalyzer_app::extensions::object_ext::ObjectExt;
+use evanalyzer_core::{ImageContainer, Object};
 use kornia_image::ImageSize;
 use slint::ComponentHandle;
 use slint::Model;
@@ -20,23 +20,23 @@ use slint::ModelRc;
 use slint::VecModel;
 use std::sync::Arc;
 
-pub struct ViewPortRoiController {
+pub struct ViewPortObjectController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) viewport_cache: Arc<ViewportCache>,
     pub(crate) image_list_controller: Arc<ImagesListController>,
-    pub(crate) roi_list_controller: Arc<RoiListController>,
+    pub(crate) object_list_controller: Arc<ObjectListController>,
 }
 
-impl ViewPortRoiController {
+impl ViewPortObjectController {
     pub fn new(
         ui: slint::Weak<AppWindow>,
         app_state: Arc<UiState>,
         viewport_controller: Arc<ViewportController>,
         viewport_cache: Arc<ViewportCache>,
         image_list_controller: Arc<ImagesListController>,
-        roi_list_controller: Arc<RoiListController>,
+        object_list_controller: Arc<ObjectListController>,
     ) -> Self {
         Self {
             ui,
@@ -44,47 +44,47 @@ impl ViewPortRoiController {
             viewport_controller,
             viewport_cache,
             image_list_controller,
-            roi_list_controller,
+            object_list_controller,
         }
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
-            // ROI painting finished
+            // object painting finished
             let manager = self.clone();
-            ui.global::<ViewportRoiState>().on_roi_paint_finished(
+            ui.global::<ViewportObjectState>().on_object_paint_finished(
                 move |points, tool_state, nr_of_polygon_points| {
                     match tool_state {
                         ToolState::Move => return,
                         ToolState::Select => return,
                         ToolState::PaintMarker => return,
-                        ToolState::PaintRectangle => manager.add_roi_from_rect(&points),
+                        ToolState::PaintRectangle => manager.add_object_from_rect(&points),
                         ToolState::PaintOval => manager.add_oval_from_rect(&points),
                         ToolState::PaintPolygon => {
                             manager.add_polygon_from_rect(&points, nr_of_polygon_points)
                         }
                     };
-                    manager.viewport_controller.trigger_image_redraw_rois();
+                    manager.viewport_controller.trigger_image_redraw_objects();
                     manager.image_list_controller.sync_image_list_to_slint();
-                    manager.roi_list_controller.sync_rois_to_slint();
+                    manager.object_list_controller.sync_objects_to_slint();
                 },
             );
 
             // In viewport clicked
             let manager = self.clone();
-            ui.global::<ViewportRoiState>()
+            ui.global::<ViewportObjectState>()
                 .on_viewport_clicked(move |clicked_x, clicked_y| {
-                    manager.find_roi_from_clicked_coordinates(clicked_x, clicked_y);
-                    manager.roi_list_controller.sync_selected_roi_to_slint(true);
-                    manager.viewport_controller.trigger_image_redraw_rois();
+                    manager.find_object_from_clicked_coordinates(clicked_x, clicked_y);
+                    manager.object_list_controller.sync_selected_object_to_slint(true);
+                    manager.viewport_controller.trigger_image_redraw_objects();
                 });
 
-            // ROI transparency
+            // object transparency
             let manager = self.clone();
             let debounce_timer = slint::Timer::default();
-            ui.global::<ViewportRoiState>()
-                .on_roi_transparency_changed(move |transparency| {
+            ui.global::<ViewportObjectState>()
+                .on_object_transparency_changed(move |transparency| {
                     let manager_in = manager.clone();
                     debounce_timer.start(
                         slint::TimerMode::SingleShot,
@@ -95,40 +95,70 @@ impl ViewPortRoiController {
                                 .overlay_state
                                 .write()
                                 .expect("Poisoned")
-                                .roi_transparency = transparency;
-                            manager_in.viewport_controller.trigger_image_redraw_rois();
+                                .object_transparency = transparency;
+                            manager_in.viewport_controller.trigger_image_redraw_objects();
                         },
                     );
                 });
 
             // Marker placed (left-click in PaintMarker mode)
             let manager = self.clone();
-            ui.global::<ViewportRoiState>()
+            ui.global::<ViewportObjectState>()
                 .on_marker_placed(move |screen_x, screen_y| {
-                    let Some(ui) = manager.ui.upgrade() else { return };
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
                     let (img_x, img_y) = {
-                        let vp = manager.viewport_controller.viewport_state.read().expect("Poisoned");
-                        ((screen_x - vp.offset_x) / vp.zoom, (screen_y - vp.offset_y) / vp.zoom)
+                        let vp = manager
+                            .viewport_controller
+                            .viewport_state
+                            .read()
+                            .expect("Poisoned");
+                        (
+                            (screen_x - vp.offset_x) / vp.zoom,
+                            (screen_y - vp.offset_y) / vp.zoom,
+                        )
                     };
                     let label = manager.read_intensity_at_screen(screen_x, screen_y);
-                    let state = ui.global::<ViewportRoiState>();
+                    let state = ui.global::<ViewportObjectState>();
                     let current = state.get_markers();
                     let mut vec: Vec<MarkerData> = (0..current.row_count())
                         .filter_map(|i| current.row_data(i))
                         .collect();
-                    vec.push(MarkerData { image_x: img_x, image_y: img_y, label: label.into() });
+                    vec.push(MarkerData {
+                        image_x: img_x,
+                        image_y: img_y,
+                        label: label.into(),
+                    });
                     state.set_markers(ModelRc::new(VecModel::from(vec)));
                 });
 
             // Marker remove-at (right-click in PaintMarker mode)
             let manager = self.clone();
-            ui.global::<ViewportRoiState>()
+            ui.global::<ViewportObjectState>()
                 .on_marker_remove_at(move |screen_x, screen_y| {
-                    let Some(ui) = manager.ui.upgrade() else { return };
-                    let zoom = manager.viewport_controller.viewport_state.read().expect("Poisoned").zoom;
-                    let offset_x = manager.viewport_controller.viewport_state.read().expect("Poisoned").offset_x;
-                    let offset_y = manager.viewport_controller.viewport_state.read().expect("Poisoned").offset_y;
-                    let state = ui.global::<ViewportRoiState>();
+                    let Some(ui) = manager.ui.upgrade() else {
+                        return;
+                    };
+                    let zoom = manager
+                        .viewport_controller
+                        .viewport_state
+                        .read()
+                        .expect("Poisoned")
+                        .zoom;
+                    let offset_x = manager
+                        .viewport_controller
+                        .viewport_state
+                        .read()
+                        .expect("Poisoned")
+                        .offset_x;
+                    let offset_y = manager
+                        .viewport_controller
+                        .viewport_state
+                        .read()
+                        .expect("Poisoned")
+                        .offset_y;
+                    let state = ui.global::<ViewportObjectState>();
                     let current = state.get_markers();
                     let threshold = 12.0_f32;
                     let closest = (0..current.row_count())
@@ -153,11 +183,21 @@ impl ViewPortRoiController {
     }
 
     fn read_intensity_at_screen(&self, screen_x: f32, screen_y: f32) -> String {
-        let data_tmp = self.viewport_cache.active_high_res_data.read().expect("Poisoned");
-        let Some((image_data, ctx)) = &*data_tmp else { return String::new() };
+        let data_tmp = self
+            .viewport_cache
+            .active_high_res_data
+            .read()
+            .expect("Poisoned");
+        let Some((image_data, ctx)) = &*data_tmp else {
+            return String::new();
+        };
         let local_x = (screen_x - ctx.draw_x) / (ctx.zoomed_w / ctx.image_w as f32);
         let local_y = (screen_y - ctx.draw_y) / (ctx.zoomed_h / ctx.image_h as f32);
-        if local_x < 0.0 || local_x >= ctx.image_w as f32 || local_y < 0.0 || local_y >= ctx.image_h as f32 {
+        if local_x < 0.0
+            || local_x >= ctx.image_w as f32
+            || local_y < 0.0
+            || local_y >= ctx.image_h as f32
+        {
             return String::new();
         }
         let idx = (local_y as usize * ctx.image_w) + local_x as usize;
@@ -173,7 +213,7 @@ impl ViewPortRoiController {
         values.join(" | ")
     }
 
-    pub fn find_roi_from_clicked_coordinates(&self, click_x: f32, click_y: f32) {
+    pub fn find_object_from_clicked_coordinates(&self, click_x: f32, click_y: f32) {
         let view_port_state = self
             .viewport_controller
             .viewport_state
@@ -183,16 +223,16 @@ impl ViewPortRoiController {
         let x1 = ((click_x - view_port_state.offset_x) / (view_port_state.zoom)) as u32;
         let y1 = ((click_y - view_port_state.offset_y) / (view_port_state.zoom)) as u32;
 
-        let clicked_roi_id = {
+        let clicked_object_id = {
             let project = self.app_state.get_project();
-            let rois = project.get_rois();
-            let preview_rois = project.get_preview_rois();
+            let objects = project.get_objects();
+            let preview_objects = project.get_preview_objects();
 
             let mut found_id = None;
-            if let Some(rois_some) = rois {
-                for roi in rois_some.iter().chain(preview_rois) {
-                    if roi.is_part_of(x1, y1) {
-                        found_id = Some(roi.id.clone());
+            if let Some(objects_some) = objects {
+                for object in objects_some.iter().chain(preview_objects) {
+                    if object.is_part_of(x1, y1) {
+                        found_id = Some(object.id.clone());
                         break;
                     }
                 }
@@ -201,10 +241,10 @@ impl ViewPortRoiController {
         };
 
         let mut project = self.app_state.get_project_write();
-        project.set_selected_roi(clicked_roi_id);
+        project.set_selected_object(clicked_object_id);
     }
 
-    pub fn add_roi_from_rect(&self, points: &ModelRc<PointSlint>) {
+    pub fn add_object_from_rect(&self, points: &ModelRc<PointSlint>) {
         let view_port_state = self
             .viewport_controller
             .viewport_state
@@ -235,7 +275,7 @@ impl ViewPortRoiController {
         mask_data.resize(width * height, false);
         mask_data.fill(true);
 
-        self.add_to_roi_list(mask_data, bbox);
+        self.add_to_object_list(mask_data, bbox);
     }
 
     pub fn add_oval_from_rect(&self, points: &ModelRc<PointSlint>) {
@@ -288,7 +328,7 @@ impl ViewPortRoiController {
             }
         }
 
-        self.add_to_roi_list(mask_data, bbox);
+        self.add_to_object_list(mask_data, bbox);
     }
 
     pub fn add_polygon_from_rect(&self, points: &ModelRc<PointSlint>, nr_of_points: i32) {
@@ -374,10 +414,10 @@ impl ViewPortRoiController {
             }
         }
 
-        self.add_to_roi_list(mask_data, bbox);
+        self.add_to_object_list(mask_data, bbox);
     }
 
-    fn add_to_roi_list(&self, mask_data: BitVec<u64, Lsb0>, bbox: [u32; 4]) {
+    fn add_to_object_list(&self, mask_data: BitVec<u64, Lsb0>, bbox: [u32; 4]) {
         let (data_tmp, read_context) = self.viewport_cache.get_image_references();
         let (idx, object_class) = {
             let project = self.app_state.get_project();
@@ -388,7 +428,7 @@ impl ViewPortRoiController {
         };
 
         if let Some((_, selected_channel)) = data_tmp.get(idx as usize) {
-            let roi = Roi::from_mask(
+            let object = Object::from_mask(
                 &ImageSize {
                     width: read_context.full_image_w,
                     height: read_context.full_image_h,
@@ -401,7 +441,7 @@ impl ViewPortRoiController {
             );
             self.app_state
                 .get_project_write()
-                .add_roi(&roi.to_roi_settings());
+                .add_object(&object.to_object_settings());
             self.app_state.mark_dirty();
         }
     }

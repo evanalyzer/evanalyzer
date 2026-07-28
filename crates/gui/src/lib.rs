@@ -21,7 +21,7 @@ const UNDO_STACK_LIMIT: usize = 100;
 
 /// Edits that land within this long of the last checkpoint are coalesced into
 /// the same undo step instead of each getting their own - otherwise dragging
-/// an ROI or typing into a text field would push dozens of near-identical
+/// an object or typing into a text field would push dozens of near-identical
 /// snapshots and "Undo" would barely seem to do anything per click.
 const UNDO_COALESCE_WINDOW: Duration = Duration::from_millis(600);
 
@@ -47,7 +47,7 @@ pub struct UiState {
     dirty: AtomicBool,
     /// Snapshots of `ProjectWithRuntime::settings` taken right before a
     /// mutation, oldest first. `ProjectSettings` holds only metadata/geometry
-    /// (paths, IDs, ROI polygons, pipeline params - no pixel buffers), so
+    /// (paths, IDs, object polygons, pipeline params - no pixel buffers), so
     /// cloning the whole struct per checkpoint is cheap even for large
     /// projects. Populated by `get_project_write` (see `maybe_checkpoint_undo`)
     /// so every mutation chokepoint gets undo coverage for free, rather than
@@ -157,10 +157,10 @@ impl UiState {
             let mut project = self.app.get_project_write();
             project.settings = prev;
             // The restored settings may no longer contain the previously
-            // selected ROI (or contain a different one reusing the same
+            // selected object (or contain a different one reusing the same
             // list position) - drop the selection rather than risk it
             // pointing at the wrong object.
-            project.set_selected_roi(None);
+            project.set_selected_object(None);
         }
         self.force_next_checkpoint.store(true, Ordering::Relaxed);
         self.push_undo_redo_state_to_ui();
@@ -186,7 +186,7 @@ impl UiState {
         {
             let mut project = self.app.get_project_write();
             project.settings = next;
-            project.set_selected_roi(None);
+            project.set_selected_object(None);
         }
         self.force_next_checkpoint.store(true, Ordering::Relaxed);
         self.push_undo_redo_state_to_ui();

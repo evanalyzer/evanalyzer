@@ -13,16 +13,16 @@ export struct ResultsColumnDef {
 }
 
 export struct ResultsRow {
-    roi_id: int,
-    // The source ROI's stable database id, or "" for rows with no single
-    // source ROI (grouped rows) or where selection is disabled (coloc-detail
-    // rows). Used for row-selection lookups instead of `roi_id`, which is
+    object_id_int: int,
+    // The source object's stable database id, or "" for rows with no single
+    // source object (grouped rows) or where selection is disabled (coloc-detail
+    // rows). Used for row-selection lookups instead of `object_id`, which is
     // only a positional display index and isn't stable across page reloads.
     object_id: string,
     values: [string],
     // Alternating zebra-stripe flag, computed in Rust: toggles every row in
-    // the normal/grouped views, and toggles once per *source* ROI (not per
-    // flattened row) in the coloc-detail view, so all of one source ROI's
+    // the normal/grouped views, and toggles once per *source* object (not per
+    // flattened row) in the coloc-detail view, so all of one source object's
     // colocalizing-partner rows read as a single band.
     stripe: bool,
 }
@@ -94,7 +94,7 @@ export enum ResultsGroupBy { none, image, folder, regex }
 
 export global ResultsState {
     in-out property <[ResultsColumnDef]> columns: [
-        { id: "roi_id", label: "ROI ID", visible: true, filterable: false, width: 100.0 },
+        { id: "object_id", label: "object ID", visible: true, filterable: false, width: 100.0 },
         { id: "image", label: "Image", visible: true, filterable: true, width: 100.0 },
         { id: "class", label: "Class", visible: true, filterable: true, width: 100.0 },
         { id: "area_px", label: "Area (px²)", visible: true, filterable: false, width: 100.0 },
@@ -104,13 +104,33 @@ export global ResultsState {
     ];
 
     in property <[ResultsRow]> rows: [
-        { roi_id: 1, object_id: "", values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"], stripe: true },
-        { roi_id: 2, object_id: "", values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"], stripe: false },
-        { roi_id: 3, object_id: "", values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"], stripe: true },
-        { roi_id: 4, object_id: "", values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"], stripe: false },
+        {
+            object_id: 1,
+            object_id: "",
+            values: ["1", "image_01.tif", "Nucleus", "1234", "456.7", "0.92", "Yes"],
+            stripe: true
+        },
+        {
+            object_id: 2,
+            object_id: "",
+            values: ["2", "image_01.tif", "Cytoplasm", "5678", "2109.3", "0.71", "No"],
+            stripe: false
+        },
+        {
+            object_id: 3,
+            object_id: "",
+            values: ["3", "image_02.tif", "Nucleus", "987", "365.4", "0.88", "No"],
+            stripe: true
+        },
+        {
+            object_id: 4,
+            object_id: "",
+            values: ["4", "image_02.tif", "Artifact", "312", "115.6", "0.43", "No"],
+            stripe: false
+        },
     ];
 
-    in-out property <int> selected_roi_id:     0;
+    in-out property <int> selected_object_id:     0;
     in-out property <int> scroll_to_row_index: -1;
     in-out property <string> sort_column_id:      "";
     in-out property <bool> sort_ascending:      true;
@@ -135,7 +155,7 @@ export global ResultsState {
     in-out property <bool> filter_coloc_active: false;
     in-out property <bool> filter_coloc_all_popup_checked: true;
 
-    callback roi_row_selected(string);
+    callback object_row_selected(string);
     callback sort_requested(string, bool);
     callback copy_to_clipboard();
     callback filter_clicked();
@@ -165,7 +185,7 @@ export global ResultsState {
     // settles. Keeps the spinner visible across the gap where loading_more has
     // already gone false but the grouped rows haven't been delivered yet.
     in-out property <bool> group_computing: false;
-    in-out property <int>  visible_column_count: 7;
+    in-out property <int> visible_column_count: 7;
     // Sum of visible columns' widths (logical px), recomputed whenever `columns` is rebuilt.
     in-out property <float> columns_total_width: 700.0;
     // User dragged a column's right-edge resize handle to a new width (logical px).
@@ -241,7 +261,7 @@ export global ResultsState {
     in-out property <bool> chart_log_scale:       false;
     // First entry is always the "Count" sentinel; the rest mirror
     // chart_plottable_columns. Picking the first entry colors heatmap cells
-    // by ROI count, picking any other averages that column per cell.
+    // by object count, picking any other averages that column per cell.
     in property <[string]> chart_heatmap_metric_options: [];
     in-out property <string> chart_heatmap_metric: "";
     // Raster cell size, in image pixels (square cells).
@@ -346,7 +366,7 @@ export global ResultsState {
     // checked image (its name folded into the filename) instead of one
     // file covering all of them together.
     in-out property <bool> export_each_image: false;
-    // "table" (per-ROI / grouped, mirrors the normal table view) or
+    // "table" (per-object / grouped, mirrors the normal table view) or
     // "coloc_detail" (flattened source × partner rows, mirrors Coloc
     // Details). Switching this re-seeds `export_column_items` from the
     // matching column set.
@@ -1124,12 +1144,12 @@ export component ResultsTable inherits Rectangle {
 
                 for data in ResultsState.rows: ResultsDataRow {
                     data: data;
-                    selected: ResultsState.selected_roi_id == data.roi_id;
+                    selected: ResultsState.selected_object_id == data.object_id_int;
                     h-offset: -h-scroll-view.viewport-x;
                     content-width: root.content-width;
                     row-clicked => {
-                        ResultsState.selected_roi_id = data.roi_id;
-                        ResultsState.roi_row_selected(data.object_id);
+                        ResultsState.selected_object_id = data.object_id_int;
+                        ResultsState.object_row_selected(data.object_id);
                     }
                 }
             }
