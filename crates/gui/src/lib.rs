@@ -332,7 +332,10 @@ pub fn create() -> GuiFrontend {
 
 fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     unsafe {
-        std::env::set_var("SLINT_BACKEND", "skia");
+        // Skia has documented first-frame rendering glitches on this backend
+        // path (see https://github.com/slint-ui/slint/issues/7845) that
+        // FemtoVG doesn't share - left unset so Slint's normal fallback order
+        // (Skia -> FemtoVG -> software) picks the more stable renderer instead.
         std::env::set_var("SLINT_SCALE_FACTOR", "1.0");
     }
 

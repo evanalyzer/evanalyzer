@@ -8,12 +8,12 @@ license = { workspace = true }
 [dependencies]
 # For Linux/macOS: Use Skia
 [target.'cfg(not(target_os = "windows"))'.dependencies.slint]
-version = "1.15"
+version = "1.17"
 features = ["renderer-skia"]
 
 # For Windows: Use Software Renderer (No Skia/VC++ requirement)
 [target.'cfg(target_os = "windows")'.dependencies.slint]
-version = "1.15"
+version = "1.17"
 default-features = false
 features = [
     "std",
@@ -23,4 +23,4 @@ features = [
 ]
 
 [build-dependencies]
-slint-build = "1.15"
+slint-build = "1.17"
