@@ -692,7 +692,6 @@ impl ProjectExt for ProjectWithRuntime {
                             color: wavelength_to_rgb_u32(ch.emission_wave_length),
                             name: ch.name.clone(),
                             notes: "".into(),
-                            measure: IndexMap::new(),
                         })
                         .collect()
                 })

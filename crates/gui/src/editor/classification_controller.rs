@@ -7,9 +7,7 @@ use crate::{
 };
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
-use evanalyzer_cfg::settings::classification_settings::{
-    Class, MeasurementChannels, MeasurementStatistics,
-};
+use evanalyzer_cfg::settings::classification_settings::Class;
 use indexmap::IndexMap;
 use log::warn;
 use slint::ModelRc;
@@ -229,14 +227,11 @@ impl ClassificationController {
     pub fn update_class_settings_in_project(self: &Arc<Self>, class_settings: ClassSettingsSlint) {
         let mut project = self.app_state.get_project_write();
 
-        let measures: IndexMap<MeasurementChannels, Vec<MeasurementStatistics>> = IndexMap::new();
-
         let new_class = Class {
             id: AssignObjectClass!(class_settings.class_id),
             color: class_settings.color.as_argb_encoded(),
             name: class_settings.name.into(),
             notes: class_settings.notes.into(),
-            measure: measures,
         };
 
         if class_settings.class_id < 0 {
