@@ -3,9 +3,9 @@
     "name": "EV detection",
     "shortDescription": "EV detection",
     "description": "Detects extracellular vesicles (EVs) in a fluorescence channel using rolling ball background subtraction, blurring and Li thresholding. The output object class can be remapped after import (default class id used during conversion: 1).",
-    "authorFirstName": "EVAnalyzer",
-    "authorLastName": "Team",
-    "authorOrganization": "evanalyzer.org",
+    "authorFirstName": "Melanie",
+    "authorLastName": "Schuerz",
+    "authorOrganization": "University of Salzburg",
     "creationTime": "2026-06-11T00:00:00Z"
   },
   "pipelineSteps": [
@@ -15,7 +15,7 @@
         "type": "rollingBall",
         "radius": 4.0,
         "ballType": "PARABOLOID",
-        "preSmooth": false
+        "preSmooth": true
       }
     },
     {
@@ -64,18 +64,20 @@
       "enabled": true,
       "command": {
         "type": "classifyObjects",
-        "originSegmentation": [
-          1
+        "originSegmentation": [],
+        "inputClasses": [
+          {
+            "VALID": 1
+          }
         ],
-        "inputClasses": [],
-        "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
+        "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
         "outputClass": {
           "VALID": 1
         },
         "overlappingWith": "UNSET",
         "minIntersectionArea": 0.0,
         "sizeUnit": "px",
-        "minArea": 0.3,
+        "minArea": 4,
         "maxArea": 2147483648.0,
         "minCircularity": 0.0,
         "maxCircularity": 1.0,
@@ -88,14 +90,6 @@
         "minFeret": 0.0,
         "maxFeret": 2147483648,
         "allowEdgeTouching": true
-      }
-    },
-    {
-      "enabled": true,
-      "command": {
-        "type": "saveImage",
-        "name": "ev",
-        "source": "IMAGE"
       }
     }
   ]

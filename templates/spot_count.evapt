@@ -92,7 +92,7 @@
             "type": "rollingBall",
             "radius": 4.0,
             "ballType": "PARABOLOID",
-            "preSmooth": false
+            "preSmooth": true
           }
         },
         {
@@ -150,14 +150,14 @@
           "enabled": true,
           "command": {
             "type": "classifyObjects",
-            "originSegmentation": [
-              1
+            "originSegmentation": [],
+            "inputClasses": [
+              {
+                "VALID": 1
+              }
             ],
-            "inputClasses": [],
-            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-            "outputClass": {
-              "VALID": 21
-            },
+            "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+            "outputClass": "UNSET",
             "overlappingWith": "UNSET",
             "minIntersectionArea": 0.0,
             "sizeUnit": "px",
@@ -174,14 +174,6 @@
             "minFeret": 0.0,
             "maxFeret": 2147483648,
             "allowEdgeTouching": true
-          }
-        },
-        {
-          "enabled": true,
-          "command": {
-            "type": "saveImage",
-            "name": "ev",
-            "source": "IMAGE"
           }
         }
       ]
@@ -203,7 +195,7 @@
             "type": "rollingBall",
             "radius": 4.0,
             "ballType": "PARABOLOID",
-            "preSmooth": false
+            "preSmooth": true
           }
         },
         {
