@@ -1,0 +1,320 @@
+import { ComboBox, LineEdit, ScrollView, SpinBox } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { ResultsState, ResultsMatrixKind, ResultsMatrixCell } from "results_table.slint";
+import { ProjectSettingsState } from "../dialogs/project_settings_dialog.slint";
+
+// -- Small bespoke pill button, matching the style of results_chart.slint's
+// "Auto" range toggle and results_window.slint's ribbon/apply buttons -------
+
+component MatrixPillButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked;
+
+    height: 26px;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: root.active ? Theme.accent : (ta.has-hover ? Theme.hover : Theme.raised);
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        alignment: center;
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-family: Theme.font-sans;
+            font-weight: 600;
+            color: root.active ? white : Theme.text-dim;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// -- Public export -------------------------------------------------------------
+
+export component ResultsMatrix inherits Rectangle {
+    background: Theme.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // -- Settings strip (single row) ----------------------------------------
+        // Which images belong to which well/cell is controlled by the toolbar's
+        // "Group by" dropdown (Folder or Regex) - Matrix view just reads
+        // ResultsState.group_by/group_regex live, rather than duplicating a
+        // grouping picker here. Plate/well physical dimensions aren't part of
+        // that dropdown, so they stay here, backed by the project's PlateSettings.
+        Rectangle {
+            height: 44px;
+            background: Theme.panel;
+
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 8px;
+
+                // Breadcrumb / drill-down back button
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+
+                    if ResultsState.matrix_active_well != "": back-ta := TouchArea {
+                        width: 18px;
+                        height: 26px;
+                        mouse-cursor: pointer;
+                        clicked => { ResultsState.matrix_back_clicked(); }
+
+                        Text {
+                            text: "◂";
+                            font-size: 13px;
+                            font-weight: 700;
+                            color: back-ta.has-hover ? Theme.accent : Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: ResultsState.matrix_active_well == "" ? "Plate" : "Plate ▸ \{ResultsState.matrix_active_well}";
+                        font-size: 11px;
+                        font-family: Theme.font-sans;
+                        font-weight: 600;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { width: 1px; background: Theme.border-soft; }
+
+                Text {
+                    text: "Value:";
+                    font-size: 11px;
+                    font-family: Theme.font-sans;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    width: 130px;
+                    model: ResultsState.matrix_metric_options;
+                    current-value: ResultsState.matrix_metric;
+                    selected(v) => { ResultsState.matrix_metric = v; }
+                }
+
+                Text {
+                    text: "Aggregate:";
+                    font-size: 11px;
+                    font-family: Theme.font-sans;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    width: 88px;
+                    model: ResultsState.matrix_agg_options;
+                    current-value: ResultsState.matrix_agg;
+                    selected(v) => { ResultsState.matrix_agg = v; }
+                }
+
+                Text {
+                    text: "Colors:";
+                    font-size: 11px;
+                    font-family: Theme.font-sans;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    width: 88px;
+                    model: ResultsState.matrix_color_scheme_options;
+                    current-value: ResultsState.matrix_color_scheme;
+                    selected(v) => { ResultsState.matrix_color_scheme = v; }
+                }
+
+                Text {
+                    text: "Range:";
+                    font-size: 11px;
+                    font-family: Theme.font-sans;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+
+                LineEdit {
+                    width: 52px;
+                    font-size: 11px;
+                    text: "\{ResultsState.matrix_range_min}";
+                    edited(t) => {
+                        ResultsState.matrix_range_min = t.to-float();
+                        ResultsState.matrix_range_auto = false;
+                    }
+                }
+
+                Text {
+                    text: "–";
+                    font-size: 11px;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+
+                LineEdit {
+                    width: 52px;
+                    font-size: 11px;
+                    text: "\{ResultsState.matrix_range_max}";
+                    edited(t) => {
+                        ResultsState.matrix_range_max = t.to-float();
+                        ResultsState.matrix_range_auto = false;
+                    }
+                }
+
+                MatrixPillButton {
+                    label: "Auto";
+                    active: ResultsState.matrix_range_auto;
+                    clicked => { ResultsState.matrix_range_auto = true; }
+                }
+
+                Rectangle { width: 1px; background: Theme.border-soft; }
+
+                Text {
+                    text: "Plate size:";
+                    font-size: 11px;
+                    font-family: Theme.font-sans;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    width: 118px;
+                    model: [
+                        "1 Well (1 x 1)",
+                        "6 Well (2 x 3)",
+                        "8 Well (2 x 4)",
+                        "12 Well (2 x 6)",
+                        "12 Well (3 x 4)",
+                        "15 Well (3 x 5)",
+                        "18 Well (3 x 6)",
+                        "24 Well (4 x 6)",
+                        "48 Well (6 x 8)",
+                        "96 Well (8 x 12)",
+                        "384 Well (16 x 24)",
+                        "1536 Well (32 x 48)",
+                        "3456 Well (48 x 72)"
+                    ];
+                    current-index <=> ProjectSettingsState.settings.well_size_index;
+                }
+
+                Text {
+                    text: "Well R/C:";
+                    font-size: 11px;
+                    font-family: Theme.font-sans;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+
+                SpinBox {
+                    width: 52px;
+                    value: ProjectSettingsState.settings.well_rows;
+                    minimum: 0;
+                    maximum: 8;
+                    edited => {
+                        ProjectSettingsState.settings.well_rows = self.value;
+                        ProjectSettingsState.well_dims_changed(self.value, ProjectSettingsState.settings.well_columns);
+                    }
+                }
+
+                SpinBox {
+                    width: 52px;
+                    value: ProjectSettingsState.settings.well_columns;
+                    minimum: 0;
+                    maximum: 8;
+                    edited => {
+                        ProjectSettingsState.settings.well_columns = self.value;
+                        ProjectSettingsState.well_dims_changed(ProjectSettingsState.settings.well_rows, self.value);
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                MatrixPillButton {
+                    label: "Apply";
+                    clicked => {
+                        ProjectSettingsState.trigger_project_settings_accepted();
+                        ResultsState.matrix_apply();
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border; }
+
+        // -- Grid content --------------------------------------------------
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.bg;
+            clip: true;
+
+            if ResultsState.matrix_status != "": Text {
+                x: 20px;
+                width: parent.width - 40px;
+                y: (parent.height - self.height) / 2;
+                text: ResultsState.matrix_status;
+                font-size: 12px;
+                font-family: Theme.font-sans;
+                color: Theme.text-faint;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            if ResultsState.matrix_status == "": ScrollView {
+                GridLayout {
+                    padding: 8px;
+                    spacing: 3px;
+
+                    for cell[i] in ResultsState.matrix_cells: cell-ta := TouchArea {
+                        row: i / ResultsState.matrix_cols;
+                        col: mod(i, ResultsState.matrix_cols);
+                        width: 62px;
+                        height: 48px;
+                        enabled: ResultsState.matrix_kind == ResultsMatrixKind.plate && cell.has_value;
+                        mouse-cursor: (cell.has_value && ResultsState.matrix_kind == ResultsMatrixKind.plate) ? pointer : default;
+                        clicked => { ResultsState.matrix_well_clicked(cell.label); }
+
+                        Rectangle {
+                            background: cell.has_value ? cell.color : Theme.panel;
+                            border-width: 1px;
+                            border-color: (cell-ta.has-hover && cell.has_value) ? Theme.accent : Theme.border-soft;
+                            border-radius: 3px;
+                            animate border-color { duration: 80ms; }
+
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: cell.label;
+                                    font-size: 10px;
+                                    font-family: Theme.font-mono;
+                                    font-weight: 600;
+                                    color: cell.has_value ? white : Theme.text-faint;
+                                    horizontal-alignment: center;
+                                    overflow: elide;
+                                }
+                                if cell.has_value: Text {
+                                    text: cell.value;
+                                    font-size: 10px;
+                                    font-family: Theme.font-mono;
+                                    color: white.with-alpha(0.85);
+                                    horizontal-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -84,13 +84,28 @@ export struct ExportBatchItem {
     columns: [string],
 }
 
-export enum ResultsViewMode { table, chart, coloc_table }
+export enum ResultsViewMode { table, chart, coloc_table, matrix }
 
 // Which chart the chart view currently shows.
 export enum ResultsChartKind { histogram, scatter, heatmap }
 
 // How rows are bucketed before aggregation.
 export enum ResultsGroupBy { none, image, folder, regex }
+
+// Which grid the Matrix view currently shows: the whole plate (one cell per
+// well) or a single well's field-of-view images (after drilling in).
+export enum ResultsMatrixKind { plate, well }
+
+export struct ResultsMatrixCell {
+    // Well id (plate view, e.g. "A14") or image name (well view). "" for an
+    // empty/unoccupied cell.
+    label: string,
+    // Pre-formatted display value, "" if the cell has no data.
+    value: string,
+    color: color,
+    // False for an empty cell — used to grey it out and disable drill-down.
+    has_value: bool,
+}
 
 export global ResultsState {
     in-out property <[ResultsColumnDef]> columns: [
@@ -300,6 +315,42 @@ export global ResultsState {
     // results_chart.slint. Returns "" when there's nothing to show (outside
     // the plot area, no chart rendered yet, etc).
     callback chart_point_lookup(float, float, float, float) -> string;
+
+    // -- Matrix (Plate/Well) view ---------------------------------------------
+    // Numeric column labels available to color the matrix by (same universe
+    // as chart_plottable_columns).
+    in property <[string]> matrix_metric_options: [];
+    in-out property <string> matrix_metric: "";
+    in property <[string]> matrix_agg_options: [];
+    in-out property <string> matrix_agg: "";
+    in property <[string]> matrix_color_scheme_options: [];
+    in-out property <string> matrix_color_scheme: "Viridis";
+    in-out property <bool> matrix_range_auto: true;
+    in-out property <float> matrix_range_min: 0.0;
+    in-out property <float> matrix_range_max: 1.0;
+    // plate = grid of wells; well = drilled into one well's field-of-view images.
+    in property <ResultsMatrixKind> matrix_kind: ResultsMatrixKind.plate;
+    // "" at plate level; the well label (e.g. "A14") once drilled in.
+    in property <string> matrix_active_well: "";
+    in property <int> matrix_rows: 0;
+    in property <int> matrix_cols: 0;
+    // Row-major, length matrix_rows * matrix_cols.
+    in property <[ResultsMatrixCell]> matrix_cells: [];
+    // Empty while a grid is shown; otherwise an explanatory/placeholder
+    // message (e.g. "Set a grouping mode in Project Settings to use Matrix view").
+    in property <string> matrix_status: "";
+    // Feedback from the last matrix_autodetect_regex_requested() call, e.g.
+    // "Matched 42/45 filenames" or "No consistent pattern found".
+    in property <string> matrix_regex_hint: "";
+    // Recomputes the grid at the current drill level (plate or the active
+    // well) from the current settings/filters.
+    callback matrix_apply();
+    // Drills into the well with this label (plate view only).
+    callback matrix_well_clicked(string);
+    // Returns from well view to plate view.
+    callback matrix_back_clicked();
+    // Runs the regex auto-detect heuristic against the project's image names.
+    callback matrix_autodetect_regex_requested();
 
     // -- Frame navigation (time/depth stacks) --------------------------------
     // True only when the loaded file actually has more than one t_stack/

@@ -10,11 +10,15 @@ import {
     ResultsChartKind,
     ResultsColumnDef,
     ResultsRow,
+    ResultsMatrixKind,
+    ResultsMatrixCell,
     FilterItem,
 } from "results_table.slint";
 import { ResultsChart } from "results_chart.slint";
+import { ResultsMatrix } from "results_matrix.slint";
 import { FrameStepper } from "frame_stepper.slint";
 import { ExportDialog } from "export_dialog.slint";
+import { ProjectSettingsState } from "../dialogs/project_settings_dialog.slint";
 export {
     ResultsState,
     ResultsViewMode,
@@ -22,6 +26,8 @@ export {
     ResultsChartKind,
     ResultsColumnDef,
     ResultsRow,
+    ResultsMatrixKind,
+    ResultsMatrixCell,
     FilterItem,
     ExportBatchItem,
 }from "results_table.slint";
@@ -880,7 +886,15 @@ component ResultsToolbar inherits Rectangle {
                         GroupOptionRow {
                             label: "Regex on image name";
                             selected: ResultsState.group_by == ResultsGroupBy.regex;
-                            clicked => { ResultsState.group_by = ResultsGroupBy.regex; }
+                            clicked => {
+                                ResultsState.group_by = ResultsGroupBy.regex;
+                                // Start from whatever regex is already saved
+                                // in Project Settings, so the user isn't
+                                // retyping a pattern they've already set up.
+                                if (ResultsState.group_regex == "") {
+                                    ResultsState.group_regex = ProjectSettingsState.settings.custom_regex;
+                                }
+                            }
                         }
 
                         GroupOptionRow {
@@ -922,7 +936,16 @@ component ResultsToolbar inherits Rectangle {
                                                 vertical-alignment: center;
                                                 enabled: ResultsState.group_by == ResultsGroupBy.regex;
                                                 text: ResultsState.group_regex;
-                                                edited => { ResultsState.group_regex = self.text; }
+                                                edited => {
+                                                    ResultsState.group_regex = self.text;
+                                                    // Keep Project Settings' persisted regex in
+                                                    // sync with whatever's typed here, so it's
+                                                    // not lost/out of date next time the project
+                                                    // is opened.
+                                                    ProjectSettingsState.settings.custom_regex = self.text;
+                                                    ProjectSettingsState.settings.grouping_mode = 4;
+                                                    ProjectSettingsState.trigger_project_settings_accepted();
+                                                }
                                             }
 
                                             if regex-input.text == "": Text {
@@ -935,6 +958,44 @@ component ResultsToolbar inherits Rectangle {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        // Auto-detect a well/plate-style regex from the
+                        // project's image filenames (e.g. "my_file_A14_01")
+                        // - shown right under the regex field it fills in.
+                        if ResultsState.group_by == ResultsGroupBy.regex: Rectangle {
+                            height: 24px;
+                            background: Theme.bg;
+                            HorizontalLayout {
+                                padding-left: 26px;
+                                padding-right: 8px;
+                                spacing: 6px;
+                                alignment: start;
+
+                                autodetect-ta := TouchArea {
+                                    width: autodetect-text.width;
+                                    mouse-cursor: pointer;
+                                    clicked => { ResultsState.matrix_autodetect_regex_requested(); }
+
+                                    autodetect-text := Text {
+                                        text: "Auto-detect regex";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: autodetect-ta.has-hover ? Theme.accent.brighter(20%) : Theme.accent;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                if ResultsState.matrix_regex_hint != "": Text {
+                                    text: ResultsState.matrix_regex_hint;
+                                    font-size: 10px;
+                                    font-family: Theme.font-mono;
+                                    color: Theme.text-faint;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
                                 }
                             }
                         }
@@ -1088,15 +1149,18 @@ component ResultsToolbar inherits Rectangle {
                     ? @image-url("../icons/regular-black/table.svg")
                     : (ResultsState.view_mode == ResultsViewMode.coloc_table
                     ? @image-url("../icons/regular-black/intersect-three.svg")
+                    : (ResultsState.view_mode == ResultsViewMode.matrix
+                    ? @image-url("../icons/regular-black/grid-nine.svg")
                     : (ResultsState.chart_kind == ResultsChartKind.histogram
                     ? @image-url("../icons/regular-black/chart-bar.svg")
                     : (ResultsState.chart_kind == ResultsChartKind.scatter
                     ? @image-url("../icons/regular-black/chart-scatter.svg")
-                    : @image-url("../icons/regular-black/grid-four.svg"))));
+                    : @image-url("../icons/regular-black/grid-four.svg")))));
                 label: "View";
                 icon-color: #4A90E2;
                 active: ResultsState.view_mode == ResultsViewMode.chart
-                    || ResultsState.view_mode == ResultsViewMode.coloc_table;
+                    || ResultsState.view_mode == ResultsViewMode.coloc_table
+                    || ResultsState.view_mode == ResultsViewMode.matrix;
                 clicked => { view-popup.show(); }
             }
 
@@ -1417,6 +1481,67 @@ component ResultsToolbar inherits Rectangle {
                                 }
                             }
                         }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        // Matrix — plate/well grid of one aggregated value per well
+                        vm-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.view_mode = ResultsViewMode.matrix;
+                                ResultsState.matrix_apply();
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vm-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: ResultsState.view_mode == ResultsViewMode.matrix ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/grid-nine.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: ResultsState.view_mode == ResultsViewMode.matrix ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Matrix (Plate/Well)";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: ResultsState.view_mode == ResultsViewMode.matrix ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1621,6 +1746,9 @@ export component ResultsWindow inherits Window {
             background: Theme.panel;
         }
         if ResultsState.view_mode == ResultsViewMode.chart: ResultsChart {
+            vertical-stretch: 1;
+        }
+        if ResultsState.view_mode == ResultsViewMode.matrix: ResultsMatrix {
             vertical-stretch: 1;
         }
 

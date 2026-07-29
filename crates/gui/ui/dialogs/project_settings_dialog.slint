@@ -18,7 +18,13 @@ export struct ProjectSettingsSlint {
     grouping_mode: int,
     custom_regex: string,
     well_size_index: int,
-    well_values: [int]
+    well_values: [int],
+    // Raw plate dimensions (number of wells), derived from well_size_index -
+    // informational only, set by Rust and read by the Matrix view to size its
+    // grid; editing plate size still goes through the well_size_index preset
+    // dropdown, not these fields directly.
+    plate_rows: int,
+    plate_cols: int,
 }
 
 export global ProjectSettingsState {
@@ -30,7 +36,9 @@ export global ProjectSettingsState {
         organization_name: "",
         custom_regex: "",
         well_size_index: 0,
-        well_values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        well_values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        plate_rows: 1,
+        plate_cols: 1,
     };
 
     callback project_settings_changed(ProjectSettingsSlint);

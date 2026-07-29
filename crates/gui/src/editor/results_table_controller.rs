@@ -1780,6 +1780,13 @@ impl ResultsTableController {
                             state.set_chart_heatmap_color_scheme_options(slint::ModelRc::new(
                                 slint::VecModel::from(heatmap_color_scheme_options()),
                             ));
+                            // Matrix view's "Value" picker - same visible-numeric-
+                            // columns source as the heatmap's, refreshed at the
+                            // same time so it's populated before the user ever
+                            // opens Matrix view.
+                            state.set_matrix_metric_options(slint::ModelRc::new(
+                                slint::VecModel::from(plottable_column_labels(&specs)),
+                            ));
                             state.set_t_stack_active(t_range.is_some());
                             state.set_t_stack_min(t_range.map_or(0, |(min, _)| min));
                             state.set_t_stack_max(t_range.map_or(0, |(_, max)| max));
@@ -1841,7 +1848,9 @@ impl ResultsTableController {
         let finish_loading = move |ui: slint::Weak<ResultsWindow>| {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = ui.upgrade() {
-                    w.global::<ResultsState>().set_loading_more(false);
+                    let state = w.global::<ResultsState>();
+                    state.set_loading_more(false);
+                    state.set_group_computing(false);
                 }
             });
         };
@@ -1919,6 +1928,7 @@ impl ResultsTableController {
                         state.set_at_top_loaded(true);
                         state.set_loading_more(false);
                         state.set_group_active(true);
+                        state.set_group_computing(false);
                     }
                 });
             }
@@ -2932,6 +2942,9 @@ impl ResultsTableController {
         )));
         state.set_chart_heatmap_metric_options(slint::ModelRc::new(slint::VecModel::from(
             heatmap_metric_options(&specs),
+        )));
+        state.set_matrix_metric_options(slint::ModelRc::new(slint::VecModel::from(
+            plottable_column_labels(&specs),
         )));
 
         let grouped = !matches!(self.group_config.lock().unwrap().group_by, GroupBy::None);

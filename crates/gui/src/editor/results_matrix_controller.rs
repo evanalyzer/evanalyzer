@@ -1,0 +1,597 @@
+use crate::editor::project_settings_controller::{ProjectSettingsController, index_to_well_size};
+use crate::editor::results_table_controller::ResultsTableController;
+use crate::{
+    ResultsGroupBy, ResultsMatrixCell, ResultsMatrixKind, ResultsState, ResultsWindow, UiState,
+};
+use evanalyzer_app::result::{
+    AggFunc, ColumnSpec, DatabaseFilter, GroupBy, HeatmapColorScheme, ResultsLoader,
+    compute_plate_matrix, compute_well_matrix, plottable_columns, suggest_regex,
+};
+use evanalyzer_cfg::settings::plate_settings::GroupingMode;
+use log::warn;
+use slint::{ComponentHandle, SharedString};
+use std::sync::Arc;
+
+/// Drives the Results window's Matrix (Plate/Well) view: which images belong
+/// to which well/cell is controlled by the toolbar's existing "Group by"
+/// dropdown (`ResultsState.group_by`/`group_regex` - Folder or Regex, same
+/// setting the flat grouped table uses), read live rather than duplicated
+/// into a separate picker here. Plate/well physical dimensions (not part of
+/// that dropdown) come from the project's `PlateSettings`. Groups objects
+/// into wells by reusing `evanalyzer_app::result::aggregate_rows` via
+/// `compute_plate_matrix`/`compute_well_matrix` (exactly like the flat
+/// grouped table and the heatmap chart reuse the same grouping/rendering
+/// building blocks), and pushes a colored grid to `ResultsState`.
+pub struct ResultsMatrixController {
+    results_ui: slint::Weak<ResultsWindow>,
+    app_state: Arc<UiState>,
+    /// Reused for the current DB path, active table filters (image/class/
+    /// coloc/t-stack/z-stack) and column specs, so the matrix respects the
+    /// same filters as the Table/Chart views instead of re-deriving them.
+    results_table_controller: Arc<ResultsTableController>,
+    /// Reused so applying plate/well/regex settings from the Matrix view
+    /// persists to the project and stays in sync with the Project Settings
+    /// dialog (see that controller's struct-level doc comment).
+    project_settings_controller: Arc<ProjectSettingsController>,
+}
+
+impl ResultsMatrixController {
+    pub fn new(
+        results_ui: slint::Weak<ResultsWindow>,
+        app_state: Arc<UiState>,
+        results_table_controller: Arc<ResultsTableController>,
+        project_settings_controller: Arc<ProjectSettingsController>,
+    ) -> Self {
+        Self {
+            results_ui,
+            app_state,
+            results_table_controller,
+            project_settings_controller,
+        }
+    }
+
+    pub fn attach_callbacks(self: &Arc<Self>) {
+        let Some(window) = self.results_ui.upgrade() else {
+            return;
+        };
+        let state = window.global::<ResultsState>();
+
+        state.set_matrix_agg_options(slint::ModelRc::new(slint::VecModel::from(vec![
+            SharedString::from("Min"),
+            SharedString::from("Max"),
+            SharedString::from("Average"),
+            SharedString::from("Median"),
+            SharedString::from("Std. dev."),
+            SharedString::from("Sum"),
+        ])));
+        state.set_matrix_color_scheme_options(slint::ModelRc::new(slint::VecModel::from(
+            color_scheme_labels(),
+        )));
+
+        {
+            let this = Arc::clone(self);
+            state.on_matrix_apply(move || {
+                let Some(config) = Self::build_config(&this) else {
+                    return;
+                };
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || Self::bg_compute_matrix(this, None, config));
+            });
+        }
+        {
+            let this = Arc::clone(self);
+            state.on_matrix_well_clicked(move |label: SharedString| {
+                let Some(config) = Self::build_config(&this) else {
+                    return;
+                };
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || {
+                    Self::bg_compute_matrix(this, Some(label.to_string()), config)
+                });
+            });
+        }
+        {
+            let this = Arc::clone(self);
+            state.on_matrix_back_clicked(move || {
+                let Some(config) = Self::build_config(&this) else {
+                    return;
+                };
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || Self::bg_compute_matrix(this, None, config));
+            });
+        }
+        {
+            let this = Arc::clone(self);
+            state.on_matrix_autodetect_regex_requested(move || {
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || Self::bg_autodetect_regex(this));
+            });
+        }
+    }
+
+    /// Reads the current picks (Value/Aggregate/Colors/Range, and the
+    /// toolbar's Group by/regex) and the visible-numeric-column list, then
+    /// seeds the Value/Aggregate pickers if they're not set yet.
+    ///
+    /// **Must run on the UI thread** - Slint globals may only be read/written
+    /// there, and this is called directly from a Slint callback (guaranteed
+    /// to already be on the UI thread), never from a spawned background
+    /// thread. `bg_compute_matrix` takes the plain `MatrixComputeConfig` this
+    /// returns instead of touching `ResultsState` itself until it's ready to
+    /// report back through `invoke_from_event_loop`.
+    fn build_config(this: &Arc<Self>) -> Option<MatrixComputeConfig> {
+        let window = this.results_ui.upgrade()?;
+        let state = window.global::<ResultsState>();
+
+        let specs = this.results_table_controller.column_specs.lock().unwrap().clone();
+        let metric_options = plottable_labels(&specs);
+
+        let mut metric_label = state.get_matrix_metric().to_string();
+        if metric_label.is_empty() || !metric_options.iter().any(|m| m.as_str() == metric_label) {
+            metric_label = metric_options
+                .first()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+        }
+        let mut agg_label = state.get_matrix_agg().to_string();
+        if agg_label.is_empty() {
+            agg_label = "Average".to_string();
+        }
+        let color_scheme_label = state.get_matrix_color_scheme().to_string();
+        let range_auto = state.get_matrix_range_auto();
+        let range_min = state.get_matrix_range_min() as f64;
+        let range_max = state.get_matrix_range_max() as f64;
+
+        // Which images belong to which well comes from the toolbar's own
+        // "Group by" setting (Folder or Regex), read live - not from a
+        // separate picker in this view, and not from PlateSettings.
+        let toolbar_group_by = state.get_group_by();
+        let toolbar_regex = state.get_group_regex().to_string();
+
+        state.set_matrix_metric_options(slint::ModelRc::new(slint::VecModel::from(
+            metric_options,
+        )));
+        state.set_matrix_metric(metric_label.clone().into());
+        state.set_matrix_agg(agg_label.clone().into());
+
+        Some(MatrixComputeConfig {
+            specs,
+            metric_label,
+            agg_label,
+            color_scheme_label,
+            range_auto,
+            range_min,
+            range_max,
+            toolbar_group_by,
+            toolbar_regex,
+        })
+    }
+
+    /// Computes the plate grid (`well_label: None`) or drills into one well's
+    /// field-of-view grid (`well_label: Some(...)`), and pushes the result
+    /// (or an explanatory status message) to `ResultsState`. `config` was
+    /// already read from `ResultsState` on the UI thread by [`Self::build_config`],
+    /// since this function itself must not touch any Slint global directly
+    /// (it runs on a background thread), only through `invoke_from_event_loop`
+    /// via `report_status`/`push_grid`.
+    fn bg_compute_matrix(this: Arc<Self>, well_label: Option<String>, config: MatrixComputeConfig) {
+        let ui = this.results_ui.clone();
+        let report_status = move |status: String| {
+            let ui = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(window) = ui.upgrade() else { return };
+                window.global::<ResultsState>().set_matrix_status(status.into());
+            });
+        };
+
+        // Keep the settings strip's plate/well controls fresh with whatever
+        // is actually persisted, regardless of which window last edited them.
+        this.project_settings_controller.sync_project_settings_to_slint();
+
+        let MatrixComputeConfig {
+            specs,
+            metric_label,
+            agg_label,
+            color_scheme_label,
+            range_auto,
+            range_min,
+            range_max,
+            toolbar_group_by,
+            toolbar_regex,
+        } = config;
+
+        let (group_by, regex) = match toolbar_group_by {
+            ResultsGroupBy::Folder => (GroupBy::Folder, String::new()),
+            ResultsGroupBy::Regex => (GroupBy::Regex, toolbar_regex),
+            ResultsGroupBy::None | ResultsGroupBy::Image => {
+                report_status(
+                    "Set the toolbar's Group by to Folder or Regex to use Matrix view.".into(),
+                );
+                return;
+            }
+        };
+
+        let Some(path) = this.results_table_controller.path.lock().unwrap().clone() else {
+            report_status("No results file loaded.".into());
+            return;
+        };
+
+        let plate = this.app_state.get_project().plate.clone();
+
+        let Some(metric_spec) = specs.iter().find(|c| c.label == metric_label).cloned() else {
+            report_status("Pick a value to color the matrix by.".into());
+            return;
+        };
+        let agg = agg_from_label(&agg_label);
+        let scheme = HeatmapColorScheme::from_label(&color_scheme_label);
+
+        let loader = ResultsLoader::new(&path);
+        let image_filter = this.results_table_controller.image_filter.lock().unwrap().clone();
+        let class_filter = this.results_table_controller.class_filter.lock().unwrap().clone();
+        let coloc_filter = this.results_table_controller.coloc_filter.lock().unwrap().clone();
+        let t_stack_filter = *this.results_table_controller.t_stack_filter.lock().unwrap();
+        let z_stack_filter = *this.results_table_controller.z_stack_filter.lock().unwrap();
+
+        let objects = match loader.get_objects(DatabaseFilter {
+            image_filter,
+            class_filter,
+            coloc_filter,
+            object_id_filter: None,
+            t_stack_filter,
+            z_stack_filter,
+            page_size: 0,
+            page: 0,
+            needs_intensities: true,
+            sort_column: None,
+            sort_ascending: true,
+        }) {
+            Ok(objects) => objects,
+            Err(e) => {
+                warn!("bg_compute_matrix failed to load ROIs: {:?}", e);
+                report_status("Failed to load data for the matrix.".into());
+                return;
+            }
+        };
+        if objects.is_empty() {
+            report_status("No ROIs match the current filters.".into());
+            return;
+        }
+
+        let plate_rows = (plate.plate_rows.max(1)) as usize;
+        let plate_cols = (plate.plate_cols.max(1)) as usize;
+
+        if let Some(well_label) = well_label {
+            if group_by != GroupBy::Regex {
+                report_status("Well view needs a Filename grouping regex.".into());
+                return;
+            }
+            let well_rows = (plate.well_rows.max(1)) as usize;
+            let well_cols = (plate.well_cols.max(1)) as usize;
+            match compute_well_matrix(
+                &objects,
+                &regex,
+                &well_label,
+                agg,
+                &metric_spec,
+                well_rows,
+                well_cols,
+                &plate.well_image_order,
+            ) {
+                Some(result) => {
+                    let values: Vec<f64> = result.cells.iter().filter_map(|c| c.value).collect();
+                    let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
+                    let cells: Vec<ResultsMatrixCell> = result
+                        .cells
+                        .iter()
+                        .map(|c| matrix_cell(c.image_name.clone(), c.value, lo, hi, scheme))
+                        .collect();
+                    Self::push_grid(
+                        &this,
+                        ResultsMatrixKind::Well,
+                        well_label,
+                        result.rows,
+                        result.cols,
+                        cells,
+                        String::new(),
+                    );
+                }
+                None => {
+                    report_status(format!(
+                        "Well {well_label} has no sub-position data — check the regex has a 4th capture group."
+                    ));
+                }
+            }
+        } else {
+            let mut plate_rows = plate_rows;
+            let mut plate_cols = plate_cols;
+            let mut result = compute_plate_matrix(
+                &objects,
+                group_by,
+                &regex,
+                agg,
+                &metric_spec,
+                plate_rows,
+                plate_cols,
+            );
+            let mut values: Vec<f64> = result.cells.iter().filter_map(|c| c.value).collect();
+
+            // Every well-shaped label decoded fine, but none of them fit the
+            // configured plate size (e.g. still at the "1 Well" default) -
+            // grow to the smallest preset that fits everything and retry,
+            // instead of leaving the user staring at an empty grid.
+            if values.is_empty()
+                && let Some((need_rows, need_cols)) = result.required_span
+                && let Some((new_rows, new_cols)) = fitting_preset(need_rows, need_cols)
+            {
+                plate_rows = new_rows;
+                plate_cols = new_cols;
+                {
+                    let mut project = this.app_state.get_project_write();
+                    project.plate.plate_rows = new_rows as i32;
+                    project.plate.plate_cols = new_cols as i32;
+                }
+                this.app_state.mark_dirty();
+                this.project_settings_controller.sync_project_settings_to_slint();
+
+                result = compute_plate_matrix(
+                    &objects,
+                    group_by,
+                    &regex,
+                    agg,
+                    &metric_spec,
+                    plate_rows,
+                    plate_cols,
+                );
+                values = result.cells.iter().filter_map(|c| c.value).collect();
+            }
+
+            let status = if values.is_empty() {
+                match (result.required_span, result.group_count, &result.sample_label) {
+                    (Some((r, c)), ..) => format!(
+                        "No wells fit — this data needs at least a {r} x {c} plate. Increase Plate size."
+                    ),
+                    (None, count, Some(sample)) if count > 0 && group_by == GroupBy::Regex => {
+                        format!(
+                            "Group by regex matched {count} group(s), but none look like well ids (e.g. \"D14\") - got \"{sample}\" instead. Capture group 1 should be just the well id, not the whole match - check for an extra wrapping parenthesis."
+                        )
+                    }
+                    _ => "No wells matched — check the toolbar's Group by regex.".to_string(),
+                }
+            } else {
+                String::new()
+            };
+            let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
+            let cells: Vec<ResultsMatrixCell> = result
+                .cells
+                .iter()
+                .map(|c| matrix_cell(c.label.clone(), c.value, lo, hi, scheme))
+                .collect();
+            Self::push_grid(
+                &this,
+                ResultsMatrixKind::Plate,
+                String::new(),
+                result.rows,
+                result.cols,
+                cells,
+                status,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_grid(
+        this: &Arc<Self>,
+        kind: ResultsMatrixKind,
+        active_well: String,
+        rows: usize,
+        cols: usize,
+        cells: Vec<ResultsMatrixCell>,
+        status: String,
+    ) {
+        let ui = this.results_ui.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(window) = ui.upgrade() else { return };
+            let state = window.global::<ResultsState>();
+            state.set_matrix_kind(kind);
+            state.set_matrix_active_well(active_well.into());
+            state.set_matrix_rows(rows as i32);
+            state.set_matrix_cols(cols as i32);
+            state.set_matrix_cells(slint::ModelRc::new(slint::VecModel::from(cells)));
+            state.set_matrix_status(status.into());
+        });
+    }
+
+    /// Suggests a regex from the current image names and, on success:
+    /// - sets it on the toolbar's own Group by dropdown (`group_by` = Regex,
+    ///   `group_regex` = the suggestion) so it takes effect immediately, and
+    /// - persists it to the project's `PlateSettings` (mirroring what typing
+    ///   directly into the toolbar's regex field does) and re-syncs the
+    ///   Project Settings dialog, so it isn't lost the next time the project
+    ///   is opened.
+    fn bg_autodetect_regex(this: Arc<Self>) {
+        let ui = this.results_ui.clone();
+        let report_hint = move |hint: String| {
+            let ui = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(window) = ui.upgrade() else { return };
+                window
+                    .global::<ResultsState>()
+                    .set_matrix_regex_hint(hint.into());
+            });
+        };
+
+        let Some(path) = this.results_table_controller.path.lock().unwrap().clone() else {
+            report_hint("No results file loaded.".to_string());
+            return;
+        };
+        let loader = ResultsLoader::new(&path);
+        let names = match loader.get_image_names() {
+            Ok(names) => names,
+            Err(e) => {
+                warn!("matrix regex autodetect failed to load image names: {:?}", e);
+                report_hint("Failed to load image names.".to_string());
+                return;
+            }
+        };
+
+        match suggest_regex(&names) {
+            Some(suggestion) => {
+                let hint = format!("Matched {}/{} filenames", suggestion.matched, suggestion.total);
+                let pattern = suggestion.pattern;
+
+                {
+                    let mut project = this.app_state.get_project_write();
+                    project.plate.grouping_mode = GroupingMode::FileName;
+                    project.plate.grouping_regex = pattern.clone();
+                }
+                this.app_state.mark_dirty();
+                this.project_settings_controller.sync_project_settings_to_slint();
+
+                let ui = this.results_ui.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(window) = ui.upgrade() else { return };
+                    let state = window.global::<ResultsState>();
+                    state.set_group_by(ResultsGroupBy::Regex);
+                    state.set_group_regex(pattern.into());
+                    state.set_matrix_regex_hint(hint.into());
+                });
+            }
+            None => {
+                report_hint("No consistent pattern found — enter a regex manually.".to_string());
+            }
+        }
+    }
+}
+
+/// UI picks read on the UI thread by [`ResultsMatrixController::build_config`]
+/// and handed to the background thread, which must not touch `ResultsState`
+/// itself (see that function's doc comment).
+struct MatrixComputeConfig {
+    specs: Vec<ColumnSpec>,
+    metric_label: String,
+    agg_label: String,
+    color_scheme_label: String,
+    range_auto: bool,
+    range_min: f64,
+    range_max: f64,
+    toolbar_group_by: ResultsGroupBy,
+    toolbar_regex: String,
+}
+
+/// The smallest of the 13 plate-size presets (in list order, same as the
+/// "Plate size" dropdown) whose `(rows, cols)` both cover `(need_rows,
+/// need_cols)`, or `None` if even the largest preset (3456-well, 48x72)
+/// isn't big enough.
+fn fitting_preset(need_rows: usize, need_cols: usize) -> Option<(usize, usize)> {
+    (0..=12).map(index_to_well_size).find_map(|(rows, cols)| {
+        let (rows, cols) = (rows as usize, cols as usize);
+        (rows >= need_rows && cols >= need_cols).then_some((rows, cols))
+    })
+}
+
+fn agg_from_label(label: &str) -> AggFunc {
+    match label {
+        "Min" => AggFunc::Min,
+        "Max" => AggFunc::Max,
+        "Median" => AggFunc::Median,
+        "Std. dev." => AggFunc::Stdev,
+        "Sum" => AggFunc::Sum,
+        _ => AggFunc::Avg,
+    }
+}
+
+fn plottable_labels(specs: &[ColumnSpec]) -> Vec<SharedString> {
+    plottable_columns(specs)
+        .iter()
+        .map(|c| SharedString::from(c.label.as_str()))
+        .collect()
+}
+
+fn color_scheme_labels() -> Vec<SharedString> {
+    HeatmapColorScheme::all()
+        .iter()
+        .map(|s| SharedString::from(s.label()))
+        .collect()
+}
+
+/// Mirrors `HeatmapRange::resolve`'s semantics ([`evanalyzer_app`] keeps that
+/// private since it's an implementation detail of chart rendering): Auto
+/// always spans `[0, max(values)]`; Manual uses the given range, collapsing
+/// a degenerate/inverted one to a hairline span above `min`.
+fn resolve_range(values: &[f64], auto: bool, min: f64, max: f64) -> (f64, f64) {
+    if auto {
+        let hi = values.iter().copied().fold(0.0f64, f64::max).max(1e-9);
+        (0.0, hi)
+    } else if max > min {
+        (min, max)
+    } else {
+        (min, min + 1e-9)
+    }
+}
+
+fn matrix_cell(
+    label: String,
+    value: Option<f64>,
+    range_lo: f64,
+    range_hi: f64,
+    scheme: HeatmapColorScheme,
+) -> ResultsMatrixCell {
+    match value {
+        Some(v) => {
+            let t = ((v - range_lo) / (range_hi - range_lo)).clamp(0.0, 1.0);
+            let (r, g, b) = scheme.color_rgb(t);
+            ResultsMatrixCell {
+                label: label.into(),
+                value: format!("{v:.1}").into(),
+                color: slint::Color::from_rgb_u8(r, g, b),
+                has_value: true,
+            }
+        }
+        None => ResultsMatrixCell {
+            label: SharedString::new(),
+            value: SharedString::new(),
+            color: slint::Color::from_rgb_u8(0, 0, 0),
+            has_value: false,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fitting_preset_picks_smallest_covering_preset() {
+        // Real-world case: a sparse plate with only rows D/G populated and
+        // columns 2-19 needs at least a 7x19 span - the 96-well (8x12) preset
+        // is too narrow (12 < 19), so it should skip to 384-well (16x24).
+        assert_eq!(fitting_preset(7, 19), Some((16, 24)));
+    }
+
+    #[test]
+    fn fitting_preset_exact_match() {
+        assert_eq!(fitting_preset(8, 12), Some((8, 12)));
+    }
+
+    #[test]
+    fn fitting_preset_none_beyond_largest() {
+        assert_eq!(fitting_preset(100, 100), None);
+    }
+
+    #[test]
+    fn resolve_range_auto_spans_zero_to_max() {
+        assert_eq!(resolve_range(&[1.0, 5.0, 3.0], true, 0.0, 0.0), (0.0, 5.0));
+    }
+
+    #[test]
+    fn resolve_range_manual_uses_given_bounds() {
+        assert_eq!(resolve_range(&[1.0, 5.0], false, 2.0, 10.0), (2.0, 10.0));
+    }
+
+    #[test]
+    fn resolve_range_manual_degenerate_collapses_to_hairline() {
+        let (lo, hi) = resolve_range(&[1.0], false, 5.0, 5.0);
+        assert_eq!(lo, 5.0);
+        assert!(hi > lo);
+    }
+}

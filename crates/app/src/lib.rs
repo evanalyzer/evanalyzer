@@ -24,6 +24,10 @@ pub mod result {
         render_heatmap, render_histogram, render_scatter, save_heatmap_png, save_histogram_png,
         save_rendered_chart_png, save_scatter_png,
     };
+    pub use crate::results::plate_matrix::{
+        PlateCell, PlateMatrixResult, RegexSuggestion, WellCell, WellMatrixResult,
+        compute_plate_matrix, compute_well_matrix, suggest_regex,
+    };
     pub use crate::results::results_exporter::ResultsExporter;
     pub use crate::results::results_loader::{
         AggFunc, ColumnSpec, DatabaseFilter, DisplayRow, GroupBy, GroupConfig, ObjectRow,
