@@ -63,7 +63,7 @@
       "command":{
         "type": "rollingBall",
         "ballType": "BALL",
-        "preSmooth": false,
+        "preSmooth": true,
         "radius": 4
       }
     },
