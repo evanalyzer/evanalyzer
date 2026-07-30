@@ -64,24 +64,40 @@ export struct ExportBatchItem {
     // When true, one output file is written per image in `images` (its name
     // folded into the output filename) instead of one file covering all of them.
     each_image: bool,
-    // "table" or "coloc_detail" — captured at "Add" time, so a batch of
-    // queued combinations can mix both export styles (and grouped/ungrouped
-    // table exports) in one "Export All" run instead of sharing one style.
+    // "table", "coloc_detail", or "matrix" — captured at "Add" time, so a
+    // batch of queued combinations can mix all three export styles in one
+    // "Export All" run instead of sharing one style.
     style: string,
-    // "none" | "image" | "regex" — grouping captured at "Add" time; only
-    // meaningful when `style == "table"`.
+    // "none" | "image" | "regex" when `style == "table"`; "folder" | "regex"
+    // when `style == "matrix"`; ignored for "coloc_detail" (always flat).
     group_by: string,
     // Regex pattern, only meaningful when `group_by == "regex"`.
     group_regex: string,
     // Precomputed display string for the list row, e.g. "Table", "Table ·
-    // Image", "Table · Regex", or "Coloc Details".
+    // Image", "Table · Regex", "Coloc Details", or "Matrix · Folder".
     style_label: string,
     // Column labels to include, captured from whichever column set matched
     // `style` at "Add" time; empty means "every column" (no filter). Captured
     // per-batch (not read live at export time) so a queued "Coloc Details"
     // combination doesn't end up filtered by a "Table"-style column
-    // selection the user made afterwards, or vice versa.
+    // selection the user made afterwards, or vice versa. Unused when
+    // `style == "matrix"` (that export always writes a single value column
+    // per cell, picked via `matrix_metric` below).
     columns: [string],
+    // The following six fields are only meaningful when `style == "matrix"`,
+    // captured from the live Matrix view's own current picks
+    // (`ResultsState.matrix_metric` etc.) at "Add" time — same "captured now,
+    // not read live" reasoning as `columns` above.
+    matrix_metric: string,
+    matrix_agg: string,
+    matrix_color_scheme: string,
+    matrix_range_auto: bool,
+    matrix_range_min: float,
+    matrix_range_max: float,
+    // "plate" (default, one grid for the whole plate) or "well" (one grid
+    // per well actually present in the data — one worksheet per well for
+    // XLSX, one CSV file per well). Only meaningful when `style == "matrix"`.
+    matrix_kind: string,
 }
 
 export enum ResultsViewMode { table, chart, coloc_table, matrix }
@@ -342,6 +358,25 @@ export global ResultsState {
     // Feedback from the last matrix_autodetect_regex_requested() call, e.g.
     // "Matched 42/45 filenames" or "No consistent pattern found".
     in property <string> matrix_regex_hint: "";
+    // Matrix's own grouping regex - decoupled from the Table's `group_regex`.
+    // The Table's None/Image/Folder/Regex picker doesn't apply to Matrix:
+    // Matrix is always grouped by regex, re-applied fresh every time the
+    // view is entered (see the Matrix view-switch handler), so it needs its
+    // own live value rather than sharing (and clobbering) the Table's.
+    // Falls back to the project's saved regex
+    // (`ProjectSettingsState.settings.custom_regex`) when empty.
+    in-out property <string> matrix_group_regex: "";
+    // Matrix's own class filter - decoupled from the Table's
+    // `filter_class_items`. "" means no filter (every class). A matrix cell
+    // aggregates one metric across a well's objects, so restricting to one
+    // class (e.g. "average area for class X") is the dominant use case;
+    // unlike the Table, Matrix has no image filter at all (it always
+    // aggregates across every image in a well/group).
+    in-out property <string> matrix_class_filter: "";
+    // Plain class-name list backing the Matrix class filter's ComboBox
+    // (kept in sync with the Table's class-name discovery - see
+    // `results_table_controller.rs`), with a leading "All classes" entry.
+    in property <[string]> matrix_class_options: ["All classes"];
     // Recomputes the grid at the current drill level (plate or the active
     // well) from the current settings/filters.
     callback matrix_apply();
@@ -349,6 +384,9 @@ export global ResultsState {
     callback matrix_well_clicked(string);
     // Returns from well view to plate view.
     callback matrix_back_clicked();
+    // Well view only: jumps to the Table view filtered to this field-of-view
+    // image's name.
+    callback matrix_image_clicked(string);
     // Runs the regex auto-detect heuristic against the project's image names.
     callback matrix_autodetect_regex_requested();
 
@@ -428,6 +466,9 @@ export global ResultsState {
     in-out property <string> export_group_by: "none";
     // Regex pattern, only used when `export_group_by == "regex"`.
     in-out property <string> export_group_regex: "";
+    // "plate" (default) or "well" — only meaningful when `export_style ==
+    // "matrix"`. See `ExportBatchItem.matrix_kind`.
+    in-out property <string> export_matrix_kind: "plate";
     // Per-dialog-session column checklist — which columns of the chosen
     // `export_style` end up in the file. Re-seeded (all checked) whenever
     // the dialog opens or `export_style` changes.

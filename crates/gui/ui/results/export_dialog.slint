@@ -755,6 +755,12 @@ export component ExportDialog inherits Rectangle {
                             clicked => { ResultsState.export_style_selected("coloc_detail"); }
                         }
 
+                        StyleToggleButton {
+                            label: "Matrix";
+                            selected: ResultsState.export_style == "matrix";
+                            clicked => { ResultsState.export_style_selected("matrix"); }
+                        }
+
                         Rectangle {
                             horizontal-stretch: 1;
                         }
@@ -802,6 +808,207 @@ export component ExportDialog inherits Rectangle {
                         }
                     }
 
+                    // -- Matrix: Plate (one grid for the whole plate) vs. Well (one
+                    // grid per well actually present in the data, exported as one
+                    // worksheet per well for XLSX or one CSV file per well).
+                    if ResultsState.export_style == "matrix": HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "View:";
+                            width: 74px;
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        StyleToggleButton {
+                            label: "Plate";
+                            selected: ResultsState.export_matrix_kind == "plate";
+                            clicked => { ResultsState.export_matrix_kind = "plate"; }
+                        }
+
+                        StyleToggleButton {
+                            label: "Well";
+                            selected: ResultsState.export_matrix_kind == "well";
+                            clicked => { ResultsState.export_matrix_kind = "well"; }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    // -- Matrix: Folder/Regex grouping (which images fall into which
+                    // well/cell) — a restricted version of the table's own Group by
+                    // row above (Folder replaces No Grouping/Image, since a matrix
+                    // cell has to come from *some* grouping).
+                    if ResultsState.export_style == "matrix": HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "Group by:";
+                            width: 74px;
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        StyleToggleButton {
+                            label: "Folder";
+                            selected: ResultsState.export_group_by == "folder";
+                            clicked => { ResultsState.export_group_by = "folder"; }
+                        }
+
+                        StyleToggleButton {
+                            label: "Regex";
+                            selected: ResultsState.export_group_by == "regex";
+                            clicked => { ResultsState.export_group_by = "regex"; }
+                        }
+
+                        if ResultsState.export_group_by == "regex": LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "e.g. (([A-Za-z]{1,2})([0-9]{1,3}))_([0-9]+)";
+                            text <=> ResultsState.export_group_regex;
+                        }
+
+                        if ResultsState.export_group_by != "regex": Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    // -- Matrix: Value / Aggregate / Colors / Range — same picks as
+                    // the live Matrix view's own settings strip, reused directly
+                    // (ResultsState.matrix_*) rather than duplicating dialog-local
+                    // properties for them.
+                    if ResultsState.export_style == "matrix": HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "Value:";
+                            width: 74px;
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 140px;
+                            model: ResultsState.matrix_metric_options;
+                            current-value: ResultsState.matrix_metric;
+                            selected(v) => { ResultsState.matrix_metric = v; }
+                        }
+
+                        Text {
+                            text: "Aggregate:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 110px;
+                            model: ResultsState.matrix_agg_options;
+                            current-value: ResultsState.matrix_agg;
+                            selected(v) => { ResultsState.matrix_agg = v; }
+                        }
+
+                        Text {
+                            text: "Colors:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 100px;
+                            model: ResultsState.matrix_color_scheme_options;
+                            current-value: ResultsState.matrix_color_scheme;
+                            selected(v) => { ResultsState.matrix_color_scheme = v; }
+                        }
+                    }
+
+                    if ResultsState.export_style == "matrix": HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "Range:";
+                            width: 74px;
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            width: 64px;
+                            font-size: 11px;
+                            enabled: !ResultsState.matrix_range_auto;
+                            text: "\{ResultsState.matrix_range_min}";
+                            edited(t) => {
+                                ResultsState.matrix_range_min = t.to-float();
+                                ResultsState.matrix_range_auto = false;
+                            }
+                        }
+
+                        Text {
+                            text: "–";
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            width: 64px;
+                            font-size: 11px;
+                            enabled: !ResultsState.matrix_range_auto;
+                            text: "\{ResultsState.matrix_range_max}";
+                            edited(t) => {
+                                ResultsState.matrix_range_max = t.to-float();
+                                ResultsState.matrix_range_auto = false;
+                            }
+                        }
+
+                        matrix-export-auto-range-ta := TouchArea {
+                            width: 44px;
+                            height: 26px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.matrix_range_auto = !ResultsState.matrix_range_auto;
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                background: ResultsState.matrix_range_auto ? Theme.accent : (matrix-export-auto-range-ta.has-hover ? Theme.hover : Theme.raised);
+
+                                Text {
+                                    text: "Auto";
+                                    font-size: 11px;
+                                    font-family: Theme.font-sans;
+                                    font-weight: 600;
+                                    color: ResultsState.matrix_range_auto ? white : Theme.text-dim;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                    }
+
                     // -- Images + Classes: collapsed chip fields, stacked -------------
                     // Each field now gets the dialog's full width (like Columns
                     // below), so both can afford to show more chips before
@@ -845,7 +1052,9 @@ export component ExportDialog inherits Rectangle {
                             }
                         }
 
-                        each-image-ta := TouchArea {
+                        // Each output file is a whole plate/well grid — "one file per
+                        // image" has no meaning for a Matrix export.
+                        if ResultsState.export_style != "matrix": each-image-ta := TouchArea {
                             height: 22px;
                             mouse-cursor: pointer;
                             clicked => {
@@ -926,8 +1135,17 @@ export component ExportDialog inherits Rectangle {
                     }
 
                     // -- Columns: collapsed chip field, grouped popup content ---------
+                    // Always rendered (its `PickerPanel` overlay is declared at the
+                    // dialog's own root and needs a stable, unconditionally-
+                    // instantiated `column-picker` id to bind to — see the header
+                    // comment on why panels live outside `body-scroll`). Not
+                    // applicable to Matrix export (it always writes a single value
+                    // column per cell, the "Value:" pick above) — simply unused
+                    // rather than hidden in that case; the export logic never reads
+                    // a matrix batch's `columns`.
                     VerticalLayout {
                         spacing: 6px;
+                        visible: ResultsState.export_style != "matrix";
 
                         HorizontalLayout {
                             spacing: 8px;
@@ -1034,9 +1252,13 @@ export component ExportDialog inherits Rectangle {
                             }
                         }
 
+                        // Captures the live table's own filters/grouping/columns —
+                        // none of which map onto a Matrix export's Value/Aggregate/
+                        // Folder-or-Regex picks, so this is a no-op for that style.
                         DialogButton {
                             width: 118px;
                             label: "Add from table";
+                            enabled: ResultsState.export_style != "matrix";
                             clicked => {
                                 ResultsState.export_add_batch_from_table();
                             }

@@ -8,7 +8,6 @@ use crate::{
 use evanalyzer_cfg::AssignObjectClass;
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
-use indexmap::IndexMap;
 use log::warn;
 use slint::ModelRc;
 use slint::{Color, Model};

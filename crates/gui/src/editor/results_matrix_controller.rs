@@ -1,11 +1,12 @@
 use crate::editor::project_settings_controller::{ProjectSettingsController, index_to_well_size};
-use crate::editor::results_table_controller::ResultsTableController;
+use crate::editor::results_table_controller::{ResultsTableController, model_to_vec};
 use crate::{
-    ResultsGroupBy, ResultsMatrixCell, ResultsMatrixKind, ResultsState, ResultsWindow, UiState,
+    FilterItem, ResultsGroupBy, ResultsMatrixCell, ResultsMatrixKind, ResultsState, ResultsViewMode,
+    ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
-    AggFunc, ColumnSpec, DatabaseFilter, GroupBy, HeatmapColorScheme, ResultsLoader,
-    compute_plate_matrix, compute_well_matrix, plottable_columns, suggest_regex,
+    AggFunc, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, HeatmapColorScheme, ResultsLoader,
+    compute_plate_matrix, compute_well_matrix, plottable_columns, resolve_range, suggest_regex,
 };
 use evanalyzer_cfg::settings::plate_settings::GroupingMode;
 use log::warn;
@@ -13,21 +14,25 @@ use slint::{ComponentHandle, SharedString};
 use std::sync::Arc;
 
 /// Drives the Results window's Matrix (Plate/Well) view: which images belong
-/// to which well/cell is controlled by the toolbar's existing "Group by"
-/// dropdown (`ResultsState.group_by`/`group_regex` - Folder or Regex, same
-/// setting the flat grouped table uses), read live rather than duplicated
-/// into a separate picker here. Plate/well physical dimensions (not part of
-/// that dropdown) come from the project's `PlateSettings`. Groups objects
-/// into wells by reusing `evanalyzer_app::result::aggregate_rows` via
+/// to which well/cell is always controlled by Matrix's own
+/// `ResultsState.matrix_group_regex` (Matrix is always regex-grouped, unlike
+/// the Table view's None/Image/Folder/Regex picker) and Matrix's own
+/// `matrix_class_filter` - both intentionally decoupled from the Table
+/// view's `group_by`/`group_regex`/`filter_class_items`, so switching
+/// between Table and Matrix never clobbers either view's settings. Matrix
+/// also never applies the Table's image filter - a matrix cell always
+/// aggregates across every image in its well/group. Plate/well physical
+/// dimensions come from the project's `PlateSettings`. Groups objects into
+/// wells by reusing `evanalyzer_app::result::aggregate_rows` via
 /// `compute_plate_matrix`/`compute_well_matrix` (exactly like the flat
 /// grouped table and the heatmap chart reuse the same grouping/rendering
 /// building blocks), and pushes a colored grid to `ResultsState`.
 pub struct ResultsMatrixController {
     results_ui: slint::Weak<ResultsWindow>,
     app_state: Arc<UiState>,
-    /// Reused for the current DB path, active table filters (image/class/
-    /// coloc/t-stack/z-stack) and column specs, so the matrix respects the
-    /// same filters as the Table/Chart views instead of re-deriving them.
+    /// Reused for the current DB path, column specs, and the Table view's
+    /// coloc/t-stack/z-stack filters (still shared - only the image and
+    /// class filters are Matrix-specific, see this struct's doc comment).
     results_table_controller: Arc<ResultsTableController>,
     /// Reused so applying plate/well/regex settings from the Matrix view
     /// persists to the project and stays in sync with the Project Settings
@@ -107,6 +112,52 @@ impl ResultsMatrixController {
                 std::thread::spawn(move || Self::bg_autodetect_regex(this));
             });
         }
+        {
+            let this = Arc::clone(self);
+            state.on_matrix_image_clicked(move |image_name: SharedString| {
+                Self::jump_to_image_in_table(&this, image_name.to_string());
+            });
+        }
+    }
+
+    /// Well view only: filters the Table view down to exactly this
+    /// field-of-view image, drops any grouping (so its individual objects
+    /// are visible, not one aggregated row), and switches to Table view -
+    /// mirrors the toolbar's own image-filter/`filter_apply` flow, just
+    /// pre-seeded with a single known image instead of reading checkboxes.
+    fn jump_to_image_in_table(this: &Arc<Self>, image_name: String) {
+        let Some(window) = this.results_ui.upgrade() else {
+            return;
+        };
+        let state = window.global::<ResultsState>();
+
+        let items: Vec<FilterItem> = model_to_vec(&state.get_filter_image_items())
+            .iter()
+            .map(|i| FilterItem {
+                label: i.label.clone(),
+                checked: i.label.as_str() == image_name,
+                group: i.group.clone(),
+                group_header: i.group_header,
+                group_all_checked: i.group_all_checked,
+            })
+            .collect();
+        state.set_filter_image_items(slint::ModelRc::new(slint::VecModel::from(items.clone())));
+        state.set_filter_image_popup(slint::ModelRc::new(slint::VecModel::from(items)));
+        state.set_filter_image_active(true);
+        state.set_filter_image_all_popup_checked(false);
+        state.set_filter_active(true);
+
+        state.set_group_by(ResultsGroupBy::None);
+        state.set_group_active(false);
+        state.set_view_mode(ResultsViewMode::Table);
+        state.set_loading_more(true);
+
+        *this.results_table_controller.image_filter.lock().unwrap() = Some(vec![image_name]);
+        *this.results_table_controller.group_config.lock().unwrap() = GroupConfig::default();
+        *this.results_table_controller.coloc_detail_mode.lock().unwrap() = false;
+        *this.results_table_controller.current_page.lock().unwrap() = 0;
+
+        ResultsTableController::spawn_reload(Arc::clone(&this.results_table_controller));
     }
 
     /// Reads the current picks (Value/Aggregate/Colors/Range, and the
@@ -142,11 +193,12 @@ impl ResultsMatrixController {
         let range_min = state.get_matrix_range_min() as f64;
         let range_max = state.get_matrix_range_max() as f64;
 
-        // Which images belong to which well comes from the toolbar's own
-        // "Group by" setting (Folder or Regex), read live - not from a
-        // separate picker in this view, and not from PlateSettings.
-        let toolbar_group_by = state.get_group_by();
-        let toolbar_regex = state.get_group_regex().to_string();
+        // Matrix is always grouped by regex, from its own decoupled
+        // `matrix_group_regex` - never the Table view's `group_by`/
+        // `group_regex` (see this controller's struct-level doc comment).
+        let regex = state.get_matrix_group_regex().to_string();
+        // "" (the "All classes" sentinel) means no class filter.
+        let class_filter = state.get_matrix_class_filter().to_string();
 
         state.set_matrix_metric_options(slint::ModelRc::new(slint::VecModel::from(
             metric_options,
@@ -162,8 +214,8 @@ impl ResultsMatrixController {
             range_auto,
             range_min,
             range_max,
-            toolbar_group_by,
-            toolbar_regex,
+            regex,
+            class_filter,
         })
     }
 
@@ -196,20 +248,16 @@ impl ResultsMatrixController {
             range_auto,
             range_min,
             range_max,
-            toolbar_group_by,
-            toolbar_regex,
+            regex,
+            class_filter,
         } = config;
 
-        let (group_by, regex) = match toolbar_group_by {
-            ResultsGroupBy::Folder => (GroupBy::Folder, String::new()),
-            ResultsGroupBy::Regex => (GroupBy::Regex, toolbar_regex),
-            ResultsGroupBy::None | ResultsGroupBy::Image => {
-                report_status(
-                    "Set the toolbar's Group by to Folder or Regex to use Matrix view.".into(),
-                );
-                return;
-            }
-        };
+        if regex.is_empty() {
+            report_status(
+                "Enter a regex to group wells (e.g. ^([A-Z]\\d+)_) or use Auto-detect.".into(),
+            );
+            return;
+        }
 
         let Some(path) = this.results_table_controller.path.lock().unwrap().clone() else {
             report_status("No results file loaded.".into());
@@ -226,14 +274,17 @@ impl ResultsMatrixController {
         let scheme = HeatmapColorScheme::from_label(&color_scheme_label);
 
         let loader = ResultsLoader::new(&path);
-        let image_filter = this.results_table_controller.image_filter.lock().unwrap().clone();
-        let class_filter = this.results_table_controller.class_filter.lock().unwrap().clone();
+        // Matrix always aggregates across every image in its well/group - the
+        // Table view's image filter never applies here (see this module's
+        // doc comment). Class filtering uses Matrix's own decoupled
+        // `matrix_class_filter` instead of the Table's `class_filter`.
+        let class_filter = (!class_filter.is_empty()).then(|| vec![class_filter]);
         let coloc_filter = this.results_table_controller.coloc_filter.lock().unwrap().clone();
         let t_stack_filter = *this.results_table_controller.t_stack_filter.lock().unwrap();
         let z_stack_filter = *this.results_table_controller.z_stack_filter.lock().unwrap();
 
         let objects = match loader.get_objects(DatabaseFilter {
-            image_filter,
+            image_filter: None,
             class_filter,
             coloc_filter,
             object_id_filter: None,
@@ -261,10 +312,6 @@ impl ResultsMatrixController {
         let plate_cols = (plate.plate_cols.max(1)) as usize;
 
         if let Some(well_label) = well_label {
-            if group_by != GroupBy::Regex {
-                report_status("Well view needs a Filename grouping regex.".into());
-                return;
-            }
             let well_rows = (plate.well_rows.max(1)) as usize;
             let well_cols = (plate.well_cols.max(1)) as usize;
             match compute_well_matrix(
@@ -293,6 +340,7 @@ impl ResultsMatrixController {
                         result.cols,
                         cells,
                         String::new(),
+                        (lo, hi),
                     );
                 }
                 None => {
@@ -306,7 +354,7 @@ impl ResultsMatrixController {
             let mut plate_cols = plate_cols;
             let mut result = compute_plate_matrix(
                 &objects,
-                group_by,
+                GroupBy::Regex,
                 &regex,
                 agg,
                 &metric_spec,
@@ -335,7 +383,7 @@ impl ResultsMatrixController {
 
                 result = compute_plate_matrix(
                     &objects,
-                    group_by,
+                    GroupBy::Regex,
                     &regex,
                     agg,
                     &metric_spec,
@@ -350,12 +398,12 @@ impl ResultsMatrixController {
                     (Some((r, c)), ..) => format!(
                         "No wells fit — this data needs at least a {r} x {c} plate. Increase Plate size."
                     ),
-                    (None, count, Some(sample)) if count > 0 && group_by == GroupBy::Regex => {
+                    (None, count, Some(sample)) if count > 0 => {
                         format!(
                             "Group by regex matched {count} group(s), but none look like well ids (e.g. \"D14\") - got \"{sample}\" instead. Capture group 1 should be just the well id, not the whole match - check for an extra wrapping parenthesis."
                         )
                     }
-                    _ => "No wells matched — check the toolbar's Group by regex.".to_string(),
+                    _ => "No wells matched — check Matrix's regex.".to_string(),
                 }
             } else {
                 String::new()
@@ -374,10 +422,16 @@ impl ResultsMatrixController {
                 result.cols,
                 cells,
                 status,
+                (lo, hi),
             );
         }
     }
 
+    /// `range` is the `(min, max)` this render actually colored with (from
+    /// `resolve_range`) - pushed back into `matrix_range_min`/`max`
+    /// unconditionally, same as the heatmap chart does for its own range
+    /// fields, so they show the live auto-computed span while Auto is on and
+    /// echo back a manual pick as a no-op otherwise; never stale either way.
     #[allow(clippy::too_many_arguments)]
     fn push_grid(
         this: &Arc<Self>,
@@ -387,6 +441,7 @@ impl ResultsMatrixController {
         cols: usize,
         cells: Vec<ResultsMatrixCell>,
         status: String,
+        range: (f64, f64),
     ) {
         let ui = this.results_ui.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -398,14 +453,16 @@ impl ResultsMatrixController {
             state.set_matrix_cols(cols as i32);
             state.set_matrix_cells(slint::ModelRc::new(slint::VecModel::from(cells)));
             state.set_matrix_status(status.into());
+            state.set_matrix_range_min(range.0 as f32);
+            state.set_matrix_range_max(range.1 as f32);
         });
     }
 
     /// Suggests a regex from the current image names and, on success:
-    /// - sets it on the toolbar's own Group by dropdown (`group_by` = Regex,
-    ///   `group_regex` = the suggestion) so it takes effect immediately, and
+    /// - sets it on Matrix's own `matrix_group_regex` so it takes effect
+    ///   immediately, and
     /// - persists it to the project's `PlateSettings` (mirroring what typing
-    ///   directly into the toolbar's regex field does) and re-syncs the
+    ///   directly into Matrix's own regex field does) and re-syncs the
     ///   Project Settings dialog, so it isn't lost the next time the project
     ///   is opened.
     fn bg_autodetect_regex(this: Arc<Self>) {
@@ -451,8 +508,7 @@ impl ResultsMatrixController {
                 let _ = slint::invoke_from_event_loop(move || {
                     let Some(window) = ui.upgrade() else { return };
                     let state = window.global::<ResultsState>();
-                    state.set_group_by(ResultsGroupBy::Regex);
-                    state.set_group_regex(pattern.into());
+                    state.set_matrix_group_regex(pattern.into());
                     state.set_matrix_regex_hint(hint.into());
                 });
             }
@@ -474,8 +530,8 @@ struct MatrixComputeConfig {
     range_auto: bool,
     range_min: f64,
     range_max: f64,
-    toolbar_group_by: ResultsGroupBy,
-    toolbar_regex: String,
+    regex: String,
+    class_filter: String,
 }
 
 /// The smallest of the 13 plate-size presets (in list order, same as the
@@ -489,7 +545,7 @@ fn fitting_preset(need_rows: usize, need_cols: usize) -> Option<(usize, usize)> 
     })
 }
 
-fn agg_from_label(label: &str) -> AggFunc {
+pub(crate) fn agg_from_label(label: &str) -> AggFunc {
     match label {
         "Min" => AggFunc::Min,
         "Max" => AggFunc::Max,
@@ -512,21 +568,6 @@ fn color_scheme_labels() -> Vec<SharedString> {
         .iter()
         .map(|s| SharedString::from(s.label()))
         .collect()
-}
-
-/// Mirrors `HeatmapRange::resolve`'s semantics ([`evanalyzer_app`] keeps that
-/// private since it's an implementation detail of chart rendering): Auto
-/// always spans `[0, max(values)]`; Manual uses the given range, collapsing
-/// a degenerate/inverted one to a hairline span above `min`.
-fn resolve_range(values: &[f64], auto: bool, min: f64, max: f64) -> (f64, f64) {
-    if auto {
-        let hi = values.iter().copied().fold(0.0f64, f64::max).max(1e-9);
-        (0.0, hi)
-    } else if max > min {
-        (min, max)
-    } else {
-        (min, min + 1e-9)
-    }
 }
 
 fn matrix_cell(
@@ -577,21 +618,6 @@ mod tests {
     fn fitting_preset_none_beyond_largest() {
         assert_eq!(fitting_preset(100, 100), None);
     }
-
-    #[test]
-    fn resolve_range_auto_spans_zero_to_max() {
-        assert_eq!(resolve_range(&[1.0, 5.0, 3.0], true, 0.0, 0.0), (0.0, 5.0));
-    }
-
-    #[test]
-    fn resolve_range_manual_uses_given_bounds() {
-        assert_eq!(resolve_range(&[1.0, 5.0], false, 2.0, 10.0), (2.0, 10.0));
-    }
-
-    #[test]
-    fn resolve_range_manual_degenerate_collapses_to_hairline() {
-        let (lo, hi) = resolve_range(&[1.0], false, 5.0, 5.0);
-        assert_eq!(lo, 5.0);
-        assert!(hi > lo);
-    }
+    // `resolve_range` itself is tested in `evanalyzer_app::results::plate_matrix`
+    // (this module just re-uses it) - no need to duplicate those cases here.
 }

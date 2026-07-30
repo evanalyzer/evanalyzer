@@ -116,6 +116,40 @@ fn row_col_from_label(label: &str) -> Option<(usize, usize)> {
     Some((row.checked_sub(1)?, col.checked_sub(1)?))
 }
 
+/// Encodes a zero-based plate row index back into a spreadsheet-style
+/// bijective base-26 letter label (`0`->`"A"`, `25`->`"Z"`, `26`->`"AA"`,
+/// ...) — the inverse of the letter-decoding half of
+/// [`row_col_from_label`]. Used for plate row headers (e.g. in the CSV/XLSX
+/// matrix export), where a row needs a label independent of any particular
+/// well's data.
+pub fn row_label(index: usize) -> String {
+    let mut n = index + 1;
+    let mut letters = Vec::new();
+    while n > 0 {
+        let rem = (n - 1) % 26;
+        letters.push((b'A' + rem as u8) as char);
+        n = (n - 1) / 26;
+    }
+    letters.iter().rev().collect()
+}
+
+/// Resolves a color scale's `[min, max]` from either the data itself (`auto
+/// = true`, spanning `[0, max(values)]`) or an explicit manual range,
+/// guaranteeing `max > min` (a degenerate/inverted manual range collapses to
+/// a hairline span above `min` rather than dividing by zero downstream).
+/// Shared by the live Matrix view and the CSV/XLSX matrix export so the two
+/// can never compute different colors for the same data.
+pub fn resolve_range(values: &[f64], auto: bool, min: f64, max: f64) -> (f64, f64) {
+    if auto {
+        let hi = values.iter().copied().fold(0.0f64, f64::max).max(1e-9);
+        (0.0, hi)
+    } else if max > min {
+        (min, max)
+    } else {
+        (min, min + 1e-9)
+    }
+}
+
 /// Forces `spec` visible (matrix cells always need their one metric column
 /// populated, regardless of the source column-visibility state) and clears
 /// unrelated flags that don't matter to `aggregate_rows`.
@@ -636,5 +670,46 @@ mod tests {
     #[test]
     fn suggest_regex_empty_input() {
         assert_eq!(suggest_regex(&[]), None);
+    }
+
+    // ---- row_label ----
+
+    #[test]
+    fn row_label_single_letter() {
+        assert_eq!(row_label(0), "A");
+        assert_eq!(row_label(25), "Z");
+    }
+
+    #[test]
+    fn row_label_multi_letter() {
+        assert_eq!(row_label(26), "AA");
+        assert_eq!(row_label(27), "AB");
+    }
+
+    #[test]
+    fn row_label_round_trips_with_row_col_from_label() {
+        for i in [0usize, 1, 25, 26, 27, 51, 52, 700] {
+            let label = format!("{}5", row_label(i));
+            assert_eq!(row_col_from_label(&label), Some((i, 4)));
+        }
+    }
+
+    // ---- resolve_range ----
+
+    #[test]
+    fn resolve_range_auto_spans_zero_to_max() {
+        assert_eq!(resolve_range(&[1.0, 5.0, 3.0], true, 0.0, 0.0), (0.0, 5.0));
+    }
+
+    #[test]
+    fn resolve_range_manual_uses_given_bounds() {
+        assert_eq!(resolve_range(&[1.0, 5.0], false, 2.0, 10.0), (2.0, 10.0));
+    }
+
+    #[test]
+    fn resolve_range_manual_degenerate_collapses_to_hairline() {
+        let (lo, hi) = resolve_range(&[1.0], false, 5.0, 5.0);
+        assert_eq!(lo, 5.0);
+        assert!(hi > lo);
     }
 }

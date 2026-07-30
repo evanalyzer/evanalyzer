@@ -26,7 +26,7 @@ pub mod result {
     };
     pub use crate::results::plate_matrix::{
         PlateCell, PlateMatrixResult, RegexSuggestion, WellCell, WellMatrixResult,
-        compute_plate_matrix, compute_well_matrix, suggest_regex,
+        compute_plate_matrix, compute_well_matrix, resolve_range, row_label, suggest_regex,
     };
     pub use crate::results::results_exporter::ResultsExporter;
     pub use crate::results::results_loader::{

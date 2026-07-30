@@ -1,6 +1,10 @@
 import { ComboBox, LineEdit, ScrollView, SpinBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
-import { ResultsState, ResultsMatrixKind, ResultsMatrixCell } from "results_table.slint";
+import {
+    ResultsState,
+    ResultsMatrixKind,
+    ResultsMatrixCell,
+} from "results_table.slint";
 import { ProjectSettingsState } from "../dialogs/project_settings_dialog.slint";
 
 // -- Small bespoke pill button, matching the style of results_chart.slint's
@@ -46,211 +50,367 @@ export component ResultsMatrix inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        // -- Settings strip (single row) ----------------------------------------
-        // Which images belong to which well/cell is controlled by the toolbar's
-        // "Group by" dropdown (Folder or Regex) - Matrix view just reads
-        // ResultsState.group_by/group_regex live, rather than duplicating a
-        // grouping picker here. Plate/well physical dimensions aren't part of
-        // that dropdown, so they stay here, backed by the project's PlateSettings.
+        // -- Settings strip (two rows) --------------------------------------
+        // Row 1: how each cell's value is displayed (Value/Aggregate/Colors/
+        // Range). Row 2: which data populates the grid - Matrix's OWN regex
+        // grouping and class filter, intentionally decoupled from the Table
+        // view's Group by/Class filter (see results_matrix_controller.rs's
+        // struct-level doc comment) - plus the plate/well physical
+        // dimensions, backed by the project's PlateSettings.
         Rectangle {
-            height: 44px;
             background: Theme.panel;
 
-            HorizontalLayout {
-                padding: 8px;
-                spacing: 8px;
+            VerticalLayout {
+                Rectangle {
+                    height: 44px;
 
-                // Breadcrumb / drill-down back button
+                    HorizontalLayout {
+                        padding: 8px;
+                        spacing: 8px;
+
+                        // Breadcrumb / drill-down back button
                 HorizontalLayout {
-                    spacing: 4px;
-                    alignment: start;
+                            spacing: 4px;
+                            alignment: start;
 
-                    if ResultsState.matrix_active_well != "": back-ta := TouchArea {
-                        width: 18px;
-                        height: 26px;
-                        mouse-cursor: pointer;
-                        clicked => { ResultsState.matrix_back_clicked(); }
+                            if ResultsState.matrix_active_well != "": back-ta := TouchArea {
+                                width: 18px;
+                                height: 26px;
+                                mouse-cursor: pointer;
+                                clicked => { ResultsState.matrix_back_clicked(); }
+
+                                Text {
+                                    text: "◂";
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    color: back-ta.has-hover ? Theme.accent : Theme.text-dim;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: ResultsState.matrix_active_well == "" ? "Plate" : "Plate ▸ \{ResultsState.matrix_active_well}";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                font-weight: 600;
+                                color: Theme.text-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            width: 1px;
+                            background: Theme.border-soft;
+                        }
 
                         Text {
-                            text: "◂";
-                            font-size: 13px;
-                            font-weight: 700;
-                            color: back-ta.has-hover ? Theme.accent : Theme.text-dim;
+                            text: "Value:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
                             vertical-alignment: center;
                         }
-                    }
 
-                    Text {
-                        text: ResultsState.matrix_active_well == "" ? "Plate" : "Plate ▸ \{ResultsState.matrix_active_well}";
-                        font-size: 11px;
-                        font-family: Theme.font-sans;
-                        font-weight: 600;
-                        color: Theme.text-dim;
-                        vertical-alignment: center;
-                    }
-                }
+                        ComboBox {
+                            width: 170px;
+                            model: ResultsState.matrix_metric_options;
+                            current-value: ResultsState.matrix_metric;
+                            selected(v) => {
+                                ResultsState.matrix_metric = v;
+                                ResultsState.matrix_apply();
+                            }
+                        }
 
-                Rectangle { width: 1px; background: Theme.border-soft; }
+                        Text {
+                            text: "Aggregate:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
 
-                Text {
-                    text: "Value:";
-                    font-size: 11px;
-                    font-family: Theme.font-sans;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                }
+                        ComboBox {
+                            width: 120px;
+                            model: ResultsState.matrix_agg_options;
+                            current-value: ResultsState.matrix_agg;
+                            selected(v) => {
+                                ResultsState.matrix_agg = v;
+                                ResultsState.matrix_apply();
+                            }
+                        }
 
-                ComboBox {
-                    width: 130px;
-                    model: ResultsState.matrix_metric_options;
-                    current-value: ResultsState.matrix_metric;
-                    selected(v) => { ResultsState.matrix_metric = v; }
-                }
+                        Text {
+                            text: "Colors:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
 
-                Text {
-                    text: "Aggregate:";
-                    font-size: 11px;
-                    font-family: Theme.font-sans;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                }
+                        ComboBox {
+                            width: 120px;
+                            model: ResultsState.matrix_color_scheme_options;
+                            current-value: ResultsState.matrix_color_scheme;
+                            selected(v) => {
+                                ResultsState.matrix_color_scheme = v;
+                                ResultsState.matrix_apply();
+                            }
+                        }
 
-                ComboBox {
-                    width: 88px;
-                    model: ResultsState.matrix_agg_options;
-                    current-value: ResultsState.matrix_agg;
-                    selected(v) => { ResultsState.matrix_agg = v; }
-                }
+                        Text {
+                            text: "Range:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
 
-                Text {
-                    text: "Colors:";
-                    font-size: 11px;
-                    font-family: Theme.font-sans;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                }
-
-                ComboBox {
-                    width: 88px;
-                    model: ResultsState.matrix_color_scheme_options;
-                    current-value: ResultsState.matrix_color_scheme;
-                    selected(v) => { ResultsState.matrix_color_scheme = v; }
-                }
-
-                Text {
-                    text: "Range:";
-                    font-size: 11px;
-                    font-family: Theme.font-sans;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                }
-
+                        // While Auto is on, these mirror the range the last render
+                // actually used (pushed back by the controller) and are
+                // disabled; editing either only takes effect once Auto is
+                // off (which typing here switches to immediately).
                 LineEdit {
-                    width: 52px;
-                    font-size: 11px;
-                    text: "\{ResultsState.matrix_range_min}";
-                    edited(t) => {
-                        ResultsState.matrix_range_min = t.to-float();
-                        ResultsState.matrix_range_auto = false;
+                            width: 52px;
+                            font-size: 11px;
+                            enabled: !ResultsState.matrix_range_auto;
+                            text: "\{ResultsState.matrix_range_min}";
+                            edited(t) => {
+                                ResultsState.matrix_range_min = t.to-float();
+                                ResultsState.matrix_range_auto = false;
+                                ResultsState.matrix_apply();
+                            }
+                        }
+
+                        Text {
+                            text: "-";
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            width: 52px;
+                            font-size: 11px;
+                            enabled: !ResultsState.matrix_range_auto;
+                            text: "\{ResultsState.matrix_range_max}";
+                            edited(t) => {
+                                ResultsState.matrix_range_max = t.to-float();
+                                ResultsState.matrix_range_auto = false;
+                                ResultsState.matrix_apply();
+                            }
+                        }
+
+                        MatrixPillButton {
+                            label: "Auto";
+                            active: ResultsState.matrix_range_auto;
+                            clicked => {
+                                ResultsState.matrix_range_auto = !ResultsState.matrix_range_auto;
+                                ResultsState.matrix_apply();
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
                     }
                 }
 
-                Text {
-                    text: "–";
-                    font-size: 11px;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border-soft;
                 }
 
-                LineEdit {
-                    width: 52px;
-                    font-size: 11px;
-                    text: "\{ResultsState.matrix_range_max}";
-                    edited(t) => {
-                        ResultsState.matrix_range_max = t.to-float();
-                        ResultsState.matrix_range_auto = false;
-                    }
-                }
+                Rectangle {
+                    height: 44px;
 
-                MatrixPillButton {
-                    label: "Auto";
-                    active: ResultsState.matrix_range_auto;
-                    clicked => { ResultsState.matrix_range_auto = true; }
-                }
+                    HorizontalLayout {
+                        padding: 8px;
+                        spacing: 8px;
 
-                Rectangle { width: 1px; background: Theme.border-soft; }
+                        Text {
+                            text: "Regex:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
 
-                Text {
-                    text: "Plate size:";
-                    font-size: 11px;
-                    font-family: Theme.font-sans;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                }
+                        Rectangle {
+                            width: 160px;
+                            height: 26px;
+                            background: Theme.bg;
+                            border-radius: 3px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            clip: true;
 
-                ComboBox {
-                    width: 118px;
-                    model: [
-                        "1 Well (1 x 1)",
-                        "6 Well (2 x 3)",
-                        "8 Well (2 x 4)",
-                        "12 Well (2 x 6)",
-                        "12 Well (3 x 4)",
-                        "15 Well (3 x 5)",
-                        "18 Well (3 x 6)",
-                        "24 Well (4 x 6)",
-                        "48 Well (6 x 8)",
-                        "96 Well (8 x 12)",
-                        "384 Well (16 x 24)",
-                        "1536 Well (32 x 48)",
-                        "3456 Well (48 x 72)"
-                    ];
-                    current-index <=> ProjectSettingsState.settings.well_size_index;
-                }
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 4px;
 
-                Text {
-                    text: "Well R/C:";
-                    font-size: 11px;
-                    font-family: Theme.font-sans;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
 
-                SpinBox {
-                    width: 52px;
-                    value: ProjectSettingsState.settings.well_rows;
-                    minimum: 0;
-                    maximum: 8;
-                    edited => {
-                        ProjectSettingsState.settings.well_rows = self.value;
-                        ProjectSettingsState.well_dims_changed(self.value, ProjectSettingsState.settings.well_columns);
-                    }
-                }
+                                    regex-input := TextInput {
+                                        width: parent.width;
+                                        font-size: 11px;
+                                        font-family: Theme.font-mono;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        text: ResultsState.matrix_group_regex;
+                                        edited => {
+                                            ResultsState.matrix_group_regex = self.text;
+                                    // Keep Project Settings' persisted regex in
+                                    // sync with whatever's typed here, same as
+                                    // the Table view's own regex field does.
+                                    ProjectSettingsState.settings.custom_regex = self.text;
+                                            ProjectSettingsState.settings.grouping_mode = 4;
+                                            ProjectSettingsState.trigger_project_settings_accepted();
+                                            ResultsState.matrix_apply();
+                                        }
+                                    }
 
-                SpinBox {
-                    width: 52px;
-                    value: ProjectSettingsState.settings.well_columns;
-                    minimum: 0;
-                    maximum: 8;
-                    edited => {
-                        ProjectSettingsState.settings.well_columns = self.value;
-                        ProjectSettingsState.well_dims_changed(ProjectSettingsState.settings.well_rows, self.value);
-                    }
-                }
+                                    if regex-input.text == "": Text {
+                                        x: 0px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "^([A-Z]\\d+)_";
+                                        font-size: 11px;
+                                        font-family: Theme.font-mono;
+                                        color: Theme.text-faint;
+                                    }
+                                }
+                            }
+                        }
 
-                Rectangle { horizontal-stretch: 1; }
+                        autodetect-ta := TouchArea {
+                            width: autodetect-text.width;
+                            mouse-cursor: pointer;
+                            clicked => { ResultsState.matrix_autodetect_regex_requested(); }
 
-                MatrixPillButton {
-                    label: "Apply";
-                    clicked => {
-                        ProjectSettingsState.trigger_project_settings_accepted();
-                        ResultsState.matrix_apply();
+                            autodetect-text := Text {
+                                text: "Auto-detect";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                color: autodetect-ta.has-hover ? Theme.accent.brighter(20%) : Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        if ResultsState.matrix_regex_hint != "": Text {
+                            text: ResultsState.matrix_regex_hint;
+                            font-size: 10px;
+                            font-family: Theme.font-mono;
+                            color: Theme.text-faint;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        Rectangle {
+                            width: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        Text {
+                            text: "Class:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            width: 140px;
+                            model: ResultsState.matrix_class_options;
+                            current-value: ResultsState.matrix_class_filter == "" ? "All classes" : ResultsState.matrix_class_filter;
+                            selected(v) => {
+                                ResultsState.matrix_class_filter = v == "All classes" ? "" : v;
+                                ResultsState.matrix_apply();
+                            }
+                        }
+
+                        Rectangle {
+                            width: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        Text {
+                            text: "Plate size:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        plate-size-combo := ComboBox {
+                            width: 170px;
+                            model: [
+                                "1 Well (1 x 1)",
+                                "6 Well (2 x 3)",
+                                "8 Well (2 x 4)",
+                                "12 Well (2 x 6)",
+                                "12 Well (3 x 4)",
+                                "15 Well (3 x 5)",
+                                "18 Well (3 x 6)",
+                                "24 Well (4 x 6)",
+                                "48 Well (6 x 8)",
+                                "96 Well (8 x 12)",
+                                "384 Well (16 x 24)",
+                                "1536 Well (32 x 48)",
+                                "3456 Well (48 x 72)"
+                            ];
+                            current-index <=> ProjectSettingsState.settings.well_size_index;
+                            changed current-index => {
+                                ProjectSettingsState.trigger_project_settings_accepted();
+                                ResultsState.matrix_apply();
+                            }
+                        }
+
+                        Text {
+                            text: "Well R/C:";
+                            font-size: 11px;
+                            font-family: Theme.font-sans;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+
+                        SpinBox {
+                            width: 80px;
+                            value: ProjectSettingsState.settings.well_rows;
+                            minimum: 0;
+                            maximum: 8;
+                            edited => {
+                                ProjectSettingsState.settings.well_rows = self.value;
+                                ProjectSettingsState.well_dims_changed(self.value, ProjectSettingsState.settings.well_columns);
+                                ProjectSettingsState.trigger_project_settings_accepted();
+                                ResultsState.matrix_apply();
+                            }
+                        }
+
+                        SpinBox {
+                            width: 80px;
+                            value: ProjectSettingsState.settings.well_columns;
+                            minimum: 0;
+                            maximum: 8;
+                            edited => {
+                                ProjectSettingsState.settings.well_columns = self.value;
+                                ProjectSettingsState.well_dims_changed(ProjectSettingsState.settings.well_rows, self.value);
+                                ProjectSettingsState.trigger_project_settings_accepted();
+                                ResultsState.matrix_apply();
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
                     }
                 }
             }
         }
 
-        Rectangle { height: 1px; background: Theme.border; }
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
 
         // -- Grid content --------------------------------------------------
         Rectangle {
@@ -270,19 +430,64 @@ export component ResultsMatrix inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            if ResultsState.matrix_status == "": ScrollView {
-                GridLayout {
-                    padding: 8px;
-                    spacing: 3px;
+            // Cells shrink/grow with the window (between a min and max size)
+            // and the whole grid is centered in the available space, instead
+            // of a fixed cell size pinned to the top-left corner. Falls back
+            // to scrolling (from the min cell size) only if the grid still
+            // doesn't fit.
+            if ResultsState.matrix_status == "": matrix-scroll := ScrollView {
+                property <int> grid-cols: max(1, ResultsState.matrix_cols);
+                property <int> grid-rows: max(1, ResultsState.matrix_rows);
+                property <length> cell-spacing: 3px;
+                // Wells/plates are square, so a single clamped size drives
+                // both width and height instead of two independent axes.
+                property <length> cell-size: max(36px, min(84px, min(
+                    (self.visible-width - 16px - (grid-cols - 1) * cell-spacing) / grid-cols,
+                    (self.visible-height - 16px - (grid-rows - 1) * cell-spacing) / grid-rows)));
+                property <length> cell-w: cell-size;
+                property <length> cell-h: cell-size;
+                property <length> grid-w: grid-cols * cell-w + (grid-cols - 1) * cell-spacing;
+                property <length> grid-h: grid-rows * cell-h + (grid-rows - 1) * cell-spacing;
+                // Where the grid starts within the (possibly larger, for
+                // scrolling) viewport rectangle below - centered when it
+                // fits, flush to the top-left edge when it doesn't.
+                property <length> grid-x: max(0px, (self.visible-width - grid-w) / 2);
+                property <length> grid-y: max(0px, (self.visible-height - grid-h) / 2);
+
+                viewport-width: max(self.visible-width, grid-w);
+                viewport-height: max(self.visible-height, grid-h);
+
+                Rectangle {
+                    width: matrix-scroll.viewport-width;
+                    height: matrix-scroll.viewport-height;
 
                     for cell[i] in ResultsState.matrix_cells: cell-ta := TouchArea {
-                        row: i / ResultsState.matrix_cols;
-                        col: mod(i, ResultsState.matrix_cols);
-                        width: 62px;
-                        height: 48px;
-                        enabled: ResultsState.matrix_kind == ResultsMatrixKind.plate && cell.has_value;
-                        mouse-cursor: (cell.has_value && ResultsState.matrix_kind == ResultsMatrixKind.plate) ? pointer : default;
-                        clicked => { ResultsState.matrix_well_clicked(cell.label); }
+                        // Truncated to int explicitly before use in the x/y
+                        // length arithmetic below - `i / grid-cols` assigned
+                        // straight into a `length` expression does NOT floor
+                        // to a whole row the way assigning it to an
+                        // `int`-typed property does, so the leftover
+                        // fraction otherwise leaks into the pixel offset,
+                        // growing across each row into a visible staircase.
+                        property <int> cell-row: i / matrix-scroll.grid-cols;
+                        property <int> cell-col: mod(i, matrix-scroll.grid-cols);
+                        x: matrix-scroll.grid-x + cell-col * (matrix-scroll.cell-w + matrix-scroll.cell-spacing);
+                        y: matrix-scroll.grid-y + cell-row * (matrix-scroll.cell-h + matrix-scroll.cell-spacing);
+                        width: matrix-scroll.cell-w;
+                        height: matrix-scroll.cell-h;
+                        enabled: cell.has_value;
+                        mouse-cursor: cell.has_value ? pointer : default;
+                        clicked => {
+                            if (ResultsState.matrix_kind == ResultsMatrixKind.plate) {
+                                ResultsState.matrix_well_clicked(cell.label);
+                            } else {
+                                // Well view's cell label is the field-of-view
+                                // image's name (see matrix_cell() in
+                                // results_matrix_controller.rs) - jump to the
+                                // Table view filtered to just that image.
+                                ResultsState.matrix_image_clicked(cell.label);
+                            }
+                        }
 
                         Rectangle {
                             background: cell.has_value ? cell.color : Theme.panel;
@@ -302,6 +507,7 @@ export component ResultsMatrix inherits Rectangle {
                                     horizontal-alignment: center;
                                     overflow: elide;
                                 }
+
                                 if cell.has_value: Text {
                                     text: cell.value;
                                     font-size: 10px;

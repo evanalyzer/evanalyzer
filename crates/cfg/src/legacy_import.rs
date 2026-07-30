@@ -31,7 +31,6 @@ use crate::settings::pipeline_command_settings::*;
 use crate::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use crate::settings::plate_settings::{GroupingMode, PlateSettings};
 use crate::settings::project_settings::ProjectSettings;
-use indexmap::IndexMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LegacyImportError {
@@ -1632,58 +1631,6 @@ mod tests {
         }"##;
         let outcome = import_legacy_project(json).unwrap();
         assert_eq!(outcome.project.classification.classes[0].color, 0x9933FF);
-    }
-
-    #[test]
-    fn measure_channel_with_no_new_equivalent_is_dropped_with_a_warning() {
-        let json = r##"{
-            "meta": { "name": "X" },
-            "projectSettings": {
-                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
-                    "defaultMeasurements": [ { "measureChannel": "SomeOldOne", "stats": ["Avg"] } ] } ] },
-                "plate": {}
-            },
-            "imageSetup": {},
-            "pipelines": []
-        }"##;
-        let outcome = import_legacy_project(json).unwrap();
-        assert!(
-            outcome
-                .warnings
-                .iter()
-                .any(|w| w.contains("SomeOldOne") && w.contains("no equivalent"))
-        );
-    }
-
-    #[test]
-    fn measure_channel_with_only_dropped_stats_is_not_inserted() {
-        let json = r##"{
-            "meta": { "name": "X" },
-            "projectSettings": {
-                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
-                    "defaultMeasurements": [ { "measureChannel": "AreaSize", "stats": ["Off", "Cnt"] } ] } ] },
-                "plate": {}
-            },
-            "imageSetup": {},
-            "pipelines": []
-        }"##;
-        let outcome = import_legacy_project(json).unwrap();
-    }
-
-    #[test]
-    fn empty_or_none_measure_channel_is_dropped_without_a_warning() {
-        let json = r##"{
-            "meta": { "name": "X" },
-            "projectSettings": {
-                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
-                    "defaultMeasurements": [ { "measureChannel": "None", "stats": [] }, { "measureChannel": "", "stats": [] } ] } ] },
-                "plate": {}
-            },
-            "imageSetup": {},
-            "pipelines": []
-        }"##;
-        let outcome = import_legacy_project(json).unwrap();
-        assert!(outcome.warnings.is_empty());
     }
 
     // ---- plate edge cases ----

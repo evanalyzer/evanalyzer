@@ -646,6 +646,13 @@ component ResultsToolbar inherits Rectangle {
                                 root.pending-preset = 2;
                                 ResultsState.clear_all_filters();
                                 ResultsState.group_by = ResultsGroupBy.regex;
+                                // Same fallback as "Regex on image name" in
+                                // Custom settings: start from whatever regex
+                                // is already saved in Project Settings rather
+                                // than silently reusing an empty/stale one.
+                                if (ResultsState.group_regex == "") {
+                                    ResultsState.group_regex = ProjectSettingsState.settings.custom_regex;
+                                }
                                 ResultsState.group_agg_min = false;
                                 ResultsState.group_agg_max = false;
                                 ResultsState.group_agg_avg = true;
@@ -830,7 +837,7 @@ component ResultsToolbar inherits Rectangle {
                 x: 0px;
                 y: group-ribbon-btn.height + 2px;
                 width: 250px;
-                height: 467px;
+                height: 420px;
                 close-policy: no-auto-close;
 
                 Rectangle {
@@ -958,44 +965,6 @@ component ResultsToolbar inherits Rectangle {
                                             }
                                         }
                                     }
-                                }
-                            }
-                        }
-
-                        // Auto-detect a well/plate-style regex from the
-                        // project's image filenames (e.g. "my_file_A14_01")
-                        // - shown right under the regex field it fills in.
-                        if ResultsState.group_by == ResultsGroupBy.regex: Rectangle {
-                            height: 24px;
-                            background: Theme.bg;
-                            HorizontalLayout {
-                                padding-left: 26px;
-                                padding-right: 8px;
-                                spacing: 6px;
-                                alignment: start;
-
-                                autodetect-ta := TouchArea {
-                                    width: autodetect-text.width;
-                                    mouse-cursor: pointer;
-                                    clicked => { ResultsState.matrix_autodetect_regex_requested(); }
-
-                                    autodetect-text := Text {
-                                        text: "Auto-detect regex";
-                                        font-size: 11px;
-                                        font-family: Theme.font-sans;
-                                        color: autodetect-ta.has-hover ? Theme.accent.brighter(20%) : Theme.accent;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                if ResultsState.matrix_regex_hint != "": Text {
-                                    text: ResultsState.matrix_regex_hint;
-                                    font-size: 10px;
-                                    font-family: Theme.font-mono;
-                                    color: Theme.text-faint;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    horizontal-stretch: 1;
                                 }
                             }
                         }
@@ -1246,6 +1215,135 @@ component ResultsToolbar inherits Rectangle {
                             }
                         }
 
+                        // Matrix — plate/well grid of one aggregated value per well
+                        vm-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                // Matrix is always regex-grouped, using its own
+                                // decoupled regex (never the Table's group_by/
+                                // group_regex) - fall back to the project's
+                                // saved regex the first time it's empty.
+                                if (ResultsState.matrix_group_regex == "") {
+                                    ResultsState.matrix_group_regex = ProjectSettingsState.settings.custom_regex;
+                                }
+                                ResultsState.view_mode = ResultsViewMode.matrix;
+                                // Re-enter whichever well was last drilled into
+                                // (if any) instead of always resetting to the
+                                // plate view, so "well -> image -> back to
+                                // Matrix" returns to where the user came from.
+                                if (ResultsState.matrix_active_well != "") {
+                                    ResultsState.matrix_well_clicked(ResultsState.matrix_active_well);
+                                } else {
+                                    ResultsState.matrix_apply();
+                                }
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vm-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: ResultsState.view_mode == ResultsViewMode.matrix ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/grid-nine.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: ResultsState.view_mode == ResultsViewMode.matrix ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Matrix (Plate/Well)";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: ResultsState.view_mode == ResultsViewMode.matrix ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Coloc Detail — flat table, one row per source × partner pair
+                        vcd-ta := TouchArea {
+                            height: 28px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                ResultsState.group_computing = true;
+                                ResultsState.loading_more = true;
+                                ResultsState.view_mode = ResultsViewMode.coloc_table;
+                                ResultsState.coloc_detail_requested();
+                                view-popup.close();
+                            }
+
+                            Rectangle {
+                                border-radius: 4px;
+                                background: vcd-ta.has-hover ? Theme.raised : transparent;
+                                animate background { duration: 80ms; }
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 8px;
+                                    spacing: 6px;
+                                    alignment: start;
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 14px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/check.svg");
+                                            width: 10px;
+                                            height: 10px;
+                                            colorize: Theme.accent;
+                                            opacity: ResultsState.view_mode == ResultsViewMode.coloc_table ? 1.0 : 0.0;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        width: 18px;
+                                        Image {
+                                            source: @image-url("../icons/regular-black/intersect-three.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: ResultsState.view_mode == ResultsViewMode.coloc_table ? Theme.accent : Theme.text-dim;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Coloc Detail";
+                                        font-size: 11px;
+                                        font-family: Theme.font-sans;
+                                        color: ResultsState.view_mode == ResultsViewMode.coloc_table ? Theme.accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
                         Rectangle {
                             height: 1px;
                             background: Theme.border-soft;
@@ -1423,125 +1521,6 @@ component ResultsToolbar inherits Rectangle {
                             height: 1px;
                             background: Theme.border-soft;
                         }
-
-                        // Coloc Detail — flat table, one row per source × partner pair
-                        vcd-ta := TouchArea {
-                            height: 28px;
-                            mouse-cursor: pointer;
-                            clicked => {
-                                ResultsState.group_computing = true;
-                                ResultsState.loading_more = true;
-                                ResultsState.view_mode = ResultsViewMode.coloc_table;
-                                ResultsState.coloc_detail_requested();
-                                view-popup.close();
-                            }
-
-                            Rectangle {
-                                border-radius: 4px;
-                                background: vcd-ta.has-hover ? Theme.raised : transparent;
-                                animate background { duration: 80ms; }
-
-                                HorizontalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 8px;
-                                    spacing: 6px;
-                                    alignment: start;
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        width: 14px;
-                                        Image {
-                                            source: @image-url("../icons/regular-black/check.svg");
-                                            width: 10px;
-                                            height: 10px;
-                                            colorize: Theme.accent;
-                                            opacity: ResultsState.view_mode == ResultsViewMode.coloc_table ? 1.0 : 0.0;
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        width: 18px;
-                                        Image {
-                                            source: @image-url("../icons/regular-black/intersect-three.svg");
-                                            width: 14px;
-                                            height: 14px;
-                                            colorize: ResultsState.view_mode == ResultsViewMode.coloc_table ? Theme.accent : Theme.text-dim;
-                                        }
-                                    }
-
-                                    Text {
-                                        text: "Coloc Detail";
-                                        font-size: 11px;
-                                        font-family: Theme.font-sans;
-                                        color: ResultsState.view_mode == ResultsViewMode.coloc_table ? Theme.accent : Theme.text-dim;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 1;
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 1px;
-                            background: Theme.border-soft;
-                        }
-
-                        // Matrix — plate/well grid of one aggregated value per well
-                        vm-ta := TouchArea {
-                            height: 28px;
-                            mouse-cursor: pointer;
-                            clicked => {
-                                ResultsState.view_mode = ResultsViewMode.matrix;
-                                ResultsState.matrix_apply();
-                                view-popup.close();
-                            }
-
-                            Rectangle {
-                                border-radius: 4px;
-                                background: vm-ta.has-hover ? Theme.raised : transparent;
-                                animate background { duration: 80ms; }
-
-                                HorizontalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 8px;
-                                    spacing: 6px;
-                                    alignment: start;
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        width: 14px;
-                                        Image {
-                                            source: @image-url("../icons/regular-black/check.svg");
-                                            width: 10px;
-                                            height: 10px;
-                                            colorize: Theme.accent;
-                                            opacity: ResultsState.view_mode == ResultsViewMode.matrix ? 1.0 : 0.0;
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        width: 18px;
-                                        Image {
-                                            source: @image-url("../icons/regular-black/grid-nine.svg");
-                                            width: 14px;
-                                            height: 14px;
-                                            colorize: ResultsState.view_mode == ResultsViewMode.matrix ? Theme.accent : Theme.text-dim;
-                                        }
-                                    }
-
-                                    Text {
-                                        text: "Matrix (Plate/Well)";
-                                        font-size: 11px;
-                                        font-family: Theme.font-sans;
-                                        color: ResultsState.view_mode == ResultsViewMode.matrix ? Theme.accent : Theme.text-dim;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 1;
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -1715,14 +1694,14 @@ component ResultsStatusBar inherits Rectangle {
 export component ResultsWindow inherits Window {
     title: "Results - EVAnalyzer";
     icon: @image-url("../icons/icon.png");
-    preferred-width: 1300px;
+    preferred-width: 1500px;
     preferred-height: 900px;
     // The heatmap toolbar row (chart-kind buttons + Color by/Cell size/
     // Colors/Range controls + Plot) is the widest content in this window and
     // needs ~1220px before "Plot" starts clipping off the right edge -
     // measured directly by rendering ResultsChart at increasing widths.
-    min-width: 1300px;
-    min-height: 300px;
+    min-width: 1500px;
+    min-height: 900px;
     background: Theme.bg;
 
     // Initial color scheme is applied from Rust (`Appearance.apply`) right

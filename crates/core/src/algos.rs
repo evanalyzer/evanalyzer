@@ -7,8 +7,6 @@ mod classification;
 mod filters;
 mod math;
 mod morphology;
-#[cfg(test)]
-mod repro_slow_watershed;
 mod segmentation;
 mod spartial_transform;
 
