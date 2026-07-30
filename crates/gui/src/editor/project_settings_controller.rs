@@ -1,26 +1,44 @@
 use crate::UiState;
-use crate::{AppWindow, ProjectSettingsSlint, ProjectSettingsState};
+use crate::{AppWindow, ProjectSettingsSlint, ProjectSettingsState, ResultsWindow};
 use evanalyzer_cfg::settings::plate_settings::GroupingMode;
 use slint::{ComponentHandle, Model};
 use std::sync::Arc;
 
+/// `ProjectSettingsState` is edited from two places: the Project Settings
+/// dialog (on `AppWindow`) and the Results window's Matrix view settings
+/// strip (on `ResultsWindow`, see `results_matrix_controller.rs`). Slint
+/// gives each top-level window its own independent instance of every global
+/// it references — `AppWindow` and `ResultsWindow` do **not** share one
+/// `ProjectSettingsState` at runtime, even though both compile against the
+/// same `.slint` global declaration. Every callback below is therefore
+/// registered on *both* windows' instances, and `sync_project_settings_to_slint`
+/// pushes to both, so the two stay in lockstep instead of silently diverging.
 pub struct ProjectSettingsController {
     pub(crate) ui: slint::Weak<AppWindow>,
+    pub(crate) results_ui: slint::Weak<ResultsWindow>,
     pub(crate) app_state: Arc<UiState>,
 }
 
 impl ProjectSettingsController {
-    pub fn new(ui: slint::Weak<AppWindow>, app_state: Arc<UiState>) -> Self {
-        Self { ui, app_state }
+    pub fn new(
+        ui: slint::Weak<AppWindow>,
+        results_ui: slint::Weak<ResultsWindow>,
+        app_state: Arc<UiState>,
+    ) -> Self {
+        Self {
+            ui,
+            results_ui,
+            app_state,
+        }
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
-        let ui_handle = self.ui.clone();
-        if let Some(ui) = ui_handle.upgrade() {
+        if let Some(ui) = self.ui.upgrade() {
             let manager = self.clone();
             ui.global::<ProjectSettingsState>()
                 .on_project_settings_changed(move |project_settings| {
                     manager.update_project_settings_in_project(&project_settings);
+                    manager.sync_project_settings_to_slint();
                 });
 
             let manager = self.clone();
@@ -29,50 +47,58 @@ impl ProjectSettingsController {
                     manager.sync_project_settings_to_slint();
                 });
 
-            // Update a single cell value in the well order model
             let ui_weak = self.ui.clone();
             ui.global::<ProjectSettingsState>()
                 .on_well_value_changed(move |index, value| {
                     if let Some(ui) = ui_weak.upgrade() {
-                        let model = ui
-                            .global::<ProjectSettingsState>()
-                            .get_settings()
-                            .well_values;
-                        if let Some(vec_model) =
-                            model.as_any().downcast_ref::<slint::VecModel<i32>>()
-                        {
-                            let idx = index as usize;
-                            if idx < vec_model.row_count() {
-                                vec_model.set_row_data(idx, value);
-                            }
-                        }
+                        set_well_value(ui.global::<ProjectSettingsState>(), index, value);
                     }
                 });
 
-            // Resize well_values when well rows or columns change
             let ui_weak = self.ui.clone();
             ui.global::<ProjectSettingsState>()
                 .on_well_dims_changed(move |rows, cols| {
                     if let Some(ui) = ui_weak.upgrade() {
-                        let model = ui
-                            .global::<ProjectSettingsState>()
-                            .get_settings()
-                            .well_values;
-                        let new_size = (rows * cols).max(0) as usize;
-                        if let Some(vec_model) =
-                            model.as_any().downcast_ref::<slint::VecModel<i32>>()
-                        {
-                            let current = vec_model.row_count();
-                            if new_size > current {
-                                for i in current..new_size {
-                                    vec_model.push((i + 1) as i32);
-                                }
-                            } else {
-                                while vec_model.row_count() > new_size {
-                                    vec_model.remove(vec_model.row_count() - 1);
-                                }
-                            }
-                        }
+                        resize_well_values(ui.global::<ProjectSettingsState>(), rows, cols);
+                    }
+                });
+        }
+
+        if let Some(results_ui) = self.results_ui.upgrade() {
+            let manager = self.clone();
+            results_ui
+                .global::<ProjectSettingsState>()
+                .on_project_settings_changed(move |project_settings| {
+                    manager.update_project_settings_in_project(&project_settings);
+                    manager.sync_project_settings_to_slint();
+                });
+
+            let manager = self.clone();
+            results_ui
+                .global::<ProjectSettingsState>()
+                .on_project_settings_canceled(move || {
+                    manager.sync_project_settings_to_slint();
+                });
+
+            let results_ui_weak = self.results_ui.clone();
+            results_ui
+                .global::<ProjectSettingsState>()
+                .on_well_value_changed(move |index, value| {
+                    if let Some(results_ui) = results_ui_weak.upgrade() {
+                        set_well_value(results_ui.global::<ProjectSettingsState>(), index, value);
+                    }
+                });
+
+            let results_ui_weak = self.results_ui.clone();
+            results_ui
+                .global::<ProjectSettingsState>()
+                .on_well_dims_changed(move |rows, cols| {
+                    if let Some(results_ui) = results_ui_weak.upgrade() {
+                        resize_well_values(
+                            results_ui.global::<ProjectSettingsState>(),
+                            rows,
+                            cols,
+                        );
                     }
                 });
         }
@@ -131,6 +157,7 @@ impl ProjectSettingsController {
     pub fn sync_project_settings_to_slint(&self) {
         let project = self.app_state.get_project();
         let ui_handle = self.ui.clone();
+        let results_ui_handle = self.results_ui.clone();
 
         let (author_name, organization) = {
             let addr = &project.metadata;
@@ -158,24 +185,69 @@ impl ProjectSettingsController {
         let expirment_name = project.metadata.name.clone();
 
         slint::invoke_from_event_loop(move || {
-            if let Some(ui) = ui_handle.upgrade() {
-                let model = std::rc::Rc::new(slint::VecModel::from(well_image_order));
-                let settings = ProjectSettingsSlint {
-                    author_name: author_name.into(),
-                    organization_name: organization.into(),
-                    project_name: expirment_name.into(),
-                    well_rows: well_rows,
-                    well_columns: well_cols,
-                    well_values: slint::ModelRc::from(model),
-                    custom_regex: regex.into(),
-                    grouping_mode: mode_index,
-                    well_size_index: well_size_to_idx(plate_rows, plate_cols),
-                };
+            // Each window has its own independent `ProjectSettingsState`
+            // instance (see the struct-level doc comment), so each needs its
+            // own `ProjectSettingsSlint` value - in particular its own
+            // `VecModel` for `well_values`, which can't be shared across them.
+            let build_settings = || ProjectSettingsSlint {
+                author_name: author_name.clone().into(),
+                organization_name: organization.clone().into(),
+                project_name: expirment_name.clone().into(),
+                well_rows,
+                well_columns: well_cols,
+                well_values: slint::ModelRc::from(std::rc::Rc::new(slint::VecModel::from(
+                    well_image_order.clone(),
+                ))),
+                custom_regex: regex.clone().into(),
+                grouping_mode: mode_index,
+                well_size_index: well_size_to_idx(plate_rows, plate_cols),
+                plate_rows,
+                plate_cols,
+            };
 
-                ui.global::<ProjectSettingsState>().set_settings(settings);
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.global::<ProjectSettingsState>()
+                    .set_settings(build_settings());
+            }
+            if let Some(results_ui) = results_ui_handle.upgrade() {
+                results_ui
+                    .global::<ProjectSettingsState>()
+                    .set_settings(build_settings());
             }
         })
         .ok();
+    }
+}
+
+/// Updates a single cell in the well-order model — shared by both windows'
+/// `on_well_value_changed` handlers (see the struct-level doc comment).
+fn set_well_value(state: ProjectSettingsState<'_>, index: i32, value: i32) {
+    let model = state.get_settings().well_values;
+    if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<i32>>() {
+        let idx = index as usize;
+        if idx < vec_model.row_count() {
+            vec_model.set_row_data(idx, value);
+        }
+    }
+}
+
+/// Resizes the well-order model to match new well row/col counts — shared by
+/// both windows' `on_well_dims_changed` handlers (see the struct-level doc
+/// comment).
+fn resize_well_values(state: ProjectSettingsState<'_>, rows: i32, cols: i32) {
+    let model = state.get_settings().well_values;
+    let new_size = (rows * cols).max(0) as usize;
+    if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<i32>>() {
+        let current = vec_model.row_count();
+        if new_size > current {
+            for i in current..new_size {
+                vec_model.push((i + 1) as i32);
+            }
+        } else {
+            while vec_model.row_count() > new_size {
+                vec_model.remove(vec_model.row_count() - 1);
+            }
+        }
     }
 }
 
@@ -202,7 +274,7 @@ fn grouping_mode_to_index(mode: &GroupingMode, regex: &String) -> i32 {
 }
 
 /// Returns row and col
-fn index_to_well_size(index: i32) -> (i32, i32) {
+pub(crate) fn index_to_well_size(index: i32) -> (i32, i32) {
     match index {
         0 => (1, 1),
         1 => (2, 3),

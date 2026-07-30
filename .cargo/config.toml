@@ -45,3 +45,11 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "link-arg=-Wl,-rpath,$ORIGIN"
 # libtorch / libduckdb .dylib files shipped next to it (see release.yml packaging).
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-Wl,-rpath,@loader_path"]
+
+[build]
+# Share build artifacts across projects to save space
+incremental = false 
+
+[profile.dev]
+# Reduce debug info size (0 = no debug info, 1 = line tables only, 2 = full)
+debug = 1 

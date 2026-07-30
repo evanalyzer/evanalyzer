@@ -132,7 +132,7 @@
             "type": "rollingBall",
             "radius": 4.0,
             "ballType": "PARABOLOID",
-            "preSmooth": false
+            "preSmooth": true
           }
         },
         {
@@ -159,7 +159,7 @@
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
-                "objectClassId": 1
+                "objectClassId": 4
               }
             ]
           }
@@ -190,14 +190,14 @@
           "enabled": true,
           "command": {
             "type": "classifyObjects",
-            "originSegmentation": [
-              1
+            "inputClasses": [
+              {
+                "VALID": 4
+              }
             ],
-            "inputClasses": [],
-            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-            "outputClass": {
-              "VALID": 4
-            },
+            "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+            "originSegmentation": [],
+            "outputClass": "UNSET",
             "overlappingWith": "UNSET",
             "minIntersectionArea": 0.0,
             "sizeUnit": "px",
@@ -288,7 +288,7 @@
                 "minThreshold": 0.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
-                "objectClassId": 1
+                "objectClassId": 11
               }
             ]
           }
@@ -310,14 +310,14 @@
           "enabled": true,
           "command": {
             "type": "classifyObjects",
-            "originSegmentation": [
-              1
+            "inputClasses": [
+              {
+                "VALID": 11
+              }
             ],
-            "inputClasses": [],
-            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-            "outputClass": {
-              "VALID": 11
-            },
+            "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+            "originSegmentation": [],
+            "outputClass": "UNSET",
             "overlappingWith": "UNSET",
             "minIntersectionArea": 0.0,
             "sizeUnit": "px",
@@ -407,7 +407,7 @@
                 "minThreshold": 40.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
-                "objectClassId": 1
+                "objectClassId": 21
               }
             ]
           }
@@ -439,13 +439,15 @@
           "command": {
             "type": "classifyObjects",
             "originSegmentation": [
-              1
+
             ],
-            "inputClasses": [],
-            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-            "outputClass": {
-              "VALID": 21
-            },
+            "inputClasses": [
+              {
+                "VALID": 21
+              }
+            ],
+            "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+            "outputClass": "UNSET",
             "overlappingWith": "UNSET",
             "minIntersectionArea": 0.0,
             "sizeUnit": "px",
@@ -483,14 +485,6 @@
             "allowMultiObjectColoc": true,
             "sizeUnit": "px",
             "minColocArea": 0.0
-          }
-        },
-        {
-          "enabled": true,
-          "command": {
-            "type": "saveImage",
-            "name": "spot_ch1",
-            "source": "IMAGE"
           }
         }
       ]
@@ -562,13 +556,15 @@
           "command": {
             "type": "classifyObjects",
             "originSegmentation": [
-              1
+
             ],
-            "inputClasses": [],
-            "matchHandling": "ADD_OUTPUT_CLASS_IF_MATCH",
-            "outputClass": {
-              "VALID": 1
-            },
+            "inputClasses": [
+              {
+                "VALID": 1
+              }
+            ],
+            "matchHandling": "REMOVE_INPUT_CLASS_IF_NOT_MATCH",
+            "outputClass": "UNSET",
             "overlappingWith": "UNSET",
             "minIntersectionArea": 0.0,
             "sizeUnit": "px",
@@ -606,14 +602,6 @@
             "allowMultiObjectColoc": true,
             "sizeUnit": "px",
             "minColocArea": 0.0
-          }
-        },
-        {
-          "enabled": true,
-          "command": {
-            "type": "saveImage",
-            "name": "spot_ch2",
-            "source": "IMAGE"
           }
         }
       ]

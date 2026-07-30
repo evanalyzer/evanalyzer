@@ -62,22 +62,7 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     let mut failed = 0usize;
     let mut total = image_count;
     for event in rx {
-        match event {
-            ProgressEvent::Started { total: t } => total = t,
-            ProgressEvent::ImageCompleted { index, total: t, path } => {
-                total = t;
-                print!("\r[{index}/{t}] {}          ", path.display());
-                std::io::stdout().flush().ok();
-            }
-            ProgressEvent::ImageFailed { path } => {
-                failed += 1;
-                println!("\nFAILED: {}", path.display());
-            }
-            ProgressEvent::Finished => println!(),
-            ProgressEvent::TilesScheduled { .. }
-            | ProgressEvent::TileCompleted { .. }
-            | ProgressEvent::BreakpointReached { .. } => {}
-        }
+        apply_progress_event(event, &mut total, &mut failed);
     }
 
     let result = handle.join().map_err(|_| {
@@ -91,6 +76,32 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     );
     println!("Results database written under: {}", output_path.display());
     Ok(())
+}
+
+/// Applies one [`ProgressEvent`] to the running `total`/`failed` counters and
+/// prints the corresponding progress line to stdout, mirroring the CLI's
+/// console output.
+///
+/// Factored out of `run`'s event loop so the state-transition logic (what
+/// each event does to `total`/`failed`) can be unit-tested without needing a
+/// real pipeline run to produce these events.
+fn apply_progress_event(event: ProgressEvent, total: &mut usize, failed: &mut usize) {
+    match event {
+        ProgressEvent::Started { total: t } => *total = t,
+        ProgressEvent::ImageCompleted { index, total: t, path } => {
+            *total = t;
+            print!("\r[{index}/{t}] {}          ", path.display());
+            std::io::stdout().flush().ok();
+        }
+        ProgressEvent::ImageFailed { path } => {
+            *failed += 1;
+            println!("\nFAILED: {}", path.display());
+        }
+        ProgressEvent::Finished => println!(),
+        ProgressEvent::TilesScheduled { .. }
+        | ProgressEvent::TileCompleted { .. }
+        | ProgressEvent::BreakpointReached { .. } => {}
+    }
 }
 
 #[cfg(test)]
@@ -127,5 +138,135 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_applies_the_images_override_and_still_rejects_an_empty_scan_result() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+        // A real (empty) directory - the `--images` override path must set
+        // `project.images.root` to this and call `scan_image_folder_and_add()`
+        // before the "no images" check runs, not merely reuse whatever (if
+        // anything) was already in the project's saved image list.
+        let images_dir = file.path.parent().unwrap().join("images");
+        std::fs::create_dir_all(&images_dir).unwrap();
+
+        let result = run(AnalyzeArgs {
+            project: file.path.clone(),
+            images: Some(images_dir),
+            threads: None,
+            job_name: None,
+        });
+
+        let err = result.expect_err(
+            "an images dir override that scans to zero images must still be rejected",
+        );
+        let InternalErrors::InvalidArgument(msg) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(msg.contains("no images"));
+    }
+
+    #[test]
+    fn run_errors_when_the_images_override_directory_does_not_exist() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+        let missing_dir = file.path.parent().unwrap().join("does_not_exist");
+
+        let result = run(AnalyzeArgs {
+            project: file.path.clone(),
+            images: Some(missing_dir),
+            threads: None,
+            job_name: None,
+        });
+
+        let err = result.expect_err("scanning a nonexistent images dir must still yield 0 images");
+        let InternalErrors::InvalidArgument(msg) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(msg.contains("no images"));
+    }
+
+    // -- apply_progress_event -------------------------------------------------
+
+    fn sample_path() -> PathBuf {
+        PathBuf::from("some/image.tif")
+    }
+
+    #[test]
+    fn apply_progress_event_started_sets_total() {
+        let mut total = 0;
+        let mut failed = 0;
+        apply_progress_event(ProgressEvent::Started { total: 7 }, &mut total, &mut failed);
+        assert_eq!(total, 7);
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn apply_progress_event_image_completed_updates_total_and_leaves_failed_unchanged() {
+        let mut total = 1;
+        let mut failed = 2;
+        apply_progress_event(
+            ProgressEvent::ImageCompleted {
+                index: 3,
+                total: 5,
+                path: sample_path(),
+            },
+            &mut total,
+            &mut failed,
+        );
+        assert_eq!(total, 5);
+        assert_eq!(failed, 2);
+    }
+
+    #[test]
+    fn apply_progress_event_image_failed_increments_failed_and_leaves_total_unchanged() {
+        let mut total = 5;
+        let mut failed = 0;
+        apply_progress_event(
+            ProgressEvent::ImageFailed { path: sample_path() },
+            &mut total,
+            &mut failed,
+        );
+        assert_eq!(total, 5);
+        assert_eq!(failed, 1);
+
+        apply_progress_event(
+            ProgressEvent::ImageFailed { path: sample_path() },
+            &mut total,
+            &mut failed,
+        );
+        assert_eq!(failed, 2, "a second failure must accumulate, not overwrite");
+    }
+
+    #[test]
+    fn apply_progress_event_finished_leaves_counters_unchanged() {
+        let mut total = 4;
+        let mut failed = 1;
+        apply_progress_event(ProgressEvent::Finished, &mut total, &mut failed);
+        assert_eq!(total, 4);
+        assert_eq!(failed, 1);
+    }
+
+    #[test]
+    fn apply_progress_event_ignores_tiles_scheduled_and_tile_completed() {
+        let mut total = 4;
+        let mut failed = 1;
+
+        apply_progress_event(
+            ProgressEvent::TilesScheduled { total_tiles: 99 },
+            &mut total,
+            &mut failed,
+        );
+        apply_progress_event(
+            ProgressEvent::TileCompleted {
+                tile_index: 1,
+                total_tiles: 99,
+                objects: Vec::new(),
+            },
+            &mut total,
+            &mut failed,
+        );
+
+        assert_eq!(total, 4);
+        assert_eq!(failed, 1);
     }
 }

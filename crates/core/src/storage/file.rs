@@ -310,8 +310,45 @@ impl PipelineResultExporter for CsvExporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::object::{Intensity, Track};
+    use evanalyzer_cfg::core_types::{ObjectId, TrackId};
+    use indexmap::IndexMap;
+    use std::collections::HashSet;
     use std::fs;
     use tempfile::TempDir;
+
+    /// Parses `content` as a CSV with a header row, returning the header record
+    /// plus every data record. Small local helper so value-by-column-name
+    /// lookups below don't rely on brittle positional/string matching.
+    fn parse_csv(content: &str) -> (csv::StringRecord, Vec<csv::StringRecord>) {
+        let mut reader = csv::Reader::from_reader(content.as_bytes());
+        let headers = reader.headers().expect("CSV should have a header row").clone();
+        let rows = reader
+            .records()
+            .map(|r| r.expect("valid CSV record"))
+            .collect();
+        (headers, rows)
+    }
+
+    /// Looks up `name`'s value in `row` by header name.
+    fn column<'a>(headers: &csv::StringRecord, row: &'a csv::StringRecord, name: &str) -> &'a str {
+        let idx = headers
+            .iter()
+            .position(|h| h == name)
+            .unwrap_or_else(|| panic!("column `{name}` not found; headers: {:?}", headers));
+        row.get(idx).unwrap_or_default()
+    }
+
+    /// Finds the single data row whose `object_id` column matches `object_id`.
+    fn row_by_object_id<'a>(
+        headers: &csv::StringRecord,
+        rows: &'a [csv::StringRecord],
+        object_id: &str,
+    ) -> &'a csv::StringRecord {
+        rows.iter()
+            .find(|row| column(headers, row, "object_id") == object_id)
+            .unwrap_or_else(|| panic!("no row found with object_id = {object_id}"))
+    }
 
     #[test]
     fn test_csv_export_creates_file() {
@@ -395,5 +432,313 @@ mod tests {
             1,
             "the header row must be written exactly once across multiple export() calls"
         );
+    }
+
+    #[test]
+    fn test_class_label_uses_class_name_when_present_falls_back_otherwise_and_handles_unset() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("test_class_label.csv");
+
+        // Only class Valid(5) has a human-readable name configured.
+        let mut class_names = HashMap::new();
+        class_names.insert(ObjectClass::Valid(5), "Positive".to_string());
+
+        let exporter = CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
+
+        let mut cache = PipelineCache::default();
+        cache.image_rel_path = PathBuf::from("classes.tif");
+
+        let named_id = ObjectId::next();
+        let named = crate::object::Object::new(crate::object::ObjectInit {
+            id: named_id.clone(),
+            object_class: HashSet::from([ObjectClass::Valid(5)]),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            ..Default::default()
+        });
+
+        let unnamed_id = ObjectId::next();
+        let unnamed = crate::object::Object::new(crate::object::ObjectInit {
+            id: unnamed_id.clone(),
+            object_class: HashSet::from([ObjectClass::Valid(7)]),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            ..Default::default()
+        });
+
+        let unset_id = ObjectId::next();
+        let unset = crate::object::Object::new(crate::object::ObjectInit {
+            id: unset_id.clone(),
+            object_class: HashSet::from([ObjectClass::Unset]),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            ..Default::default()
+        });
+
+        cache.object_cache.insert(named.id.clone(), named);
+        cache.object_cache.insert(unnamed.id.clone(), unnamed);
+        cache.object_cache.insert(unset.id.clone(), unset);
+
+        exporter.export(&cache).expect("export should succeed");
+
+        let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
+        let (headers, rows) = parse_csv(&content);
+
+        assert_eq!(
+            column(&headers, row_by_object_id(&headers, &rows, &named_id.to_string()), "object_class"),
+            "Positive (5)",
+            "a class present in class_names should render as '<name> (<n>)'"
+        );
+        assert_eq!(
+            column(&headers, row_by_object_id(&headers, &rows, &unnamed_id.to_string()), "object_class"),
+            "class_7",
+            "a class absent from class_names should fall back to 'class_<n>'"
+        );
+        assert_eq!(
+            column(&headers, row_by_object_id(&headers, &rows, &unset_id.to_string()), "object_class"),
+            "unset",
+            "ObjectClass::Unset should render as 'unset'"
+        );
+    }
+
+    #[test]
+    fn test_colocalization_columns_are_named_and_comma_joined() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("test_coloc.csv");
+
+        let mut class_names = HashMap::new();
+        class_names.insert(ObjectClass::Valid(9), "Nuclei".to_string());
+
+        let exporter = CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
+
+        let mut cache = PipelineCache::default();
+        cache.image_rel_path = PathBuf::from("coloc.tif");
+
+        let partner_a = ObjectId::next();
+        let partner_b = ObjectId::next();
+
+        let colocalized_id = ObjectId::next();
+        let colocalized = crate::object::Object::new(crate::object::ObjectInit {
+            id: colocalized_id.clone(),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            colocalized_with: IndexMap::from([(
+                ObjectClass::Valid(9),
+                vec![partner_a.clone(), partner_b.clone()],
+            )]),
+            ..Default::default()
+        });
+
+        let solo_id = ObjectId::next();
+        let solo = crate::object::Object::new(crate::object::ObjectInit {
+            id: solo_id.clone(),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            ..Default::default()
+        });
+
+        cache.object_cache.insert(colocalized.id.clone(), colocalized);
+        cache.object_cache.insert(solo.id.clone(), solo);
+
+        exporter.export(&cache).expect("export should succeed");
+
+        let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
+        let (headers, rows) = parse_csv(&content);
+
+        let coloc_col = "coloc_with_Nuclei (9)";
+        assert!(
+            headers.iter().any(|h| h == coloc_col),
+            "expected a '{coloc_col}' column; headers were: {:?}",
+            headers
+        );
+
+        let expected_ids = format!("{},{}", partner_a, partner_b);
+        assert_eq!(
+            column(&headers, row_by_object_id(&headers, &rows, &colocalized_id.to_string()), coloc_col),
+            expected_ids,
+            "multiple colocalization partners should be comma-joined"
+        );
+        assert_eq!(
+            column(&headers, row_by_object_id(&headers, &rows, &solo_id.to_string()), coloc_col),
+            "",
+            "an object with no colocalization for that class should have an empty cell"
+        );
+    }
+
+    #[test]
+    fn test_multi_channel_intensity_columns_are_computed_correctly() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("test_intensities.csv");
+
+        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+
+        let mut cache = PipelineCache::default();
+        cache.image_rel_path = PathBuf::from("intensities.tif");
+        // PipelineCache::default() sets nr_of_bits = 16 (see PipelineImageMeta's test Default impl).
+        let bit_max = ((1u64 << 16) - 1) as f64;
+
+        let area: usize = 5;
+        let ch0 = Intensity {
+            sum_intensity: 2.5,
+            min_intensity: 0.1,
+            max_intensity: 0.9,
+            avg_intensity: 0.5,
+            pixel_values: vec![],
+        };
+        let ch3 = Intensity {
+            sum_intensity: 1.2,
+            min_intensity: 0.05,
+            max_intensity: 0.4,
+            avg_intensity: 0.24,
+            pixel_values: vec![],
+        };
+
+        let object_id = ObjectId::next();
+        let object = crate::object::Object::new(crate::object::ObjectInit {
+            id: object_id.clone(),
+            area,
+            bbox: [0, 0, 3, 3],
+            intensities: IndexMap::from([(0, ch0.clone()), (3, ch3.clone())]),
+            ..Default::default()
+        });
+        cache.object_cache.insert(object.id.clone(), object);
+
+        exporter.export(&cache).expect("export should succeed");
+
+        let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
+        let (headers, rows) = parse_csv(&content);
+        let row = row_by_object_id(&headers, &rows, &object_id.to_string());
+
+        for (ch, intensity) in [(0, &ch0), (3, &ch3)] {
+            let mean_raw = intensity.sum_intensity / (area as f64).max(1.0);
+            let min_raw = intensity.min_intensity as f64;
+            let max_raw = intensity.max_intensity as f64;
+
+            assert_eq!(
+                column(&headers, row, &format!("ch{ch}_integrated_density_raw")),
+                format!("{:.6}", intensity.sum_intensity)
+            );
+            assert_eq!(
+                column(&headers, row, &format!("ch{ch}_integrated_density_scaled")),
+                format!("{:.2}", intensity.sum_intensity * bit_max)
+            );
+            assert_eq!(
+                column(&headers, row, &format!("ch{ch}_mean_intensity_raw")),
+                format!("{:.6}", mean_raw)
+            );
+            assert_eq!(
+                column(&headers, row, &format!("ch{ch}_mean_intensity_scaled")),
+                format!("{:.2}", mean_raw * bit_max)
+            );
+            assert_eq!(
+                column(&headers, row, &format!("ch{ch}_min_intensity_raw")),
+                format!("{:.6}", min_raw)
+            );
+            assert_eq!(
+                column(&headers, row, &format!("ch{ch}_min_intensity_scaled")),
+                format!("{:.2}", min_raw * bit_max)
+            );
+            assert_eq!(
+                column(&headers, row, &format!("ch{ch}_max_intensity_raw")),
+                format!("{:.6}", max_raw)
+            );
+            assert_eq!(
+                column(&headers, row, &format!("ch{ch}_max_intensity_scaled")),
+                format!("{:.2}", max_raw * bit_max)
+            );
+        }
+    }
+
+    #[test]
+    fn test_new_against_preexisting_file_does_not_rewrite_header() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("test_preexisting.csv");
+
+        // First, independent exporter instance creates the file and writes header + one row.
+        let exporter_1 = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let mut cache_a = PipelineCache::default();
+        cache_a.image_rel_path = PathBuf::from("image_a.tif");
+        let object_a = crate::object::Object::new(crate::object::ObjectInit {
+            id: ObjectId::next(),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            ..Default::default()
+        });
+        cache_a.object_cache.insert(object_a.id.clone(), object_a);
+        exporter_1.export(&cache_a).expect("first export should succeed");
+        drop(exporter_1);
+
+        // A brand-new CsvExporter instance pointed at the now-existing file should treat the
+        // header as already written (header_written = output_path.exists()) and only append.
+        let exporter_2 = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let mut cache_b = PipelineCache::default();
+        cache_b.image_rel_path = PathBuf::from("image_b.tif");
+        let object_b = crate::object::Object::new(crate::object::ObjectInit {
+            id: ObjectId::next(),
+            area: 20,
+            bbox: [1, 1, 4, 4],
+            ..Default::default()
+        });
+        cache_b.object_cache.insert(object_b.id.clone(), object_b);
+        exporter_2.export(&cache_b).expect("second export (fresh instance) should succeed");
+
+        let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "expected one header row plus one data row per export() call, got: {content}"
+        );
+        assert_eq!(
+            lines.iter().filter(|l| l.starts_with("image,channel")).count(),
+            1,
+            "a second CsvExporter instance over a pre-existing file must not rewrite the header"
+        );
+    }
+
+    #[test]
+    fn test_lineage_touches_edge_and_track_id_fields() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("test_lineage.csv");
+
+        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+
+        let mut cache = PipelineCache::default();
+        cache.image_rel_path = PathBuf::from("lineage.tif");
+
+        let parent_id = ObjectId::next();
+        let child_1 = ObjectId::next();
+        let child_2 = ObjectId::next();
+
+        let object_id = ObjectId::next();
+        let object = crate::object::Object::new(crate::object::ObjectInit {
+            id: object_id.clone(),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            parent_id: Some(parent_id.clone()),
+            children: vec![child_1.clone(), child_2.clone()],
+            touches_edge: true,
+            track: Track {
+                id: TrackId(42),
+                object_ids: vec![],
+                parent_track: None,
+            },
+            ..Default::default()
+        });
+        cache.object_cache.insert(object.id.clone(), object);
+
+        exporter.export(&cache).expect("export should succeed");
+
+        let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
+        let (headers, rows) = parse_csv(&content);
+        let row = row_by_object_id(&headers, &rows, &object_id.to_string());
+
+        assert_eq!(column(&headers, row, "parent_id"), parent_id.to_string());
+        assert_eq!(
+            column(&headers, row, "children"),
+            format!("{},{}", child_1, child_2)
+        );
+        assert_eq!(column(&headers, row, "touches_edge"), "true");
+        assert_eq!(column(&headers, row, "track_id"), "42");
     }
 }

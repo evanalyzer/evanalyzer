@@ -86,6 +86,7 @@ impl ImageCache {
                             0f32;
                             self.image_meta.image_tile_info.width
                                 * self.image_meta.image_tile_info.height
+                                * 3
                         ],
                         CpuAllocator,
                     )
@@ -170,4 +171,302 @@ pub struct PipelineCache {
     pub image_cache: ImageCache,
     pub object_cache: BTreeMap<ObjectId, Object>,
     pub image_rel_path: PathBuf,
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::ManagedImage;
+    use kornia_apriltag::utils::Point2d;
+    use kornia_image::{Image, ImageSize};
+    use kornia_tensor::CpuAllocator;
+
+    fn gray_container(width: usize, height: usize, data: Vec<f32>) -> Arc<ImageContainer> {
+        Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::new(
+                ImageSize { width, height },
+                data,
+                CpuAllocator,
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }))
+    }
+
+    fn rgb_container(width: usize, height: usize, data: Vec<f32>) -> Arc<ImageContainer> {
+        Arc::new(ImageContainer::F32Rgb(ManagedImage {
+            data: Image::<f32, 3, CpuAllocator>::new(
+                ImageSize { width, height },
+                data,
+                CpuAllocator,
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }))
+    }
+
+    fn u32_container(width: usize, height: usize, data: Vec<u32>) -> Arc<ImageContainer> {
+        Arc::new(ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1, CpuAllocator>::new(
+                ImageSize { width, height },
+                data,
+                CpuAllocator,
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }))
+    }
+
+    // ---- clear_pipeline_context ----
+
+    #[test]
+    fn clear_pipeline_context_keeps_channel_entries() {
+        let mut cache = ImageCache::default();
+        cache.add_to_channel_cache(gray_container(1, 1, vec![1.0]), 0);
+
+        cache.clear_pipeline_context();
+
+        assert!(cache.get_image_from_channel_cache(0).is_some());
+    }
+
+    #[test]
+    fn clear_pipeline_context_drops_pipeline_context_memory_entries() {
+        let mut cache = ImageCache::default();
+        cache.images.insert(
+            ImageAddress::Memory(MemoryId::PipelineContext(1)),
+            gray_container(1, 1, vec![1.0]),
+        );
+
+        cache.clear_pipeline_context();
+
+        assert!(
+            cache
+                .get_image_from_memory_cache(MemoryId::PipelineContext(1))
+                .is_none()
+        );
+    }
+
+    /// Pins down the current (possibly surprising) behavior of the catch-all `_ => false`
+    /// arm: the doc comment on `clear_pipeline_context` only mentions dropping
+    /// `Memory(PipelineContext(_))`, but the match's fallback arm actually also drops
+    /// every other non-Channel `ImageAddress` variant -- including `Scratchpad` and
+    /// `Memory(ProjectCache(_))`. This test documents that reality; it is not asserting
+    /// that this is the *intended* behavior.
+    #[test]
+    fn clear_pipeline_context_also_drops_scratchpad_and_project_cache_via_catch_all() {
+        let mut cache = ImageCache::default();
+        cache
+            .images
+            .insert(ImageAddress::Scratchpad, gray_container(1, 1, vec![2.0]));
+        cache.images.insert(
+            ImageAddress::Memory(MemoryId::ProjectCache(7)),
+            gray_container(1, 1, vec![3.0]),
+        );
+        cache.add_to_channel_cache(gray_container(1, 1, vec![4.0]), 5);
+
+        cache.clear_pipeline_context();
+
+        // Channel entry survives.
+        assert!(cache.get_image_from_channel_cache(5).is_some());
+        // Scratchpad and ProjectCache entries are both gone too, via the `_ => false` arm,
+        // even though the doc comment only calls out PipelineContext memory slots.
+        assert!(!cache.images.contains_key(&ImageAddress::Scratchpad));
+        assert!(
+            !cache
+                .images
+                .contains_key(&ImageAddress::Memory(MemoryId::ProjectCache(7)))
+        );
+        assert_eq!(cache.images.len(), 1);
+    }
+
+    // ---- add_to_channel_cache / get_image_from_channel_cache ----
+
+    #[test]
+    fn channel_cache_round_trip() {
+        let mut cache = ImageCache::default();
+        let image = gray_container(1, 1, vec![42.0]);
+
+        cache.add_to_channel_cache(image.clone(), 3);
+
+        let fetched = cache.get_image_from_channel_cache(3).unwrap();
+        assert!(Arc::ptr_eq(&fetched, &image));
+    }
+
+    #[test]
+    fn channel_cache_miss_returns_none() {
+        let cache = ImageCache::default();
+        assert!(cache.get_image_from_channel_cache(99).is_none());
+    }
+
+    // ---- get_image_from_memory_cache ----
+
+    #[test]
+    fn memory_cache_round_trip() {
+        let mut cache = ImageCache::default();
+        let image = gray_container(1, 1, vec![7.0]);
+        let id = MemoryId::PipelineContext(2);
+        cache
+            .images
+            .insert(ImageAddress::Memory(id), image.clone());
+
+        let fetched = cache.get_image_from_memory_cache(id).unwrap();
+        assert!(Arc::ptr_eq(&fetched, &image));
+    }
+
+    #[test]
+    fn memory_cache_miss_returns_none() {
+        let cache = ImageCache::default();
+        assert!(
+            cache
+                .get_image_from_memory_cache(MemoryId::PipelineContext(1))
+                .is_none()
+        );
+    }
+
+    // ---- get_image_from_cache ----
+
+    #[test]
+    fn get_image_from_cache_scratchpad_gray_is_zeroed_and_sized() {
+        let mut cache = ImageCache::default();
+        cache.image_meta.is_rgb = false;
+        cache.image_meta.image_tile_info = crate::ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 3,
+            height: 2,
+        };
+
+        let result = cache
+            .get_image_from_cache(&ImageAddress::Scratchpad)
+            .unwrap();
+
+        match result.as_ref() {
+            ImageContainer::F32Gray(img) => {
+                assert_eq!(img.data.width(), 3);
+                assert_eq!(img.data.height(), 2);
+                assert!(img.as_slice().iter().all(|&v| v == 0.0));
+            }
+            other => panic!("expected F32Gray, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_image_from_cache_scratchpad_rgb_is_zeroed_and_sized() {
+        let mut cache = ImageCache::default();
+        cache.image_meta.is_rgb = true;
+        cache.image_meta.image_tile_info = crate::ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 2,
+            height: 2,
+        };
+
+        let result = cache
+            .get_image_from_cache(&ImageAddress::Scratchpad)
+            .unwrap();
+
+        match result.as_ref() {
+            ImageContainer::F32Rgb(img) => {
+                assert_eq!(img.data.width(), 2);
+                assert_eq!(img.data.height(), 2);
+                assert!(img.as_slice().iter().all(|&v| v == 0.0));
+            }
+            other => panic!("expected F32Rgb, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_image_from_cache_memory_delegates() {
+        let mut cache = ImageCache::default();
+        let image = gray_container(1, 1, vec![9.0]);
+        let id = MemoryId::PipelineContext(4);
+        cache
+            .images
+            .insert(ImageAddress::Memory(id), image.clone());
+
+        let fetched = cache
+            .get_image_from_cache(&ImageAddress::Memory(id))
+            .unwrap();
+        assert!(Arc::ptr_eq(&fetched, &image));
+    }
+
+    #[test]
+    fn get_image_from_cache_channel_delegates() {
+        let mut cache = ImageCache::default();
+        let image = gray_container(1, 1, vec![11.0]);
+        cache.add_to_channel_cache(image.clone(), 6);
+
+        let fetched = cache
+            .get_image_from_cache(&ImageAddress::Channel(6))
+            .unwrap();
+        assert!(Arc::ptr_eq(&fetched, &image));
+    }
+
+    // ---- iter_channels ----
+
+    #[test]
+    fn iter_channels_only_yields_channel_entries() {
+        let mut cache = ImageCache::default();
+        cache.add_to_channel_cache(gray_container(1, 1, vec![1.0]), 0);
+        cache.add_to_channel_cache(gray_container(1, 1, vec![2.0]), 1);
+        cache.images.insert(
+            ImageAddress::Memory(MemoryId::PipelineContext(1)),
+            gray_container(1, 1, vec![3.0]),
+        );
+        cache
+            .images
+            .insert(ImageAddress::Scratchpad, gray_container(1, 1, vec![4.0]));
+
+        let mut indices: Vec<i32> = cache.iter_channels().map(|(idx, _)| idx).collect();
+        indices.sort();
+
+        assert_eq!(indices, vec![0, 1]);
+    }
+
+    // ---- resolve_channel_views ----
+
+    #[test]
+    fn resolve_channel_views_returns_gray_and_rgb_but_skips_u32() {
+        let mut cache = ImageCache::default();
+        cache.add_to_channel_cache(gray_container(1, 1, vec![5.0]), 0);
+        cache.add_to_channel_cache(rgb_container(1, 1, vec![1.0, 2.0, 3.0]), 1);
+        cache.add_to_channel_cache(u32_container(1, 1, vec![7]), 2);
+
+        let mut views = cache.resolve_channel_views();
+        views.sort_by_key(|(idx, _, _)| *idx);
+
+        assert_eq!(views.len(), 2);
+
+        let (idx0, is_rgb0, slice0) = views[0];
+        assert_eq!(idx0, 0);
+        assert!(!is_rgb0);
+        assert_eq!(slice0, &[5.0]);
+
+        let (idx1, is_rgb1, slice1) = views[1];
+        assert_eq!(idx1, 1);
+        assert!(is_rgb1);
+        assert_eq!(slice1, &[1.0, 2.0, 3.0]);
+    }
+
+    // ---- sample_channel_pixel ----
+
+    #[test]
+    fn sample_channel_pixel_rgb_uses_bt709_luminance() {
+        let slice = [10.0f32, 20.0, 30.0];
+        let expected = 0.2126 * 10.0 + 0.7152 * 20.0 + 0.0722 * 30.0;
+
+        let result = sample_channel_pixel(true, &slice, 0);
+
+        assert!((result - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sample_channel_pixel_gray_is_passthrough() {
+        let slice = [1.0f32, 2.0, 3.0];
+
+        assert_eq!(sample_channel_pixel(false, &slice, 2), 3.0);
+    }
 }
