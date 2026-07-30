@@ -116,102 +116,6 @@
         "id": {
           "$ref": "#/$defs/ObjectClass"
         },
-        "measure": {
-          "type": "object",
-          "properties": {
-            "areaSize": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "circularity": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "distanceCenterToCenter": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "distanceCenterToSurfaceMax": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "distanceCenterToSurfaceMin": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "distanceSurfaceToSurfaceMax": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "distanceSurfaceToSurfaceMin": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "intensityAvg": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "intensityMax": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "intensityMin": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "intensitySum": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "intersecting": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "objectCount": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "perimeter": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            },
-            "position": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/MeasurementStatistics"
-              }
-            }
-          },
-          "additionalProperties": false
-        },
         "name": {
           "type": "string"
         },
@@ -223,8 +127,7 @@
         "id",
         "color",
         "name",
-        "notes",
-        "measure"
+        "notes"
       ]
     },
     "ClassificationClassifyObjectsClassifyMatchHandlingSettings": {
@@ -1189,18 +1092,6 @@
         "IMAGE",
         "INSTANCE_MAP",
         "SEGMENTATION_MASK"
-      ]
-    },
-    "MeasurementStatistics": {
-      "type": "string",
-      "enum": [
-        "VAL",
-        "AVG",
-        "MIN",
-        "MAX",
-        "STDEV",
-        "MEDIAN",
-        "SUM"
       ]
     },
     "MedianSubtractSettings": {

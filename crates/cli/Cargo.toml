@@ -12,3 +12,13 @@ evanalyzer_cfg = { path = "../cfg" }
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
 serde_json = "1"
+
+[dev-dependencies]
+# Test-only: seeds a minimal results database directly via SQL (mirroring the
+# schema `evanalyzer_core::storage::duckdb` writes) so `export_*` command
+# tests can exercise `ResultsLoader`/`ResultsExporter` end-to-end without a
+# full pipeline run. `evanalyzer_app` builds an equivalent fixture for its own
+# tests, but that helper is `pub(crate)` and `#[cfg(test)]`-only there, so it
+# isn't reachable from this crate.
+duckdb = { version = "1.1.3", features = ["bundled"] }
+tempfile = "3"

@@ -1014,6 +1014,15 @@ impl HeatmapColorScheme {
     pub fn color(self, t: f64) -> RGBColor {
         interpolate_stops(self.stops(), t)
     }
+
+    /// Same mapping as [`color`](Self::color), as a plain `(r, g, b)` tuple —
+    /// so callers outside this module that color cells directly instead of
+    /// rendering a bitmap (e.g. the GUI's Matrix view) don't need a
+    /// `plotters` dependency just to destructure an `RGBColor`.
+    pub fn color_rgb(self, t: f64) -> (u8, u8, u8) {
+        let RGBColor(r, g, b) = self.color(t);
+        (r, g, b)
+    }
 }
 
 /// The `[min, max]` a heatmap's color scale (and legend) spans.

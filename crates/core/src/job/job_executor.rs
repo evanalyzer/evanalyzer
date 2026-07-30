@@ -2023,6 +2023,119 @@ mod execution_order_tests {
     }
 }
 
+/// End-to-end coverage for `run`/`analyze_image_tiles_parallel`/
+/// `prepare_pipeline_cache` - the paths above only exercise the pure helper
+/// methods (tile math, precedence resolution, execution ordering), never the
+/// actual image-loading-through-DB-export flow. Uses the same real BioFormats
+/// fixture and JVM setup as `image_reader`'s tests.
+#[cfg(test)]
+mod full_run_integration_tests {
+    use super::*;
+    use crate::algos::{ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod};
+    use crate::init_java_wrapper;
+    use crate::pipeline::pipeline::CorePipelineSettings;
+    use crate::storage::memory::MemoryExporter;
+    use evanalyzer_cfg::core_types::{PixelUnits, SegmentationClass};
+    use evanalyzer_cfg::settings::images_settings::SeriesSettings;
+    use std::collections::BTreeMap;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    fn threshold_connected_components_extract_pipeline() -> Pipeline {
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        // Manual threshold spanning the full 8-bit range: every pixel is
+        // assigned to the same segmentation class, so the fixture image
+        // (known non-empty from image_reader's tests on the same file)
+        // reliably produces at least one connected component.
+        pipeline.add_command(Box::new(Threshold {
+            thresholds: vec![ThresholdEntry {
+                method: ThresholdMethod::Manual,
+                min_threshold: 0.0,
+                max_threshold: 255.0,
+                unit: PixelUnits::Bit,
+                object_class_id: SegmentationClass(1),
+            }],
+        }));
+        pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
+        pipeline.add_command(Box::new(ExtractObjects {
+            max_objects_before_fail: 100_000,
+        }));
+        pipeline
+    }
+
+    fn make_single_image_job(out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>>) -> JobExecutor {
+        let rel_path = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let mut series = BTreeMap::new();
+        series.insert(0, SeriesSettings::default());
+        let mut images = IndexMap::new();
+        images.insert(
+            rel_path.clone(),
+            ImageEntry {
+                rel_path,
+                file_size: 0,
+                selected_series: 0,
+                series,
+            },
+        );
+
+        let mut job = JobExecutor::new(
+            PathBuf::new(),
+            std::env::temp_dir(),
+            images,
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter { out_objects })),
+            None,
+        );
+        job.add_pipeline(threshold_connected_components_extract_pipeline());
+        job
+    }
+
+    #[test]
+    fn run_on_a_real_fixture_image_writes_extracted_objects_through_the_exporter() {
+        init_java_wrapper(1_000_000_000).unwrap();
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let job = make_single_image_job(out_objects.clone());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = job.run(1, tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        result.expect("threshold -> connected components -> extract pipeline should succeed");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageCompleted { .. })),
+            "expected an ImageCompleted event for the single processed image"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, ProgressEvent::ImageFailed { .. })),
+            "no image should have failed"
+        );
+        assert!(
+            !out_objects.lock().unwrap().is_empty(),
+            "thresholding the whole 8-bit range should extract at least one object"
+        );
+    }
+
+    #[test]
+    fn count_preview_visible_tiles_matches_the_real_fixture_images_single_tile_grid() {
+        init_java_wrapper(1_000_000_000).unwrap();
+        let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
+
+        // The fixture image is far smaller than the 4096px base tile size
+        // used when no preview settings are set, so it must resolve to
+        // exactly one tile.
+        let count = job.count_preview_visible_tiles().unwrap();
+        assert_eq!(count, 1);
+    }
+}
+
 /*
 
 

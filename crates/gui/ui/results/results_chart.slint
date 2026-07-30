@@ -53,37 +53,11 @@ export component ResultsChart inherits Rectangle {
                 padding: 8px;
                 spacing: 10px;
 
-                HorizontalLayout {
-                    spacing: 4px;
-                    ChartKindButton {
-                        label: "Histogram";
-                        selected: ResultsState.chart_kind == ResultsChartKind.histogram;
-                        clicked => { ResultsState.chart_kind = ResultsChartKind.histogram; }
-                    }
-
-                    ChartKindButton {
-                        label: "Scatter";
-                        selected: ResultsState.chart_kind == ResultsChartKind.scatter;
-                        clicked => { ResultsState.chart_kind = ResultsChartKind.scatter; }
-                    }
-
-                    ChartKindButton {
-                        label: "Heatmap";
-                        selected: ResultsState.chart_kind == ResultsChartKind.heatmap;
-                        clicked => { ResultsState.chart_kind = ResultsChartKind.heatmap; }
-                    }
-                }
-
-                Rectangle {
-                    width: 1px;
-                    background: Theme.border-soft;
-                }
-
                 if ResultsState.chart_kind == ResultsChartKind.histogram: HorizontalLayout {
                     spacing: 6px;
                     alignment: start;
                     Text {
-                        text: "Column:";
+                        text: "Value:";
                         font-size: 11px;
                         font-family: Theme.font-sans;
                         color: Theme.text-dim;
@@ -193,7 +167,7 @@ export component ResultsChart inherits Rectangle {
                     spacing: 6px;
                     alignment: start;
                     Text {
-                        text: "Color by:";
+                        text: "Value:";
                         font-size: 11px;
                         font-family: Theme.font-sans;
                         color: Theme.text-dim;
@@ -253,6 +227,7 @@ export component ResultsChart inherits Rectangle {
                     LineEdit {
                         width: 64px;
                         font-size: 11px;
+                        enabled: !ResultsState.chart_heatmap_range_auto;
                         text: "\{ResultsState.chart_heatmap_range_min}";
                         edited(t) => {
                             ResultsState.chart_heatmap_range_min = t.to-float();
@@ -270,6 +245,7 @@ export component ResultsChart inherits Rectangle {
                     LineEdit {
                         width: 64px;
                         font-size: 11px;
+                        enabled: !ResultsState.chart_heatmap_range_auto;
                         text: "\{ResultsState.chart_heatmap_range_max}";
                         edited(t) => {
                             ResultsState.chart_heatmap_range_max = t.to-float();
@@ -282,7 +258,7 @@ export component ResultsChart inherits Rectangle {
                         height: 26px;
                         mouse-cursor: pointer;
                         clicked => {
-                            ResultsState.chart_heatmap_range_auto = true;
+                            ResultsState.chart_heatmap_range_auto = !ResultsState.chart_heatmap_range_auto;
                         }
 
                         Rectangle {

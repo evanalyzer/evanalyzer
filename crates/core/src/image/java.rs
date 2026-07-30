@@ -314,3 +314,51 @@ impl Drop for JavaWrapper {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `JavaWrapper` with no live JVM/JNI state, built via struct literal
+    /// (all fields are `pub`) rather than `new()` - this exercises `set_path`'s
+    /// pure path-selection logic without paying for (or requiring) a real JVM.
+    fn bare_wrapper() -> JavaWrapper {
+        JavaWrapper {
+            jvm: None,
+            m_bioformats_class: None,
+            m_constructor: None,
+            m_close: None,
+            m_get_image_properties: None,
+            m_read_image_tile: None,
+            m_reserved_ram: 0,
+        }
+    }
+
+    #[test]
+    fn set_path_returns_the_platform_specific_java_home_and_lib_path() {
+        let (java_home, jvm_lib_path) = bare_wrapper().set_path();
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(java_home, PathBuf::from("java/jre_win"));
+            assert_eq!(jvm_lib_path, java_home.join("bin/server/jvm.dll"));
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(java_home, PathBuf::from("Contents/Java/jre_macos_arm"));
+            assert_eq!(jvm_lib_path, java_home.join("lib/server/libjvm.dylib"));
+        } else {
+            assert_eq!(java_home, PathBuf::from("java/jre_linux"));
+            assert_eq!(jvm_lib_path, java_home.join("lib/amd64/server/libjvm.so"));
+        }
+    }
+
+    #[test]
+    fn set_path_is_idempotent_across_repeated_calls() {
+        // set_path prepends to the process-global PATH env var as a side
+        // effect; calling it more than once (e.g. across several
+        // ImageReader::new() calls) must keep returning the same computed
+        // paths rather than e.g. accumulating a different value each time.
+        let wrapper = bare_wrapper();
+        let first = wrapper.set_path();
+        let second = wrapper.set_path();
+        assert_eq!(first, second);
+    }
+}

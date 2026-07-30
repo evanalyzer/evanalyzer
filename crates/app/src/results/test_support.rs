@@ -125,6 +125,60 @@ fn make_object_id(group: u16, idx: usize) -> String {
     format!("00000000-0000-0000-{group:04x}-{idx:012x}")
 }
 
+/// Builds a two-object `objects` table shaped for Matrix (Plate) export
+/// tests: image "A1_01.tif" (area 10, folder "A1") and image "B2_01.tif"
+/// (area 20, folder "B2"). Both the folder name and the `^([A-Z]\d+)_`
+/// prefix of the image name decode to the same well ids ("A1" -> row 0/col
+/// 0, "B2" -> row 1/col 1), so the same fixture drives both Folder-mode and
+/// Regex-mode grouping tests with the same expected 2x2 grid.
+pub(crate) fn seed_plate_results_db(path: &Path) {
+    let conn = duckdb::Connection::open(path).expect("open test db");
+    create_schema(&conn);
+
+    let insert = |image: &str, rel_path: &str, object_id: &str, area_px: u64| {
+        conn.execute(
+            "INSERT INTO objects (
+                image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
+                object_class_name, object_class_id, track_id,
+                centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+                bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+                area_px, area_nm2, perimeter_px, perimeter_nm,
+                circularity, solidity, aspect_ratio, roundness, compactness,
+                major_axis_px, minor_axis_px, touches_edge,
+                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                intensities_json, coloc_json
+            ) VALUES (
+                ?, ?, ?, 'ClassA', 1,
+                '[\"ClassA\"]', '[1]', 0,
+                0, 0, 0, 0,
+                0, 0, 10, 10,
+                0, 0, 0, 0,
+                ?, ?, 40, 40,
+                1.0, 1.0, 1.0, 1.0, 1.0,
+                10, 10, false,
+                1.0, 1.0, 1.0,
+                ?, '{}'
+            )",
+            duckdb::params![image, rel_path, object_id, area_px, area_px as f64, CH0_INTENSITIES_JSON],
+        )
+        .unwrap_or_else(|e| panic!("insert object {object_id}: {e}"));
+    };
+
+    insert(
+        "A1_01.tif",
+        "A1/A1_01.tif",
+        "00000000-0000-0000-0000-0000000000a1",
+        10,
+    );
+    insert(
+        "B2_01.tif",
+        "B2/B2_01.tif",
+        "00000000-0000-0000-0000-0000000000b2",
+        20,
+    );
+}
+
 /// Inverse of [`make_object_id`] - recovers `idx` from the trailing 12 hex
 /// digits, regardless of `group`.
 pub(crate) fn decode_object_id_idx(object_id: &str) -> usize {

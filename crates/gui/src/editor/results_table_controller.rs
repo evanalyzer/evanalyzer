@@ -1,4 +1,5 @@
 use crate::editor::images_list_controller::ImagesListController;
+use crate::editor::results_matrix_controller::agg_from_label;
 use crate::{
     ExportBatchItem, FilterItem, ResultsChartKind, ResultsColumnDef, ResultsGroupBy,
     ResultsListState, ResultsRow, ResultsState, ResultsWindow, UiState,
@@ -640,7 +641,16 @@ impl ResultsTableController {
                 apply_export_column_checklist(&state, column_items_from_specs(&specs), "");
                 state.set_export_has_intensity(has_intensity_columns(&specs));
                 state.set_export_group_by("none".into());
-                state.set_export_group_regex(SharedString::new());
+                // Seed from the project's own saved regex (Project Settings /
+                // Plate grouping) instead of leaving it blank, so it matches
+                // what "Regex on name" already falls back to elsewhere.
+                state.set_export_group_regex(
+                    window
+                        .global::<crate::ProjectSettingsState>()
+                        .get_settings()
+                        .custom_regex,
+                );
+                state.set_export_matrix_kind("plate".into());
 
                 state.set_export_combo_name(SharedString::new());
                 state.set_export_format("csv".into());
@@ -798,6 +808,41 @@ impl ResultsTableController {
                 // against the old list would otherwise silently hide every
                 // freshly seeded row.
                 state.set_export_column_search_text(SharedString::new());
+
+                if style.as_str() == "matrix" {
+                    // `export_group_by`'s "none"/"image" values (left over from
+                    // "table" style) aren't valid choices for Matrix's own
+                    // Folder/Regex picker.
+                    let group_by = state.get_export_group_by().to_string();
+                    if group_by != "folder" && group_by != "regex" {
+                        state.set_export_group_by("folder".into());
+                    }
+                    // `matrix_agg_options`/`matrix_color_scheme_options` are
+                    // always populated at startup by `ResultsMatrixController`
+                    // (they don't depend on the loaded file), but
+                    // `matrix_metric_options` is only populated once the live
+                    // Matrix view has actually been opened this session — seed
+                    // it here too so the dialog's Value picker isn't empty for
+                    // a user who exports without ever visiting that view.
+                    if state.get_matrix_metric_options().row_count() == 0 {
+                        let specs = this.column_specs.lock().unwrap().clone();
+                        let metric_options: Vec<SharedString> = plottable_columns(&specs)
+                            .iter()
+                            .map(|c| SharedString::from(c.label.as_str()))
+                            .collect();
+                        if state.get_matrix_metric().is_empty()
+                            && let Some(first) = metric_options.first()
+                        {
+                            state.set_matrix_metric(first.clone());
+                        }
+                        state.set_matrix_metric_options(slint::ModelRc::new(
+                            slint::VecModel::from(metric_options),
+                        ));
+                    }
+                    if state.get_matrix_agg().is_empty() {
+                        state.set_matrix_agg("Average".into());
+                    }
+                }
 
                 if style.as_str() != "coloc_detail" {
                     let specs = this.column_specs.lock().unwrap().clone();
@@ -1051,29 +1096,43 @@ impl ResultsTableController {
                     }
                 };
 
+                let style = state.get_export_style().to_string();
+                let is_matrix = style == "matrix";
+
                 // Captured now (not read live at export time) so this batch's
                 // columns stay correct even if the user later flips
-                // style/columns to configure a different combination.
-                let column_items = model_to_vec(&state.get_export_column_items());
-                let selected_columns: Vec<String> = column_items
-                    .iter()
-                    .filter(|i| i.checked)
-                    .map(|i| i.label.to_string())
-                    .collect();
-                if !column_items.is_empty() && selected_columns.is_empty() {
-                    state.set_export_status("Pick at least one column before adding.".into());
-                    return;
-                }
-                let all_columns_selected = selected_columns.len() == column_items.len();
-                let columns: Vec<SharedString> = if all_columns_selected {
+                // style/columns to configure a different combination. Not
+                // applicable to Matrix (it always writes a single value
+                // column per cell — see `matrix_fields` below).
+                let columns: Vec<SharedString> = if is_matrix {
                     Vec::new()
                 } else {
-                    selected_columns.iter().map(SharedString::from).collect()
+                    let column_items = model_to_vec(&state.get_export_column_items());
+                    let selected_columns: Vec<String> = column_items
+                        .iter()
+                        .filter(|i| i.checked)
+                        .map(|i| i.label.to_string())
+                        .collect();
+                    if !column_items.is_empty() && selected_columns.is_empty() {
+                        state.set_export_status("Pick at least one column before adding.".into());
+                        return;
+                    }
+                    let all_columns_selected = selected_columns.len() == column_items.len();
+                    if all_columns_selected {
+                        Vec::new()
+                    } else {
+                        selected_columns.iter().map(SharedString::from).collect()
+                    }
                 };
 
-                let style = state.get_export_style().to_string();
+                if is_matrix && state.get_matrix_metric().is_empty() {
+                    state.set_export_status("Pick a value to color the matrix by.".into());
+                    return;
+                }
+
                 let group_by = state.get_export_group_by().to_string();
                 let group_regex = state.get_export_group_regex().to_string();
+                let matrix_fields = matrix_batch_fields(&state, is_matrix);
 
                 let mut batches = export_batches_to_vec(&state.get_export_batches());
                 batches.push(ExportBatchItem {
@@ -1088,12 +1147,19 @@ impl ResultsTableController {
                             .collect::<Vec<_>>(),
                     )),
                     images_label: images_label.into(),
-                    each_image: state.get_export_each_image(),
+                    each_image: !is_matrix && state.get_export_each_image(),
                     style_label: export_style_label(&style, &group_by).into(),
                     style: style.into(),
                     group_by: group_by.into(),
                     group_regex: group_regex.into(),
                     columns: slint::ModelRc::new(slint::VecModel::from(columns)),
+                    matrix_metric: matrix_fields.metric.into(),
+                    matrix_agg: matrix_fields.agg.into(),
+                    matrix_color_scheme: matrix_fields.color_scheme.into(),
+                    matrix_range_auto: matrix_fields.range_auto,
+                    matrix_range_min: matrix_fields.range_min,
+                    matrix_range_max: matrix_fields.range_max,
+                    matrix_kind: matrix_fields.kind.into(),
                 });
                 state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(batches)));
                 state.set_export_combo_name(SharedString::new());
@@ -1160,25 +1226,36 @@ impl ResultsTableController {
                         if n.is_empty() { "results".to_string() } else { n }
                     };
                     let style = state.get_export_style().to_string();
+                    let is_matrix = style == "matrix";
                     let group_by = state.get_export_group_by().to_string();
                     let group_regex = state.get_export_group_regex().to_string();
 
-                    let column_items = model_to_vec(&state.get_export_column_items());
-                    let selected_columns: Vec<String> = column_items
-                        .iter()
-                        .filter(|i| i.checked)
-                        .map(|i| i.label.to_string())
-                        .collect();
-                    if !column_items.is_empty() && selected_columns.is_empty() {
-                        state.set_export_status("Pick at least one column to export.".into());
+                    if is_matrix && state.get_matrix_metric().is_empty() {
+                        state.set_export_status("Pick a value to color the matrix by.".into());
                         return;
                     }
-                    let all_columns_selected = selected_columns.len() == column_items.len();
-                    let columns: Vec<SharedString> = if all_columns_selected {
+
+                    let columns: Vec<SharedString> = if is_matrix {
                         Vec::new()
                     } else {
-                        selected_columns.iter().map(SharedString::from).collect()
+                        let column_items = model_to_vec(&state.get_export_column_items());
+                        let selected_columns: Vec<String> = column_items
+                            .iter()
+                            .filter(|i| i.checked)
+                            .map(|i| i.label.to_string())
+                            .collect();
+                        if !column_items.is_empty() && selected_columns.is_empty() {
+                            state.set_export_status("Pick at least one column to export.".into());
+                            return;
+                        }
+                        let all_columns_selected = selected_columns.len() == column_items.len();
+                        if all_columns_selected {
+                            Vec::new()
+                        } else {
+                            selected_columns.iter().map(SharedString::from).collect()
+                        }
                     };
+                    let matrix_fields = matrix_batch_fields(&state, is_matrix);
 
                     batches.push(ExportBatchItem {
                         name: name.into(),
@@ -1189,12 +1266,19 @@ impl ResultsTableController {
                             selected_images.iter().map(SharedString::from).collect::<Vec<_>>(),
                         )),
                         images_label: SharedString::new(),
-                        each_image: state.get_export_each_image(),
+                        each_image: !is_matrix && state.get_export_each_image(),
                         style_label: SharedString::new(),
                         style: style.into(),
                         group_by: group_by.into(),
                         group_regex: group_regex.into(),
                         columns: slint::ModelRc::new(slint::VecModel::from(columns)),
+                        matrix_metric: matrix_fields.metric.into(),
+                        matrix_agg: matrix_fields.agg.into(),
+                        matrix_color_scheme: matrix_fields.color_scheme.into(),
+                        matrix_range_auto: matrix_fields.range_auto,
+                        matrix_range_min: matrix_fields.range_min,
+                        matrix_range_max: matrix_fields.range_max,
+                        matrix_kind: matrix_fields.kind.into(),
                     });
                 }
 
@@ -1218,12 +1302,20 @@ impl ResultsTableController {
                         each_image: batch.each_image,
                         is_xlsx: batch.format.as_str() == "xlsx",
                         is_coloc_detail: batch.style.as_str() == "coloc_detail",
+                        is_matrix: batch.style.as_str() == "matrix",
                         group_by: batch.group_by.to_string(),
                         group_regex: batch.group_regex.to_string(),
                         columns: (0..batch.columns.row_count())
                             .filter_map(|i| batch.columns.row_data(i))
                             .map(|s| s.to_string())
                             .collect(),
+                        matrix_metric: batch.matrix_metric.to_string(),
+                        matrix_agg: batch.matrix_agg.to_string(),
+                        matrix_color_scheme: batch.matrix_color_scheme.to_string(),
+                        matrix_range_auto: batch.matrix_range_auto,
+                        matrix_range_min: batch.matrix_range_min as f64,
+                        matrix_range_max: batch.matrix_range_max as f64,
+                        matrix_kind: batch.matrix_kind.to_string(),
                     })
                     .collect();
 
@@ -1236,7 +1328,17 @@ impl ResultsTableController {
                 // its own captured column selection on top). Coloc Details
                 // batches don't need this — that exporter discovers its own
                 // columns and only consults each batch's `columns` labels.
+                // Matrix batches only use it to look up the picked metric's
+                // `ColumnSpec`.
                 let table_specs = this.column_specs.lock().unwrap().clone();
+                // Plate grid dimensions — a project-wide setting (not
+                // per-batch), read once here the same way `table_specs` is.
+                let plate = this.app_state.get_project().plate.clone();
+                let plate_rows = plate.plate_rows.max(1) as usize;
+                let plate_cols = plate.plate_cols.max(1) as usize;
+                let well_rows = plate.well_rows.max(1) as usize;
+                let well_cols = plate.well_cols.max(1) as usize;
+                let well_image_order = plate.well_image_order.clone();
 
                 let total_files: usize = batches
                     .iter()
@@ -1316,7 +1418,86 @@ impl ResultsTableController {
                                 ..Default::default()
                             };
 
-                            let result = match (batch.is_coloc_detail, is_xlsx) {
+                            let result = if batch.is_matrix {
+                                match table_specs.iter().find(|c| c.label == batch.matrix_metric).cloned() {
+                                    Some(metric_spec) => {
+                                        let (matrix_group_by, matrix_regex) =
+                                            match batch.group_by.as_str() {
+                                                "regex" => (GroupBy::Regex, batch.group_regex.clone()),
+                                                _ => (GroupBy::Folder, String::new()),
+                                            };
+                                        let agg = agg_from_label(&batch.matrix_agg);
+                                        let scheme = HeatmapColorScheme::from_label(&batch.matrix_color_scheme);
+                                        if batch.matrix_kind == "well" {
+                                            if is_xlsx {
+                                                exporter.export_well_matrices_to_xlsx(
+                                                    filter,
+                                                    matrix_group_by,
+                                                    &matrix_regex,
+                                                    agg,
+                                                    &metric_spec,
+                                                    plate_rows,
+                                                    plate_cols,
+                                                    well_rows,
+                                                    well_cols,
+                                                    &well_image_order,
+                                                    scheme,
+                                                    batch.matrix_range_auto,
+                                                    batch.matrix_range_min,
+                                                    batch.matrix_range_max,
+                                                    &out_path,
+                                                )
+                                            } else {
+                                                exporter.export_well_matrices_to_csv(
+                                                    filter,
+                                                    matrix_group_by,
+                                                    &matrix_regex,
+                                                    agg,
+                                                    &metric_spec,
+                                                    plate_rows,
+                                                    plate_cols,
+                                                    well_rows,
+                                                    well_cols,
+                                                    &well_image_order,
+                                                    &folder,
+                                                    &file_label,
+                                                )
+                                            }
+                                        } else if is_xlsx {
+                                            exporter.export_matrix_to_xlsx(
+                                                filter,
+                                                matrix_group_by,
+                                                &matrix_regex,
+                                                agg,
+                                                &metric_spec,
+                                                plate_rows,
+                                                plate_cols,
+                                                scheme,
+                                                batch.matrix_range_auto,
+                                                batch.matrix_range_min,
+                                                batch.matrix_range_max,
+                                                &out_path,
+                                            )
+                                        } else {
+                                            exporter.export_matrix_to_csv(
+                                                filter,
+                                                matrix_group_by,
+                                                &matrix_regex,
+                                                agg,
+                                                &metric_spec,
+                                                plate_rows,
+                                                plate_cols,
+                                                &out_path,
+                                            )
+                                        }
+                                    }
+                                    None => Err(InternalErrors::Io(format!(
+                                        "Matrix export: value column '{}' not found",
+                                        batch.matrix_metric
+                                    ))),
+                                }
+                            } else {
+                                match (batch.is_coloc_detail, is_xlsx) {
                                 (true, true) => exporter.export_coloc_detail_to_xlsx(
                                     filter,
                                     visible_labels.as_ref(),
@@ -1332,6 +1513,7 @@ impl ResultsTableController {
                                 }
                                 (false, false) => {
                                     exporter.export_to_csv(filter, &group, &base_specs, &out_path)
+                                }
                                 }
                             };
                             match result {
@@ -1587,6 +1769,17 @@ impl ResultsTableController {
                     group_by: group_by.into(),
                     group_regex: group_regex.into(),
                     columns: slint::ModelRc::new(slint::VecModel::from(columns)),
+                    // Matrix export isn't reachable via this path — the "Add
+                    // from table" button is disabled while `export_style ==
+                    // "matrix"` (its live filters/grouping/columns don't map
+                    // onto Matrix's Value/Aggregate/Folder-or-Regex picks).
+                    matrix_metric: SharedString::new(),
+                    matrix_agg: SharedString::new(),
+                    matrix_color_scheme: SharedString::new(),
+                    matrix_range_auto: true,
+                    matrix_range_min: 0.0,
+                    matrix_range_max: 1.0,
+                    matrix_kind: "plate".into(),
                 });
                 state.set_export_batches(slint::ModelRc::new(slint::VecModel::from(batches)));
                 state.set_export_combo_name(SharedString::new());
@@ -1730,6 +1923,14 @@ impl ResultsTableController {
                             state.set_filter_class_active(false);
                             state.set_filter_class_all_popup_checked(true);
 
+                            let mut matrix_class_options =
+                                vec![SharedString::from("All classes")];
+                            matrix_class_options
+                                .extend(cls_names.iter().map(SharedString::from));
+                            state.set_matrix_class_options(slint::ModelRc::new(
+                                slint::VecModel::from(matrix_class_options),
+                            ));
+
                             // "No" / "Yes (any class)" are always offered; the rest are the
                             // partner classes actually present in this file's coloc_json data,
                             // letting the user filter for e.g. "Colocalizes with Nucleus".
@@ -1780,6 +1981,13 @@ impl ResultsTableController {
                             state.set_chart_heatmap_color_scheme_options(slint::ModelRc::new(
                                 slint::VecModel::from(heatmap_color_scheme_options()),
                             ));
+                            // Matrix view's "Value" picker - same visible-numeric-
+                            // columns source as the heatmap's, refreshed at the
+                            // same time so it's populated before the user ever
+                            // opens Matrix view.
+                            state.set_matrix_metric_options(slint::ModelRc::new(
+                                slint::VecModel::from(plottable_column_labels(&specs)),
+                            ));
                             state.set_t_stack_active(t_range.is_some());
                             state.set_t_stack_min(t_range.map_or(0, |(min, _)| min));
                             state.set_t_stack_max(t_range.map_or(0, |(_, max)| max));
@@ -1818,7 +2026,7 @@ impl ResultsTableController {
     /// Checking `coloc_detail_mode` first means row filters (image/class/coloc)
     /// applied while the coloc-detail view is active reload *that* view instead
     /// of silently falling back to the normal table.
-    fn spawn_reload(this: Arc<Self>) {
+    pub(crate) fn spawn_reload(this: Arc<Self>) {
         let coloc_detail = *this.coloc_detail_mode.lock().unwrap();
         let grouped = !matches!(this.group_config.lock().unwrap().group_by, GroupBy::None);
         std::thread::spawn(move || {
@@ -1841,7 +2049,9 @@ impl ResultsTableController {
         let finish_loading = move |ui: slint::Weak<ResultsWindow>| {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = ui.upgrade() {
-                    w.global::<ResultsState>().set_loading_more(false);
+                    let state = w.global::<ResultsState>();
+                    state.set_loading_more(false);
+                    state.set_group_computing(false);
                 }
             });
         };
@@ -1919,6 +2129,7 @@ impl ResultsTableController {
                         state.set_at_top_loaded(true);
                         state.set_loading_more(false);
                         state.set_group_active(true);
+                        state.set_group_computing(false);
                     }
                 });
             }
@@ -2933,6 +3144,9 @@ impl ResultsTableController {
         state.set_chart_heatmap_metric_options(slint::ModelRc::new(slint::VecModel::from(
             heatmap_metric_options(&specs),
         )));
+        state.set_matrix_metric_options(slint::ModelRc::new(slint::VecModel::from(
+            plottable_column_labels(&specs),
+        )));
 
         let grouped = !matches!(self.group_config.lock().unwrap().group_by, GroupBy::None);
         if grouped {
@@ -3458,10 +3672,59 @@ fn export_style_label(style: &str, group_by: &str) -> String {
     if style == "coloc_detail" {
         return "Coloc Details".to_string();
     }
+    if style == "matrix" {
+        return match group_by {
+            "regex" => "Matrix · Regex".to_string(),
+            _ => "Matrix · Folder".to_string(),
+        };
+    }
     match group_by {
         "image" => "Table · Image".to_string(),
         "regex" => "Table · Regex".to_string(),
         _ => "Table".to_string(),
+    }
+}
+
+/// A queued Matrix batch's Value/Aggregate/Colors/Range picks, captured from
+/// the live `ResultsState.matrix_*` globals at "Add" time (see
+/// `ExportBatchItem::matrix_metric` etc.) — not meaningful for "table"/
+/// "coloc_detail" batches, which get [`MatrixBatchFields::default`] instead.
+struct MatrixBatchFields {
+    metric: String,
+    agg: String,
+    color_scheme: String,
+    range_auto: bool,
+    range_min: f32,
+    range_max: f32,
+    kind: String,
+}
+
+impl Default for MatrixBatchFields {
+    fn default() -> Self {
+        Self {
+            metric: String::new(),
+            agg: String::new(),
+            color_scheme: String::new(),
+            range_auto: true,
+            range_min: 0.0,
+            range_max: 1.0,
+            kind: "plate".to_string(),
+        }
+    }
+}
+
+fn matrix_batch_fields(state: &ResultsState, is_matrix: bool) -> MatrixBatchFields {
+    if !is_matrix {
+        return MatrixBatchFields::default();
+    }
+    MatrixBatchFields {
+        metric: state.get_matrix_metric().to_string(),
+        agg: state.get_matrix_agg().to_string(),
+        color_scheme: state.get_matrix_color_scheme().to_string(),
+        range_auto: state.get_matrix_range_auto(),
+        range_min: state.get_matrix_range_min(),
+        range_max: state.get_matrix_range_max(),
+        kind: state.get_export_matrix_kind().to_string(),
     }
 }
 
@@ -3514,7 +3777,7 @@ fn to_model(items: Vec<FilterItem>) -> slint::ModelRc<FilterItem> {
     slint::ModelRc::new(slint::VecModel::from(items))
 }
 
-fn model_to_vec(model: &slint::ModelRc<FilterItem>) -> Vec<FilterItem> {
+pub(crate) fn model_to_vec(model: &slint::ModelRc<FilterItem>) -> Vec<FilterItem> {
     (0..model.row_count())
         .filter_map(|i| model.row_data(i))
         .collect()
@@ -3735,11 +3998,24 @@ struct PlannedExport {
     each_image: bool,
     is_xlsx: bool,
     is_coloc_detail: bool,
-    /// "none" | "image" | "regex"; ignored when `is_coloc_detail`.
+    is_matrix: bool,
+    /// "none" | "image" | "regex" when `is_coloc_detail`/`is_matrix` are both
+    /// false; "folder" | "regex" when `is_matrix`; ignored when
+    /// `is_coloc_detail`.
     group_by: String,
     group_regex: String,
-    /// Column labels to include; empty means "every column" (no filter applied).
+    /// Column labels to include; empty means "every column" (no filter
+    /// applied). Ignored when `is_matrix`.
     columns: Vec<String>,
+    /// The following six fields are only meaningful when `is_matrix`.
+    matrix_metric: String,
+    matrix_agg: String,
+    matrix_color_scheme: String,
+    matrix_range_auto: bool,
+    matrix_range_min: f64,
+    matrix_range_max: f64,
+    /// "plate" (default) or "well" — see `ExportBatchItem.matrix_kind`.
+    matrix_kind: String,
 }
 
 /// An image's display name with its own file extension stripped (e.g.
@@ -4641,6 +4917,25 @@ mod tests {
             "Coloc Details",
             "grouping is ignored for Coloc Details, which is always flat"
         );
+        assert_eq!(export_style_label("matrix", "folder"), "Matrix · Folder");
+        assert_eq!(export_style_label("matrix", "regex"), "Matrix · Regex");
+        assert_eq!(
+            export_style_label("matrix", "none"),
+            "Matrix · Folder",
+            "an unrecognized/leftover group_by value falls back to Folder, matrix's own default"
+        );
+    }
+
+    #[test]
+    fn matrix_batch_fields_defaults_when_not_matrix() {
+        let defaults = MatrixBatchFields::default();
+        assert_eq!(defaults.metric, "");
+        assert_eq!(defaults.agg, "");
+        assert_eq!(defaults.color_scheme, "");
+        assert!(defaults.range_auto);
+        assert_eq!(defaults.range_min, 0.0);
+        assert_eq!(defaults.range_max, 1.0);
+        assert_eq!(defaults.kind, "plate");
     }
 
     #[test]

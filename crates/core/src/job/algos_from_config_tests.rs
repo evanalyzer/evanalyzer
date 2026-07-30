@@ -13,6 +13,7 @@ use evanalyzer_cfg::core_types::{
 };
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command_settings::*;
+#[cfg(feature = "ai")]
 use std::path::PathBuf;
 
 // ---- Enum conversions --------------------------------------------
@@ -992,4 +993,133 @@ fn into_algorithm_voronoi_dispatches_to_voronoi_algorithm() {
     let result = into_algorithm(PipelineCommand::Voronoi(VoronoiSettings::default()))
         .expect("conversion should not fail");
     assert_eq!(result.name(), "Voronoi");
+}
+
+#[test]
+fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm() {
+    // Table-driven so every `PipelineCommand` variant not already covered above
+    // is checked against the exact `name()` its algorithm reports - several of
+    // these deliberately don't match their settings type name 1:1 (e.g.
+    // `ColorFilterCommand` -> "HsvColorFilter", `GaussianBlur` -> "Blur",
+    // `SaveImage` -> "Save Image"), so a generic "does it convert" test
+    // wouldn't catch a dispatch arm wired to the wrong algorithm.
+    let cases: Vec<(PipelineCommand, &str)> = vec![
+        (
+            PipelineCommand::Colocalization(ColocalizationSettings::default()),
+            "Colocalization",
+        ),
+        (
+            PipelineCommand::ColorFilterCommand(ColorFilterCommandSettings::default()),
+            "HsvColorFilter",
+        ),
+        (
+            PipelineCommand::ConnectedComponents(ConnectedComponentsSettings::default()),
+            "ConnectedComponents",
+        ),
+        (
+            PipelineCommand::DistanceTransform(DistanceTransformSettings::default()),
+            "DistanceTransform",
+        ),
+        (
+            PipelineCommand::EdgeDetectionCanny(EdgeDetectionCannySettings::default()),
+            "EdgeDetectionCanny",
+        ),
+        (
+            PipelineCommand::EdgeDetectionSobel(EdgeDetectionSobelSettings::default()),
+            "EdgeDetectionSobel",
+        ),
+        (
+            PipelineCommand::EnhanceContrast(EnhanceContrastSettings::default()),
+            "EnhanceContrast",
+        ),
+        (
+            PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
+            "ExtractObjects",
+        ),
+        (
+            PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
+            "Blur",
+        ),
+        (PipelineCommand::Hessian(HessianSettings::default()), "Hessian"),
+        (
+            PipelineCommand::ImageCache(ImageCacheSettings::default()),
+            "ImageCache",
+        ),
+        (
+            PipelineCommand::ImageMath(ImageMathSettings::default()),
+            "ImageMath",
+        ),
+        (
+            PipelineCommand::IntensityTransformation(IntensityTransformationSettings::default()),
+            "IntensityTransformation",
+        ),
+        (
+            PipelineCommand::Laplacian(LaplacianSettings::default()),
+            "Laplacian",
+        ),
+        (
+            PipelineCommand::MedianSubtract(MedianSubtractSettings::default()),
+            "MedianSubtract",
+        ),
+        (
+            PipelineCommand::MorphologicalCommand(MorphologicalCommandSettings::default()),
+            "MorphologicalTransform",
+        ),
+        (
+            PipelineCommand::ObjectMath(ObjectMathSettings::default()),
+            "ObjectMath",
+        ),
+        (
+            PipelineCommand::RankFilter(RankFilterSettings::default()),
+            "RankFilter",
+        ),
+        (
+            PipelineCommand::RollingBall(RollingBallSettings::default()),
+            "RollingBall",
+        ),
+        (
+            PipelineCommand::SaveImage(SaveImageSettings::default()),
+            "Save Image",
+        ),
+        (
+            PipelineCommand::StructureTensor(StructureTensorSettings::default()),
+            "StructureTensor",
+        ),
+        (
+            PipelineCommand::TransformObjects(TransformObjectsSettings::default()),
+            "TransformObjects",
+        ),
+        (
+            PipelineCommand::WeightedDeviation(WeightedDeviationSettings::default()),
+            "WeightedDeviation",
+        ),
+    ];
+
+    for (cmd, expected_name) in cases {
+        let result = into_algorithm(cmd).unwrap_or_else(|e| {
+            panic!("conversion for {expected_name} should not fail, got {e:?}")
+        });
+        assert_eq!(result.name(), expected_name);
+    }
+}
+
+#[cfg(not(feature = "ai"))]
+#[test]
+fn into_algorithm_cellpose_errors_when_ai_feature_is_disabled() {
+    let result = into_algorithm(PipelineCommand::Cellpose(CellposeSettings::default()));
+    assert!(result.is_err());
+}
+
+#[cfg(not(feature = "ai"))]
+#[test]
+fn into_algorithm_stardist_errors_when_ai_feature_is_disabled() {
+    let result = into_algorithm(PipelineCommand::Stardist(StardistSettings::default()));
+    assert!(result.is_err());
+}
+
+#[cfg(not(feature = "ai"))]
+#[test]
+fn into_algorithm_unet_errors_when_ai_feature_is_disabled() {
+    let result = into_algorithm(PipelineCommand::UNet(UNetSettings::default()));
+    assert!(result.is_err());
 }

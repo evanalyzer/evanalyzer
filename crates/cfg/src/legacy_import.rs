@@ -21,9 +21,7 @@
 
 use crate::core_types::{ImageAddress, ObjectClass, PipelineId, SegmentationClass, SizeUnits};
 use crate::legacy_schema::*;
-use crate::settings::classification_settings::{
-    Class, ClassificationSettings, MeasurementChannels, MeasurementStatistics,
-};
+use crate::settings::classification_settings::{Class, ClassificationSettings};
 use crate::settings::images_settings::{
     GlobalImageSettings, PixelSizeSettings, ZStackHandling, ZStackSettings,
 };
@@ -33,7 +31,6 @@ use crate::settings::pipeline_command_settings::*;
 use crate::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use crate::settings::plate_settings::{GroupingMode, PlateSettings};
 use crate::settings::project_settings::ProjectSettings;
-use indexmap::IndexMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LegacyImportError {
@@ -206,79 +203,16 @@ fn convert_class(old: &LegacyClass, warnings: &mut Vec<String>) -> Class {
         warnings,
     );
     let color = parse_hex_color(&old.color).unwrap_or(0x9933FF);
-    let measure = convert_measure(&old.default_measurements, &old.name, warnings);
     Class {
         id,
         color,
         name: old.name.clone(),
         notes: old.notes.clone(),
-        measure,
     }
 }
 
 fn parse_hex_color(s: &str) -> Option<u32> {
     u32::from_str_radix(s.trim_start_matches('#'), 16).ok()
-}
-
-fn map_measure_channel(old: &str) -> Option<MeasurementChannels> {
-    use MeasurementChannels::*;
-    Some(match old {
-        "Count" => ObjectCount,
-        "AreaSize" => AreaSize,
-        "Perimeter" => Perimeter,
-        "Circularity" => Circularity,
-        "IntensitySum" => IntensitySum,
-        "IntensityAvg" => IntensityAvg,
-        "IntensityMin" => IntensityMin,
-        "IntensityMax" => IntensityMax,
-        "Intersecting" => Intersecting,
-        "CenteroidX" | "CenteroidY" => Position,
-        "DistanceCentroidToCentoid" => DistanceCenterToCenter,
-        "DistanceCentroidToSurfaceMin" => DistanceCenterToSurfaceMin,
-        "DistanceCentroidToSurfaceMax" => DistanceCenterToSurfaceMax,
-        "DistanceSurfaceToSurfaceMin" => DistanceSurfaceToSurfaceMin,
-        "DistanceSurfaceToSurfaceMax" => DistanceSurfaceToSurfaceMax,
-        _ => return None,
-    })
-}
-
-fn map_stat(old: &str) -> Option<MeasurementStatistics> {
-    use MeasurementStatistics::*;
-    Some(match old {
-        "Avg" => Avg,
-        "Max" => Max,
-        "Min" => Min,
-        "Sum" => Sum,
-        "Median" => Median,
-        "Stddev" => Stdev,
-        // "Off" / "Cnt" have no new equivalent.
-        _ => return None,
-    })
-}
-
-fn convert_measure(
-    old: &[LegacyResultsTemplate],
-    class_name: &str,
-    warnings: &mut Vec<String>,
-) -> IndexMap<MeasurementChannels, Vec<MeasurementStatistics>> {
-    let mut measure = IndexMap::new();
-    for tmpl in old {
-        let Some(channel) = map_measure_channel(&tmpl.measure_channel) else {
-            if !tmpl.measure_channel.is_empty() && tmpl.measure_channel != "None" {
-                warnings.push(format!(
-                    "class '{class_name}': default measurement '{}' has no equivalent in the new format - dropped",
-                    tmpl.measure_channel
-                ));
-            }
-            continue;
-        };
-        let stats: Vec<MeasurementStatistics> =
-            tmpl.stats.iter().filter_map(|s| map_stat(s)).collect();
-        if !stats.is_empty() {
-            measure.insert(channel, stats);
-        }
-    }
-    measure
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,15 +1124,6 @@ mod tests {
         assert_eq!(p.classification.classes[0].id, ObjectClass::Valid(1));
         assert_eq!(p.classification.classes[0].color, 0x3399FF);
         assert_eq!(p.classification.classes[1].id, ObjectClass::Unset);
-        assert_eq!(
-            p.classification.classes[0]
-                .measure
-                .get(&MeasurementChannels::AreaSize),
-            Some(&vec![
-                MeasurementStatistics::Avg,
-                MeasurementStatistics::Sum
-            ])
-        );
 
         assert_eq!(p.plate.grouping_mode, GroupingMode::FolderName);
         assert_eq!(p.plate.well_rows, 2);
@@ -1589,56 +1514,6 @@ mod tests {
     }
 
     #[test]
-    fn map_measure_channel_covers_every_documented_legacy_name() {
-        use MeasurementChannels::*;
-        let cases = [
-            ("Count", ObjectCount),
-            ("AreaSize", AreaSize),
-            ("Perimeter", Perimeter),
-            ("Circularity", Circularity),
-            ("IntensitySum", IntensitySum),
-            ("IntensityAvg", IntensityAvg),
-            ("IntensityMin", IntensityMin),
-            ("IntensityMax", IntensityMax),
-            ("Intersecting", Intersecting),
-            ("CenteroidX", Position),
-            ("CenteroidY", Position),
-            ("DistanceCentroidToCentoid", DistanceCenterToCenter),
-            ("DistanceCentroidToSurfaceMin", DistanceCenterToSurfaceMin),
-            ("DistanceCentroidToSurfaceMax", DistanceCenterToSurfaceMax),
-            ("DistanceSurfaceToSurfaceMin", DistanceSurfaceToSurfaceMin),
-            ("DistanceSurfaceToSurfaceMax", DistanceSurfaceToSurfaceMax),
-        ];
-        for (legacy, expected) in cases {
-            assert_eq!(
-                map_measure_channel(legacy),
-                Some(expected),
-                "mapping {legacy}"
-            );
-        }
-    }
-
-    #[test]
-    fn map_measure_channel_returns_none_for_an_unknown_name() {
-        assert_eq!(map_measure_channel("SomethingNew"), None);
-        assert_eq!(map_measure_channel(""), None);
-    }
-
-    #[test]
-    fn map_stat_covers_every_documented_legacy_name_and_rejects_dropped_ones() {
-        use MeasurementStatistics::*;
-        assert_eq!(map_stat("Avg"), Some(Avg));
-        assert_eq!(map_stat("Max"), Some(Max));
-        assert_eq!(map_stat("Min"), Some(Min));
-        assert_eq!(map_stat("Sum"), Some(Sum));
-        assert_eq!(map_stat("Median"), Some(Median));
-        assert_eq!(map_stat("Stddev"), Some(Stdev));
-        // "Off"/"Cnt" have no new equivalent by design.
-        assert_eq!(map_stat("Off"), None);
-        assert_eq!(map_stat("Cnt"), None);
-    }
-
-    #[test]
     fn legacy_unit_to_nm_factor_covers_every_known_unit() {
         assert_eq!(legacy_unit_to_nm_factor("nm"), 1.0);
         assert_eq!(legacy_unit_to_nm_factor("um"), 1_000.0);
@@ -1756,61 +1631,6 @@ mod tests {
         }"##;
         let outcome = import_legacy_project(json).unwrap();
         assert_eq!(outcome.project.classification.classes[0].color, 0x9933FF);
-    }
-
-    #[test]
-    fn measure_channel_with_no_new_equivalent_is_dropped_with_a_warning() {
-        let json = r##"{
-            "meta": { "name": "X" },
-            "projectSettings": {
-                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
-                    "defaultMeasurements": [ { "measureChannel": "SomeOldOne", "stats": ["Avg"] } ] } ] },
-                "plate": {}
-            },
-            "imageSetup": {},
-            "pipelines": []
-        }"##;
-        let outcome = import_legacy_project(json).unwrap();
-        assert!(outcome.project.classification.classes[0].measure.is_empty());
-        assert!(
-            outcome
-                .warnings
-                .iter()
-                .any(|w| w.contains("SomeOldOne") && w.contains("no equivalent"))
-        );
-    }
-
-    #[test]
-    fn measure_channel_with_only_dropped_stats_is_not_inserted() {
-        let json = r##"{
-            "meta": { "name": "X" },
-            "projectSettings": {
-                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
-                    "defaultMeasurements": [ { "measureChannel": "AreaSize", "stats": ["Off", "Cnt"] } ] } ] },
-                "plate": {}
-            },
-            "imageSetup": {},
-            "pipelines": []
-        }"##;
-        let outcome = import_legacy_project(json).unwrap();
-        assert!(outcome.project.classification.classes[0].measure.is_empty());
-    }
-
-    #[test]
-    fn empty_or_none_measure_channel_is_dropped_without_a_warning() {
-        let json = r##"{
-            "meta": { "name": "X" },
-            "projectSettings": {
-                "classification": { "classes": [ { "classId": "1", "name": "c", "color": "#000000", "notes": "",
-                    "defaultMeasurements": [ { "measureChannel": "None", "stats": [] }, { "measureChannel": "", "stats": [] } ] } ] },
-                "plate": {}
-            },
-            "imageSetup": {},
-            "pipelines": []
-        }"##;
-        let outcome = import_legacy_project(json).unwrap();
-        assert!(outcome.project.classification.classes[0].measure.is_empty());
-        assert!(outcome.warnings.is_empty());
     }
 
     // ---- plate edge cases ----

@@ -1,11 +1,16 @@
+use crate::results::plate_matrix::{
+    PlateMatrixResult, WellMatrixResult, compute_plate_matrix, compute_well_matrix, resolve_range,
+    row_label,
+};
+use crate::results::results_chart::HeatmapColorScheme;
 use crate::results::results_loader::{
-    ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, ResultsLoader, aggregate_objects_sql,
-    build_coloc_detail_column_specs, coloc_partner_ids, discover_coloc_detail_columns,
-    flatten_coloc_rows, to_display_row, to_object_filter,
+    AggFunc, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, ResultsLoader,
+    aggregate_objects_sql, build_coloc_detail_column_specs, coloc_partner_ids,
+    discover_coloc_detail_columns, flatten_coloc_rows, to_display_row, to_object_filter,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_core::{DuckDbReader, ObjectRow};
-use rust_xlsxwriter::{Format, Workbook};
+use rust_xlsxwriter::{Color, Format, Workbook};
 use std::{collections::HashSet, path::Path, sync::Arc};
 
 /// Source rows accumulated per colocalization-partner lookup while streaming
@@ -125,6 +130,339 @@ impl ResultsExporter {
         Ok(())
     }
 
+    /// Exports one Matrix (Plate) view as a plain-text grid to CSV: a header
+    /// row of column numbers, a header column of row letters (`A`, `B`, ...,
+    /// `AA`, ... via [`row_label`]), and each well's aggregated value at its
+    /// plate position — no color (CSV can't carry it), mirroring
+    /// `export_matrix_to_xlsx` otherwise. Recomputes the matrix fresh from
+    /// `filter` (the same way `export_to_csv` recomputes grouped rows fresh
+    /// rather than reusing cached UI state), so each batch's own class/image
+    /// filter is respected.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_matrix_to_csv(
+        &self,
+        filter: DatabaseFilter,
+        group_by: GroupBy,
+        regex: &str,
+        agg: AggFunc,
+        metric: &ColumnSpec,
+        plate_rows: usize,
+        plate_cols: usize,
+        export_path: &Path,
+    ) -> Result<(), InternalErrors> {
+        let result = self.compute_matrix(filter, group_by, regex, agg, metric, plate_rows, plate_cols)?;
+
+        let mut writer =
+            csv::Writer::from_path(export_path).map_err(|e| InternalErrors::Io(e.to_string()))?;
+        let mut header = vec![String::new()];
+        header.extend((1..=result.cols).map(|c| c.to_string()));
+        writer
+            .write_record(&header)
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        for r in 0..result.rows {
+            let mut row = vec![row_label(r)];
+            for c in 0..result.cols {
+                let value = result.cells[r * result.cols + c].value;
+                row.push(value.map(|v| format!("{v:.3}")).unwrap_or_default());
+            }
+            writer
+                .write_record(&row)
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        }
+        writer
+            .flush()
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Exports one Matrix (Plate) view to XLSX: same grid shape as
+    /// `export_matrix_to_csv`, plus each well's cell colored via
+    /// `color_scheme` over `[range_min, range_max]` (or auto-ranged to
+    /// `[0, max(values)]` when `range_auto`) — the same color mapping the
+    /// live Matrix view uses (see `resolve_range`), so the exported sheet
+    /// looks the same as what's on screen.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_matrix_to_xlsx(
+        &self,
+        filter: DatabaseFilter,
+        group_by: GroupBy,
+        regex: &str,
+        agg: AggFunc,
+        metric: &ColumnSpec,
+        plate_rows: usize,
+        plate_cols: usize,
+        color_scheme: HeatmapColorScheme,
+        range_auto: bool,
+        range_min: f64,
+        range_max: f64,
+        export_path: &Path,
+    ) -> Result<(), InternalErrors> {
+        let result = self.compute_matrix(filter, group_by, regex, agg, metric, plate_rows, plate_cols)?;
+        let values: Vec<f64> = result.cells.iter().filter_map(|c| c.value).collect();
+        let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
+
+        let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("Matrix").map_err(err)?;
+
+        let header_fmt = Format::new().set_bold();
+        for c in 0..result.cols {
+            sheet
+                .write_number_with_format(0, (c + 1) as u16, (c + 1) as f64, &header_fmt)
+                .map_err(err)?;
+        }
+        for r in 0..result.rows {
+            sheet
+                .write_with_format(r as u32 + 1, 0, row_label(r), &header_fmt)
+                .map_err(err)?;
+            for c in 0..result.cols {
+                let Some(v) = result.cells[r * result.cols + c].value else {
+                    continue;
+                };
+                let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+                let (cr, cg, cb) = color_scheme.color_rgb(t);
+                let cell_fmt = Format::new()
+                    .set_background_color(Color::RGB(
+                        ((cr as u32) << 16) | ((cg as u32) << 8) | cb as u32,
+                    ))
+                    .set_font_color(Color::White);
+                sheet
+                    .write_number_with_format(r as u32 + 1, (c + 1) as u16, v, &cell_fmt)
+                    .map_err(err)?;
+            }
+        }
+
+        workbook.save(export_path).map_err(err)?;
+        Ok(())
+    }
+
+    /// Loads every object matching `filter` and computes the plate matrix —
+    /// the shared first step of both `export_matrix_to_csv`/`_xlsx`.
+    #[allow(clippy::too_many_arguments)]
+    fn compute_matrix(
+        &self,
+        filter: DatabaseFilter,
+        group_by: GroupBy,
+        regex: &str,
+        agg: AggFunc,
+        metric: &ColumnSpec,
+        plate_rows: usize,
+        plate_cols: usize,
+    ) -> Result<PlateMatrixResult, InternalErrors> {
+        let objects = self.results_loader.get_objects(DatabaseFilter {
+            needs_intensities: true,
+            page_size: 0,
+            ..filter
+        })?;
+        Ok(compute_plate_matrix(
+            &objects,
+            group_by,
+            regex,
+            agg,
+            metric,
+            plate_rows,
+            plate_cols,
+        ))
+    }
+
+    /// Loads every object matching `filter` once, computes the plate matrix to
+    /// discover which wells actually have data (`count > 0`), then computes
+    /// each of those wells' field-of-view grid (see [`compute_well_matrix`]) -
+    /// the shared first step of `export_well_matrices_to_csv`/`_xlsx`. A well
+    /// whose regex has no usable sub-position data is silently skipped
+    /// (mirrors the live Matrix view's own well drill-down).
+    #[allow(clippy::too_many_arguments)]
+    fn compute_well_matrices(
+        &self,
+        filter: DatabaseFilter,
+        group_by: GroupBy,
+        regex: &str,
+        agg: AggFunc,
+        metric: &ColumnSpec,
+        plate_rows: usize,
+        plate_cols: usize,
+        well_rows: usize,
+        well_cols: usize,
+        well_image_order: &[i32],
+    ) -> Result<Vec<WellMatrixResult>, InternalErrors> {
+        let objects = self.results_loader.get_objects(DatabaseFilter {
+            needs_intensities: true,
+            page_size: 0,
+            ..filter
+        })?;
+        let plate = compute_plate_matrix(&objects, group_by, regex, agg, metric, plate_rows, plate_cols);
+        Ok(plate
+            .cells
+            .iter()
+            .filter(|c| c.count > 0 && !c.label.is_empty())
+            .filter_map(|c| {
+                compute_well_matrix(
+                    &objects,
+                    regex,
+                    &c.label,
+                    agg,
+                    metric,
+                    well_rows,
+                    well_cols,
+                    well_image_order,
+                )
+            })
+            .collect())
+    }
+
+    /// Exports one CSV file per well actually present in the plate (see
+    /// `compute_well_matrices`) into `folder`, named
+    /// `<base_name>_<well_label>.csv` - the Well-view counterpart to
+    /// `export_matrix_to_csv`'s single plate-wide grid. Errors if no well has
+    /// usable sub-position data (regex has no group 4, or nothing matched)
+    /// rather than silently writing nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_well_matrices_to_csv(
+        &self,
+        filter: DatabaseFilter,
+        group_by: GroupBy,
+        regex: &str,
+        agg: AggFunc,
+        metric: &ColumnSpec,
+        plate_rows: usize,
+        plate_cols: usize,
+        well_rows: usize,
+        well_cols: usize,
+        well_image_order: &[i32],
+        folder: &Path,
+        base_name: &str,
+    ) -> Result<(), InternalErrors> {
+        let wells = self.compute_well_matrices(
+            filter,
+            group_by,
+            regex,
+            agg,
+            metric,
+            plate_rows,
+            plate_cols,
+            well_rows,
+            well_cols,
+            well_image_order,
+        )?;
+        if wells.is_empty() {
+            return Err(InternalErrors::Io(
+                "No wells with sub-position data found - check the regex has a 4th capture group."
+                    .to_string(),
+            ));
+        }
+
+        for well in &wells {
+            let export_path =
+                folder.join(format!("{base_name}_{}.csv", sanitize_component(&well.well_label)));
+            let mut writer =
+                csv::Writer::from_path(&export_path).map_err(|e| InternalErrors::Io(e.to_string()))?;
+            let mut header = vec![String::new()];
+            header.extend((1..=well.cols).map(|c| c.to_string()));
+            writer
+                .write_record(&header)
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            for r in 0..well.rows {
+                let mut row = vec![row_label(r)];
+                for c in 0..well.cols {
+                    let value = well.cells[r * well.cols + c].value;
+                    row.push(value.map(|v| format!("{v:.3}")).unwrap_or_default());
+                }
+                writer
+                    .write_record(&row)
+                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            }
+            writer.flush().map_err(|e| InternalErrors::Io(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Exports every well actually present in the plate (see
+    /// `compute_well_matrices`) into one XLSX workbook, one worksheet per well
+    /// (named after the well label) - the Well-view counterpart to
+    /// `export_matrix_to_xlsx`'s single plate-wide grid, each sheet colored
+    /// the same way. Errors if no well has usable sub-position data.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_well_matrices_to_xlsx(
+        &self,
+        filter: DatabaseFilter,
+        group_by: GroupBy,
+        regex: &str,
+        agg: AggFunc,
+        metric: &ColumnSpec,
+        plate_rows: usize,
+        plate_cols: usize,
+        well_rows: usize,
+        well_cols: usize,
+        well_image_order: &[i32],
+        color_scheme: HeatmapColorScheme,
+        range_auto: bool,
+        range_min: f64,
+        range_max: f64,
+        export_path: &Path,
+    ) -> Result<(), InternalErrors> {
+        let wells = self.compute_well_matrices(
+            filter,
+            group_by,
+            regex,
+            agg,
+            metric,
+            plate_rows,
+            plate_cols,
+            well_rows,
+            well_cols,
+            well_image_order,
+        )?;
+        if wells.is_empty() {
+            return Err(InternalErrors::Io(
+                "No wells with sub-position data found - check the regex has a 4th capture group."
+                    .to_string(),
+            ));
+        }
+
+        let err = |e: rust_xlsxwriter::XlsxError| InternalErrors::Io(e.to_string());
+        let mut workbook = Workbook::new();
+        let mut used_sheet_names = HashSet::new();
+        let header_fmt = Format::new().set_bold();
+
+        for well in &wells {
+            let values: Vec<f64> = well.cells.iter().filter_map(|c| c.value).collect();
+            let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
+            let sheet_name = unique_sheet_name(&well.well_label, &mut used_sheet_names);
+            let sheet = workbook.add_worksheet();
+            sheet.set_name(sheet_name).map_err(err)?;
+
+            for c in 0..well.cols {
+                sheet
+                    .write_number_with_format(0, (c + 1) as u16, (c + 1) as f64, &header_fmt)
+                    .map_err(err)?;
+            }
+            for r in 0..well.rows {
+                sheet
+                    .write_with_format(r as u32 + 1, 0, row_label(r), &header_fmt)
+                    .map_err(err)?;
+                for c in 0..well.cols {
+                    let Some(v) = well.cells[r * well.cols + c].value else {
+                        continue;
+                    };
+                    let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+                    let (cr, cg, cb) = color_scheme.color_rgb(t);
+                    let cell_fmt = Format::new()
+                        .set_background_color(Color::RGB(
+                            ((cr as u32) << 16) | ((cg as u32) << 8) | cb as u32,
+                        ))
+                        .set_font_color(Color::White);
+                    sheet
+                        .write_number_with_format(r as u32 + 1, (c + 1) as u16, v, &cell_fmt)
+                        .map_err(err)?;
+                }
+            }
+        }
+
+        workbook.save(export_path).map_err(err)?;
+        Ok(())
+    }
+
     // -------------------------------------------------------------------------
 
     /// Streams the rows matching `filter` (or grouped/aggregated rows, when
@@ -236,6 +574,50 @@ impl ResultsExporter {
     }
 }
 
+/// Replaces characters illegal in a filename or XLSX sheet name (`/ \ : * ? "
+/// < > |` plus the sheet-name-only `[ ]`) with `_`. Falls back to `"well"` if
+/// nothing usable is left.
+fn sanitize_component(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '[' | ']') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '_') {
+        "well".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Sanitizes `label` into a valid XLSX sheet name (see [`sanitize_component`]),
+/// truncated to Excel's 31-character limit, and disambiguated against
+/// `used` with a numeric suffix on collision (well labels are normally
+/// already unique, so this is a defensive fallback rather than the common
+/// case).
+fn unique_sheet_name(label: &str, used: &mut HashSet<String>) -> String {
+    let base: String = sanitize_component(label).chars().take(31).collect();
+    if used.insert(base.clone()) {
+        return base;
+    }
+    for n in 2..1000 {
+        let suffix = format!("_{n}");
+        let cut = 31usize.saturating_sub(suffix.chars().count());
+        let candidate: String = base.chars().take(cut).collect::<String>() + &suffix;
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    base
+}
+
 /// Resolves colocalization partners for one accumulated batch of source ROIs
 /// against `reader` (the same connection `export_coloc_detail_rows`'s source
 /// stream is still open on — see `DuckDbReader::stream_objects`'s doc comment
@@ -318,7 +700,8 @@ mod tests {
     use super::*;
     use crate::results::results_loader::{AggFunc, build_column_specs};
     use crate::results::test_support::{
-        decode_object_id_idx, seed_large_coloc_db, seed_large_results_db, seed_results_db,
+        decode_object_id_idx, seed_large_coloc_db, seed_large_results_db, seed_plate_results_db,
+        seed_results_db,
     };
     use calamine::{Data, Reader, open_workbook_auto};
 
@@ -541,6 +924,251 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // Matrix (Plate) export tests.
+
+    fn area_metric() -> ColumnSpec {
+        ColumnSpec {
+            id: "area_px".to_string(),
+            label: "Area (px\u{00B2})".to_string(),
+            filterable: false,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn export_matrix_to_csv_places_wells_by_folder_and_formats_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_plate_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        let csv_path = dir.path().join("plate.csv");
+        exporter
+            .export_matrix_to_csv(
+                DatabaseFilter::default(),
+                GroupBy::Folder,
+                "",
+                AggFunc::Avg,
+                &area_metric(),
+                2,
+                2,
+                &csv_path,
+            )
+            .expect("matrix export should succeed");
+
+        let rows = parse_csv(&csv_path);
+        assert_eq!(
+            rows,
+            vec![
+                vec!["".to_string(), "1".to_string(), "2".to_string()],
+                vec!["A".to_string(), "10.000".to_string(), "".to_string()],
+                vec!["B".to_string(), "".to_string(), "20.000".to_string()],
+            ],
+            "folder \"A1\" -> row A/col 1 (value 10), folder \"B2\" -> row B/col 2 (value 20)"
+        );
+    }
+
+    #[test]
+    fn export_matrix_to_csv_regex_grouping_produces_the_same_grid_as_folder_grouping() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_plate_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        let csv_path = dir.path().join("plate.csv");
+        exporter
+            .export_matrix_to_csv(
+                DatabaseFilter::default(),
+                GroupBy::Regex,
+                r"^([A-Z]\d+)_",
+                AggFunc::Avg,
+                &area_metric(),
+                2,
+                2,
+                &csv_path,
+            )
+            .expect("matrix export should succeed");
+
+        let rows = parse_csv(&csv_path);
+        assert_eq!(
+            rows,
+            vec![
+                vec!["".to_string(), "1".to_string(), "2".to_string()],
+                vec!["A".to_string(), "10.000".to_string(), "".to_string()],
+                vec!["B".to_string(), "".to_string(), "20.000".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn export_matrix_to_xlsx_writes_the_same_values_as_csv_with_a_distinct_fill_per_cell() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_plate_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        let xlsx_path = dir.path().join("plate.xlsx");
+        exporter
+            .export_matrix_to_xlsx(
+                DatabaseFilter::default(),
+                GroupBy::Folder,
+                "",
+                AggFunc::Avg,
+                &area_metric(),
+                2,
+                2,
+                HeatmapColorScheme::Viridis,
+                true,
+                0.0,
+                1.0,
+                &xlsx_path,
+            )
+            .expect("matrix export should succeed");
+
+        let rows = parse_xlsx(&xlsx_path);
+        assert_eq!(rows[0], vec!["".to_string(), "1".to_string(), "2".to_string()]);
+        assert_eq!(rows[1], vec!["A".to_string(), "10".to_string(), "".to_string()]);
+        assert_eq!(rows[2], vec!["B".to_string(), "".to_string(), "20".to_string()]);
+
+        let bytes = std::fs::read(&xlsx_path).expect("xlsx file should exist");
+        assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
+        // Per-cell fill coloring (via `HeatmapColorScheme::color_rgb`) is
+        // covered by live GUI verification rather than here - inspecting it
+        // would need a zip/XML reader this crate doesn't otherwise depend on,
+        // out of proportion to what a unit test should pull in.
+    }
+
+    /// A well regex with the 4th capture group `compute_well_matrix` needs
+    /// (sub-position) - matches `seed_plate_results_db`'s "A1_01.tif" /
+    /// "B2_01.tif" image names exactly: group 1 = well id ("A1"/"B2"),
+    /// group 4 = sub-position ("01").
+    const WELL_REGEX: &str = r"^(([A-Z])(\d+))_(\d+)";
+
+    #[test]
+    fn export_well_matrices_to_csv_writes_one_file_per_well() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_plate_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        exporter
+            .export_well_matrices_to_csv(
+                DatabaseFilter::default(),
+                GroupBy::Regex,
+                WELL_REGEX,
+                AggFunc::Avg,
+                &area_metric(),
+                2,
+                2,
+                1,
+                1,
+                &[1],
+                dir.path(),
+                "wells",
+            )
+            .expect("well matrix export should succeed");
+
+        let rows_a1 = parse_csv(&dir.path().join("wells_A1.csv"));
+        assert_eq!(
+            rows_a1,
+            vec![vec!["".to_string(), "1".to_string()], vec!["A".to_string(), "10.000".to_string()]]
+        );
+        let rows_b2 = parse_csv(&dir.path().join("wells_B2.csv"));
+        assert_eq!(
+            rows_b2,
+            vec![vec!["".to_string(), "1".to_string()], vec!["A".to_string(), "20.000".to_string()]]
+        );
+    }
+
+    #[test]
+    fn export_well_matrices_to_csv_errors_when_no_well_has_sub_position_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_plate_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        let result = exporter.export_well_matrices_to_csv(
+            DatabaseFilter::default(),
+            GroupBy::Regex,
+            r"^([A-Z]\d+)_", // only 1 capture group - no sub-position
+            AggFunc::Avg,
+            &area_metric(),
+            2,
+            2,
+            1,
+            1,
+            &[1],
+            dir.path(),
+            "wells",
+        );
+        assert!(result.is_err(), "no well has usable sub-position data - should error, not write nothing");
+    }
+
+    #[test]
+    fn export_well_matrices_to_xlsx_writes_one_sheet_per_well() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_plate_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        let xlsx_path = dir.path().join("wells.xlsx");
+        exporter
+            .export_well_matrices_to_xlsx(
+                DatabaseFilter::default(),
+                GroupBy::Regex,
+                WELL_REGEX,
+                AggFunc::Avg,
+                &area_metric(),
+                2,
+                2,
+                1,
+                1,
+                &[1],
+                HeatmapColorScheme::Viridis,
+                true,
+                0.0,
+                1.0,
+                &xlsx_path,
+            )
+            .expect("well matrix export should succeed");
+
+        let mut workbook: calamine::Sheets<_> = open_workbook_auto(&xlsx_path).expect("open xlsx back");
+        let mut sheet_names = workbook.sheet_names().to_vec();
+        sheet_names.sort();
+        assert_eq!(sheet_names, vec!["A1".to_string(), "B2".to_string()]);
+
+        let sheet_a1 = workbook.worksheet_range("A1").expect("read sheet A1");
+        let rows_a1: Vec<Vec<String>> = sheet_a1
+            .rows()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| match cell {
+                        Data::Float(f) if f.fract() == 0.0 => format!("{f:.0}"),
+                        Data::Empty => String::new(),
+                        other => other.to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            rows_a1,
+            vec![vec!["".to_string(), "1".to_string()], vec!["A".to_string(), "10".to_string()]]
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // Large-dataset characterization tests.
     //
     // These seed far more rows than any GUI page or DB round-trip holds and
@@ -682,6 +1310,71 @@ mod tests {
         assert!(
             seen_source_idx.into_iter().all(|seen| seen),
             "every source object must be exported exactly once"
+        );
+    }
+
+    #[test]
+    fn export_coloc_detail_to_xlsx_writes_a_readable_workbook_and_respects_the_column_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_large_coloc_db(&db_path, 2, 1);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        let xlsx_path = dir.path().join("coloc_detail.xlsx");
+        let visible: HashSet<String> = ["object ID", "Coloc ClassB object ID"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        // Scoped to ClassA (the source class) only - otherwise the ClassB
+        // partner objects seeded alongside the sources would themselves be
+        // treated as (partner-less) source rows too, same as the large-scale
+        // CSV test above.
+        let filter = DatabaseFilter {
+            class_filter: Some(vec!["ClassA".to_string()]),
+            ..Default::default()
+        };
+        exporter
+            .export_coloc_detail_to_xlsx(filter, Some(&visible), &xlsx_path)
+            .expect("export should succeed");
+
+        let rows = parse_xlsx(&xlsx_path);
+        assert_eq!(rows.len(), 3, "header + one flattened row per source object");
+        assert_eq!(
+            rows[0],
+            vec!["object ID".to_string(), "Coloc ClassB object ID".to_string()],
+            "hidden columns (Image, Class, Area, ...) must not appear in the header"
+        );
+
+        let bytes = std::fs::read(&xlsx_path).expect("xlsx file should exist");
+        assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
+    }
+
+    #[test]
+    fn export_coloc_detail_rows_with_no_colocalization_data_still_exports_object_rows() {
+        // `seed_results_db`'s two objects both carry an empty `coloc_json`
+        // ('{}') and no `coloc_stats` rows - the shape of a project whose
+        // colocalization pipeline step has never run. The exporter must
+        // still succeed (zero partner classes discovered, zero partner ids
+        // resolved per batch) rather than erroring or panicking.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+
+        let csv_path = dir.path().join("coloc_detail.csv");
+        exporter
+            .export_coloc_detail_to_csv(DatabaseFilter::default(), None, &csv_path)
+            .expect("export should succeed even with no colocalization data at all");
+
+        let rows = parse_csv(&csv_path);
+        assert_eq!(rows.len(), 3, "header + one row per object, no partner columns");
+        assert!(
+            !rows[0].iter().any(|h| h.starts_with("Coloc ")),
+            "no partner classes were ever recorded, so no Coloc-prefixed column should exist"
         );
     }
 }

@@ -798,7 +798,7 @@ impl Default for GroupConfig {
 }
 
 /// Returns the directory portion of a relative image path (`""` if none).
-fn folder_of(rel_path: &str) -> String {
+pub(crate) fn folder_of(rel_path: &str) -> String {
     std::path::Path::new(rel_path)
         .parent()
         .map(|p| p.to_string_lossy().to_string())
@@ -808,7 +808,7 @@ fn folder_of(rel_path: &str) -> String {
 
 /// Computes the grouping key for a single object, or `None` if the row should be
 /// excluded from the grouped view (only happens for a non-matching regex).
-fn group_key(
+pub(crate) fn group_key(
     object: &ObjectRow,
     group_by: GroupBy,
     regex: Option<&regex::Regex>,

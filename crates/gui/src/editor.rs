@@ -7,6 +7,7 @@ use crate::{
         pipelines_controller::PipelinesController,
         project_settings_controller::ProjectSettingsController,
         results_list_controller::ResultsListController,
+        results_matrix_controller::ResultsMatrixController,
         results_table_controller::ResultsTableController, object_list_controller::ObjectListController,
         template_controller::TemplateController,
         undo_redo_controller::UndoRedoController,
@@ -27,6 +28,7 @@ pub mod pipelines_controller;
 pub mod project_controller;
 pub mod project_settings_controller;
 pub mod results_list_controller;
+pub mod results_matrix_controller;
 pub mod results_table_controller;
 pub mod object_list_controller;
 pub mod template_controller;
@@ -52,6 +54,7 @@ pub struct Editor {
     pipelines_controller: Arc<PipelinesController>,
     pipeline_worker: Arc<PipelineWorker>,
     results_table_controller: Arc<ResultsTableController>,
+    results_matrix_controller: Arc<ResultsMatrixController>,
     results_list_controller: Arc<ResultsListController>,
     template_controller: Arc<TemplateController>,
     undo_redo_controller: Arc<UndoRedoController>,
@@ -80,6 +83,7 @@ impl Editor {
 
         let project_settings_controller = Arc::new(ProjectSettingsController::new(
             ui.clone(),
+            results_ui.clone(),
             app_state.clone(),
         ));
 
@@ -114,6 +118,12 @@ impl Editor {
             ui.clone(),
             app_state.clone(),
             results_table_controller.clone(),
+        ));
+        let results_matrix_controller = Arc::new(ResultsMatrixController::new(
+            results_ui.clone(),
+            app_state.clone(),
+            results_table_controller.clone(),
+            project_settings_controller.clone(),
         ));
 
         let viewport_object_controller = Arc::new(ViewPortObjectController::new(
@@ -199,6 +209,7 @@ impl Editor {
             pipelines_controller,
             pipeline_worker,
             results_table_controller,
+            results_matrix_controller,
             results_list_controller,
             template_controller,
             undo_redo_controller,
@@ -217,6 +228,7 @@ impl Editor {
         self.object_list_controller.attach_callbacks();
         self.pipelines_controller.attach_callbacks();
         self.results_table_controller.attach_callbacks();
+        self.results_matrix_controller.attach_callbacks();
         self.results_list_controller.attach_callbacks();
         self.template_controller.attach_callbacks();
         self.undo_redo_controller.attach_callbacks();

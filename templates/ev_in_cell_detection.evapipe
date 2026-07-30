@@ -3,9 +3,9 @@
     "name": "EV in Cell",
     "shortDescription": "EV in cell detection",
     "description": "Detects extracellular vesicles inside cells using median background subtraction, blurring, Li thresholding and watershed splitting. The output object class can be remapped after import (default class id used during conversion: 1).",
-    "authorFirstName": "EVAnalyzer",
-    "authorLastName": "Team",
-    "authorOrganization": "evanalyzer.org",
+    "authorFirstName": "Melanie",
+    "authorLastName": "Schuerz",
+    "authorOrganization": "University of Salzburg",
     "creationTime": "2026-06-11T00:00:00Z"
   },
   "pipelineSteps": [
@@ -75,7 +75,7 @@
         "overlappingWith": "UNSET",
         "minIntersectionArea": 0.0,
         "sizeUnit": "px",
-        "minArea": 0.3,
+        "minArea": 3,
         "maxArea": 2147483648.0,
         "minCircularity": 0.0,
         "maxCircularity": 1.0,
@@ -88,14 +88,6 @@
         "minFeret": 0.0,
         "maxFeret": 2147483648,
         "allowEdgeTouching": true
-      }
-    },
-    {
-      "enabled": true,
-      "command": {
-        "type": "saveImage",
-        "name": "nucleus",
-        "source": "IMAGE"
       }
     }
   ]

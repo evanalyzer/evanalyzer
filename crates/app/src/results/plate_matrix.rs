@@ -1,0 +1,715 @@
+//! Plate/Well matrix computation for the Results window's Matrix view.
+//!
+//! Reuses [`aggregate_rows`]'s grouping engine unchanged: a "well" is just
+//! another `GroupBy::Folder`/`GroupBy::Regex` group, and a "field of view"
+//! inside a well is just a `GroupBy::Image` group over that well's objects.
+//! The only genuinely new work here is placing those groups into a 2D grid:
+//! decoding a well label like `"A14"` into a `(row, col)` plate coordinate,
+//! and mapping a captured sub-position number to a slot inside a well via
+//! `well_image_order`.
+
+use super::results_loader::{AggFunc, ColumnSpec, GroupBy, GroupConfig, aggregate_rows, group_key};
+use evanalyzer_core::ObjectRow;
+use std::collections::HashSet;
+
+/// One cell of a plate-level matrix: an aggregated value for one well (or an
+/// empty placeholder, `label: ""`/`value: None`, if no group landed there).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlateCell {
+    pub label: String,
+    pub value: Option<f64>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlateMatrixResult {
+    pub rows: usize,
+    pub cols: usize,
+    /// Row-major, length `rows * cols`.
+    pub cells: Vec<PlateCell>,
+    /// The smallest `(rows, cols)` plate size that would fit every
+    /// well-shaped label found in the data (1-indexed span, e.g. a well
+    /// decoded at row D / col 19 contributes `(4, 19)`), regardless of
+    /// whether it actually fit in the *configured* `plate_rows`/`plate_cols`
+    /// passed in. `None` if no label decoded as a well coordinate at all
+    /// (pure folder/sequential mode, or a regex whose group 1 isn't
+    /// well-shaped). Lets the caller tell "the regex matched nothing" apart
+    /// from "the plate size is too small for this data" and offer a fix.
+    pub required_span: Option<(usize, usize)>,
+    /// How many groups `aggregate_rows` produced, before placement. Together
+    /// with `required_span == None`, a nonzero count means the regex *did*
+    /// match and group the data - just not into well-shaped keys (e.g. its
+    /// first capture group captured more than the well id) - as opposed to
+    /// the regex matching nothing at all.
+    pub group_count: usize,
+    /// One example group label, for diagnostics (e.g. showing the user what
+    /// their regex's first capture group actually captured).
+    pub sample_label: Option<String>,
+}
+
+/// One cell of a well-level matrix: an aggregated value for one field-of-view
+/// image inside the well (or an empty placeholder if no image occupies that
+/// acquisition-order slot).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WellCell {
+    pub image_name: String,
+    pub value: Option<f64>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WellMatrixResult {
+    pub rows: usize,
+    pub cols: usize,
+    pub well_label: String,
+    /// Row-major, length `rows * cols`.
+    pub cells: Vec<WellCell>,
+}
+
+/// A best-effort regex suggestion from [`suggest_regex`]: `pattern` matched
+/// `matched` of `total` sample filenames.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegexSuggestion {
+    pub pattern: String,
+    pub matched: usize,
+    pub total: usize,
+}
+
+fn empty_plate_cell() -> PlateCell {
+    PlateCell {
+        label: String::new(),
+        value: None,
+        count: 0,
+    }
+}
+
+fn empty_well_cell() -> WellCell {
+    WellCell {
+        image_name: String::new(),
+        value: None,
+        count: 0,
+    }
+}
+
+/// Decodes a well label shaped like `<letters><digits>` (e.g. `"A14"`,
+/// `"AA7"`) into a zero-based `(row, col)`. Row letters use spreadsheet-style
+/// bijective base-26 (`A`=0, `B`=1, ..., `Z`=25, `AA`=26, ...) so plates with
+/// more than 26 rows (e.g. a 48x72 preset) still decode correctly. Returns
+/// `None` for anything not shaped that way (folder names, non-well-shaped
+/// regex groups) — callers fall back to sequential placement in that case.
+fn row_col_from_label(label: &str) -> Option<(usize, usize)> {
+    let split = label.find(|c: char| c.is_ascii_digit())?;
+    let (letters, digits) = label.split_at(split);
+    if letters.is_empty()
+        || digits.is_empty()
+        || !letters.chars().all(|c| c.is_ascii_alphabetic())
+        || !digits.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let mut row: usize = 0;
+    for c in letters.chars() {
+        let v = (c.to_ascii_uppercase() as u8 - b'A' + 1) as usize;
+        row = row * 26 + v;
+    }
+    let col: usize = digits.parse().ok()?;
+    Some((row.checked_sub(1)?, col.checked_sub(1)?))
+}
+
+/// Encodes a zero-based plate row index back into a spreadsheet-style
+/// bijective base-26 letter label (`0`->`"A"`, `25`->`"Z"`, `26`->`"AA"`,
+/// ...) — the inverse of the letter-decoding half of
+/// [`row_col_from_label`]. Used for plate row headers (e.g. in the CSV/XLSX
+/// matrix export), where a row needs a label independent of any particular
+/// well's data.
+pub fn row_label(index: usize) -> String {
+    let mut n = index + 1;
+    let mut letters = Vec::new();
+    while n > 0 {
+        let rem = (n - 1) % 26;
+        letters.push((b'A' + rem as u8) as char);
+        n = (n - 1) / 26;
+    }
+    letters.iter().rev().collect()
+}
+
+/// Resolves a color scale's `[min, max]` from either the data itself (`auto
+/// = true`, spanning `[0, max(values)]`) or an explicit manual range,
+/// guaranteeing `max > min` (a degenerate/inverted manual range collapses to
+/// a hairline span above `min` rather than dividing by zero downstream).
+/// Shared by the live Matrix view and the CSV/XLSX matrix export so the two
+/// can never compute different colors for the same data.
+pub fn resolve_range(values: &[f64], auto: bool, min: f64, max: f64) -> (f64, f64) {
+    if auto {
+        let hi = values.iter().copied().fold(0.0f64, f64::max).max(1e-9);
+        (0.0, hi)
+    } else if max > min {
+        (min, max)
+    } else {
+        (min, min + 1e-9)
+    }
+}
+
+/// Forces `spec` visible (matrix cells always need their one metric column
+/// populated, regardless of the source column-visibility state) and clears
+/// unrelated flags that don't matter to `aggregate_rows`.
+fn visible_metric_spec(spec: &ColumnSpec) -> ColumnSpec {
+    ColumnSpec {
+        id: spec.id.clone(),
+        label: spec.label.clone(),
+        filterable: spec.filterable,
+        visible: true,
+    }
+}
+
+/// Computes one aggregated value per well/group (via [`aggregate_rows`]) and
+/// places it into a `plate_rows x plate_cols` grid.
+///
+/// Groups whose label decodes as `<letters><digits>` (e.g. `"A14"`) are
+/// placed at that exact coordinate; everything else (folder names, or a
+/// regex whose capture group 1 isn't well-shaped) fills the remaining empty
+/// cells in row-major order. Groups beyond the plate's capacity are dropped.
+pub fn compute_plate_matrix(
+    objects: &[ObjectRow],
+    group_by: GroupBy,
+    regex: &str,
+    agg: AggFunc,
+    metric_column: &ColumnSpec,
+    plate_rows: usize,
+    plate_cols: usize,
+) -> PlateMatrixResult {
+    let config = GroupConfig {
+        group_by,
+        regex: regex.to_string(),
+        aggs: vec![agg],
+        split_colocalized: false,
+        group_by_class: false,
+    };
+    let base_specs = [visible_metric_spec(metric_column)];
+    let (specs, rows) = aggregate_rows(objects, &config, &base_specs);
+    let value_col = specs
+        .iter()
+        .position(|s| s.id == format!("{}__{}", metric_column.id, agg.label()));
+
+    let total = plate_rows * plate_cols;
+    let mut cells: Vec<PlateCell> = (0..total).map(|_| empty_plate_cell()).collect();
+    let mut occupied = vec![false; total];
+    let mut required_span: Option<(usize, usize)> = None;
+
+    let mut unplaced: Vec<PlateCell> = Vec::new();
+    for row in &rows {
+        let label = row.values.first().cloned().unwrap_or_default();
+        let count: usize = row.values.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let value = value_col
+            .and_then(|i| row.values.get(i))
+            .and_then(|v| v.parse::<f64>().ok());
+        let cell = PlateCell {
+            label: label.clone(),
+            value,
+            count,
+        };
+        match row_col_from_label(&label) {
+            Some((r, c)) => {
+                let (need_r, need_c) = required_span.unwrap_or((0, 0));
+                required_span = Some((need_r.max(r + 1), need_c.max(c + 1)));
+                if r < plate_rows && c < plate_cols {
+                    let idx = r * plate_cols + c;
+                    cells[idx] = cell;
+                    occupied[idx] = true;
+                }
+                // else: well-shaped but outside the configured plate bounds -
+                // the plate size setting doesn't match this data, so drop it
+                // rather than silently misplacing it into an unrelated slot;
+                // `required_span` tells the caller how big it needs to be.
+            }
+            // Not well-shaped at all (folder names, or a regex whose group 1
+            // isn't a well id) - fill sequentially instead.
+            None => unplaced.push(cell),
+        }
+    }
+    let mut next_slot = 0;
+    for cell in unplaced {
+        while next_slot < total && occupied[next_slot] {
+            next_slot += 1;
+        }
+        if next_slot >= total {
+            break; // more groups than the plate has room for; silently truncate
+        }
+        cells[next_slot] = cell;
+        occupied[next_slot] = true;
+    }
+
+    PlateMatrixResult {
+        rows: plate_rows,
+        cols: plate_cols,
+        cells,
+        required_span,
+        group_count: rows.len(),
+        sample_label: rows.first().map(|r| r.values.first().cloned().unwrap_or_default()),
+    }
+}
+
+/// Computes one aggregated value per field-of-view image inside a single
+/// well (via [`aggregate_rows`], scoped to that well's objects and grouped by
+/// `GroupBy::Image`) and places it into a `well_rows x well_cols` grid using
+/// `well_image_order` (the acquisition-order preset from `PlateSettings`):
+/// the image whose captured sub-position equals `well_image_order[i]` is
+/// placed at slot `i` (row-major).
+///
+/// Requires `regex` to have a 4th capture group (the sub-position — the
+/// shape produced by the "Filename well" preset and by [`suggest_regex`]).
+/// Returns `None` if the regex has no usable group 4, or no object belongs
+/// to `well_label`.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_well_matrix(
+    objects: &[ObjectRow],
+    regex: &str,
+    well_label: &str,
+    agg: AggFunc,
+    metric_column: &ColumnSpec,
+    well_rows: usize,
+    well_cols: usize,
+    well_image_order: &[i32],
+) -> Option<WellMatrixResult> {
+    let re = regex::Regex::new(regex).ok()?;
+    if re.captures_len() < 5 {
+        return None; // no group(4) present - no sub-position data
+    }
+
+    let well_objects: Vec<ObjectRow> = objects
+        .iter()
+        .filter(|o| group_key(o, GroupBy::Regex, Some(&re)).as_deref() == Some(well_label))
+        .cloned()
+        .collect();
+    if well_objects.is_empty() {
+        return None;
+    }
+
+    let config = GroupConfig {
+        group_by: GroupBy::Image,
+        regex: String::new(),
+        aggs: vec![agg],
+        split_colocalized: false,
+        group_by_class: false,
+    };
+    let base_specs = [visible_metric_spec(metric_column)];
+    let (specs, rows) = aggregate_rows(&well_objects, &config, &base_specs);
+    let value_col = specs
+        .iter()
+        .position(|s| s.id == format!("{}__{}", metric_column.id, agg.label()));
+
+    let total = well_rows * well_cols;
+    let mut cells: Vec<WellCell> = (0..total).map(|_| empty_well_cell()).collect();
+    let mut placed_any = false;
+
+    for row in &rows {
+        let image_name = row.values.first().cloned().unwrap_or_default();
+        let count: usize = row.values.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let value = value_col
+            .and_then(|i| row.values.get(i))
+            .and_then(|v| v.parse::<f64>().ok());
+        let Some(caps) = re.captures(&image_name) else {
+            continue;
+        };
+        let Some(sub) = caps.get(4).and_then(|m| m.as_str().parse::<i32>().ok()) else {
+            continue;
+        };
+        let Some(idx) = well_image_order.iter().position(|v| *v == sub) else {
+            continue;
+        };
+        if idx >= total {
+            continue;
+        }
+        cells[idx] = WellCell {
+            image_name,
+            value,
+            count,
+        };
+        placed_any = true;
+    }
+
+    if !placed_any {
+        return None;
+    }
+
+    Some(WellMatrixResult {
+        rows: well_rows,
+        cols: well_cols,
+        well_label: well_label.to_string(),
+        cells,
+    })
+}
+
+/// Suggests a "well" regex (group 1 = well id, group 4 = sub-position) by
+/// testing a short list of candidate shapes against sample filenames, in
+/// order from most to least specific. Accepts the first candidate matching
+/// at least 80% of the (deduplicated) samples with at least 2 distinct well
+/// ids — otherwise returns `None`.
+///
+/// This is explicitly a best-effort heuristic, not a general regex-mining
+/// engine: callers must always show the result to the user as an editable
+/// suggestion, never apply it silently.
+pub fn suggest_regex(image_names: &[String]) -> Option<RegexSuggestion> {
+    let mut seen = HashSet::new();
+    let samples: Vec<&str> = image_names
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|s| seen.insert(*s))
+        .collect();
+    if samples.is_empty() {
+        return None;
+    }
+
+    const CANDIDATES: &[&str] = &[
+        r"(([A-Za-z]{1,2})([0-9]{1,3}))_([0-9]+)",
+        r"(([A-Za-z]{1,2})([0-9]{1,3}))-([0-9]+)",
+        r"(([A-Za-z]{1,2})([0-9]{1,3}))",
+        r"(.*)_([0-9]+)",
+    ];
+
+    for pattern in CANDIDATES {
+        let Ok(re) = regex::Regex::new(pattern) else {
+            continue;
+        };
+        let mut matched = 0usize;
+        let mut distinct = HashSet::new();
+        for name in &samples {
+            if let Some(caps) = re.captures(name)
+                && let Some(g1) = caps.get(1)
+            {
+                matched += 1;
+                distinct.insert(g1.as_str().to_string());
+            }
+        }
+        let ratio = matched as f64 / samples.len() as f64;
+        if ratio >= 0.8 && distinct.len() >= 2 {
+            return Some(RegexSuggestion {
+                pattern: pattern.to_string(),
+                matched,
+                total: samples.len(),
+            });
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn obj(image_name: &str, image_rel_path: &str, area_px: u64) -> ObjectRow {
+        ObjectRow {
+            image_name: image_name.into(),
+            image_rel_path: image_rel_path.into(),
+            c_stack: None,
+            z_stack: None,
+            t_stack: None,
+            object_id: "00000000-0000-0000-0000-000000000001".into(),
+            seg_class_name: None,
+            seg_class_id: None,
+            object_class_name: vec![],
+            object_class_id: vec![],
+            parent_id: None,
+            children: vec![],
+            track_id: 0,
+            centroid_x_px: 0.0,
+            centroid_y_px: 0.0,
+            centroid_x_nm: 0.0,
+            centroid_y_nm: 0.0,
+            area_px,
+            area_nm2: area_px as f64,
+            perimeter_px: 0.0,
+            perimeter_nm: 0.0,
+            circularity: 0.0,
+            solidity: 0.0,
+            aspect_ratio: 0.0,
+            roundness: 0.0,
+            compactness: 0.0,
+            major_axis_px: 0.0,
+            minor_axis_px: 0.0,
+            touches_edge: false,
+            intensities_json: "{}".into(),
+            coloc_json: "{}".into(),
+            bbox_px: [0, 0, 0, 0],
+        }
+    }
+
+    fn area_col() -> ColumnSpec {
+        ColumnSpec {
+            id: "area_px".into(),
+            label: "Area (px)".into(),
+            filterable: false,
+            visible: true,
+        }
+    }
+
+    // ---- row_col_from_label ----
+
+    #[test]
+    fn row_col_from_label_single_letter() {
+        assert_eq!(row_col_from_label("A14"), Some((0, 13)));
+        assert_eq!(row_col_from_label("H12"), Some((7, 11)));
+    }
+
+    #[test]
+    fn row_col_from_label_multi_letter() {
+        // Spreadsheet-style bijective base-26: Z=25, AA=26, AB=27.
+        assert_eq!(row_col_from_label("AA7"), Some((26, 6)));
+        assert_eq!(row_col_from_label("AB1"), Some((27, 0)));
+    }
+
+    #[test]
+    fn row_col_from_label_not_well_shaped() {
+        assert_eq!(row_col_from_label("plateA"), None);
+        assert_eq!(row_col_from_label("14"), None);
+        assert_eq!(row_col_from_label(""), None);
+    }
+
+    // ---- compute_plate_matrix: folder mode (sequential fill) ----
+
+    #[test]
+    fn plate_matrix_folder_mode_fills_sequentially() {
+        let objects = vec![
+            obj("img1.tif", "plateA/img1.tif", 10),
+            obj("img2.tif", "plateA/img2.tif", 20),
+            obj("img3.tif", "plateB/img3.tif", 100),
+        ];
+        let result = compute_plate_matrix(
+            &objects,
+            GroupBy::Folder,
+            "",
+            AggFunc::Avg,
+            &area_col(),
+            2,
+            2,
+        );
+        assert_eq!(result.rows, 2);
+        assert_eq!(result.cols, 2);
+        // Two distinct folders -> two occupied cells, filled row-major.
+        assert_eq!(result.cells[0].label, "plateA");
+        assert_eq!(result.cells[0].value, Some(15.0));
+        assert_eq!(result.cells[0].count, 2);
+        assert_eq!(result.cells[1].label, "plateB");
+        assert_eq!(result.cells[1].value, Some(100.0));
+        assert_eq!(result.cells[2], empty_plate_cell());
+        assert_eq!(result.cells[3], empty_plate_cell());
+    }
+
+    // ---- compute_plate_matrix: regex mode (row/col placement) ----
+
+    #[test]
+    fn plate_matrix_regex_mode_places_by_well_coordinate() {
+        let objects = vec![
+            obj("my_file_01_A14_01.tif", "", 10),
+            obj("my_file_01_A14_02.tif", "", 20),
+            obj("my_file_01_A15_01.tif", "", 40),
+        ];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let result = compute_plate_matrix(
+            &objects,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &area_col(),
+            8,
+            24,
+        );
+        // A14 -> row 0 ('A'), col 13 (14-1).
+        let a14 = &result.cells[13];
+        assert_eq!(a14.label, "A14");
+        assert_eq!(a14.value, Some(15.0)); // avg(10, 20)
+        assert_eq!(a14.count, 2);
+        // A15 -> row 0, col 14.
+        let a15 = &result.cells[14];
+        assert_eq!(a15.label, "A15");
+        assert_eq!(a15.value, Some(40.0));
+        assert_eq!(a15.count, 1);
+    }
+
+    #[test]
+    fn plate_matrix_regex_mode_drops_groups_beyond_capacity() {
+        let objects = vec![obj("A99_01.tif", "", 1)];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        // Only an 8x12 plate - "A99" decodes to row 0, col 98, out of bounds.
+        let result =
+            compute_plate_matrix(&objects, GroupBy::Regex, regex, AggFunc::Avg, &area_col(), 8, 12);
+        assert!(result.cells.iter().all(|c| c.value.is_none()));
+        // But it still reports how big a plate would be needed.
+        assert_eq!(result.required_span, Some((1, 99)));
+    }
+
+    #[test]
+    fn plate_matrix_required_span_reflects_real_sparse_plate_data() {
+        // Mirrors a real dataset: only rows D/G populated, columns 2-19,
+        // e.g. "D10_02.vsi", "G9_04.vsi" - and the plate size still at the
+        // useless 1x1 default, so nothing fits without resizing.
+        let objects = vec![
+            obj("D19_02.vsi", "", 10),
+            obj("G9_04.vsi", "", 20),
+        ];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let result =
+            compute_plate_matrix(&objects, GroupBy::Regex, regex, AggFunc::Avg, &area_col(), 1, 1);
+        assert!(result.cells.iter().all(|c| c.value.is_none()));
+        // D -> row 4, col 19; G -> row 7, col 9. Needs at least 7 rows x 19 cols.
+        assert_eq!(result.required_span, Some((7, 19)));
+    }
+
+    #[test]
+    fn plate_matrix_required_span_none_for_folder_mode() {
+        let objects = vec![obj("img1.tif", "plateA/img1.tif", 10)];
+        let result =
+            compute_plate_matrix(&objects, GroupBy::Folder, "", AggFunc::Avg, &area_col(), 2, 2);
+        assert_eq!(result.required_span, None);
+    }
+
+    #[test]
+    fn plate_matrix_reports_group_count_and_sample_when_regex_group1_is_not_well_shaped() {
+        // A regex with an extra wrapping parenthesis around the whole
+        // pattern - group(1) captures "D2_02" (well + sub-position) instead
+        // of just "D2", so nothing decodes as a well coordinate even though
+        // the regex clearly matched and grouped the data.
+        let objects = vec![
+            obj("D2_02.vsi", "", 10),
+            obj("D2_03.vsi", "", 20),
+            obj("G9_04.vsi", "", 30),
+        ];
+        let regex = r"((([A-Za-z]{1,2})([0-9]{1,3}))_([0-9]+))";
+        let result =
+            compute_plate_matrix(&objects, GroupBy::Regex, regex, AggFunc::Avg, &area_col(), 1, 1);
+        assert_eq!(result.required_span, None);
+        assert_eq!(result.group_count, 3); // one group per image, not per well
+        assert_eq!(result.sample_label, Some("D2_02".to_string()));
+    }
+
+    // ---- compute_well_matrix ----
+
+    #[test]
+    fn well_matrix_places_fields_by_acquisition_order() {
+        let objects = vec![
+            obj("my_file_01_A14_01.tif", "", 10),
+            obj("my_file_01_A14_02.tif", "", 20),
+            obj("my_file_01_A14_03.tif", "", 30),
+            obj("my_file_01_A15_01.tif", "", 999), // different well, excluded
+        ];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        // well_image_order maps acquisition position 1,2,3,4 to grid slots
+        // 0,1,2,3 (row-major over a 2x2 well grid).
+        let well_image_order = [1, 2, 3, 4];
+        let result = compute_well_matrix(
+            &objects,
+            regex,
+            "A14",
+            AggFunc::Avg,
+            &area_col(),
+            2,
+            2,
+            &well_image_order,
+        )
+        .expect("well has sub-position data");
+        assert_eq!(result.well_label, "A14");
+        assert_eq!(result.cells[0].image_name, "my_file_01_A14_01.tif");
+        assert_eq!(result.cells[0].value, Some(10.0));
+        assert_eq!(result.cells[1].image_name, "my_file_01_A14_02.tif");
+        assert_eq!(result.cells[2].image_name, "my_file_01_A14_03.tif");
+        assert_eq!(result.cells[3], empty_well_cell());
+    }
+
+    #[test]
+    fn well_matrix_none_without_group4() {
+        let objects = vec![obj("A14.tif", "", 10)];
+        // Only 1 capture group - no sub-position.
+        let regex = r"([A-Za-z][0-9]+)";
+        assert!(compute_well_matrix(&objects, regex, "A14", AggFunc::Avg, &area_col(), 2, 2, &[1, 2, 3, 4]).is_none());
+    }
+
+    #[test]
+    fn well_matrix_none_when_well_not_found() {
+        let objects = vec![obj("my_file_01_A14_01.tif", "", 10)];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        assert!(
+            compute_well_matrix(&objects, regex, "Z99", AggFunc::Avg, &area_col(), 2, 2, &[1, 2, 3, 4])
+                .is_none()
+        );
+    }
+
+    // ---- suggest_regex ----
+
+    #[test]
+    fn suggest_regex_detects_well_shape() {
+        let names: Vec<String> = [
+            "my_file_01_A14_01.tif",
+            "my_file_01_A14_02.tif",
+            "my_file_01_A14_03.tif",
+            "my_file_01_A15_01.tif",
+            "my_file_01_A15_02.tif",
+            "my_file_01_A16_03.tif",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let suggestion = suggest_regex(&names).expect("should detect a well-shaped pattern");
+        assert_eq!(suggestion.pattern, r"(([A-Za-z]{1,2})([0-9]{1,3}))_([0-9]+)");
+        assert_eq!(suggestion.matched, 6);
+        assert_eq!(suggestion.total, 6);
+
+        // The suggested regex should actually decode row/col/sub correctly.
+        let re = regex::Regex::new(&suggestion.pattern).unwrap();
+        let caps = re.captures("my_file_01_A14_02.tif").unwrap();
+        assert_eq!(caps.get(1).unwrap().as_str(), "A14");
+        assert_eq!(caps.get(4).unwrap().as_str(), "02");
+    }
+
+    #[test]
+    fn suggest_regex_none_for_unstructured_names() {
+        let names: Vec<String> = vec!["foo.tif".into(), "bar.tif".into()];
+        assert_eq!(suggest_regex(&names), None);
+    }
+
+    #[test]
+    fn suggest_regex_empty_input() {
+        assert_eq!(suggest_regex(&[]), None);
+    }
+
+    // ---- row_label ----
+
+    #[test]
+    fn row_label_single_letter() {
+        assert_eq!(row_label(0), "A");
+        assert_eq!(row_label(25), "Z");
+    }
+
+    #[test]
+    fn row_label_multi_letter() {
+        assert_eq!(row_label(26), "AA");
+        assert_eq!(row_label(27), "AB");
+    }
+
+    #[test]
+    fn row_label_round_trips_with_row_col_from_label() {
+        for i in [0usize, 1, 25, 26, 27, 51, 52, 700] {
+            let label = format!("{}5", row_label(i));
+            assert_eq!(row_col_from_label(&label), Some((i, 4)));
+        }
+    }
+
+    // ---- resolve_range ----
+
+    #[test]
+    fn resolve_range_auto_spans_zero_to_max() {
+        assert_eq!(resolve_range(&[1.0, 5.0, 3.0], true, 0.0, 0.0), (0.0, 5.0));
+    }
+
+    #[test]
+    fn resolve_range_manual_uses_given_bounds() {
+        assert_eq!(resolve_range(&[1.0, 5.0], false, 2.0, 10.0), (2.0, 10.0));
+    }
+
+    #[test]
+    fn resolve_range_manual_degenerate_collapses_to_hairline() {
+        let (lo, hi) = resolve_range(&[1.0], false, 5.0, 5.0);
+        assert_eq!(lo, 5.0);
+        assert!(hi > lo);
+    }
+}

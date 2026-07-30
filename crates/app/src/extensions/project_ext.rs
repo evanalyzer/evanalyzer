@@ -28,7 +28,6 @@ use evanalyzer_cfg::{
 };
 use evanalyzer_core::{ImageMeta, ImageReader, ReadMode, SUPPORTED_IMAGE_FORMATS};
 use human_sort::compare;
-use indexmap::IndexMap;
 use log::{info, trace, warn};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -692,7 +691,6 @@ impl ProjectExt for ProjectWithRuntime {
                             color: wavelength_to_rgb_u32(ch.emission_wave_length),
                             name: ch.name.clone(),
                             notes: "".into(),
-                            measure: IndexMap::new(),
                         })
                         .collect()
                 })

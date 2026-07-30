@@ -1591,6 +1591,153 @@ mod tests {
     }
 
     #[test]
+    fn decode_image_grayscale_8bit_normalizes_samples() {
+        let buffer: Vec<u8> = vec![0, 128, 255, 64];
+
+        let result = decode_image(
+            &buffer,
+            true,
+            true,
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            8,
+            1,
+            ImageTile::default(),
+            ImagePlane { z: 0, c: 0, t: 0 },
+        )
+        .unwrap();
+
+        match result {
+            ImageContainer::F32Gray(img) => {
+                let expected: Vec<f32> = buffer.iter().map(|&v| v as f32 / 255.0).collect();
+                compare_data(&expected, img.as_slice(), 1e-6);
+            }
+            other => panic!("expected F32Gray, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_image_interleaved_rgb_16bit_little_endian_preserves_order() {
+        // 1x2 image, 16-bit little-endian interleaved RGB: already RGBRGB..., so
+        // decoding must preserve sample order (unlike the planar paths, which
+        // reorder).
+        let samples: [u16; 6] = [1000, 2000, 3000, 4000, 5000, 6000];
+        let mut buffer = Vec::with_capacity(samples.len() * 2);
+        for s in samples {
+            buffer.extend_from_slice(&s.to_le_bytes());
+        }
+
+        let result = decode_image(
+            &buffer,
+            true,
+            true,
+            ImageSize {
+                width: 2,
+                height: 1,
+            },
+            16,
+            3,
+            ImageTile::default(),
+            ImagePlane { z: 0, c: 0, t: 0 },
+        )
+        .unwrap();
+
+        match result {
+            ImageContainer::F32Rgb(img) => {
+                let inv = 1.0 / 65535.0;
+                let expected: Vec<f32> = samples.iter().map(|&v| v as f32 * inv).collect();
+                compare_data(&expected, img.as_slice(), 1e-6);
+            }
+            other => panic!("expected F32Rgb, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_image_interleaved_rgba_8bit_drops_alpha_channel() {
+        // 1x2 image, 8-bit interleaved RGBA: RGBA RGBA.
+        let buffer: Vec<u8> = vec![
+            10, 20, 30, 255, // pixel 0 RGBA
+            40, 50, 60, 128, // pixel 1 RGBA
+        ];
+
+        let result = decode_image(
+            &buffer,
+            true,
+            true,
+            ImageSize {
+                width: 2,
+                height: 1,
+            },
+            8,
+            4,
+            ImageTile::default(),
+            ImagePlane { z: 0, c: 0, t: 0 },
+        )
+        .unwrap();
+
+        match result {
+            ImageContainer::F32Rgb(img) => {
+                let expected: Vec<f32> = [10, 20, 30, 40, 50, 60]
+                    .iter()
+                    .map(|&v| v as f32 / 255.0)
+                    .collect();
+                compare_data(&expected, img.as_slice(), 1e-6);
+            }
+            other => panic!("expected F32Rgb, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_image_unsupported_channel_count_returns_error() {
+        let buffer: Vec<u8> = vec![0, 0, 0, 0];
+        let result = decode_image(
+            &buffer,
+            true,
+            true,
+            ImageSize {
+                width: 2,
+                height: 1,
+            },
+            8,
+            2, // neither grayscale (1) nor RGB(A) (3/4)
+            ImageTile::default(),
+            ImagePlane { z: 0, c: 0, t: 0 },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_samples_parallel_generic_bit_depth_matches_16bit_semantics() {
+        // nr_bits = 12 falls through to the generic (non-8/16) branch, which
+        // reads via read_le/read_be into a u64 instead of u16::from_le_bytes -
+        // for a 2-byte chunk both must normalize to the same value.
+        let buffer: Vec<u8> = vec![0xFF, 0x00, 0x00, 0x10]; // LE: 0x00FF, 0x1000
+        let inv_divisor = 1.0 / 4095.0;
+
+        let little_endian = decode_samples_parallel(&buffer, 12, true, inv_divisor);
+        assert_eq!(little_endian, vec![0x00FF as f32 * inv_divisor, 0x1000 as f32 * inv_divisor]);
+
+        let big_endian = decode_samples_parallel(&buffer, 12, false, inv_divisor);
+        assert_eq!(big_endian, vec![0xFF00 as f32 * inv_divisor, 0x0010 as f32 * inv_divisor]);
+    }
+
+    #[test]
+    fn read_le_reconstructs_value_from_a_partial_byte_chunk() {
+        assert_eq!(read_le(&[0x01, 0x02]), 0x0201);
+        assert_eq!(read_le(&[0xFF]), 0xFF);
+        assert_eq!(read_le(&[0x00, 0x00, 0x01]), 0x010000);
+    }
+
+    #[test]
+    fn read_be_reconstructs_value_from_a_partial_byte_chunk() {
+        assert_eq!(read_be(&[0x01, 0x02]), 0x0102);
+        assert_eq!(read_be(&[0xFF]), 0xFF);
+        assert_eq!(read_be(&[0x01, 0x00, 0x00]), 0x010000);
+    }
+
+    #[test]
     fn clone_empty_u32_returns_matching_variant_and_size() {
         let size = ImageSize {
             width: 4,
