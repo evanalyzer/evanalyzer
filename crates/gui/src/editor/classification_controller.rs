@@ -425,7 +425,10 @@ mod tests {
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
 
         let project = ui_state.get_project();
-        assert_eq!(project.classification.classes[0].color, color.as_argb_encoded());
+        assert_eq!(
+            project.classification.classes[0].color,
+            color.as_argb_encoded()
+        );
     }
 
     // -- ClassificationModelBridge (Model impl) --------------------------------
@@ -473,16 +476,21 @@ mod tests {
         );
         {
             let mut project = ui_state.get_project_write();
-            project.classification.classes.push(evanalyzer_cfg::settings::classification_settings::Class {
-                id: ObjectClass::Valid(1),
-                color: 0,
-                name: "Nuclei".to_string(),
-                notes: String::new(),
-            });
-            let mut with_class = evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default();
+            project.classification.classes.push(
+                evanalyzer_cfg::settings::classification_settings::Class {
+                    id: ObjectClass::Valid(1),
+                    color: 0,
+                    name: "Nuclei".to_string(),
+                    notes: String::new(),
+                },
+            );
+            let mut with_class =
+                evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default();
             with_class.object_class.insert(ObjectClass::Valid(1));
             project.add_object(&with_class);
-            project.add_object(&evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default());
+            project.add_object(
+                &evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default(),
+            );
         }
 
         let bridge = bridge_for(&ui_state);
@@ -526,7 +534,8 @@ mod tests {
     }
 
     #[test]
-    fn sync_class_settings_to_class_edit_dialog_slint_does_not_panic_for_a_known_or_unknown_class() {
+    fn sync_class_settings_to_class_edit_dialog_slint_does_not_panic_for_a_known_or_unknown_class()
+    {
         let (_, controller) = make_controller();
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
 
@@ -546,10 +555,16 @@ mod tests {
         controller.attach_callbacks();
 
         ui.global::<ClassificationState>().invoke_class_selected(3);
-        assert_eq!(ui_state.get_project().get_selected_object_class(), ObjectClass::Valid(3));
+        assert_eq!(
+            ui_state.get_project().get_selected_object_class(),
+            ObjectClass::Valid(3)
+        );
 
         ui.global::<ClassificationState>().invoke_class_selected(-1);
-        assert_eq!(ui_state.get_project().get_selected_object_class(), ObjectClass::Unset);
+        assert_eq!(
+            ui_state.get_project().get_selected_object_class(),
+            ObjectClass::Unset
+        );
     }
 
     #[test]
@@ -588,9 +603,14 @@ mod tests {
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
         controller.attach_callbacks();
 
-        ui.global::<ClassificationState>().invoke_class_visibility_toggled(1);
+        ui.global::<ClassificationState>()
+            .invoke_class_visibility_toggled(1);
 
-        assert!(!ui_state.get_project().is_class_visible(&ObjectClass::Valid(1)));
+        assert!(
+            !ui_state
+                .get_project()
+                .is_class_visible(&ObjectClass::Valid(1))
+        );
     }
 
     #[test]
@@ -600,7 +620,8 @@ mod tests {
         controller.attach_callbacks();
         let initial = ui_state.get_project().hide_unclassified_objects();
 
-        ui.global::<ClassificationState>().invoke_hide_unclassified_toggled();
+        ui.global::<ClassificationState>()
+            .invoke_hide_unclassified_toggled();
 
         assert_eq!(ui_state.get_project().hide_unclassified_objects(), !initial);
     }

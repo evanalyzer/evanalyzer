@@ -160,7 +160,14 @@ pub(crate) fn seed_plate_results_db(path: &Path) {
                 1.0, 1.0, 1.0,
                 ?, '{}'
             )",
-            duckdb::params![image, rel_path, object_id, area_px, area_px as f64, CH0_INTENSITIES_JSON],
+            duckdb::params![
+                image,
+                rel_path,
+                object_id,
+                area_px,
+                area_px as f64,
+                CH0_INTENSITIES_JSON
+            ],
         )
         .unwrap_or_else(|e| panic!("insert object {object_id}: {e}"));
     };

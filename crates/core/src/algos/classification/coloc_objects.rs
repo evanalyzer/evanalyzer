@@ -254,7 +254,9 @@ impl ImageAlgorithm for Colocalization {
                             for (current_object, current_ids) in &states {
                                 for next_id in next_ids {
                                     if let Some(next_object) = cache.object_cache.get(next_id) {
-                                        if let Some(intersection) = current_object.overlaps(next_object) {
+                                        if let Some(intersection) =
+                                            current_object.overlaps(next_object)
+                                        {
                                             let mut new_ids = current_ids.clone();
                                             new_ids.push(next_id.clone());
                                             next_states.push((intersection, new_ids));
@@ -317,12 +319,12 @@ mod tests {
 
     use super::*;
     use crate::{
+        ImageContainer, ImagePlane, ManagedImage,
         image::PixelSizes,
         pipeline::{
             pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
             pipeline_context::PipelineContext,
         },
-        ImageContainer, ImagePlane, ManagedImage,
     };
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
@@ -364,7 +366,12 @@ mod tests {
         .unwrap()
     }
 
-    fn make_filled_object(id: u128, bbox: [u32; 4], plane: ImagePlane, class: ObjectClass) -> Object {
+    fn make_filled_object(
+        id: u128,
+        bbox: [u32; 4],
+        plane: ImagePlane,
+        class: ObjectClass,
+    ) -> Object {
         let [x_min, y_min, x_max, y_max] = bbox;
         // bbox uses inclusive convention: width = xmax - xmin + 1
         let w = (x_max - x_min + 1) as usize;
@@ -415,10 +422,12 @@ mod tests {
 
         run(&coloc, &mut cache);
 
-        assert!(cache
-            .object_cache
-            .values()
-            .all(|r| r.colocalized_with.is_empty()));
+        assert!(
+            cache
+                .object_cache
+                .values()
+                .all(|r| r.colocalized_with.is_empty())
+        );
     }
 
     #[test]
@@ -476,10 +485,12 @@ mod tests {
 
         run(&coloc, &mut cache);
 
-        assert!(cache
-            .object_cache
-            .values()
-            .all(|r| r.colocalized_with.is_empty()));
+        assert!(
+            cache
+                .object_cache
+                .values()
+                .all(|r| r.colocalized_with.is_empty())
+        );
     }
 
     #[test]
@@ -540,10 +551,12 @@ mod tests {
         run(&coloc, &mut cache);
 
         // object_a is excluded from CLASS_A bucket so no colocalization occurs
-        assert!(cache
-            .object_cache
-            .values()
-            .all(|r| r.colocalized_with.is_empty()));
+        assert!(
+            cache
+                .object_cache
+                .values()
+                .all(|r| r.colocalized_with.is_empty())
+        );
     }
 
     #[test]
@@ -567,7 +580,11 @@ mod tests {
         run(&coloc, &mut cache);
 
         // Three ROIs total: the original two + the intersection object
-        assert_eq!(cache.object_cache.len(), 3, "intersection object should be added");
+        assert_eq!(
+            cache.object_cache.len(),
+            3,
+            "intersection object should be added"
+        );
         let overlap_object = cache
             .object_cache
             .values()
@@ -906,7 +923,10 @@ mod tests {
         run(&coloc, &mut cache);
 
         let x = cache.object_cache.get(&ObjectId(ID_X)).unwrap();
-        assert!(x.colocalized_with.contains_key(&CLASS_C), "X must coloc with C");
+        assert!(
+            x.colocalized_with.contains_key(&CLASS_C),
+            "X must coloc with C"
+        );
         assert_eq!(
             x.colocalized_with[&CLASS_C],
             vec![ObjectId(ID_Y)],

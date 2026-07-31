@@ -39,7 +39,11 @@ use crate::{
 /// pixels are discarded. Runs on GPU automatically if CUDA is available in the
 /// linked libtorch build, otherwise falls back to CPU.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment", next = "measure", display_name = "AI Cellpose Segmentation")]
+#[cmdsmeta(
+    category = "segment",
+    next = "measure",
+    display_name = "AI Cellpose Segmentation"
+)]
 pub struct Cellpose {
     /// Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
     #[cmdsmeta(file_extensions = "pt,pth")]
@@ -147,11 +151,8 @@ impl ImageAlgorithm for Cellpose {
         let channel_dim = out_sizes.len() as i64 - 3;
         let flow_y = Self::channel_to_vec(&output.narrow(channel_dim, 0, 1), width, height)?;
         let flow_x = Self::channel_to_vec(&output.narrow(channel_dim, 1, 1), width, height)?;
-        let cell_prob = Self::channel_to_vec(
-            &output.narrow(channel_dim, 2, 1).sigmoid(),
-            width,
-            height,
-        )?;
+        let cell_prob =
+            Self::channel_to_vec(&output.narrow(channel_dim, 2, 1).sigmoid(), width, height)?;
 
         // Pixels above the cell-probability threshold take part in the dynamics.
         let is_cell: Vec<bool> = cell_prob
@@ -159,8 +160,7 @@ impl ImageAlgorithm for Cellpose {
             .map(|&p| p >= self.probability_threshold)
             .collect();
 
-        let final_positions =
-            self.follow_flows(&flow_y, &flow_x, &is_cell, width, height);
+        let final_positions = self.follow_flows(&flow_y, &flow_x, &is_cell, width, height);
 
         let labels = Self::label_sinks(&final_positions, &is_cell, width, height);
 
@@ -373,7 +373,11 @@ impl Cellpose {
         for (i, &label) in labels.iter().enumerate() {
             let instance_id = remap[label as usize];
             inst_slice[i] = instance_id;
-            seg_slice[i] = if instance_id == 0 { 0 } else { foreground_class };
+            seg_slice[i] = if instance_id == 0 {
+                0
+            } else {
+                foreground_class
+            };
         }
     }
 }
@@ -460,7 +464,10 @@ mod tests {
         let final_positions = vec![1, 1, 1];
         let is_cell = vec![false, true, true];
         let labels = Cellpose::label_sinks(&final_positions, &is_cell, 3, 1);
-        assert_eq!(labels[0], 0, "non-cell pixels must stay unlabeled regardless of final_positions");
+        assert_eq!(
+            labels[0], 0,
+            "non-cell pixels must stay unlabeled regardless of final_positions"
+        );
         assert_ne!(labels[1], 0);
         assert_eq!(labels[1], labels[2]);
     }
@@ -514,8 +521,16 @@ mod tests {
         let mut inst = vec![9u32; 4];
         algo.write_instances(&labels, &mut seg, &mut inst);
 
-        assert_eq!(seg, vec![0, 0, 0, 0], "stale segmentation labels must be reset to background");
-        assert_eq!(inst, vec![0, 0, 0, 0], "stale instance ids must be reset to background");
+        assert_eq!(
+            seg,
+            vec![0, 0, 0, 0],
+            "stale segmentation labels must be reset to background"
+        );
+        assert_eq!(
+            inst,
+            vec![0, 0, 0, 0],
+            "stale instance ids must be reset to background"
+        );
     }
 
     #[test]
@@ -544,7 +559,10 @@ mod tests {
         let mut inst = vec![0u32; 3];
         algo.write_instances(&labels, &mut seg, &mut inst);
 
-        assert_eq!(inst[0], 1, "min_object_size = 0 must disable the size filter, not drop everything");
+        assert_eq!(
+            inst[0], 1,
+            "min_object_size = 0 must disable the size filter, not drop everything"
+        );
         assert_eq!(seg[0], 7);
     }
 }

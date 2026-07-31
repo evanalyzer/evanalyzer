@@ -18,8 +18,7 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
     let image_count = project.images.list.len();
     if image_count == 0 {
         return Err(InternalErrors::InvalidArgument(
-            "Project has no images - pass --images <dir> or add images to the project first"
-                .into(),
+            "Project has no images - pass --images <dir> or add images to the project first".into(),
         ));
     }
 
@@ -65,9 +64,9 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
         apply_progress_event(event, &mut total, &mut failed);
     }
 
-    let result = handle.join().map_err(|_| {
-        InternalErrors::Internal("Pipeline worker thread panicked".into())
-    })?;
+    let result = handle
+        .join()
+        .map_err(|_| InternalErrors::Internal("Pipeline worker thread panicked".into()))?;
     result?;
 
     println!(
@@ -88,7 +87,11 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
 fn apply_progress_event(event: ProgressEvent, total: &mut usize, failed: &mut usize) {
     match event {
         ProgressEvent::Started { total: t } => *total = t,
-        ProgressEvent::ImageCompleted { index, total: t, path } => {
+        ProgressEvent::ImageCompleted {
+            index,
+            total: t,
+            path,
+        } => {
             *total = t;
             print!("\r[{index}/{t}] {}          ", path.display());
             std::io::stdout().flush().ok();
@@ -157,9 +160,8 @@ mod tests {
             job_name: None,
         });
 
-        let err = result.expect_err(
-            "an images dir override that scans to zero images must still be rejected",
-        );
+        let err = result
+            .expect_err("an images dir override that scans to zero images must still be rejected");
         let InternalErrors::InvalidArgument(msg) = err else {
             panic!("expected InvalidArgument, got {err:?}");
         };
@@ -222,7 +224,9 @@ mod tests {
         let mut total = 5;
         let mut failed = 0;
         apply_progress_event(
-            ProgressEvent::ImageFailed { path: sample_path() },
+            ProgressEvent::ImageFailed {
+                path: sample_path(),
+            },
             &mut total,
             &mut failed,
         );
@@ -230,7 +234,9 @@ mod tests {
         assert_eq!(failed, 1);
 
         apply_progress_event(
-            ProgressEvent::ImageFailed { path: sample_path() },
+            ProgressEvent::ImageFailed {
+                path: sample_path(),
+            },
             &mut total,
             &mut failed,
         );

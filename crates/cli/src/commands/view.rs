@@ -19,7 +19,10 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
     let objects = loader.get_objects(filter)?;
 
     let (channels, coloc_partner_classes) = if args.channels {
-        (discover_channels(&objects), loader.get_coloc_partner_class_names()?)
+        (
+            discover_channels(&objects),
+            loader.get_coloc_partner_class_names()?,
+        )
     } else {
         (vec![], vec![])
     };
@@ -55,8 +58,16 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
     }
 
     println!("Database: {}", args.db.display());
-    println!("Images:   {} ({})", image_names.len(), summarize(&image_names));
-    println!("Classes:  {} ({})", class_names.len(), summarize(&class_names));
+    println!(
+        "Images:   {} ({})",
+        image_names.len(),
+        summarize(&image_names)
+    );
+    println!(
+        "Classes:  {} ({})",
+        class_names.len(),
+        summarize(&class_names)
+    );
     if let Some((min, max)) = t_range {
         println!("T-stack:  {min}..{max}");
     }
@@ -82,8 +93,10 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
 pub fn run_columns(args: ColumnsArgs) -> Result<(), InternalErrors> {
     let loader = ResultsLoader::new(&args.db);
     let specs = discover_columns(&loader)?;
-    let plottable: std::collections::HashSet<&str> =
-        plottable_columns(&specs).iter().map(|c| c.id.as_str()).collect();
+    let plottable: std::collections::HashSet<&str> = plottable_columns(&specs)
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
 
     if args.json {
         let out: Vec<_> = specs
@@ -102,7 +115,11 @@ pub fn run_columns(args: ColumnsArgs) -> Result<(), InternalErrors> {
 
     println!("{:<36} {:<32} {}", "ID", "LABEL", "NUMERIC");
     for c in &specs {
-        let numeric = if plottable.contains(c.id.as_str()) { "yes" } else { "" };
+        let numeric = if plottable.contains(c.id.as_str()) {
+            "yes"
+        } else {
+            ""
+        };
         println!("{:<36} {:<32} {numeric}", c.id, c.label);
     }
     Ok(())
@@ -201,7 +218,10 @@ mod tests {
     fn run_columns_lists_plain_columns_for_a_seeded_database() {
         let db = TempResultsDb::seeded();
 
-        let result = run_columns(ColumnsArgs { db: db.path.clone(), json: false });
+        let result = run_columns(ColumnsArgs {
+            db: db.path.clone(),
+            json: false,
+        });
 
         assert!(result.is_ok());
     }
@@ -222,11 +242,16 @@ mod tests {
         assert!(ids.contains(&"class"));
         assert!(ids.iter().any(|id| id.starts_with("ch0_")));
 
-        let plottable: std::collections::HashSet<&str> =
-            plottable_columns(&specs).iter().map(|c| c.id.as_str()).collect();
+        let plottable: std::collections::HashSet<&str> = plottable_columns(&specs)
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
         assert!(!plottable.is_empty());
 
-        let result = run_columns(ColumnsArgs { db: db.path.clone(), json: true });
+        let result = run_columns(ColumnsArgs {
+            db: db.path.clone(),
+            json: true,
+        });
 
         assert!(result.is_ok());
     }

@@ -210,8 +210,8 @@ impl UNet {
             .iter()
             .enumerate()
             .map(|(i, &p)| {
-                let is_foreground =
-                    p >= probability_threshold && boundary.map(|b| b[i] < boundary_threshold).unwrap_or(true);
+                let is_foreground = p >= probability_threshold
+                    && boundary.map(|b| b[i] < boundary_threshold).unwrap_or(true);
                 if is_foreground {
                     foreground_class
                 } else {
@@ -271,7 +271,11 @@ mod tests {
         let probs = [0.1];
         let boundary = [0.0]; // well below the boundary threshold
         let result = UNet::classify_pixels(&probs, Some(&boundary), 0.5, 0.5, FG);
-        assert_eq!(result, vec![bg()], "a low foreground probability must stay background even with an open boundary");
+        assert_eq!(
+            result,
+            vec![bg()],
+            "a low foreground probability must stay background even with an open boundary"
+        );
     }
 
     #[test]

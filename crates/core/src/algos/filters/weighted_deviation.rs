@@ -194,8 +194,7 @@ mod tests {
             width: 4,
             height: 4,
         };
-        let input_img =
-            Image::<f32, 1, CpuAllocator>::new(size, vec![5.0f32; 16], CpuAllocator)?;
+        let input_img = Image::<f32, 1, CpuAllocator>::new(size, vec![5.0f32; 16], CpuAllocator)?;
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
 
         // Simulate a scratch_pad left over as F32Rgb from an earlier pipeline

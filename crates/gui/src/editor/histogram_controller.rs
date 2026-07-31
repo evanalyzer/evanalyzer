@@ -164,7 +164,9 @@ impl HistogramController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::test_support::{project_with_one_image, test_ui_state, test_ui_state_with_project};
+    use crate::editor::test_support::{
+        project_with_one_image, test_ui_state, test_ui_state_with_project,
+    };
 
     fn make_controller(ui_state: Arc<UiState>) -> Arc<HistogramController> {
         let viewport_controller = Arc::new(ViewportController::new(

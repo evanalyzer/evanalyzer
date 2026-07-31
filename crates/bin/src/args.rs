@@ -46,12 +46,24 @@ mod tests {
 
     #[test]
     fn cli_subcommand_is_routed_to_the_evanalyzer_cli_command_tree() {
-        let args = Args::try_parse_from(["evanalyzer", "cli", "project-info", "--project", "p.evaproj"]).unwrap();
+        let args = Args::try_parse_from([
+            "evanalyzer",
+            "cli",
+            "project-info",
+            "--project",
+            "p.evaproj",
+        ])
+        .unwrap();
         match args.command {
-            Some(TopCommand::Cli { command: evanalyzer_cli::CliCommand::ProjectInfo(a) }) => {
+            Some(TopCommand::Cli {
+                command: evanalyzer_cli::CliCommand::ProjectInfo(a),
+            }) => {
                 assert_eq!(a.project, std::path::PathBuf::from("p.evaproj"));
             }
-            other => panic!("expected Cli(ProjectInfo), got a different command tree: {}", other.is_some()),
+            other => panic!(
+                "expected Cli(ProjectInfo), got a different command tree: {}",
+                other.is_some()
+            ),
         }
     }
 

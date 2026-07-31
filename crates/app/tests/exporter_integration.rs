@@ -8,7 +8,7 @@
 use bitvec::prelude::*;
 use evanalyzer_app::result::{DatabaseFilter, GroupConfig, ResultsExporter, ResultsLoader};
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
-use evanalyzer_core::{DuckDbExporter, Object, PipelineCache, PipelineResultExporter, ObjectInit};
+use evanalyzer_core::{DuckDbExporter, Object, ObjectInit, PipelineCache, PipelineResultExporter};
 use std::sync::Arc;
 
 fn make_filled_object(id: u128, bbox: [u32; 4], class: ObjectClass) -> Object {

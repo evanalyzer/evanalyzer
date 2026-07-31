@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, Data, DeriveInput};
+use syn::{Data, DeriveInput, parse_macro_input};
 
 #[proc_macro_derive(CommandsMeta, attributes(cmdsmeta))]
 pub fn commands_meta_derive(input: TokenStream) -> TokenStream {

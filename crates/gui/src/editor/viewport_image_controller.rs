@@ -210,7 +210,9 @@ impl ViewportImageController {
             TimerMode::SingleShot,
             std::time::Duration::from_millis(150),
             move || {
-                self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
+                self_in
+                    .viewport_controller
+                    .trigger_redraw_low_res_and_high_res();
                 self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
@@ -246,7 +248,9 @@ impl ViewportImageController {
             TimerMode::SingleShot,
             std::time::Duration::from_millis(150),
             move || {
-                self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
+                self_in
+                    .viewport_controller
+                    .trigger_redraw_low_res_and_high_res();
                 self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
@@ -278,7 +282,9 @@ impl ViewportImageController {
             TimerMode::SingleShot,
             std::time::Duration::from_millis(150),
             move || {
-                self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
+                self_in
+                    .viewport_controller
+                    .trigger_redraw_low_res_and_high_res();
                 self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
@@ -650,9 +656,15 @@ mod tests {
     fn update_viewport_size_stores_the_given_dimensions() {
         let (_, controller) = make_controller();
 
-        controller.update_viewport_size_in_viewport_state(800.0, 600.0).unwrap();
+        controller
+            .update_viewport_size_in_viewport_state(800.0, 600.0)
+            .unwrap();
 
-        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        let state = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
         assert_eq!(state.viewport_width, 800.0);
         assert_eq!(state.viewport_height, 600.0);
     }
@@ -667,7 +679,11 @@ mod tests {
             .update_viewport_zoom_in_viewport_state(2.5, 10.0, -5.0)
             .unwrap();
 
-        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        let state = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
         assert_eq!(state.zoom, 2.5);
         assert_eq!(state.offset_x, 10.0);
         assert_eq!(state.offset_y, -5.0);
@@ -686,7 +702,11 @@ mod tests {
             .update_viewport_position_in_viewport_state(42.0, -7.0)
             .unwrap();
 
-        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        let state = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
         assert_eq!(state.offset_x, 42.0);
         assert_eq!(state.offset_y, -7.0);
         assert_eq!(state.zoom, 3.0, "position update must not touch zoom");
@@ -700,7 +720,11 @@ mod tests {
 
         controller.update_mouse_position_in_viewport_state(123.0, 456.0);
 
-        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        let state = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
         assert_eq!(state.mouse_pos_x, 123.0);
         assert_eq!(state.mouse_pos_y, 456.0);
     }
@@ -738,13 +762,41 @@ mod tests {
     #[test]
     fn update_channel_options_maps_every_projection_kind_to_its_z_stack_handling() {
         let cases = [
-            (IntensityProjection::SingleStack, ZStackHandling::SingleStack, true),
-            (IntensityProjection::AllStacks, ZStackHandling::AllStacks, true),
-            (IntensityProjection::Max, ZStackHandling::MaxIntensity, false),
-            (IntensityProjection::Min, ZStackHandling::MinIntensity, false),
-            (IntensityProjection::Avg, ZStackHandling::AvgIntensity, false),
-            (IntensityProjection::Sum, ZStackHandling::SumIntensity, false),
-            (IntensityProjection::Middle, ZStackHandling::TakeTheMiddle, false),
+            (
+                IntensityProjection::SingleStack,
+                ZStackHandling::SingleStack,
+                true,
+            ),
+            (
+                IntensityProjection::AllStacks,
+                ZStackHandling::AllStacks,
+                true,
+            ),
+            (
+                IntensityProjection::Max,
+                ZStackHandling::MaxIntensity,
+                false,
+            ),
+            (
+                IntensityProjection::Min,
+                ZStackHandling::MinIntensity,
+                false,
+            ),
+            (
+                IntensityProjection::Avg,
+                ZStackHandling::AvgIntensity,
+                false,
+            ),
+            (
+                IntensityProjection::Sum,
+                ZStackHandling::SumIntensity,
+                false,
+            ),
+            (
+                IntensityProjection::Middle,
+                ZStackHandling::TakeTheMiddle,
+                false,
+            ),
         ];
 
         for (projection, expected_handling, expects_range) in cases {

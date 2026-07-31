@@ -88,9 +88,8 @@ mod tests {
 
     #[test]
     fn from_quick_xml_error_wraps_the_message_in_xml_variant() {
-        let xml_err = quick_xml::Error::Escape(quick_xml::escape::EscapeError::UnterminatedEntity(
-            0..1,
-        ));
+        let xml_err =
+            quick_xml::Error::Escape(quick_xml::escape::EscapeError::UnterminatedEntity(0..1));
         let err: InternalErrors = xml_err.into();
         assert!(matches!(err, InternalErrors::Xml(_)));
         assert!(err.to_string().contains("XML error"));

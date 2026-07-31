@@ -150,7 +150,8 @@ impl ResultsExporter {
         plate_cols: usize,
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
-        let result = self.compute_matrix(filter, group_by, regex, agg, metric, plate_rows, plate_cols)?;
+        let result =
+            self.compute_matrix(filter, group_by, regex, agg, metric, plate_rows, plate_cols)?;
 
         let mut writer =
             csv::Writer::from_path(export_path).map_err(|e| InternalErrors::Io(e.to_string()))?;
@@ -197,7 +198,8 @@ impl ResultsExporter {
         range_max: f64,
         export_path: &Path,
     ) -> Result<(), InternalErrors> {
-        let result = self.compute_matrix(filter, group_by, regex, agg, metric, plate_rows, plate_cols)?;
+        let result =
+            self.compute_matrix(filter, group_by, regex, agg, metric, plate_rows, plate_cols)?;
         let values: Vec<f64> = result.cells.iter().filter_map(|c| c.value).collect();
         let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
 
@@ -256,13 +258,7 @@ impl ResultsExporter {
             ..filter
         })?;
         Ok(compute_plate_matrix(
-            &objects,
-            group_by,
-            regex,
-            agg,
-            metric,
-            plate_rows,
-            plate_cols,
+            &objects, group_by, regex, agg, metric, plate_rows, plate_cols,
         ))
     }
 
@@ -291,7 +287,9 @@ impl ResultsExporter {
             page_size: 0,
             ..filter
         })?;
-        let plate = compute_plate_matrix(&objects, group_by, regex, agg, metric, plate_rows, plate_cols);
+        let plate = compute_plate_matrix(
+            &objects, group_by, regex, agg, metric, plate_rows, plate_cols,
+        );
         Ok(plate
             .cells
             .iter()
@@ -353,10 +351,12 @@ impl ResultsExporter {
         }
 
         for well in &wells {
-            let export_path =
-                folder.join(format!("{base_name}_{}.csv", sanitize_component(&well.well_label)));
-            let mut writer =
-                csv::Writer::from_path(&export_path).map_err(|e| InternalErrors::Io(e.to_string()))?;
+            let export_path = folder.join(format!(
+                "{base_name}_{}.csv",
+                sanitize_component(&well.well_label)
+            ));
+            let mut writer = csv::Writer::from_path(&export_path)
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
             let mut header = vec![String::new()];
             header.extend((1..=well.cols).map(|c| c.to_string()));
             writer
@@ -372,7 +372,9 @@ impl ResultsExporter {
                     .write_record(&row)
                     .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
-            writer.flush().map_err(|e| InternalErrors::Io(e.to_string()))?;
+            writer
+                .flush()
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
         }
         Ok(())
     }
@@ -582,7 +584,10 @@ fn sanitize_component(name: &str) -> String {
         .trim()
         .chars()
         .map(|c| {
-            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '[' | ']') {
+            if matches!(
+                c,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '[' | ']'
+            ) {
                 '_'
             } else {
                 c
@@ -1015,10 +1020,14 @@ mod tests {
             .unwrap();
 
         let mut workbook = open_workbook_auto(&xlsx_path).expect("open exported xlsx");
-        let sheet = workbook
-            .worksheet_range("Results")
-            .expect("Results sheet");
-        let header: Vec<String> = sheet.rows().next().unwrap().iter().map(|c| c.to_string()).collect();
+        let sheet = workbook.worksheet_range("Results").expect("Results sheet");
+        let header: Vec<String> = sheet
+            .rows()
+            .next()
+            .unwrap()
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
         let area_col = header
             .iter()
             .position(|h| h.starts_with("Area (px"))
@@ -1081,7 +1090,12 @@ mod tests {
         let specs = build_column_specs(&[], &[]);
         let csv_path = dir.path().join("special_chars.csv");
         exporter
-            .export_to_csv(DatabaseFilter::default(), &GroupConfig::default(), &specs, &csv_path)
+            .export_to_csv(
+                DatabaseFilter::default(),
+                &GroupConfig::default(),
+                &specs,
+                &csv_path,
+            )
             .unwrap();
 
         let rows = parse_csv(&csv_path);
@@ -1204,9 +1218,18 @@ mod tests {
             .expect("matrix export should succeed");
 
         let rows = parse_xlsx(&xlsx_path);
-        assert_eq!(rows[0], vec!["".to_string(), "1".to_string(), "2".to_string()]);
-        assert_eq!(rows[1], vec!["A".to_string(), "10".to_string(), "".to_string()]);
-        assert_eq!(rows[2], vec!["B".to_string(), "".to_string(), "20".to_string()]);
+        assert_eq!(
+            rows[0],
+            vec!["".to_string(), "1".to_string(), "2".to_string()]
+        );
+        assert_eq!(
+            rows[1],
+            vec!["A".to_string(), "10".to_string(), "".to_string()]
+        );
+        assert_eq!(
+            rows[2],
+            vec!["B".to_string(), "".to_string(), "20".to_string()]
+        );
 
         let bytes = std::fs::read(&xlsx_path).expect("xlsx file should exist");
         assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
@@ -1405,12 +1428,18 @@ mod tests {
         let rows_a1 = parse_csv(&dir.path().join("wells_A1.csv"));
         assert_eq!(
             rows_a1,
-            vec![vec!["".to_string(), "1".to_string()], vec!["A".to_string(), "10.000".to_string()]]
+            vec![
+                vec!["".to_string(), "1".to_string()],
+                vec!["A".to_string(), "10.000".to_string()]
+            ]
         );
         let rows_b2 = parse_csv(&dir.path().join("wells_B2.csv"));
         assert_eq!(
             rows_b2,
-            vec![vec!["".to_string(), "1".to_string()], vec!["A".to_string(), "20.000".to_string()]]
+            vec![
+                vec!["".to_string(), "1".to_string()],
+                vec!["A".to_string(), "20.000".to_string()]
+            ]
         );
     }
 
@@ -1437,7 +1466,10 @@ mod tests {
             dir.path(),
             "wells",
         );
-        assert!(result.is_err(), "no well has usable sub-position data - should error, not write nothing");
+        assert!(
+            result.is_err(),
+            "no well has usable sub-position data - should error, not write nothing"
+        );
     }
 
     #[test]
@@ -1470,7 +1502,8 @@ mod tests {
             )
             .expect("well matrix export should succeed");
 
-        let mut workbook: calamine::Sheets<_> = open_workbook_auto(&xlsx_path).expect("open xlsx back");
+        let mut workbook: calamine::Sheets<_> =
+            open_workbook_auto(&xlsx_path).expect("open xlsx back");
         let mut sheet_names = workbook.sheet_names().to_vec();
         sheet_names.sort();
         assert_eq!(sheet_names, vec!["A1".to_string(), "B2".to_string()]);
@@ -1490,7 +1523,10 @@ mod tests {
             .collect();
         assert_eq!(
             rows_a1,
-            vec![vec!["".to_string(), "1".to_string()], vec!["A".to_string(), "10".to_string()]]
+            vec![
+                vec!["".to_string(), "1".to_string()],
+                vec!["A".to_string(), "10".to_string()]
+            ]
         );
     }
 
@@ -1666,10 +1702,17 @@ mod tests {
             .expect("export should succeed");
 
         let rows = parse_xlsx(&xlsx_path);
-        assert_eq!(rows.len(), 3, "header + one flattened row per source object");
+        assert_eq!(
+            rows.len(),
+            3,
+            "header + one flattened row per source object"
+        );
         assert_eq!(
             rows[0],
-            vec!["object ID".to_string(), "Coloc ClassB object ID".to_string()],
+            vec![
+                "object ID".to_string(),
+                "Coloc ClassB object ID".to_string()
+            ],
             "hidden columns (Image, Class, Area, ...) must not appear in the header"
         );
 
@@ -1697,7 +1740,11 @@ mod tests {
             .expect("export should succeed even with no colocalization data at all");
 
         let rows = parse_csv(&csv_path);
-        assert_eq!(rows.len(), 3, "header + one row per object, no partner columns");
+        assert_eq!(
+            rows.len(),
+            3,
+            "header + one row per object, no partner columns"
+        );
         assert!(
             !rows[0].iter().any(|h| h.starts_with("Coloc ")),
             "no partner classes were ever recorded, so no Coloc-prefixed column should exist"

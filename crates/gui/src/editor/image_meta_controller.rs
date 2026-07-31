@@ -149,11 +149,14 @@ impl ImageMetaController {
                 .series
                 .iter()
                 .filter_map(|(&idx, series_info)| {
-                    series_info.resolutions.get(&0).map(|pyramid_info| SeriesInfo {
-                        idx,
-                        width: pyramid_info.width as i32,
-                        height: pyramid_info.height as i32,
-                    })
+                    series_info
+                        .resolutions
+                        .get(&0)
+                        .map(|pyramid_info| SeriesInfo {
+                            idx,
+                            width: pyramid_info.width as i32,
+                            height: pyramid_info.height as i32,
+                        })
                 })
                 .collect();
 
@@ -213,7 +216,8 @@ impl ImageMetaController {
             image_meta_ui.set_nr_t_stacks(series_info.nr_t_stacks);
             image_meta_ui.set_nr_z_stacks(series_info.nr_z_stacks);
             image_meta_ui.set_nr_series(image_meta.series.len() as i32);
-            image_meta_ui.set_series_list(std::rc::Rc::new(slint::VecModel::from(series_list)).into());
+            image_meta_ui
+                .set_series_list(std::rc::Rc::new(slint::VecModel::from(series_list)).into());
 
             let bits = pyramid_info.width
                 * pyramid_info.height
@@ -412,7 +416,8 @@ mod tests {
             slint::Weak::default(),
             ui_state.clone(),
         ));
-        let controller = ImageMetaController::new(slint::Weak::default(), ui_state, viewport_controller);
+        let controller =
+            ImageMetaController::new(slint::Weak::default(), ui_state, viewport_controller);
 
         // `project_with_one_image()`'s "img.tif" doesn't exist on disk -
         // `get_or_create_reader` must surface that as an `Err`, not panic.

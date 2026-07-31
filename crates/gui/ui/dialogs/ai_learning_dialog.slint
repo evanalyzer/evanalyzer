@@ -195,6 +195,11 @@ component FeatureRow inherits Rectangle {
     border-radius: Theme.radius-sm;
     background: row-ta.has-hover ? Theme.raised : transparent;
 
+    // Declared before the controls below (not after) so it sits behind them
+    // in z-order/hit-testing - a full-row TouchArea declared last would sit
+    // on top and swallow every click meant for the ComboBox/remove button.
+    row-ta := TouchArea { }
+
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
@@ -293,10 +298,6 @@ component FeatureRow inherits Rectangle {
                 }
             }
         }
-    }
-
-    row-ta := TouchArea {
-        // Purely for row hover feedback; the controls above handle their own input.
     }
 }
 

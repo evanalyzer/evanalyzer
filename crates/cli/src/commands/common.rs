@@ -51,7 +51,11 @@ pub fn build_group_config(args: &GroupArgs) -> GroupConfig {
     GroupConfig {
         group_by,
         regex: args.group_regex.clone().unwrap_or_default(),
-        aggs: if aggs.is_empty() { vec![AggFunc::Avg] } else { aggs },
+        aggs: if aggs.is_empty() {
+            vec![AggFunc::Avg]
+        } else {
+            aggs
+        },
         split_colocalized: args.split_colocalized,
         group_by_class: args.group_by_class,
     }

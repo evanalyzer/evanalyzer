@@ -156,8 +156,11 @@ impl ImageAlgorithm for TransformObjects {
                 continue;
             };
             let geometry = self.transform_geometry(object, image_size, &px_sizes);
-            let (segmentation_class, parent_id, plane) =
-                (object.segmentation_class, object.parent_id.clone(), object.plane.clone());
+            let (segmentation_class, parent_id, plane) = (
+                object.segmentation_class,
+                object.parent_id.clone(),
+                object.plane.clone(),
+            );
 
             // Build the transformed shape as its own (not-yet-inserted) object so
             // intensities can be sampled against the *new* mask via
@@ -353,10 +356,18 @@ mod tests {
 
     /// Like `make_ctx`, but also registers a constant-value channel-0 image in
     /// `cache`, so intensity measurement has something real to sample.
-    fn make_ctx_with_channel(size: ImageSize, cache: &mut PipelineCache, value: f32) -> PipelineContext {
+    fn make_ctx_with_channel(
+        size: ImageSize,
+        cache: &mut PipelineCache,
+        value: f32,
+    ) -> PipelineContext {
         let ctx = make_ctx(size);
-        let img = Image::<f32, 1, CpuAllocator>::new(size, vec![value; size.width * size.height], CpuAllocator)
-            .unwrap();
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            size,
+            vec![value; size.width * size.height],
+            CpuAllocator,
+        )
+        .unwrap();
         cache.image_cache.image_meta = PipelineImageMeta {
             image_tile_info: crate::ImageTile {
                 offset_x: 0,
@@ -396,12 +407,19 @@ mod tests {
         let original_bbox = object.bbox;
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
-        assert_eq!(cache.object_cache.get(&ObjectId(ID_A)).unwrap().bbox, original_bbox);
+        assert_eq!(
+            cache.object_cache.get(&ObjectId(ID_A)).unwrap().bbox,
+            original_bbox
+        );
     }
 
     #[test]
@@ -416,12 +434,20 @@ mod tests {
         let object = make_square_object(ID_A, 10, 10, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
-        assert_eq!(cache.object_cache.len(), 1, "scale must not create a new object");
+        assert_eq!(
+            cache.object_cache.len(),
+            1,
+            "scale must not create a new object"
+        );
         let scaled = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         let [x_min, y_min, x_max, y_max] = scaled.bbox;
         let width = x_max - x_min + 1;
@@ -431,7 +457,10 @@ mod tests {
             height >= 7 && height <= 9,
             "expected ~8px tall, got {height}"
         );
-        assert!(scaled.has_object_class(&CLASS_IN), "class is unchanged by a geometric transform");
+        assert!(
+            scaled.has_object_class(&CLASS_IN),
+            "class is unchanged by a geometric transform"
+        );
     }
 
     #[test]
@@ -446,14 +475,21 @@ mod tests {
         let original_bbox = object.bbox;
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
         assert_eq!(cache.object_cache.len(), 2, "a new object must be added");
         let original = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
-        assert_eq!(original.bbox, original_bbox, "input object must stay untouched");
+        assert_eq!(
+            original.bbox, original_bbox,
+            "input object must stay untouched"
+        );
 
         let transformed = cache
             .object_cache
@@ -477,10 +513,14 @@ mod tests {
         let object = make_square_object(ID_A, 20, 20, 6, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
         let circle = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         let [x_min, y_min, x_max, y_max] = circle.bbox;
@@ -503,15 +543,22 @@ mod tests {
         let object = make_square_object(ID_A, 20, 20, 6, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
         let circle = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         let [x_min, y_min, x_max, y_max] = circle.bbox;
         let diameter = (x_max - x_min + 1).max(y_max - y_min + 1);
-        assert!(diameter >= 5, "min circle must not shrink below the bbox, got {diameter}");
+        assert!(
+            diameter >= 5,
+            "min circle must not shrink below the bbox, got {diameter}"
+        );
     }
 
     #[test]
@@ -528,16 +575,23 @@ mod tests {
         let object = make_square_object(ID_A, 20, 20, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
         let circle = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         let [x_min, y_min, x_max, y_max] = circle.bbox;
         let diameter = (x_max - x_min + 1).max(y_max - y_min + 1);
         // bbox diameter (4) + extra_size (10) = ~14
-        assert!(diameter >= 12, "expected snap area to grow well beyond the bbox, got {diameter}");
+        assert!(
+            diameter >= 12,
+            "expected snap area to grow well beyond the bbox, got {diameter}"
+        );
     }
 
     #[test]
@@ -551,15 +605,22 @@ mod tests {
         let object = make_square_object(ID_A, 20, 20, 8, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
         let ellipse_object = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         // A filled square's corners are now outside the fitted ellipse, so the area shrinks.
         assert!(ellipse_object.area > 0);
-        assert!(ellipse_object.area < 64, "expected the ellipse to cut the square's corners");
+        assert!(
+            ellipse_object.area < 64,
+            "expected the ellipse to cut the square's corners"
+        );
     }
 
     #[test]
@@ -574,14 +635,21 @@ mod tests {
         let object = make_square_object(ID_A, 4, 4, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 20,
-            height: 20,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 20,
+                height: 20,
+            },
+        );
 
         let scaled = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(scaled.touches_edge);
-        assert!(scaled.bbox[2] <= 19 && scaled.bbox[3] <= 19, "mask must stay inside the image");
+        assert!(
+            scaled.bbox[2] <= 19 && scaled.bbox[3] <= 19,
+            "mask must stay inside the image"
+        );
     }
 
     #[test]
@@ -599,10 +667,14 @@ mod tests {
         let object = make_square_object(ID_A, 20, 20, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
         let expanded = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert_eq!(
@@ -610,7 +682,10 @@ mod tests {
             [18, 18, 25, 25],
             "a disk margin of 2 must grow the bbox by exactly 2 on every side"
         );
-        assert!(expanded.area > 16, "expanded area must exceed the original 4x4=16");
+        assert!(
+            expanded.area > 16,
+            "expanded area must exceed the original 4x4=16"
+        );
     }
 
     #[test]
@@ -628,10 +703,14 @@ mod tests {
         let object = make_square_object(ID_A, 20, 20, 8, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
         let shrunk = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert_eq!(
@@ -656,10 +735,14 @@ mod tests {
         let object = make_square_object(ID_A, 20, 20, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
-        run(&cmd, &mut cache, ImageSize {
-            width: 100,
-            height: 100,
-        });
+        run(
+            &cmd,
+            &mut cache,
+            ImageSize {
+                width: 100,
+                height: 100,
+            },
+        );
 
         let shrunk = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert_eq!(shrunk.area, 0);
@@ -701,6 +784,9 @@ mod tests {
             .intensities
             .get(&CHANNEL)
             .expect("transformed object must have measured intensities, not be left empty");
-        assert_eq!(intensity.sum_intensity, transformed.area as f64 * VALUE as f64);
+        assert_eq!(
+            intensity.sum_intensity,
+            transformed.area as f64 * VALUE as f64
+        );
     }
 }

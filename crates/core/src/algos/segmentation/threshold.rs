@@ -1112,8 +1112,8 @@ mod tests {
             .as_ref()
             .expect("No labels found")
             .as_slice();
-        let foreground_fraction = result_pixels.iter().filter(|&&v| v == 1).count() as f32
-            / result_pixels.len() as f32;
+        let foreground_fraction =
+            result_pixels.iter().filter(|&&v| v == 1).count() as f32 / result_pixels.len() as f32;
 
         // True foreground fraction is ~20%. Before the fix this was ~100%
         // ("detects everything"); it should now land close to the real split.
@@ -1150,8 +1150,8 @@ mod tests {
     }
 
     #[test]
-    fn test_all_auto_methods_narrow_dynamic_range_regression() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn test_all_auto_methods_narrow_dynamic_range_regression()
+    -> Result<(), Box<dyn std::error::Error>> {
         // Same real-world scenario as test_li_narrow_dynamic_range_regression
         // (16-bit image that only uses a narrow slice of its theoretical
         // range), exercised across every auto-threshold method through the

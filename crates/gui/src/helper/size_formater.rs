@@ -56,7 +56,10 @@ mod tests {
         // indexing past the end of `units`.
         let huge_bits = 8u64.saturating_mul(1024u64.pow(6));
         let result = format_bits(huge_bits);
-        assert!(result.ends_with("PB"), "expected a PB-suffixed result, got {result:?}");
+        assert!(
+            result.ends_with("PB"),
+            "expected a PB-suffixed result, got {result:?}"
+        );
     }
 
     #[test]
@@ -72,7 +75,10 @@ mod tests {
     fn format_bytes_clamps_at_the_largest_unit() {
         let huge = 1024f64.powi(7); // way past PB
         let result = format_bytes(huge);
-        assert!(result.ends_with("PB"), "expected a PB-suffixed result, got {result:?}");
+        assert!(
+            result.ends_with("PB"),
+            "expected a PB-suffixed result, got {result:?}"
+        );
     }
 
     #[test]

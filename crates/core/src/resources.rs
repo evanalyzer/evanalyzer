@@ -167,7 +167,9 @@ mod tests {
 
     #[test]
     fn recommended_parallelism_never_exceeds_available_cores() {
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         assert!(recommended_parallelism() <= cores);
     }
 
@@ -178,7 +180,9 @@ mod tests {
 
     #[test]
     fn recommended_reader_pool_size_never_exceeds_available_cores() {
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         assert!(recommended_reader_pool_size() <= cores);
     }
 

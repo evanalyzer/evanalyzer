@@ -245,7 +245,9 @@ pub fn compute_plate_matrix(
         cells,
         required_span,
         group_count: rows.len(),
-        sample_label: rows.first().map(|r| r.values.first().cloned().unwrap_or_default()),
+        sample_label: rows
+            .first()
+            .map(|r| r.values.first().cloned().unwrap_or_default()),
     }
 }
 
@@ -531,8 +533,15 @@ mod tests {
         let objects = vec![obj("A99_01.tif", "", 1)];
         let regex = r"((.)([0-9]+))_([0-9]+)";
         // Only an 8x12 plate - "A99" decodes to row 0, col 98, out of bounds.
-        let result =
-            compute_plate_matrix(&objects, GroupBy::Regex, regex, AggFunc::Avg, &area_col(), 8, 12);
+        let result = compute_plate_matrix(
+            &objects,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &area_col(),
+            8,
+            12,
+        );
         assert!(result.cells.iter().all(|c| c.value.is_none()));
         // But it still reports how big a plate would be needed.
         assert_eq!(result.required_span, Some((1, 99)));
@@ -543,13 +552,17 @@ mod tests {
         // Mirrors a real dataset: only rows D/G populated, columns 2-19,
         // e.g. "D10_02.vsi", "G9_04.vsi" - and the plate size still at the
         // useless 1x1 default, so nothing fits without resizing.
-        let objects = vec![
-            obj("D19_02.vsi", "", 10),
-            obj("G9_04.vsi", "", 20),
-        ];
+        let objects = vec![obj("D19_02.vsi", "", 10), obj("G9_04.vsi", "", 20)];
         let regex = r"((.)([0-9]+))_([0-9]+)";
-        let result =
-            compute_plate_matrix(&objects, GroupBy::Regex, regex, AggFunc::Avg, &area_col(), 1, 1);
+        let result = compute_plate_matrix(
+            &objects,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &area_col(),
+            1,
+            1,
+        );
         assert!(result.cells.iter().all(|c| c.value.is_none()));
         // D -> row 4, col 19; G -> row 7, col 9. Needs at least 7 rows x 19 cols.
         assert_eq!(result.required_span, Some((7, 19)));
@@ -558,8 +571,15 @@ mod tests {
     #[test]
     fn plate_matrix_required_span_none_for_folder_mode() {
         let objects = vec![obj("img1.tif", "plateA/img1.tif", 10)];
-        let result =
-            compute_plate_matrix(&objects, GroupBy::Folder, "", AggFunc::Avg, &area_col(), 2, 2);
+        let result = compute_plate_matrix(
+            &objects,
+            GroupBy::Folder,
+            "",
+            AggFunc::Avg,
+            &area_col(),
+            2,
+            2,
+        );
         assert_eq!(result.required_span, None);
     }
 
@@ -575,8 +595,15 @@ mod tests {
             obj("G9_04.vsi", "", 30),
         ];
         let regex = r"((([A-Za-z]{1,2})([0-9]{1,3}))_([0-9]+))";
-        let result =
-            compute_plate_matrix(&objects, GroupBy::Regex, regex, AggFunc::Avg, &area_col(), 1, 1);
+        let result = compute_plate_matrix(
+            &objects,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &area_col(),
+            1,
+            1,
+        );
         assert_eq!(result.required_span, None);
         assert_eq!(result.group_count, 3); // one group per image, not per well
         assert_eq!(result.sample_label, Some("D2_02".to_string()));
@@ -620,7 +647,19 @@ mod tests {
         let objects = vec![obj("A14.tif", "", 10)];
         // Only 1 capture group - no sub-position.
         let regex = r"([A-Za-z][0-9]+)";
-        assert!(compute_well_matrix(&objects, regex, "A14", AggFunc::Avg, &area_col(), 2, 2, &[1, 2, 3, 4]).is_none());
+        assert!(
+            compute_well_matrix(
+                &objects,
+                regex,
+                "A14",
+                AggFunc::Avg,
+                &area_col(),
+                2,
+                2,
+                &[1, 2, 3, 4]
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -628,8 +667,17 @@ mod tests {
         let objects = vec![obj("my_file_01_A14_01.tif", "", 10)];
         let regex = r"((.)([0-9]+))_([0-9]+)";
         assert!(
-            compute_well_matrix(&objects, regex, "Z99", AggFunc::Avg, &area_col(), 2, 2, &[1, 2, 3, 4])
-                .is_none()
+            compute_well_matrix(
+                &objects,
+                regex,
+                "Z99",
+                AggFunc::Avg,
+                &area_col(),
+                2,
+                2,
+                &[1, 2, 3, 4]
+            )
+            .is_none()
         );
     }
 
@@ -650,7 +698,10 @@ mod tests {
         .collect();
 
         let suggestion = suggest_regex(&names).expect("should detect a well-shaped pattern");
-        assert_eq!(suggestion.pattern, r"(([A-Za-z]{1,2})([0-9]{1,3}))_([0-9]+)");
+        assert_eq!(
+            suggestion.pattern,
+            r"(([A-Za-z]{1,2})([0-9]{1,3}))_([0-9]+)"
+        );
         assert_eq!(suggestion.matched, 6);
         assert_eq!(suggestion.total, 6);
 
@@ -773,7 +824,10 @@ mod tests {
                     ?, 1.0, 1.0, 1.0, 1.0, 10, 10, false,
                     1.0, 1.0, 1.0, '{}', '{}'
                 )",
-                duckdb::params![format!("00000000-0000-0000-0000-0000000000{idx:02}"), circularity],
+                duckdb::params![
+                    format!("00000000-0000-0000-0000-0000000000{idx:02}"),
+                    circularity
+                ],
             )
             .unwrap();
         }
@@ -806,8 +860,12 @@ mod tests {
             ..Default::default()
         };
         let (specs, rows) =
-            aggregate_objects_sql(&loader, DatabaseFilter::default(), &config, &base_specs).unwrap();
-        let value_col = specs.iter().position(|s| s.id == "circularity__avg").unwrap();
+            aggregate_objects_sql(&loader, DatabaseFilter::default(), &config, &base_specs)
+                .unwrap();
+        let value_col = specs
+            .iter()
+            .position(|s| s.id == "circularity__avg")
+            .unwrap();
         let table_row = rows
             .iter()
             .find(|r| r.values[0] == "my_file_01_A14_01.tif")

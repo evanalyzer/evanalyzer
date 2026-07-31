@@ -155,7 +155,11 @@ impl ImageAlgorithm for ObjectMath {
                 .iter()
                 .filter(|oid| *oid != input_id)
                 .filter_map(|oid| cache.object_cache.get(oid))
-                .filter(|o| input_object.overlaps(o).is_some_and(|i| i.area >= min_area_px))
+                .filter(|o| {
+                    input_object
+                        .overlaps(o)
+                        .is_some_and(|i| i.area >= min_area_px)
+                })
                 .collect();
 
             if overlapping.is_empty() {
@@ -531,7 +535,11 @@ mod tests {
         });
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
-        assert_eq!(cache.object_cache.len(), 2, "no new object in in-place mode");
+        assert_eq!(
+            cache.object_cache.len(),
+            2,
+            "no new object in in-place mode"
+        );
         let cell = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert_eq!(cell.area, 100 - 16);
     }

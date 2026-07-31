@@ -62,23 +62,28 @@ mod tests {
         let path = PathBuf::from("/models/one.pt");
         let load_calls = Cell::new(0);
 
-        let first =
-            get_or_insert::<u32, ()>(&mut cache, &path, || {
-                load_calls.set(load_calls.get() + 1);
-                Ok(42)
-            })
-            .unwrap();
-        let second =
-            get_or_insert::<u32, ()>(&mut cache, &path, || {
-                load_calls.set(load_calls.get() + 1);
-                Ok(0) // Would prove staleness if this ever won.
-            })
-            .unwrap();
+        let first = get_or_insert::<u32, ()>(&mut cache, &path, || {
+            load_calls.set(load_calls.get() + 1);
+            Ok(42)
+        })
+        .unwrap();
+        let second = get_or_insert::<u32, ()>(&mut cache, &path, || {
+            load_calls.set(load_calls.get() + 1);
+            Ok(0) // Would prove staleness if this ever won.
+        })
+        .unwrap();
 
-        assert_eq!(load_calls.get(), 1, "loader must run exactly once for a repeated path");
+        assert_eq!(
+            load_calls.get(),
+            1,
+            "loader must run exactly once for a repeated path"
+        );
         assert_eq!(*first, 42);
         assert_eq!(*second, 42);
-        assert!(Arc::ptr_eq(&first, &second), "second call must return the same cached Arc");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "second call must return the same cached Arc"
+        );
     }
 
     #[test]
@@ -97,7 +102,11 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(load_calls.get(), 2, "a different path must trigger its own load");
+        assert_eq!(
+            load_calls.get(),
+            2,
+            "a different path must trigger its own load"
+        );
         assert_eq!(*a, 1);
         assert_eq!(*b, 2);
     }
@@ -120,7 +129,11 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(load_calls.get(), 2, "a failed load must not poison the cache entry");
+        assert_eq!(
+            load_calls.get(),
+            2,
+            "a failed load must not poison the cache entry"
+        );
         assert_eq!(*second, 7);
     }
 }

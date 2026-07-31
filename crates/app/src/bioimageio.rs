@@ -10,5 +10,5 @@ pub mod rdf_parser;
 pub mod rdf_to_command;
 
 pub use rdf_model::{ModelKind, RdfModel};
-pub use rdf_parser::{parse_file, parse_str, RdfError};
-pub use rdf_to_command::{configure, configure_from_file, ConfigureError, ConfiguredModel};
+pub use rdf_parser::{RdfError, parse_file, parse_str};
+pub use rdf_to_command::{ConfigureError, ConfiguredModel, configure, configure_from_file};

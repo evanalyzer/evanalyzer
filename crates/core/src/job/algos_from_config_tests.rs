@@ -1040,7 +1040,10 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
             PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
             "Blur",
         ),
-        (PipelineCommand::Hessian(HessianSettings::default()), "Hessian"),
+        (
+            PipelineCommand::Hessian(HessianSettings::default()),
+            "Hessian",
+        ),
         (
             PipelineCommand::ImageCache(ImageCacheSettings::default()),
             "ImageCache",

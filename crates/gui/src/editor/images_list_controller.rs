@@ -112,7 +112,11 @@ impl ImagesListController {
     /// paints `bbox_px` (`[xmin, ymin, xmax, ymax]`, in image pixels) as a
     /// highlight box in the viewport. Used when a object row is selected in the
     /// results table so the user can locate the object in its source image.
-    pub fn open_image_and_highlight_object(self: &Arc<Self>, rel_path: &PathBuf, bbox_px: [u32; 4]) {
+    pub fn open_image_and_highlight_object(
+        self: &Arc<Self>,
+        rel_path: &PathBuf,
+        bbox_px: [u32; 4],
+    ) {
         self.open_new_image_from_rel_path(rel_path);
 
         // `open_new_image` clears any previous highlight, so set ours afterwards.
@@ -126,7 +130,8 @@ impl ImagesListController {
             active: true,
         };
         if let Some(ui) = self.ui.upgrade() {
-            ui.global::<ViewportObjectState>().set_object_highlight(highlight);
+            ui.global::<ViewportObjectState>()
+                .set_object_highlight(highlight);
         }
     }
 
@@ -526,7 +531,11 @@ mod tests {
         controller.update_image_filter_text_in_project("Nuclei");
 
         assert_eq!(
-            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            *controller
+                .image_controller_state
+                .image_filter_text
+                .read()
+                .unwrap(),
             "Nuclei"
         );
     }
@@ -539,7 +548,11 @@ mod tests {
         controller.update_image_filter_text_in_project("second");
 
         assert_eq!(
-            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            *controller
+                .image_controller_state
+                .image_filter_text
+                .read()
+                .unwrap(),
             "second"
         );
     }
@@ -571,7 +584,10 @@ mod tests {
         controller.open_new_image(&image_path);
 
         let project = controller.app_state.get_project();
-        assert_eq!(project.images.root, Some(PathBuf::from("/some/other/place")));
+        assert_eq!(
+            project.images.root,
+            Some(PathBuf::from("/some/other/place"))
+        );
     }
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------
@@ -612,10 +628,15 @@ mod tests {
         let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
         controller.attach_callbacks();
 
-        ui.global::<ImagesListState>().invoke_image_filter_text_changed("Nuclei".into());
+        ui.global::<ImagesListState>()
+            .invoke_image_filter_text_changed("Nuclei".into());
 
         assert_eq!(
-            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            *controller
+                .image_controller_state
+                .image_filter_text
+                .read()
+                .unwrap(),
             "Nuclei"
         );
     }
@@ -638,10 +659,12 @@ mod tests {
         // `None` and `open_new_image_from_rel_path` is a no-op - this is
         // exercising that lookup-miss branch through the real callback
         // wiring, not asserting an image actually opened.
-        assert!(controller
-            .app_state
-            .get_project()
-            .get_current_image_path_cloned()
-            .is_none());
+        assert!(
+            controller
+                .app_state
+                .get_project()
+                .get_current_image_path_cloned()
+                .is_none()
+        );
     }
 }

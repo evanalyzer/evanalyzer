@@ -107,7 +107,11 @@ impl ViewportWorker {
                 false,
             ),
             _ => (
-                &self.viewport_controller.drawing_tasks.object_task.task_count,
+                &self
+                    .viewport_controller
+                    .drawing_tasks
+                    .object_task
+                    .task_count,
                 &self.viewport_controller.drawing_tasks.object_task,
                 false,
             ),
@@ -936,8 +940,14 @@ mod tests {
         let img = gray_container(pixels);
 
         let (min, max, min_limit, max_limit) = apply_auto_adjust(&img, false);
-        assert_eq!(min, 0.5, "the 2 low outliers must be clipped out of the range");
-        assert_eq!(max, 0.5, "the 2 high outliers must be clipped out of the range");
+        assert_eq!(
+            min, 0.5,
+            "the 2 low outliers must be clipped out of the range"
+        );
+        assert_eq!(
+            max, 0.5,
+            "the 2 high outliers must be clipped out of the range"
+        );
         assert_eq!(min_limit, 0.49);
         assert_eq!(max_limit, 0.51);
     }
@@ -946,7 +956,10 @@ mod tests {
     fn apply_auto_adjust_limits_are_clamped_to_the_0_1_range() {
         let img = gray_container(vec![0.0; 100]);
         let (_, _, min_limit, _) = apply_auto_adjust(&img, false);
-        assert_eq!(min_limit, 0.0, "min - 0.01 must clamp at 0.0, not go negative");
+        assert_eq!(
+            min_limit, 0.0,
+            "min - 0.01 must clamp at 0.0, not go negative"
+        );
 
         let img = gray_container(vec![1.0; 100]);
         let (_, _, _, max_limit) = apply_auto_adjust(&img, false);
@@ -993,8 +1006,7 @@ mod tests {
         let ctx = ctx_for(&data);
         let mut dest = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; 2];
 
-        let hists =
-            prepare_image_channels_for_slint(&[ctx], &mut dest, 4, false, &vec![0], false);
+        let hists = prepare_image_channels_for_slint(&[ctx], &mut dest, 4, false, &vec![0], false);
 
         assert!(hists.is_empty());
     }

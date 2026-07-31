@@ -455,20 +455,30 @@ mod tests {
         // `process_f32_gray`'s `equalize_histogram` branch directly.
         let width = 4;
         let height = 4;
-        let data: Vec<f32> = (0..width * height).map(|i| 0.3 + (i as f32) * 0.01).collect();
+        let data: Vec<f32> = (0..width * height)
+            .map(|i| 0.3 + (i as f32) * 0.01)
+            .collect();
         let img =
             Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
                 .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
         let mut cache = PipelineCache::default();
 
-        let enhancer =
-            EnhanceContrast { saturated_pixels: 0.0, normalize: false, equalize_histogram: true };
+        let enhancer = EnhanceContrast {
+            saturated_pixels: 0.0,
+            normalize: false,
+            equalize_histogram: true,
+        };
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
         if let ImageContainer::F32Gray(output) = ctx.image.as_ref() {
-            assert!(output.as_slice().iter().all(|&p| (0.0..=1.0).contains(&p) && !p.is_nan()));
+            assert!(
+                output
+                    .as_slice()
+                    .iter()
+                    .all(|&p| (0.0..=1.0).contains(&p) && !p.is_nan())
+            );
         } else {
             panic!("Expected F32Gray output");
         }
@@ -488,15 +498,21 @@ mod tests {
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
         let mut cache = PipelineCache::default();
 
-        let enhancer =
-            EnhanceContrast { saturated_pixels: 0.0, normalize: true, equalize_histogram: false };
+        let enhancer = EnhanceContrast {
+            saturated_pixels: 0.0,
+            normalize: true,
+            equalize_histogram: false,
+        };
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
         if let ImageContainer::F32Gray(output) = ctx.image.as_ref() {
             let pixels = output.as_slice();
             let max = pixels.iter().cloned().fold(0.0f32, f32::max);
-            assert!(max > 0.99, "normalize should stretch the max back up to ~1.0, got {max}");
+            assert!(
+                max > 0.99,
+                "normalize should stretch the max back up to ~1.0, got {max}"
+            );
         } else {
             panic!("Expected F32Gray output");
         }
@@ -518,18 +534,29 @@ mod tests {
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
         let mut cache = PipelineCache::default();
 
-        let enhancer =
-            EnhanceContrast { saturated_pixels: 0.0, normalize: false, equalize_histogram: false };
+        let enhancer = EnhanceContrast {
+            saturated_pixels: 0.0,
+            normalize: false,
+            equalize_histogram: false,
+        };
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
         if let ImageContainer::F32Rgb(output) = ctx.image.as_ref() {
             let pixels = output.as_slice();
             // The dim pixel's luminance was the minimum - stretched to ~0.
-            assert!(pixels[0] < 0.01, "dim pixel should stretch toward black, got {}", pixels[0]);
+            assert!(
+                pixels[0] < 0.01,
+                "dim pixel should stretch toward black, got {}",
+                pixels[0]
+            );
             // The bright pixel's luminance was the maximum - stretched to ~1.
             let last_px = &pixels[pixels.len() - 3..];
-            assert!(last_px[0] > 0.99, "bright pixel should stretch toward white, got {}", last_px[0]);
+            assert!(
+                last_px[0] > 0.99,
+                "bright pixel should stretch toward white, got {}",
+                last_px[0]
+            );
         } else {
             panic!("Expected F32Rgb output");
         }
@@ -548,8 +575,11 @@ mod tests {
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
         let mut cache = PipelineCache::default();
 
-        let enhancer =
-            EnhanceContrast { saturated_pixels: 0.0, normalize: true, equalize_histogram: false };
+        let enhancer = EnhanceContrast {
+            saturated_pixels: 0.0,
+            normalize: true,
+            equalize_histogram: false,
+        };
         let result = enhancer.execute(&mut ctx, &mut cache);
         assert!(result.is_ok());
 
@@ -559,7 +589,10 @@ mod tests {
                 .chunks_exact(3)
                 .map(|rgb| 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2])
                 .fold(0.0f32, f32::max);
-            assert!(max_lum > 0.99, "normalize should push peak luminance to ~1.0, got {max_lum}");
+            assert!(
+                max_lum > 0.99,
+                "normalize should push peak luminance to ~1.0, got {max_lum}"
+            );
         } else {
             panic!("Expected F32Rgb output");
         }
@@ -616,7 +649,11 @@ mod tests {
         lut[65535] = 0.9;
         assert_eq!(sample_lut(&lut, 0.0), 0.1);
         assert_eq!(sample_lut(&lut, 1.0), 0.9);
-        assert_eq!(sample_lut(&lut, 2.0), 0.9, "out-of-range input should clamp to the last bin");
+        assert_eq!(
+            sample_lut(&lut, 2.0),
+            0.9,
+            "out-of-range input should clamp to the last bin"
+        );
     }
 
     #[test]

@@ -429,7 +429,10 @@ mod tests {
         // `ImageSource::InstanceMap` branch (untested before this) can reuse
         // the same fixture as the `ImageSource::Image` tests above.
         let input_img = Image::<f32, 1, _>::from_size_slice(
-            ImageSize { width: 2, height: 2 },
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
             &[0.0f32, 0.5, 0.5, 1.0],
             CpuAllocator,
         )
@@ -453,7 +456,10 @@ mod tests {
     #[test]
     fn test_save_segmentation_mask_command_execution() {
         let input_img = Image::<f32, 1, _>::from_size_slice(
-            ImageSize { width: 2, height: 2 },
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
             &[0.0f32, 0.5, 0.5, 1.0],
             CpuAllocator,
         )

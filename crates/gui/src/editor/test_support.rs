@@ -134,7 +134,8 @@ fn ensure_slint_test_platform() {
 /// any number of unit tests.
 pub(crate) fn test_ui_windows() -> (AppWindow, ResultsWindow) {
     ensure_slint_test_platform();
-    let ui = AppWindow::new().expect("AppWindow::new must succeed under the headless test platform");
+    let ui =
+        AppWindow::new().expect("AppWindow::new must succeed under the headless test platform");
     let results_ui = ResultsWindow::new()
         .expect("ResultsWindow::new must succeed under the headless test platform");
     (ui, results_ui)

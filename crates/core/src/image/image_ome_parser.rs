@@ -399,13 +399,19 @@ mod tests {
     /// several JNI-backed tests in `image_reader.rs` open for real.
     fn real_fixture_xml() -> String {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/ome.xml");
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
     }
 
     #[test]
     fn real_fixture_parses_series_channels_and_pyramid_resolution() {
-        let reader = reader_at("/some/dir/multi-channel-4D-series.ome.tif", ReadMode::Default);
-        let meta = reader.parse_ome_xml(&real_fixture_xml()).expect("real fixture must parse");
+        let reader = reader_at(
+            "/some/dir/multi-channel-4D-series.ome.tif",
+            ReadMode::Default,
+        );
+        let meta = reader
+            .parse_ome_xml(&real_fixture_xml())
+            .expect("real fixture must parse");
 
         // Name comes from the reader's own path, not the XML's Image/@Name.
         assert_eq!(meta.name, "multi-channel-4D-series.ome.tif");
@@ -418,7 +424,10 @@ mod tests {
 
         assert_eq!(series.channels.len(), 3);
         for c in 0..3 {
-            assert!(series.channels.contains_key(&c), "channel {c} must be present");
+            assert!(
+                series.channels.contains_key(&c),
+                "channel {c} must be present"
+            );
         }
 
         assert_eq!(series.resolutions.len(), 1);
@@ -459,10 +468,18 @@ mod tests {
 </JODA>"#;
 
         let reader = reader_at("/some/dir/thumbnail.tif", ReadMode::Default);
-        let meta = reader.parse_ome_xml(xml).expect("missing BitsPerPixel must not itself be a parse error");
+        let meta = reader
+            .parse_ome_xml(xml)
+            .expect("missing BitsPerPixel must not itself be a parse error");
 
-        let res = meta.series[&0].resolutions.get(&0).expect("resolution 0 must exist");
-        assert_eq!(res.nr_bits, 0, "nr_bits must default to 0 when BitsPerPixel is absent");
+        let res = meta.series[&0]
+            .resolutions
+            .get(&0)
+            .expect("resolution 0 must exist");
+        assert_eq!(
+            res.nr_bits, 0,
+            "nr_bits must default to 0 when BitsPerPixel is absent"
+        );
     }
 
     #[test]
@@ -494,7 +511,10 @@ mod tests {
 
         let ch1 = &series.channels[&1];
         assert_eq!(ch1.name, "GFP");
-        assert_eq!(ch1.emission_wave_length, 509.0, "0.509 µm must convert to 509 nm");
+        assert_eq!(
+            ch1.emission_wave_length, 509.0,
+            "0.509 µm must convert to 509 nm"
+        );
     }
 
     #[test]
@@ -520,7 +540,10 @@ mod tests {
         let series = &meta.series[&0];
 
         let res = series.resolutions.get(&0).unwrap();
-        assert!(res.is_rgb, "1 color channel + non-interleaved + 3 C-stacks + 8-bit must trip the RGB heuristic");
+        assert!(
+            res.is_rgb,
+            "1 color channel + non-interleaved + 3 C-stacks + 8-bit must trip the RGB heuristic"
+        );
 
         assert_eq!(series.channels[&0].name, "Red");
         assert_eq!(series.channels[&1].name, "Green");
@@ -554,7 +577,10 @@ mod tests {
         let series = &meta.series[&0];
 
         assert!(!series.resolutions[&0].is_rgb);
-        assert_eq!(series.channels[&0].name, "Ch0", "channel must keep its parsed name, not be renamed");
+        assert_eq!(
+            series.channels[&0].name, "Ch0",
+            "channel must keep its parsed name, not be renamed"
+        );
     }
 
     #[test]
@@ -583,7 +609,10 @@ mod tests {
     fn image_id_without_a_colon_is_a_parse_error_not_a_panic() {
         let xml = r#"<OME><Image ID="NoColonHere"><Pixels ID="Pixels:0"/></Image></OME>"#;
         let reader = reader_at("/x.tif", ReadMode::Default);
-        let err = reader.parse_ome_xml(xml).err().expect("missing ':' in Image/@ID must error");
+        let err = reader
+            .parse_ome_xml(xml)
+            .err()
+            .expect("missing ':' in Image/@ID must error");
         assert!(matches!(err, InternalErrors::ParseError(_)));
     }
 
@@ -591,7 +620,10 @@ mod tests {
     fn channel_id_without_a_colon_is_a_parse_error_not_a_panic() {
         let xml = r#"<OME><Image ID="Image:0"><Pixels ID="Pixels:0" SizeC="1"><Channel ID="NoColonHere"/></Pixels></Image></OME>"#;
         let reader = reader_at("/x.tif", ReadMode::Default);
-        let err = reader.parse_ome_xml(xml).err().expect("missing ':' in Channel/@ID must error");
+        let err = reader
+            .parse_ome_xml(xml)
+            .err()
+            .expect("missing ':' in Channel/@ID must error");
         assert!(matches!(err, InternalErrors::ParseError(_)));
     }
 
@@ -599,7 +631,10 @@ mod tests {
     fn non_numeric_image_id_suffix_is_a_parse_error_not_a_panic() {
         let xml = r#"<OME><Image ID="Image:not-a-number"><Pixels ID="Pixels:0"/></Image></OME>"#;
         let reader = reader_at("/x.tif", ReadMode::Default);
-        let err = reader.parse_ome_xml(xml).err().expect("non-numeric series index must error");
+        let err = reader
+            .parse_ome_xml(xml)
+            .err()
+            .expect("non-numeric series index must error");
         // A colon is present, so this goes through `val.parse::<i32>()?` rather
         // than the `ok_or_else(ParseError)` "no colon at all" branch above -
         // the `?` auto-converts the `ParseIntError` via `InternalErrors`'s
@@ -611,7 +646,10 @@ mod tests {
     fn unknown_physical_size_unit_is_a_parse_error_not_a_panic() {
         let xml = r#"<OME><Image ID="Image:0"><Pixels ID="Pixels:0" SizeC="1" PhysicalSizeX="1.0" PhysicalSizeXUnit="px"/></Image></OME>"#;
         let reader = reader_at("/x.tif", ReadMode::Default);
-        let err = reader.parse_ome_xml(xml).err().expect("unsupported unit 'px' must error, not silently default");
+        let err = reader
+            .parse_ome_xml(xml)
+            .err()
+            .expect("unsupported unit 'px' must error, not silently default");
         assert!(matches!(err, InternalErrors::ParseError(_)));
     }
 
@@ -619,7 +657,10 @@ mod tests {
     fn malformed_numeric_attribute_is_a_parse_error_not_a_panic() {
         let xml = r#"<OME><Image ID="Image:0"><Pixels ID="Pixels:0" SizeC="not-a-number"/></Image></OME>"#;
         let reader = reader_at("/x.tif", ReadMode::Default);
-        let err = reader.parse_ome_xml(xml).err().expect("non-numeric SizeC must error");
+        let err = reader
+            .parse_ome_xml(xml)
+            .err()
+            .expect("non-numeric SizeC must error");
         assert!(matches!(err, InternalErrors::ParseError(_)));
     }
 

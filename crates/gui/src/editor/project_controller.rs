@@ -166,17 +166,18 @@ impl ProjectController {
     /// project used with no equivalent in this format are reported to the user
     /// as a non-blocking warning, listing what was skipped or approximated.
     pub fn import_legacy_project_file(self: Arc<Self>, legacy_path: &PathBuf) {
-        let (warnings, legacy_image_folder) = match self.app_state.import_legacy_project(legacy_path) {
-            Ok(result) => result,
-            Err(e) => {
-                warn!("Could not import legacy project {:?}: {}", legacy_path, e);
-                self.show_warning(
-                    "Cannot import legacy project",
-                    &format!("Failed to import '{}': {e}", legacy_path.display()),
-                );
-                return;
-            }
-        };
+        let (warnings, legacy_image_folder) =
+            match self.app_state.import_legacy_project(legacy_path) {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!("Could not import legacy project {:?}: {}", legacy_path, e);
+                    self.show_warning(
+                        "Cannot import legacy project",
+                        &format!("Failed to import '{}': {e}", legacy_path.display()),
+                    );
+                    return;
+                }
+            };
 
         self.app_state.mark_dirty();
 
@@ -250,7 +251,8 @@ impl ProjectController {
                 warning.set_info(info);
                 warning.set_title(title.into());
                 warning.set_message(message.into());
-                ui.global::<GlobalAppState>().set_active_dialog(DialogType::Warning);
+                ui.global::<GlobalAppState>()
+                    .set_active_dialog(DialogType::Warning);
             }
         }) {
             warn!("Failed to show warning dialog: {e}");
@@ -296,20 +298,16 @@ impl ProjectController {
 
             // Save As (always prompts for a new path)
             let manager = Arc::clone(self);
-            ui.global::<ToolbarState>().on_save_as_file_clicked(move || {
-                manager.save_project_as_handler();
-            });
+            ui.global::<ToolbarState>()
+                .on_save_as_file_clicked(move || {
+                    manager.save_project_as_handler();
+                });
 
             // Save project as template
             let manager = Arc::clone(self);
             ui.global::<ToolbarState>()
                 .on_save_project_as_template_clicked(move || {
-                    let name = manager
-                        .app_state
-                        .get_project()
-                        .metadata
-                        .name
-                        .clone();
+                    let name = manager.app_state.get_project().metadata.name.clone();
                     manager
                         .template_controller
                         .start_project_template_save(name);
@@ -324,26 +322,24 @@ impl ProjectController {
 
             // Project template picker: select - update detail pane
             let manager = Arc::clone(self);
-            ui.global::<ProjectTemplateState>()
-                .on_select(move |id| {
-                    let Some(ui) = manager.ui.upgrade() else {
-                        return;
-                    };
-                    let templates = manager.project_templates.lock().expect("Poisoned");
-                    if let Some(template) = templates.get(id as usize) {
-                        let detail = project_template_to_def(id, template);
-                        let picker = ui.global::<ProjectTemplateState>();
-                        picker.set_detail(detail);
-                        picker.set_has_detail(true);
-                    }
-                });
+            ui.global::<ProjectTemplateState>().on_select(move |id| {
+                let Some(ui) = manager.ui.upgrade() else {
+                    return;
+                };
+                let templates = manager.project_templates.lock().expect("Poisoned");
+                if let Some(template) = templates.get(id as usize) {
+                    let detail = project_template_to_def(id, template);
+                    let picker = ui.global::<ProjectTemplateState>();
+                    picker.set_detail(detail);
+                    picker.set_has_detail(true);
+                }
+            });
 
             // Project template picker: confirm - apply template to the project
             let manager = Arc::clone(self);
-            ui.global::<ProjectTemplateState>()
-                .on_confirm(move |id| {
-                    manager.apply_project_template(id);
-                });
+            ui.global::<ProjectTemplateState>().on_confirm(move |id| {
+                manager.apply_project_template(id);
+            });
 
             // Project template picker: cancel - close dialog
             let manager = Arc::clone(self);
@@ -408,7 +404,9 @@ impl ProjectController {
                 let manager = Arc::clone(&manager);
                 manager.clone().save_project_then(move |saved| {
                     if saved {
-                        if let Some(action) = manager.pending_action.lock().expect("Poisoned").take() {
+                        if let Some(action) =
+                            manager.pending_action.lock().expect("Poisoned").take()
+                        {
                             manager.run_pending_action(action);
                         }
                     }
@@ -520,7 +518,10 @@ impl ProjectController {
                 // calls `set_window_title()`, which takes a *read* lock on the
                 // same project `RwLock`; still holding the write guard there
                 // deadlocks the thread against itself.
-                let result = in_thread.app_state.get_project_write().save_project_as(&path);
+                let result = in_thread
+                    .app_state
+                    .get_project_write()
+                    .save_project_as(&path);
                 match result {
                     Ok(_) => {
                         info!("Project saved as: {}", path.display());
@@ -569,7 +570,10 @@ impl ProjectController {
                     // same fix: drop the write guard at this `let` instead of
                     // holding it across the match arms, where `clear_dirty()`
                     // would deadlock trying to re-acquire it for reading.
-                    let result = in_thread.app_state.get_project_write().save_project_as(&path);
+                    let result = in_thread
+                        .app_state
+                        .get_project_write()
+                        .save_project_as(&path);
                     let ok = result.is_ok();
                     match result {
                         Ok(_) => {
@@ -669,7 +673,9 @@ impl ProjectController {
             let picker = ui.global::<ProjectTemplateState>();
             picker.set_selected_id(-1);
             picker.set_has_detail(false);
-            picker.set_templates(ModelRc::new(VecModel::from(Vec::<ProjectTemplateDef>::new())));
+            picker.set_templates(ModelRc::new(VecModel::from(
+                Vec::<ProjectTemplateDef>::new(),
+            )));
             picker.set_categories(ModelRc::new(VecModel::from(vec![SharedString::from(
                 ALL_CATEGORIES,
             )])));
@@ -741,8 +747,7 @@ impl ProjectController {
             .iter()
             .enumerate()
             .filter(|(_, t)| {
-                let category_ok =
-                    filter.category.is_empty() || t.meta.category == filter.category;
+                let category_ok = filter.category.is_empty() || t.meta.category == filter.category;
                 let tags_ok = filter.tags.is_empty()
                     || t.meta.tags.iter().any(|tag| filter.tags.contains(tag));
                 category_ok && tags_ok
@@ -774,7 +779,10 @@ impl ProjectController {
             templates.get(id as usize).cloned()
         };
         let Some(template) = template else {
-            warn!("project template picker confirm: unknown template id {}", id);
+            warn!(
+                "project template picker confirm: unknown template id {}",
+                id
+            );
             return;
         };
 
@@ -1053,7 +1061,9 @@ mod tests {
 
     // -- open_new_project -------------------------------------------------------
 
-    fn temp_project_file(settings: &evanalyzer_cfg::settings::project_settings::ProjectSettings) -> PathBuf {
+    fn temp_project_file(
+        settings: &evanalyzer_cfg::settings::project_settings::ProjectSettings,
+    ) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "evanalyzer_project_controller_test_{}_{}",
             std::process::id(),
@@ -1098,7 +1108,10 @@ mod tests {
 
         let project = ui_state.get_project();
         assert_eq!(project.metadata.name, "Loaded Project");
-        assert!(!ui_state.is_dirty(), "opening a project must clear the dirty flag");
+        assert!(
+            !ui_state.is_dirty(),
+            "opening a project must clear the dirty flag"
+        );
 
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
@@ -1110,7 +1123,9 @@ mod tests {
             let mut project = ui_state.get_project_write();
             project.tmp_settings.current_image = Some(PathBuf::from("/some/old/image.tif"));
         }
-        let path = temp_project_file(&evanalyzer_cfg::settings::project_settings::ProjectSettings::default());
+        let path = temp_project_file(
+            &evanalyzer_cfg::settings::project_settings::ProjectSettings::default(),
+        );
 
         controller.clone().open_new_project(&path);
 
@@ -1121,7 +1136,8 @@ mod tests {
     // -- import_legacy_project_file ----------------------------------------------
 
     #[test]
-    fn import_legacy_project_file_on_a_nonexistent_file_shows_a_warning_and_leaves_the_project_untouched() {
+    fn import_legacy_project_file_on_a_nonexistent_file_shows_a_warning_and_leaves_the_project_untouched()
+     {
         let (ui_state, controller) = make_controller();
         {
             let mut project = ui_state.get_project_write();
@@ -1136,7 +1152,10 @@ mod tests {
             ui_state.get_project().metadata.name,
             "should not be overwritten"
         );
-        assert!(!ui_state.is_dirty(), "a failed import must not mark the project dirty");
+        assert!(
+            !ui_state.is_dirty(),
+            "a failed import must not mark the project dirty"
+        );
     }
 
     // -- save_project_then --------------------------------------------------------
@@ -1174,7 +1193,10 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("save_project_then must call on_done");
         assert!(ok);
-        assert!(!ui_state.is_dirty(), "a successful save must clear the dirty flag");
+        assert!(
+            !ui_state.is_dirty(),
+            "a successful save must clear the dirty flag"
+        );
         assert!(path.exists());
 
         std::fs::remove_dir_all(&dir).ok();

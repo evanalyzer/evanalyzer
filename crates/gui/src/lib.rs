@@ -492,7 +492,10 @@ mod ui_state_tests {
         set_name(&ui_state, "first edit");
         assert_eq!(name(&ui_state), "first edit");
 
-        assert!(ui_state.undo(), "a checkpoint of the pre-edit state must exist");
+        assert!(
+            ui_state.undo(),
+            "a checkpoint of the pre-edit state must exist"
+        );
         assert_eq!(
             name(&ui_state),
             "",
