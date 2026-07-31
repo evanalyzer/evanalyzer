@@ -346,18 +346,21 @@ mod tests {
     use crate::editor::test_support::test_ui_state;
 
     fn make_controller() -> (Arc<UiState>, Arc<ClassificationController>) {
+        make_controller_with_ui(slint::Weak::default())
+    }
+
+    fn make_controller_with_ui(
+        ui: slint::Weak<AppWindow>,
+    ) -> (Arc<UiState>, Arc<ClassificationController>) {
         let ui_state = test_ui_state();
-        let viewport_controller = Arc::new(ViewportController::new(
-            slint::Weak::default(),
-            ui_state.clone(),
-        ));
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
         let object_list_controller = Arc::new(ObjectListController::new(
-            slint::Weak::default(),
+            ui.clone(),
             ui_state.clone(),
             viewport_controller.clone(),
         ));
         let controller = Arc::new(ClassificationController::new(
-            slint::Weak::default(),
+            ui,
             ui_state.clone(),
             object_list_controller,
             viewport_controller,
@@ -510,5 +513,109 @@ mod tests {
         let (ui_state, _controller) = make_controller();
 
         assert!(bridge_for(&ui_state).row_data(0).is_none());
+    }
+
+    // -- sync_classification_to_slint / sync_class_settings_to_class_edit_dialog_slint
+
+    #[test]
+    fn sync_classification_to_slint_does_not_panic_without_a_live_ui() {
+        let (_, controller) = make_controller();
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+
+        controller.sync_classification_to_slint();
+    }
+
+    #[test]
+    fn sync_class_settings_to_class_edit_dialog_slint_does_not_panic_for_a_known_or_unknown_class() {
+        let (_, controller) = make_controller();
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+
+        controller.sync_class_settings_to_class_edit_dialog_slint(ObjectClass::Valid(1));
+        // Unknown class id - takes the early `return` branch.
+        controller.sync_class_settings_to_class_edit_dialog_slint(ObjectClass::Valid(99));
+    }
+
+    // -- attach_callbacks (live AppWindow) -----------------------------------------
+
+    use crate::editor::test_support::test_ui_windows;
+
+    #[test]
+    fn attach_callbacks_class_selected_stores_the_selected_object_class() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+
+        ui.global::<ClassificationState>().invoke_class_selected(3);
+        assert_eq!(ui_state.get_project().get_selected_object_class(), ObjectClass::Valid(3));
+
+        ui.global::<ClassificationState>().invoke_class_selected(-1);
+        assert_eq!(ui_state.get_project().get_selected_object_class(), ObjectClass::Unset);
+    }
+
+    #[test]
+    fn attach_callbacks_class_delete_removes_the_class_and_clears_selection() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+        controller.attach_callbacks();
+
+        ui.global::<ClassificationState>().invoke_class_delete(1);
+
+        let project = ui_state.get_project();
+        assert!(project.classification.classes.is_empty());
+        assert_eq!(project.get_selected_object_class(), ObjectClass::Unset);
+    }
+
+    #[test]
+    fn attach_callbacks_class_move_up_and_down_reorder_the_list() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.update_class_settings_in_project(settings(-1, "A"));
+        controller.update_class_settings_in_project(settings(-1, "B"));
+        controller.attach_callbacks();
+
+        ui.global::<ClassificationState>().invoke_class_move_up(2);
+        assert_eq!(ui_state.get_project().classification.classes[0].name, "B");
+
+        ui.global::<ClassificationState>().invoke_class_move_down(2);
+        assert_eq!(ui_state.get_project().classification.classes[1].name, "B");
+    }
+
+    #[test]
+    fn attach_callbacks_class_visibility_toggled_flips_visibility() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+        controller.attach_callbacks();
+
+        ui.global::<ClassificationState>().invoke_class_visibility_toggled(1);
+
+        assert!(!ui_state.get_project().is_class_visible(&ObjectClass::Valid(1)));
+    }
+
+    #[test]
+    fn attach_callbacks_hide_unclassified_toggled_flips_the_flag() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+        let initial = ui_state.get_project().hide_unclassified_objects();
+
+        ui.global::<ClassificationState>().invoke_hide_unclassified_toggled();
+
+        assert_eq!(ui_state.get_project().hide_unclassified_objects(), !initial);
+    }
+
+    #[test]
+    fn attach_callbacks_apply_classification_settings_adds_a_class_via_the_wired_callback() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+
+        ui.global::<ClassificationSettingsState>()
+            .invoke_apply_classification_settings(settings(-1, "Nuclei"));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.classification.classes.len(), 1);
+        assert_eq!(project.classification.classes[0].name, "Nuclei");
     }
 }

@@ -388,4 +388,63 @@ mod tests {
         let index = grouping_mode_to_index(&GroupingMode::FileName, &"something-else".to_string());
         assert_eq!(index, 4);
     }
+
+    // -- update_project_settings_in_project / sync_project_settings_to_slint ------
+
+    use crate::editor::test_support::test_ui_state;
+
+    fn sample_settings() -> ProjectSettingsSlint {
+        ProjectSettingsSlint {
+            author_name: "Ada Lovelace".into(),
+            organization_name: "Analytical Engines".into(),
+            project_name: "Test Project".into(),
+            well_rows: 2,
+            well_columns: 3,
+            well_values: slint::ModelRc::new(slint::VecModel::from(vec![1, 2, 3, 4, 5, 6])),
+            custom_regex: "".into(),
+            grouping_mode: 0,
+            well_size_index: 1,
+            plate_rows: 0,
+            plate_cols: 0,
+        }
+    }
+
+    fn make_controller(ui_state: Arc<UiState>) -> ProjectSettingsController {
+        ProjectSettingsController::new(slint::Weak::default(), slint::Weak::default(), ui_state)
+    }
+
+    #[test]
+    fn update_project_settings_in_project_writes_author_and_plate_fields() {
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state.clone());
+
+        controller.update_project_settings_in_project(&sample_settings());
+
+        let project = ui_state.get_project();
+        assert_eq!(project.metadata.author_first_name, "Ada");
+        assert_eq!(project.metadata.author_last_name, "Lovelace");
+        assert_eq!(project.metadata.author_organization, "Analytical Engines");
+        assert_eq!(project.metadata.name, "Test Project");
+        assert_eq!(project.plate.well_rows, 2);
+        assert_eq!(project.plate.well_cols, 3);
+        // well_size_index=1 -> index_to_well_size(1) == (2, 3), see the test above.
+        assert_eq!((project.plate.plate_rows, project.plate.plate_cols), (2, 3));
+    }
+
+    #[test]
+    fn update_project_settings_in_project_marks_the_project_dirty() {
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state.clone());
+
+        controller.update_project_settings_in_project(&sample_settings());
+
+        assert!(ui_state.is_dirty());
+    }
+
+    #[test]
+    fn sync_project_settings_to_slint_does_not_panic_without_a_live_ui() {
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state);
+        controller.sync_project_settings_to_slint();
+    }
 }

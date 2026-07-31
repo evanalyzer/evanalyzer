@@ -807,4 +807,21 @@ mod tests {
             .expect("fixture project has a current image");
         assert_eq!(entry.selected_series, 2);
     }
+
+    // -- sync_pixel_info_throttled / sync_actual_mouse_position_information_to_slint
+
+    #[test]
+    fn sync_actual_mouse_position_information_to_slint_without_cached_high_res_data_is_a_no_op() {
+        let (_, controller) = make_controller();
+        // `viewport_cache.active_high_res_data` is `None` in a fresh cache -
+        // must return early rather than panic.
+        controller.sync_actual_mouse_position_information_to_slint();
+    }
+
+    #[test]
+    fn sync_pixel_info_throttled_does_not_panic_on_first_or_repeated_calls() {
+        let (_, controller) = make_controller();
+        controller.sync_pixel_info_throttled();
+        controller.sync_pixel_info_throttled();
+    }
 }

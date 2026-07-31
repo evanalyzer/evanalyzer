@@ -698,4 +698,82 @@ mod tests {
         let at_max = matrix_cell("x".to_string(), Some(100.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
         assert_eq!(above.color, at_max.color, "values above range_hi must clamp to t=1.0");
     }
+
+    // -- attach_callbacks (live ResultsWindow) -------------------------------------
+
+    use crate::editor::images_list_controller::ImagesListController;
+    use crate::editor::results_table_controller::ResultsTableController;
+    use crate::editor::test_support::{test_ui_state, test_ui_windows};
+    use slint::Model;
+
+    fn make_controller(
+        results_ui: slint::Weak<ResultsWindow>,
+    ) -> (Arc<UiState>, Arc<ResultsMatrixController>) {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(crate::editor::viewport_controller::ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(crate::editor::object_list_controller::ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(crate::editor::histogram_controller::HistogramController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(crate::editor::image_meta_controller::ImageMetaController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller,
+        ));
+        let results_table_controller = Arc::new(ResultsTableController::new(
+            results_ui.clone(),
+            ui_state.clone(),
+            image_list_controller,
+        ));
+        let project_settings_controller = Arc::new(ProjectSettingsController::new(
+            slint::Weak::default(),
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let controller = Arc::new(ResultsMatrixController::new(
+            results_ui,
+            ui_state.clone(),
+            results_table_controller,
+            project_settings_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    #[test]
+    fn attach_callbacks_populates_the_agg_and_color_scheme_option_lists() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+
+        controller.attach_callbacks();
+
+        let state = results_ui.global::<ResultsState>();
+        let agg_options: Vec<String> =
+            state.get_matrix_agg_options().iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            agg_options,
+            vec!["Min", "Max", "Average", "Median", "Std. dev.", "Sum"]
+        );
+
+        let color_options: Vec<String> = state
+            .get_matrix_color_scheme_options()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(color_options, vec!["Viridis", "Magma", "Plasma", "Grayscale"]);
+    }
 }

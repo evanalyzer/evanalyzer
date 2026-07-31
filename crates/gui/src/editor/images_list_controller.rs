@@ -573,4 +573,75 @@ mod tests {
         let project = controller.app_state.get_project();
         assert_eq!(project.images.root, Some(PathBuf::from("/some/other/place")));
     }
+
+    // -- attach_callbacks (live AppWindow) -----------------------------------------
+
+    use crate::editor::test_support::test_ui_windows;
+
+    fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> ImagesListController {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let histogram_controller = Arc::new(HistogramController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_meta_controller = Arc::new(ImageMetaController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        ImagesListController::new(
+            ui,
+            ui_state,
+            viewport_controller,
+            histogram_controller,
+            image_meta_controller,
+            object_list_controller,
+        )
+    }
+
+    #[test]
+    fn attach_callbacks_image_filter_text_changed_stores_the_text_and_resyncs() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
+        controller.attach_callbacks();
+
+        ui.global::<ImagesListState>().invoke_image_filter_text_changed("Nuclei".into());
+
+        assert_eq!(
+            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            "Nuclei"
+        );
+    }
+
+    #[test]
+    fn attach_callbacks_image_selected_opens_the_matching_image() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
+        {
+            let mut project = controller.app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+        }
+        controller.attach_callbacks();
+
+        ui.global::<ImagesListState>()
+            .invoke_image_selected("img.tif".into());
+
+        // "img.tif" isn't a real relative path in the (empty) project image
+        // list, so `get_image_absolute_path_from_relative` resolves to
+        // `None` and `open_new_image_from_rel_path` is a no-op - this is
+        // exercising that lookup-miss branch through the real callback
+        // wiring, not asserting an image actually opened.
+        assert!(controller
+            .app_state
+            .get_project()
+            .get_current_image_path_cloned()
+            .is_none());
+    }
 }

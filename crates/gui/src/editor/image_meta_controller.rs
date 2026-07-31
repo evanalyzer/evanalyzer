@@ -393,4 +393,29 @@ mod tests {
         assert_eq!(sizes.y, 1.0);
         assert_eq!(sizes.z, 1.0);
     }
+
+    // -- sync_image_meta_to_slint --------------------------------------------------
+
+    #[test]
+    fn sync_image_meta_to_slint_without_a_current_image_returns_ok() {
+        let (_, controller) = make_controller();
+
+        assert!(controller.sync_image_meta_to_slint().is_ok());
+    }
+
+    #[test]
+    fn sync_image_meta_to_slint_with_a_missing_image_file_returns_an_error() {
+        let ui_state = crate::editor::test_support::test_ui_state_with_project(
+            crate::editor::test_support::project_with_one_image(),
+        );
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let controller = ImageMetaController::new(slint::Weak::default(), ui_state, viewport_controller);
+
+        // `project_with_one_image()`'s "img.tif" doesn't exist on disk -
+        // `get_or_create_reader` must surface that as an `Err`, not panic.
+        assert!(controller.sync_image_meta_to_slint().is_err());
+    }
 }

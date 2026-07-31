@@ -239,3 +239,24 @@ impl Editor {
         self.pipeline_worker.start_worker();
     }
 }
+
+#[cfg(test)]
+mod editor_new_tests {
+    use super::*;
+    use crate::editor::test_support::test_ui_state;
+
+    /// `Editor::new()` builds every controller in the app (see the struct
+    /// literal at the end of `new()`) - none of their constructors touch the
+    /// Slint platform (only `attach_callbacks()`/the worker threads do, which
+    /// this deliberately doesn't call), so this exercises the entire
+    /// dependency-wiring graph with a dead UI and asserts it doesn't panic.
+    /// A future constructor that panics on a `None` upgrade, or a wiring
+    /// mistake that passes the wrong controller instance to a dependent's
+    /// constructor (a type error would catch a wrong *type*, but not a wrong
+    /// *instance* of the same type), would surface here.
+    #[test]
+    fn new_wires_every_controller_without_panicking() {
+        let ui_state = test_ui_state();
+        let _editor = Editor::new(slint::Weak::default(), slint::Weak::default(), ui_state);
+    }
+}

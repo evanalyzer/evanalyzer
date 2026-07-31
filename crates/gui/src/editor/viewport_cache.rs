@@ -921,4 +921,47 @@ mod tests {
         assert_eq!(level, 0);
         assert_eq!((w, h), (2000.0, 2000.0));
     }
+
+    // -- calc_draw_pos / find_in_cache --------------------------------------------
+
+    #[test]
+    fn calc_draw_pos_scales_and_offsets_the_tile_position() {
+        let cache = ViewportCache::new(crate::editor::test_support::test_ui_state());
+
+        let (x, y) = cache.calc_draw_pos(10, 20, 2.0, 3.0, 1.0, 1.0);
+
+        assert_eq!((x, y), (21.0, 61.0));
+    }
+
+    #[test]
+    fn find_in_cache_finds_an_exact_match_after_inserting_into_the_high_res_cache() {
+        let cache = ViewportCache::new(crate::editor::test_support::test_ui_state());
+        let k = key(0, 0, 0, 0, 0, 10, 10);
+        cache
+            .cache_high_res
+            .lock()
+            .unwrap()
+            .insert(k.clone(), weighted_tile(10, 10))
+            .unwrap();
+
+        let found = cache.find_in_cache(&k, false);
+
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn find_in_cache_low_resolution_flag_searches_the_low_res_cache_not_the_high_res_one() {
+        let cache = ViewportCache::new(crate::editor::test_support::test_ui_state());
+        let k = key(0, 0, 0, 0, 0, 10, 10);
+        cache
+            .cache_high_res
+            .lock()
+            .unwrap()
+            .insert(k.clone(), weighted_tile(10, 10))
+            .unwrap();
+
+        // Inserted into high-res only - a low-res lookup must not find it.
+        assert!(cache.find_in_cache(&k, true).is_none());
+        assert!(cache.find_in_cache(&k, false).is_some());
+    }
 }

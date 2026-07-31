@@ -208,4 +208,20 @@ mod tests {
         let project = ui_state.get_project();
         assert!(project.get_histograms_from_selected_channel().is_none());
     }
+
+    #[test]
+    fn sync_histogram_settings_to_slint_does_not_panic_with_or_without_settings() {
+        // Without a current image (no histogram settings to report) and with
+        // one (the normal case) - the pre-`invoke_from_event_loop` half of
+        // this method (project/state reads) must not panic either way, even
+        // though the dead `ui` means the actual Slint push never runs.
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state.clone());
+        controller.sync_histogram_settings_to_slint();
+
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let controller = make_controller(ui_state.clone());
+        controller.update_histogram_settings_in_project(0.0, 1.0, 0.0, 1.0);
+        controller.sync_histogram_settings_to_slint();
+    }
 }

@@ -1050,4 +1050,133 @@ mod tests {
             "a clean project must run the action immediately, not stash it"
         );
     }
+
+    // -- open_new_project -------------------------------------------------------
+
+    fn temp_project_file(settings: &evanalyzer_cfg::settings::project_settings::ProjectSettings) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "evanalyzer_project_controller_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.evaproj");
+        std::fs::write(&path, serde_json::to_string_pretty(settings).unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn open_new_project_on_a_nonexistent_file_shows_a_warning_and_leaves_the_project_untouched() {
+        let (ui_state, controller) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.metadata.name = "should not be overwritten".to_string();
+        }
+
+        controller
+            .clone()
+            .open_new_project(&PathBuf::from("/nonexistent/does_not_exist.evaproj"));
+
+        assert_eq!(
+            ui_state.get_project().metadata.name,
+            "should not be overwritten"
+        );
+    }
+
+    #[test]
+    fn open_new_project_loads_the_file_and_clears_the_dirty_flag() {
+        let (ui_state, controller) = make_controller();
+        ui_state.mark_dirty();
+        let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+        settings.metadata.name = "Loaded Project".to_string();
+        let path = temp_project_file(&settings);
+
+        controller.clone().open_new_project(&path);
+
+        let project = ui_state.get_project();
+        assert_eq!(project.metadata.name, "Loaded Project");
+        assert!(!ui_state.is_dirty(), "opening a project must clear the dirty flag");
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn open_new_project_resets_the_current_image_selection() {
+        let (ui_state, controller) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.tmp_settings.current_image = Some(PathBuf::from("/some/old/image.tif"));
+        }
+        let path = temp_project_file(&evanalyzer_cfg::settings::project_settings::ProjectSettings::default());
+
+        controller.clone().open_new_project(&path);
+
+        assert!(ui_state.get_project().tmp_settings.current_image.is_none());
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    // -- import_legacy_project_file ----------------------------------------------
+
+    #[test]
+    fn import_legacy_project_file_on_a_nonexistent_file_shows_a_warning_and_leaves_the_project_untouched() {
+        let (ui_state, controller) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.metadata.name = "should not be overwritten".to_string();
+        }
+
+        controller
+            .clone()
+            .import_legacy_project_file(&PathBuf::from("/nonexistent/does_not_exist.icproj"));
+
+        assert_eq!(
+            ui_state.get_project().metadata.name,
+            "should not be overwritten"
+        );
+        assert!(!ui_state.is_dirty(), "a failed import must not mark the project dirty");
+    }
+
+    // -- save_project_then --------------------------------------------------------
+
+    fn temp_dir_for(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "evanalyzer_project_controller_{name}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn save_project_then_with_an_existing_path_saves_to_disk_and_reports_success() {
+        let (ui_state, controller) = make_controller();
+        let dir = temp_dir_for("save_existing_path");
+        let path = dir.join("test.evaproj");
+        {
+            let mut project = ui_state.get_project_write();
+            project.tmp_settings.current_project = Some(path.clone());
+        }
+        ui_state.mark_dirty();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        controller.save_project_then(move |ok| {
+            tx.send(ok).unwrap();
+        });
+
+        let ok = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("save_project_then must call on_done");
+        assert!(ok);
+        assert!(!ui_state.is_dirty(), "a successful save must clear the dirty flag");
+        assert!(path.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

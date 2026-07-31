@@ -11,7 +11,7 @@
 //! afterwards. The Slint-sync half of the method still runs - it just
 //! becomes a no-op, exactly like it does in production when the window is
 //! gone.
-use crate::UiState;
+use crate::{AppWindow, ResultsWindow, UiState};
 use evanalyzer_app::ProjectOwner;
 use evanalyzer_app::ProjectWithRuntime;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
@@ -97,4 +97,45 @@ pub(crate) fn project_with_one_image() -> ProjectWithRuntime {
     );
     project.set_current_image_path(&rel_path);
     project
+}
+
+/// Ensures the Slint headless testing platform is set up on the *calling
+/// thread* before constructing a real `AppWindow`/`ResultsWindow`.
+///
+/// `i_slint_backend_testing::init_no_event_loop()` panics
+/// ("platform already initialized") if called twice on the same OS thread,
+/// and Rust's default test harness reuses a fixed pool of worker threads
+/// across many `#[test]` functions rather than spawning one thread per test
+/// - so calling the raw function directly from every test that needs a
+/// window would intermittently panic depending on which worker thread
+/// happened to pick up which test. The Slint platform context is itself
+/// thread-local (see `i-slint-core`'s `GLOBAL_CONTEXT`), so gating the call
+/// on a matching thread-local flag here correctly makes it idempotent for
+/// the lifetime of whichever thread runs it.
+fn ensure_slint_test_platform() {
+    thread_local! {
+        static INITIALIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    INITIALIZED.with(|initialized| {
+        if !initialized.get() {
+            i_slint_backend_testing::init_no_event_loop();
+            initialized.set(true);
+        }
+    });
+}
+
+/// Builds real, headless `AppWindow`/`ResultsWindow` instances - unlike
+/// [`test_ui_state`]'s dead `Weak::default()`, these support
+/// `controller.attach_callbacks()` followed by firing the registered
+/// callback through Slint's generated `ui.global::<X>().invoke_y(...)`
+/// methods, and reading back whatever properties the callback set. No real
+/// window system or renderer is involved (see
+/// [`ensure_slint_test_platform`]), so this is safe and fast to call from
+/// any number of unit tests.
+pub(crate) fn test_ui_windows() -> (AppWindow, ResultsWindow) {
+    ensure_slint_test_platform();
+    let ui = AppWindow::new().expect("AppWindow::new must succeed under the headless test platform");
+    let results_ui = ResultsWindow::new()
+        .expect("ResultsWindow::new must succeed under the headless test platform");
+    (ui, results_ui)
 }
