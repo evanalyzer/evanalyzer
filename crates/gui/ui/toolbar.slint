@@ -11,6 +11,7 @@ import {
 } from "editor/viewport_state.slint";
 import { PipelinesPanelState } from "editor/pipelines_panel.slint";
 import { ObjectListState } from "editor/object_list_panel.slint";
+import { AiLearningState } from "dialogs/ai_learning_dialog.slint";
 
 // Define the enum
 
@@ -95,9 +96,9 @@ export component Toolbar inherits Rectangle {
         }
 
         ToolToggleButton {
-            icon: @image-url("icons/regular-black/fediverse-logo.svg");
-            enabled: false;
+            icon: @image-url("icons/regular-black/brain.svg");
             clicked => {
+                AiLearningState.open_requested();
             }
         }
 

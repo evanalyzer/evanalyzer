@@ -96,6 +96,15 @@ import { WarningState } from "state.slint";
 import { UnsavedChangesDialog } from "dialogs/unsaved_changes_dialog.slint";
 import { UnsavedChangesState } from "state.slint";
 import {
+    AiLearningDialog,
+    AiLearningState,
+    AiTrainingSettingsSlint,
+    FeatureRowSlint,
+    ObjectMetricRowSlint,
+    TrainingImageRowSlint,
+    TrainingObjectRowSlint,
+} from "dialogs/ai_learning_dialog.slint";
+import {
     RunAnalysisDialog,
     RunAnalysisState,
 } from "dialogs/run_analysis_dialog.slint";
@@ -154,6 +163,12 @@ export {
     ResultsViewMode,
     ResultsChartKind,
     Appearance,
+    AiLearningState,
+    AiTrainingSettingsSlint,
+    FeatureRowSlint,
+    ObjectMetricRowSlint,
+    TrainingImageRowSlint,
+    TrainingObjectRowSlint,
 }
 export component AppWindow inherits Window {
     // A literal binding on the inherited `title` property isn't settable
@@ -364,6 +379,10 @@ export component AppWindow inherits Window {
             height: 100%;
         }
         if (GlobalAppState.active_dialog == DialogType.run-analysis-confirm): RunAnalysisDialog {
+            width: 100%;
+            height: 100%;
+        }
+        if (GlobalAppState.active_dialog == DialogType.ai-learning): AiLearningDialog {
             width: 100%;
             height: 100%;
         }
