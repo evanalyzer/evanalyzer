@@ -860,3 +860,323 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
         tags: ModelRc::new(VecModel::from(tags)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
+    use evanalyzer_cfg::settings::meta_data::MetaData;
+    use evanalyzer_cfg::settings::plate_settings::PlateSettings;
+    use slint::Model;
+
+    fn template_with_meta(meta: MetaData, pipeline_count: usize) -> ProjectTemplate {
+        ProjectTemplate {
+            meta,
+            classification: ClassificationSettings::default(),
+            plate: PlateSettings::default(),
+            pipelines: (0..pipeline_count)
+                .map(|_| evanalyzer_cfg::settings::templates::PipelineTemplate {
+                    meta: MetaData::default(),
+                    pipeline_steps: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn project_template_to_def_carries_the_given_id_and_pipeline_count() {
+        let template = template_with_meta(MetaData::default(), 3);
+        let def = project_template_to_def(7, &template);
+
+        assert_eq!(def.id, 7);
+        assert_eq!(def.pipeline_count, 3);
+    }
+
+    #[test]
+    fn project_template_to_def_joins_first_and_last_author_name_with_a_space() {
+        let meta = MetaData {
+            author_first_name: "Ada".into(),
+            author_last_name: "Lovelace".into(),
+            ..Default::default()
+        };
+        let def = project_template_to_def(0, &template_with_meta(meta, 0));
+
+        assert_eq!(def.author.as_str(), "Ada Lovelace");
+    }
+
+    #[test]
+    fn project_template_to_def_trims_a_missing_last_name_instead_of_leaving_trailing_whitespace() {
+        let meta = MetaData {
+            author_first_name: "Ada".into(),
+            author_last_name: "".into(),
+            ..Default::default()
+        };
+        let def = project_template_to_def(0, &template_with_meta(meta, 0));
+
+        assert_eq!(def.author.as_str(), "Ada");
+    }
+
+    #[test]
+    fn project_template_to_def_formats_creation_time_as_year_month_day() {
+        let meta = MetaData {
+            creation_time: chrono::DateTime::parse_from_rfc3339("2026-03-05T12:34:56Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            ..Default::default()
+        };
+        let def = project_template_to_def(0, &template_with_meta(meta, 0));
+
+        assert_eq!(def.creation_time.as_str(), "2026-03-05");
+    }
+
+    #[test]
+    fn project_template_to_def_copies_tags_into_the_slint_model() {
+        let meta = MetaData {
+            tags: vec!["cells".to_string(), "uptake".to_string()],
+            ..Default::default()
+        };
+        let def = project_template_to_def(0, &template_with_meta(meta, 0));
+
+        let tags: Vec<String> = def.tags.iter().map(|t| t.to_string()).collect();
+        assert_eq!(tags, vec!["cells".to_string(), "uptake".to_string()]);
+    }
+
+    // -- guard_discard / run_pending_action -----------------------------------
+
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::object_list_controller::ObjectListController;
+    use crate::editor::results_table_controller::ResultsTableController;
+    use crate::editor::test_support::test_ui_state;
+    use crate::editor::viewport_controller::ViewportController;
+
+    fn make_controller() -> (Arc<UiState>, Arc<ProjectController>) {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(HistogramController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller.clone(),
+        ));
+        let project_settings_controller = Arc::new(ProjectSettingsController::new(
+            slint::Weak::default(),
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let classification_controller = Arc::new(ClassificationController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+        ));
+        let template_controller = Arc::new(TemplateController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let pipelines_controller = Arc::new(PipelinesController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+            template_controller.clone(),
+        ));
+        let results_table_controller = Arc::new(ResultsTableController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            image_list_controller.clone(),
+        ));
+        let results_list_controller = Arc::new(ResultsListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            results_table_controller,
+        ));
+        let controller = Arc::new(ProjectController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            image_list_controller,
+            project_settings_controller,
+            classification_controller,
+            pipelines_controller,
+            results_list_controller,
+            template_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    #[test]
+    fn guard_discard_stashes_the_action_when_the_project_is_dirty() {
+        let (ui_state, controller) = make_controller();
+        ui_state.mark_dirty();
+
+        controller.guard_discard(PendingAction::Quit);
+
+        assert!(
+            controller.pending_action.lock().unwrap().is_some(),
+            "a dirty project must stash the action instead of running it"
+        );
+    }
+
+    #[test]
+    fn guard_discard_runs_immediately_without_stashing_when_the_project_is_clean() {
+        let (ui_state, controller) = make_controller();
+        assert!(!ui_state.is_dirty());
+
+        // `Quit` runs synchronously via `invoke_from_event_loop` (a safe
+        // no-op without a live UI) rather than spawning a background thread,
+        // so this is deterministic to assert on.
+        controller.guard_discard(PendingAction::Quit);
+
+        assert!(
+            controller.pending_action.lock().unwrap().is_none(),
+            "a clean project must run the action immediately, not stash it"
+        );
+    }
+
+    // -- open_new_project -------------------------------------------------------
+
+    fn temp_project_file(settings: &evanalyzer_cfg::settings::project_settings::ProjectSettings) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "evanalyzer_project_controller_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.evaproj");
+        std::fs::write(&path, serde_json::to_string_pretty(settings).unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn open_new_project_on_a_nonexistent_file_shows_a_warning_and_leaves_the_project_untouched() {
+        let (ui_state, controller) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.metadata.name = "should not be overwritten".to_string();
+        }
+
+        controller
+            .clone()
+            .open_new_project(&PathBuf::from("/nonexistent/does_not_exist.evaproj"));
+
+        assert_eq!(
+            ui_state.get_project().metadata.name,
+            "should not be overwritten"
+        );
+    }
+
+    #[test]
+    fn open_new_project_loads_the_file_and_clears_the_dirty_flag() {
+        let (ui_state, controller) = make_controller();
+        ui_state.mark_dirty();
+        let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
+        settings.metadata.name = "Loaded Project".to_string();
+        let path = temp_project_file(&settings);
+
+        controller.clone().open_new_project(&path);
+
+        let project = ui_state.get_project();
+        assert_eq!(project.metadata.name, "Loaded Project");
+        assert!(!ui_state.is_dirty(), "opening a project must clear the dirty flag");
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn open_new_project_resets_the_current_image_selection() {
+        let (ui_state, controller) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.tmp_settings.current_image = Some(PathBuf::from("/some/old/image.tif"));
+        }
+        let path = temp_project_file(&evanalyzer_cfg::settings::project_settings::ProjectSettings::default());
+
+        controller.clone().open_new_project(&path);
+
+        assert!(ui_state.get_project().tmp_settings.current_image.is_none());
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    // -- import_legacy_project_file ----------------------------------------------
+
+    #[test]
+    fn import_legacy_project_file_on_a_nonexistent_file_shows_a_warning_and_leaves_the_project_untouched() {
+        let (ui_state, controller) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.metadata.name = "should not be overwritten".to_string();
+        }
+
+        controller
+            .clone()
+            .import_legacy_project_file(&PathBuf::from("/nonexistent/does_not_exist.icproj"));
+
+        assert_eq!(
+            ui_state.get_project().metadata.name,
+            "should not be overwritten"
+        );
+        assert!(!ui_state.is_dirty(), "a failed import must not mark the project dirty");
+    }
+
+    // -- save_project_then --------------------------------------------------------
+
+    fn temp_dir_for(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "evanalyzer_project_controller_{name}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn save_project_then_with_an_existing_path_saves_to_disk_and_reports_success() {
+        let (ui_state, controller) = make_controller();
+        let dir = temp_dir_for("save_existing_path");
+        let path = dir.join("test.evaproj");
+        {
+            let mut project = ui_state.get_project_write();
+            project.tmp_settings.current_project = Some(path.clone());
+        }
+        ui_state.mark_dirty();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        controller.save_project_then(move |ok| {
+            tx.send(ok).unwrap();
+        });
+
+        let ok = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("save_project_then must call on_done");
+        assert!(ok);
+        assert!(!ui_state.is_dirty(), "a successful save must clear the dirty flag");
+        assert!(path.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

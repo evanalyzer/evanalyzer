@@ -301,3 +301,150 @@ fn well_size_to_idx(row: i32, col: i32) -> i32 {
     }
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- index_to_well_size / well_size_to_idx ---------------------------------
+
+    #[test]
+    fn index_to_well_size_covers_every_known_plate_format() {
+        assert_eq!(index_to_well_size(0), (1, 1));
+        assert_eq!(index_to_well_size(1), (2, 3));
+        assert_eq!(index_to_well_size(9), (8, 12));
+        assert_eq!(index_to_well_size(12), (48, 72));
+    }
+
+    #[test]
+    fn index_to_well_size_out_of_range_falls_back_to_1x1() {
+        assert_eq!(index_to_well_size(13), (1, 1));
+        assert_eq!(index_to_well_size(-1), (1, 1));
+    }
+
+    #[test]
+    fn well_size_to_idx_is_the_inverse_of_index_to_well_size_for_every_known_index() {
+        for i in 0..=12 {
+            let (rows, cols) = index_to_well_size(i);
+            assert_eq!(well_size_to_idx(rows, cols), i);
+        }
+    }
+
+    #[test]
+    fn well_size_to_idx_of_an_unknown_dimension_pair_falls_back_to_zero() {
+        assert_eq!(well_size_to_idx(7, 7), 0);
+    }
+
+    // -- index_to_grouping_mode / grouping_mode_to_index -----------------------
+
+    #[test]
+    fn index_to_grouping_mode_no_grouping() {
+        let (mode, regex) = index_to_grouping_mode(0, &"ignored".to_string());
+        assert_eq!(mode, GroupingMode::NoGrouping);
+        assert_eq!(regex, "");
+    }
+
+    #[test]
+    fn index_to_grouping_mode_folder_name() {
+        let (mode, regex) = index_to_grouping_mode(1, &"ignored".to_string());
+        assert_eq!(mode, GroupingMode::FolderName);
+        assert_eq!(regex, "");
+    }
+
+    #[test]
+    fn index_to_grouping_mode_file_name_presets_carry_their_fixed_regex() {
+        let (mode, regex) = index_to_grouping_mode(2, &"ignored".to_string());
+        assert_eq!(mode, GroupingMode::FileName);
+        assert_eq!(regex, "(.*)_([0-9]*)");
+
+        let (mode, regex) = index_to_grouping_mode(3, &"ignored".to_string());
+        assert_eq!(mode, GroupingMode::FileName);
+        assert_eq!(regex, "((.)([0-9]+))_([0-9]+)");
+    }
+
+    #[test]
+    fn index_to_grouping_mode_custom_index_passes_through_the_given_regex() {
+        let (mode, regex) = index_to_grouping_mode(4, &"my-custom-regex".to_string());
+        assert_eq!(mode, GroupingMode::FileName);
+        assert_eq!(regex, "my-custom-regex");
+    }
+
+    #[test]
+    fn grouping_mode_to_index_round_trips_every_index_to_grouping_mode_case() {
+        for (index, regex) in [
+            (0, ""),
+            (1, ""),
+            (2, "(.*)_([0-9]*)"),
+            (3, "((.)([0-9]+))_([0-9]+)"),
+        ] {
+            let (mode, produced_regex) = index_to_grouping_mode(index, &"unused".to_string());
+            assert_eq!(produced_regex, regex);
+            assert_eq!(grouping_mode_to_index(&mode, &produced_regex), index);
+        }
+    }
+
+    #[test]
+    fn grouping_mode_to_index_unrecognized_regex_maps_to_the_custom_index() {
+        let index = grouping_mode_to_index(&GroupingMode::FileName, &"something-else".to_string());
+        assert_eq!(index, 4);
+    }
+
+    // -- update_project_settings_in_project / sync_project_settings_to_slint ------
+
+    use crate::editor::test_support::test_ui_state;
+
+    fn sample_settings() -> ProjectSettingsSlint {
+        ProjectSettingsSlint {
+            author_name: "Ada Lovelace".into(),
+            organization_name: "Analytical Engines".into(),
+            project_name: "Test Project".into(),
+            well_rows: 2,
+            well_columns: 3,
+            well_values: slint::ModelRc::new(slint::VecModel::from(vec![1, 2, 3, 4, 5, 6])),
+            custom_regex: "".into(),
+            grouping_mode: 0,
+            well_size_index: 1,
+            plate_rows: 0,
+            plate_cols: 0,
+        }
+    }
+
+    fn make_controller(ui_state: Arc<UiState>) -> ProjectSettingsController {
+        ProjectSettingsController::new(slint::Weak::default(), slint::Weak::default(), ui_state)
+    }
+
+    #[test]
+    fn update_project_settings_in_project_writes_author_and_plate_fields() {
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state.clone());
+
+        controller.update_project_settings_in_project(&sample_settings());
+
+        let project = ui_state.get_project();
+        assert_eq!(project.metadata.author_first_name, "Ada");
+        assert_eq!(project.metadata.author_last_name, "Lovelace");
+        assert_eq!(project.metadata.author_organization, "Analytical Engines");
+        assert_eq!(project.metadata.name, "Test Project");
+        assert_eq!(project.plate.well_rows, 2);
+        assert_eq!(project.plate.well_cols, 3);
+        // well_size_index=1 -> index_to_well_size(1) == (2, 3), see the test above.
+        assert_eq!((project.plate.plate_rows, project.plate.plate_cols), (2, 3));
+    }
+
+    #[test]
+    fn update_project_settings_in_project_marks_the_project_dirty() {
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state.clone());
+
+        controller.update_project_settings_in_project(&sample_settings());
+
+        assert!(ui_state.is_dirty());
+    }
+
+    #[test]
+    fn sync_project_settings_to_slint_does_not_panic_without_a_live_ui() {
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state);
+        controller.sync_project_settings_to_slint();
+    }
+}

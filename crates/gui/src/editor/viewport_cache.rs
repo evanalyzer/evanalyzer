@@ -846,4 +846,122 @@ mod tests {
         let group = TileGroupKey::from(&k);
         assert!(cache.index.candidates(&group).is_empty());
     }
+
+    // -- to_z_projection ---------------------------------------------------------
+
+    #[test]
+    fn to_z_projection_maps_every_z_stack_handling_variant() {
+        let cases = [
+            (ZStackHandling::SingleStack, ZProjection::None),
+            (ZStackHandling::AllStacks, ZProjection::None),
+            (ZStackHandling::MaxIntensity, ZProjection::MaxIntensity),
+            (ZStackHandling::MinIntensity, ZProjection::MinIntensity),
+            (ZStackHandling::AvgIntensity, ZProjection::AvgIntensity),
+            (ZStackHandling::SumIntensity, ZProjection::SumIntensity),
+            (ZStackHandling::TakeTheMiddle, ZProjection::TakeTheMiddle),
+        ];
+        for (handling, expected) in cases {
+            assert_eq!(to_z_projection(handling.clone()), expected, "for {handling:?}");
+        }
+    }
+
+    // -- look_for_best_matching_resolution_index ---------------------------------
+
+    fn pyramid(width: u64, height: u64) -> PyramidInfo {
+        PyramidInfo {
+            width,
+            height,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn best_matching_resolution_full_res_picks_the_smallest_level_that_still_covers_the_viewport() {
+        let mut resolutions = BTreeMap::new();
+        resolutions.insert(0, pyramid(4000, 3000));
+        resolutions.insert(1, pyramid(2000, 1500));
+        resolutions.insert(2, pyramid(500, 375)); // too small to cover 800x600
+
+        let (level, w, h) = look_for_best_matching_resolution_index(800, 600, &resolutions, false);
+
+        assert_eq!(level, 1);
+        assert_eq!((w, h), (2000.0, 1500.0));
+    }
+
+    #[test]
+    fn best_matching_resolution_falls_back_to_level_0_when_every_level_is_too_small() {
+        let mut resolutions = BTreeMap::new();
+        resolutions.insert(0, pyramid(200, 150));
+
+        let (level, w, h) = look_for_best_matching_resolution_index(800, 600, &resolutions, false);
+
+        assert_eq!(level, 0);
+        assert_eq!((w, h), (200.0, 150.0));
+    }
+
+    #[test]
+    fn best_matching_resolution_of_an_empty_pyramid_returns_a_zero_sized_default() {
+        let resolutions = BTreeMap::new();
+
+        let (level, w, h) = look_for_best_matching_resolution_index(800, 600, &resolutions, false);
+
+        assert_eq!((level, w, h), (0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn best_matching_resolution_low_res_mode_targets_the_fixed_low_res_cap_not_the_viewport_size() {
+        let mut resolutions = BTreeMap::new();
+        // Bigger than the viewport request (10000x10000) but still within
+        // the fixed low-res cap - low_resolution=true must target the cap
+        // (LOW_RES_MAX_WIDTH_AND_HEIGHT), not the (huge) requested size.
+        resolutions.insert(0, pyramid(2000, 2000));
+
+        let (level, w, h) = look_for_best_matching_resolution_index(10_000, 10_000, &resolutions, true);
+
+        assert_eq!(level, 0);
+        assert_eq!((w, h), (2000.0, 2000.0));
+    }
+
+    // -- calc_draw_pos / find_in_cache --------------------------------------------
+
+    #[test]
+    fn calc_draw_pos_scales_and_offsets_the_tile_position() {
+        let cache = ViewportCache::new(crate::editor::test_support::test_ui_state());
+
+        let (x, y) = cache.calc_draw_pos(10, 20, 2.0, 3.0, 1.0, 1.0);
+
+        assert_eq!((x, y), (21.0, 61.0));
+    }
+
+    #[test]
+    fn find_in_cache_finds_an_exact_match_after_inserting_into_the_high_res_cache() {
+        let cache = ViewportCache::new(crate::editor::test_support::test_ui_state());
+        let k = key(0, 0, 0, 0, 0, 10, 10);
+        cache
+            .cache_high_res
+            .lock()
+            .unwrap()
+            .insert(k.clone(), weighted_tile(10, 10))
+            .unwrap();
+
+        let found = cache.find_in_cache(&k, false);
+
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn find_in_cache_low_resolution_flag_searches_the_low_res_cache_not_the_high_res_one() {
+        let cache = ViewportCache::new(crate::editor::test_support::test_ui_state());
+        let k = key(0, 0, 0, 0, 0, 10, 10);
+        cache
+            .cache_high_res
+            .lock()
+            .unwrap()
+            .insert(k.clone(), weighted_tile(10, 10))
+            .unwrap();
+
+        // Inserted into high-res only - a low-res lookup must not find it.
+        assert!(cache.find_in_cache(&k, true).is_none());
+        assert!(cache.find_in_cache(&k, false).is_some());
+    }
 }

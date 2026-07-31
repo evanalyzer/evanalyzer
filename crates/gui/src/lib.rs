@@ -421,6 +421,151 @@ fn load_about_dialog_information(ui: &AppWindow) {
     });
 }
 
+#[cfg(test)]
+mod ui_state_tests {
+    use super::*;
+    use crate::editor::test_support::test_ui_state;
+
+    // -- dirty tracking -----------------------------------------------------
+
+    #[test]
+    fn is_dirty_defaults_to_false() {
+        let ui_state = test_ui_state();
+        assert!(!ui_state.is_dirty());
+    }
+
+    #[test]
+    fn mark_dirty_and_clear_dirty_round_trip() {
+        let ui_state = test_ui_state();
+
+        ui_state.mark_dirty();
+        assert!(ui_state.is_dirty());
+
+        ui_state.clear_dirty();
+        assert!(!ui_state.is_dirty());
+    }
+
+    #[test]
+    fn set_window_title_does_not_panic_with_or_without_a_current_project_path() {
+        let ui_state = test_ui_state();
+        // No `current_project` set (fresh project) - exercises the
+        // `unwrap_or_else("Untitled")` branch.
+        ui_state.set_window_title(true);
+        ui_state.set_window_title(false);
+
+        {
+            let mut project = ui_state.get_project_write();
+            project.tmp_settings.current_project = Some(PathBuf::from("/a/b/My Project.evaproj"));
+        }
+        ui_state.set_window_title(true);
+        ui_state.set_window_title(false);
+    }
+
+    // -- undo / redo ----------------------------------------------------------
+
+    fn set_name(ui_state: &UiState, name: &str) {
+        ui_state.get_project_write().metadata.name = name.to_string();
+    }
+
+    fn name(ui_state: &UiState) -> String {
+        ui_state.get_project().metadata.name.clone()
+    }
+
+    #[test]
+    fn undo_on_an_untouched_project_returns_false() {
+        let ui_state = test_ui_state();
+        assert!(!ui_state.undo());
+    }
+
+    #[test]
+    fn redo_with_nothing_undone_returns_false() {
+        let ui_state = test_ui_state();
+        set_name(&ui_state, "first");
+        assert!(!ui_state.redo());
+    }
+
+    #[test]
+    fn get_project_write_takes_a_checkpoint_that_undo_can_restore() {
+        let ui_state = test_ui_state();
+        assert_eq!(name(&ui_state), ""); // default project state
+
+        set_name(&ui_state, "first edit");
+        assert_eq!(name(&ui_state), "first edit");
+
+        assert!(ui_state.undo(), "a checkpoint of the pre-edit state must exist");
+        assert_eq!(
+            name(&ui_state),
+            "",
+            "undo must restore the state from before the edit"
+        );
+    }
+
+    #[test]
+    fn undo_marks_the_project_dirty_and_clears_the_selected_object() {
+        let ui_state = test_ui_state();
+        set_name(&ui_state, "first edit");
+        ui_state.clear_dirty();
+        ui_state
+            .get_project_write()
+            .set_selected_object(Some(evanalyzer_cfg::core_types::ObjectId(1)));
+
+        ui_state.undo();
+
+        assert!(ui_state.is_dirty());
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+    }
+
+    #[test]
+    fn redo_reapplies_the_state_that_was_just_undone() {
+        let ui_state = test_ui_state();
+        set_name(&ui_state, "first edit");
+        ui_state.undo();
+        assert_eq!(name(&ui_state), "");
+
+        assert!(ui_state.redo());
+        assert_eq!(name(&ui_state), "first edit");
+    }
+
+    #[test]
+    fn redo_stack_is_cleared_by_a_fresh_edit_after_an_undo() {
+        let ui_state = test_ui_state();
+        set_name(&ui_state, "first edit");
+        ui_state.undo();
+        assert!(
+            ui_state.redo_stack.lock().unwrap().len() == 1,
+            "sanity check: redo has something to reapply"
+        );
+
+        // A fresh edit after the undo must invalidate the redone-away future,
+        // per `force_next_checkpoint`'s doc comment.
+        set_name(&ui_state, "diverging edit");
+
+        assert!(
+            ui_state.redo_stack.lock().unwrap().is_empty(),
+            "starting a new edit path after undo must clear the redo stack"
+        );
+        assert!(!ui_state.redo());
+    }
+
+    #[test]
+    fn rapid_successive_writes_are_coalesced_into_one_checkpoint() {
+        let ui_state = test_ui_state();
+        // Both writes land well within `UNDO_COALESCE_WINDOW` of each other
+        // (no sleep needed - two sequential calls take microseconds).
+        set_name(&ui_state, "edit 1");
+        set_name(&ui_state, "edit 2");
+
+        assert_eq!(
+            ui_state.undo_stack.lock().unwrap().len(),
+            1,
+            "two edits within the coalesce window must share one checkpoint"
+        );
+        // The single checkpoint must be the state from *before* either edit.
+        ui_state.undo();
+        assert_eq!(name(&ui_state), "");
+    }
+}
+
 /// Apply the persisted dark/light preference to both windows. Each window
 /// owns its own `Appearance`/`Palette` instance, so this has to be done
 /// for both explicitly - see the comment on `Appearance` in style.slint.

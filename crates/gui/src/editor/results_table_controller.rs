@@ -5032,4 +5032,169 @@ mod tests {
         assert_eq!(group.aggs, vec![AggFunc::Avg, AggFunc::Sum]);
         assert!(group.group_by_class);
     }
+
+    // -- attach_callbacks (live ResultsWindow) -------------------------------------
+
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::images_list_controller::ImagesListController;
+    use crate::editor::object_list_controller::ObjectListController;
+    use crate::editor::test_support::{test_ui_state, test_ui_windows};
+    use crate::editor::viewport_controller::ViewportController;
+
+    fn make_controller(
+        results_ui: slint::Weak<ResultsWindow>,
+    ) -> (Arc<UiState>, Arc<ResultsTableController>) {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(HistogramController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller,
+        ));
+        let controller = Arc::new(ResultsTableController::new(
+            results_ui,
+            ui_state.clone(),
+            image_list_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    #[test]
+    fn attach_callbacks_image_toggle_updates_checked_state_and_active_flag() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        state.set_filter_image_items(to_model(vec![plain_item("a", true), plain_item("b", true)]));
+        state.set_filter_image_popup(to_model(vec![plain_item("a", true), plain_item("b", true)]));
+
+        state.invoke_image_filter_label_toggled("a".into());
+
+        let items = model_to_vec(&state.get_filter_image_items());
+        assert!(!items.iter().find(|i| i.label == "a").unwrap().checked);
+        assert!(items.iter().find(|i| i.label == "b").unwrap().checked);
+        assert!(state.get_filter_image_active(), "one unchecked item makes the filter active");
+    }
+
+    #[test]
+    fn attach_callbacks_image_select_all_and_clear_all_toggle_every_item() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        state.set_filter_image_items(to_model(vec![plain_item("a", false), plain_item("b", false)]));
+        state.set_filter_image_popup(to_model(vec![plain_item("a", false), plain_item("b", false)]));
+
+        state.invoke_image_select_all();
+        let items = model_to_vec(&state.get_filter_image_items());
+        assert!(items.iter().all(|i| i.checked));
+        assert!(!state.get_filter_image_active());
+
+        state.invoke_image_clear_all();
+        let items = model_to_vec(&state.get_filter_image_items());
+        assert!(items.iter().all(|i| !i.checked));
+        assert!(state.get_filter_image_active());
+    }
+
+    #[test]
+    fn attach_callbacks_class_toggle_and_select_all_mirror_the_image_filter_behavior() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        state.set_filter_class_items(to_model(vec![plain_item("A", true), plain_item("B", true)]));
+        state.set_filter_class_popup(to_model(vec![plain_item("A", true), plain_item("B", true)]));
+
+        state.invoke_class_filter_label_toggled("A".into());
+        assert!(!model_to_vec(&state.get_filter_class_items())[0].checked);
+
+        state.invoke_class_select_all();
+        assert!(model_to_vec(&state.get_filter_class_items()).iter().all(|i| i.checked));
+    }
+
+    #[test]
+    fn attach_callbacks_coloc_toggle_and_select_all_mirror_the_image_filter_behavior() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        state.set_filter_coloc_items(to_model(vec![plain_item("x", true)]));
+        state.set_filter_coloc_popup(to_model(vec![plain_item("x", true)]));
+
+        state.invoke_coloc_filter_label_toggled("x".into());
+        assert!(!model_to_vec(&state.get_filter_coloc_items())[0].checked);
+
+        state.invoke_coloc_select_all();
+        assert!(model_to_vec(&state.get_filter_coloc_items())[0].checked);
+
+        state.invoke_coloc_clear_all();
+        assert!(!model_to_vec(&state.get_filter_coloc_items())[0].checked);
+    }
+
+    #[test]
+    fn attach_callbacks_column_select_all_and_clear_all_toggle_visibility() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        state.set_column_items(to_model(vec![plain_item("Area", false), plain_item("Class", false)]));
+        state.set_column_popup(to_model(vec![plain_item("Area", false), plain_item("Class", false)]));
+
+        state.invoke_column_select_all();
+        assert!(model_to_vec(&state.get_column_items()).iter().all(|i| i.checked));
+
+        state.invoke_column_clear_all();
+        assert!(model_to_vec(&state.get_column_items()).iter().all(|i| !i.checked));
+    }
+
+    #[test]
+    fn attach_callbacks_image_search_changed_stores_the_search_text() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        state.set_filter_image_items(to_model(vec![plain_item("apple", false), plain_item("banana", false)]));
+
+        state.invoke_image_filter_search_changed("app".into());
+
+        assert_eq!(*controller.image_search.lock().unwrap(), "app");
+        let popup = model_to_vec(&state.get_filter_image_popup());
+        assert_eq!(popup.len(), 1);
+        assert_eq!(popup[0].label, "apple");
+    }
+
+    #[test]
+    fn attach_callbacks_column_width_changed_stores_the_width() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+
+        results_ui.global::<ResultsState>()
+            .invoke_column_width_changed("area_px".into(), 120.0);
+
+        assert_eq!(
+            controller.column_widths.lock().unwrap().get("area_px").copied(),
+            Some(120.0)
+        );
+    }
 }

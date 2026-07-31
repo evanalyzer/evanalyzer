@@ -205,3 +205,145 @@ fn extract_name_from_path(path: &PathBuf) -> Option<&str> {
         _ => Some(file_stem),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- format_file_size ----------------------------------------------------
+
+    #[test]
+    fn format_file_size_below_1024_bytes_uses_bytes() {
+        assert_eq!(format_file_size(0), "0 B");
+        assert_eq!(format_file_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_file_size_at_1024_bytes_switches_to_kilobytes() {
+        assert_eq!(format_file_size(1_024), "1 KB");
+        assert_eq!(format_file_size(2_048), "2 KB");
+    }
+
+    #[test]
+    fn format_file_size_just_below_1_mb_stays_in_kilobytes() {
+        assert_eq!(format_file_size(1_024 * 1_024 - 1), "1023 KB");
+    }
+
+    #[test]
+    fn format_file_size_at_1_mb_switches_to_megabytes_with_one_decimal() {
+        assert_eq!(format_file_size(1_024 * 1_024), "1.0 MB");
+        assert_eq!(format_file_size(1_024 * 1_024 * 3 / 2), "1.5 MB");
+    }
+
+    // -- format_modified_time -------------------------------------------------
+
+    #[test]
+    fn format_modified_time_just_now_for_a_few_seconds_ago() {
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(10);
+        assert_eq!(format_modified_time(t), "just now");
+    }
+
+    #[test]
+    fn format_modified_time_minutes_ago_boundary() {
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        assert_eq!(format_modified_time(t), "1 min ago");
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(59);
+        assert_eq!(format_modified_time(t), "just now");
+    }
+
+    #[test]
+    fn format_modified_time_hours_ago_boundary() {
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(3_600);
+        assert_eq!(format_modified_time(t), "1 hr ago");
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(3_599);
+        assert_eq!(format_modified_time(t), "59 min ago");
+    }
+
+    #[test]
+    fn format_modified_time_days_ago_boundary() {
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        assert_eq!(format_modified_time(t), "1 days ago");
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(86_399);
+        assert_eq!(format_modified_time(t), "23 hr ago");
+    }
+
+    #[test]
+    fn format_modified_time_in_the_future_is_empty() {
+        // `SystemTime::elapsed()` errors when `time` is later than "now" -
+        // must not panic, just report nothing.
+        let t = std::time::SystemTime::now() + std::time::Duration::from_secs(3_600);
+        assert_eq!(format_modified_time(t), "");
+    }
+
+    // -- extract_name_from_path ------------------------------------------------
+
+    #[test]
+    fn extract_name_from_path_strips_directories_and_extension() {
+        let path = PathBuf::from("/a/b/file.evadb");
+        assert_eq!(extract_name_from_path(&path), Some("file"));
+    }
+
+    #[test]
+    fn extract_name_from_path_returns_the_part_after_the_last_double_underscore() {
+        let path = PathBuf::from("/a/2026-01-01__My Project.evadb");
+        assert_eq!(extract_name_from_path(&path), Some("My Project"));
+    }
+
+    #[test]
+    fn extract_name_from_path_falls_back_to_the_full_stem_when_the_suffix_after_double_underscore_is_empty() {
+        let path = PathBuf::from("/a/2026-01-01__.evadb");
+        assert_eq!(extract_name_from_path(&path), Some("2026-01-01__"));
+    }
+
+    #[test]
+    fn extract_name_from_path_without_a_file_name_returns_none() {
+        // `Path::file_name()` returns `None` for a path ending in `..` (or
+        // the root path) - there's no filename component to extract.
+        let path = PathBuf::from("/a/..");
+        assert_eq!(extract_name_from_path(&path), None);
+    }
+
+    // -- collect_results_files -------------------------------------------------
+
+    fn temp_subdir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "evanalyzer_results_list_controller_test_{name}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn collect_results_files_finds_only_matching_extension_recursively() {
+        let dir = temp_subdir("matching_ext");
+        std::fs::write(dir.join("keep.evadb"), b"x").unwrap();
+        std::fs::write(dir.join("skip.txt"), b"x").unwrap();
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("also_keep.evadb"), b"x").unwrap();
+
+        let mut items = Vec::new();
+        collect_results_files(&dir, &mut items);
+
+        let names: std::collections::HashSet<String> =
+            items.iter().map(|(_, d)| d.name.to_string()).collect();
+        assert_eq!(items.len(), 2);
+        assert!(names.contains("keep"));
+        assert!(names.contains("also_keep"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn collect_results_files_on_a_nonexistent_directory_leaves_items_empty() {
+        let dir = std::env::temp_dir().join("evanalyzer_results_list_controller_does_not_exist");
+        let mut items = Vec::new();
+        collect_results_files(&dir, &mut items);
+        assert!(items.is_empty());
+    }
+}

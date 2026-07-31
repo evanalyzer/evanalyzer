@@ -446,3 +446,215 @@ impl ViewPortObjectController {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
+    use crate::editor::viewport_cache::{ReadContext, ViewportCache};
+    use bitvec::prelude::*;
+    use evanalyzer_cfg::core_types::ObjectId;
+    use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+    use evanalyzer_core::{ImageChannel, ManagedImage};
+    use kornia_apriltag::utils::Point2d;
+    use kornia_image::Image;
+    use kornia_image::allocator::CpuAllocator;
+
+    fn make_controller() -> (Arc<UiState>, Arc<ViewPortObjectController>, Arc<ViewportCache>) {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(HistogramController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller.clone(),
+        ));
+        let controller = Arc::new(ViewPortObjectController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller,
+            viewport_cache.clone(),
+            image_list_controller,
+            object_list_controller,
+        ));
+        (ui_state, controller, viewport_cache)
+    }
+
+    // -- find_object_from_clicked_coordinates --------------------------------------
+
+    fn object_with_bbox(id: u128, bbox: [u32; 4]) -> ObjectMetricSettings {
+        let width = (bbox[2] - bbox[0] + 1) as usize;
+        let height = (bbox[3] - bbox[1] + 1) as usize;
+        ObjectMetricSettings {
+            id: ObjectId(id),
+            bbox,
+            mask_data: bitvec![u64, Lsb0; 1; width * height],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn clicking_inside_an_objects_mask_selects_it() {
+        let (ui_state, controller, _) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.add_object(&object_with_bbox(1, [10, 10, 15, 15]));
+        }
+        // Default viewport state: zoom=1.0, offset=(0,0) - click coordinates
+        // map 1:1 to image coordinates.
+
+        controller.find_object_from_clicked_coordinates(12.0, 12.0);
+
+        assert_eq!(ui_state.get_project().get_selected_object_id(), Some(ObjectId(1)));
+    }
+
+    #[test]
+    fn clicking_outside_every_objects_bbox_clears_the_selection() {
+        let (ui_state, controller, _) = make_controller();
+        {
+            let mut project = ui_state.get_project_write();
+            project.add_object(&object_with_bbox(1, [10, 10, 15, 15]));
+            project.set_selected_object(Some(ObjectId(1)));
+        }
+
+        controller.find_object_from_clicked_coordinates(0.0, 0.0);
+
+        assert_eq!(ui_state.get_project().get_selected_object_id(), None);
+    }
+
+    // -- add_object_from_rect ------------------------------------------------------
+
+    fn points(pairs: &[(f32, f32)]) -> ModelRc<PointSlint> {
+        let items: Vec<PointSlint> = pairs
+            .iter()
+            .map(|&(x, y)| PointSlint { x, y })
+            .collect();
+        ModelRc::new(VecModel::from(items))
+    }
+
+    /// Seeds `viewport_cache.active_high_res_data` with a single flat 20x20
+    /// grayscale channel and a matching `ReadContext` (zoom=1, no tile
+    /// offset), so `add_to_object_list`'s pixel-by-pixel intensity sampling
+    /// has real, in-bounds data to read.
+    fn seed_image_cache(viewport_cache: &ViewportCache) {
+        let size = kornia_image::ImageSize {
+            width: 20,
+            height: 20,
+        };
+        let image = Image::<f32, 1, CpuAllocator>::new(size, vec![0.5f32; 20 * 20], CpuAllocator)
+            .unwrap();
+        let container = ImageContainer::F32Gray(ManagedImage {
+            data: image,
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        });
+        let channel = ImageChannel {
+            image: Arc::new(container),
+            color: [1.0, 1.0, 1.0],
+            is_visible: true,
+            c_stack: 0,
+            name: "ch0".to_string(),
+            is_rgb: false,
+        };
+        *viewport_cache.active_high_res_data.write().unwrap() = Some((
+            Arc::new(vec![channel]),
+            ReadContext {
+                zoom: 1.0,
+                image_w: 20,
+                image_h: 20,
+                full_image_w: 20,
+                full_image_h: 20,
+                bit_depth: 8,
+                ..Default::default()
+            },
+        ));
+    }
+
+    #[test]
+    fn add_object_from_rect_creates_an_object_spanning_the_two_corner_points() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        controller.add_object_from_rect(&points(&[(2.0, 2.0), (5.0, 5.0)]));
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().expect("current series must have objects");
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].bbox, [2, 2, 5, 5]);
+        // A rectangle mask fills every pixel in its bbox.
+        assert_eq!(objects[0].area, 4 * 4);
+    }
+
+    #[test]
+    fn add_object_from_rect_without_cached_image_data_adds_nothing() {
+        // No `seed_image_cache` call - `viewport_cache` is empty, matching
+        // the state right after opening the app before any tile has loaded.
+        let (ui_state, controller, _) = make_controller();
+
+        controller.add_object_from_rect(&points(&[(2.0, 2.0), (5.0, 5.0)]));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
+    }
+
+    // -- add_oval_from_rect / add_polygon_from_rect (no cached data) --------------
+
+    #[test]
+    fn add_oval_from_rect_without_cached_image_data_adds_nothing() {
+        let (ui_state, controller, _) = make_controller();
+
+        controller.add_oval_from_rect(&points(&[(2.0, 2.0), (8.0, 8.0)]));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
+    }
+
+    #[test]
+    fn add_polygon_from_rect_with_fewer_than_three_points_is_a_no_op() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        controller.add_polygon_from_rect(&points(&[(2.0, 2.0), (5.0, 5.0)]), 2);
+
+        let project = ui_state.get_project();
+        assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
+    }
+
+    #[test]
+    fn add_polygon_from_rect_creates_an_object_covering_the_triangle_bbox() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        controller.add_polygon_from_rect(
+            &points(&[(2.0, 2.0), (10.0, 2.0), (6.0, 10.0)]),
+            3,
+        );
+
+        let project = ui_state.get_project();
+        let objects = project.get_objects().expect("current series must have objects");
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].bbox, [2, 2, 10, 10]);
+        assert!(objects[0].area > 0, "the triangle interior must be filled");
+    }
+}

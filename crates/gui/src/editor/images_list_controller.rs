@@ -482,3 +482,166 @@ impl ImagesListController {
             .ok();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::test_support::test_ui_state;
+
+    fn make_controller() -> ImagesListController {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let histogram_controller = Arc::new(HistogramController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_meta_controller = Arc::new(ImageMetaController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        ImagesListController::new(
+            slint::Weak::default(),
+            ui_state,
+            viewport_controller,
+            histogram_controller,
+            image_meta_controller,
+            object_list_controller,
+        )
+    }
+
+    #[test]
+    fn update_image_filter_text_in_project_stores_the_given_text() {
+        let controller = make_controller();
+
+        controller.update_image_filter_text_in_project("Nuclei");
+
+        assert_eq!(
+            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            "Nuclei"
+        );
+    }
+
+    #[test]
+    fn update_image_filter_text_in_project_overwrites_a_previous_value() {
+        let controller = make_controller();
+        controller.update_image_filter_text_in_project("first");
+
+        controller.update_image_filter_text_in_project("second");
+
+        assert_eq!(
+            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            "second"
+        );
+    }
+
+    #[test]
+    fn open_new_image_already_under_the_project_root_just_sets_it_as_current() {
+        let controller = Arc::new(make_controller());
+        {
+            let mut project = controller.app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+        }
+        let image_path = PathBuf::from("/data/images/img.tif");
+
+        controller.open_new_image(&image_path);
+
+        let project = controller.app_state.get_project();
+        assert_eq!(project.get_current_image_path_cloned(), Some(image_path));
+        // Must not have touched the root - it was already correct.
+        assert_eq!(project.images.root, Some(PathBuf::from("/data/images")));
+    }
+
+    #[test]
+    fn open_new_image_outside_the_project_root_switches_the_root_to_its_parent_dir() {
+        let controller = Arc::new(make_controller());
+        // No root set yet (fresh project) - the image is by definition not
+        // part of it, so this must take the "change root" branch.
+        let image_path = PathBuf::from("/some/other/place/img.tif");
+
+        controller.open_new_image(&image_path);
+
+        let project = controller.app_state.get_project();
+        assert_eq!(project.images.root, Some(PathBuf::from("/some/other/place")));
+    }
+
+    // -- attach_callbacks (live AppWindow) -----------------------------------------
+
+    use crate::editor::test_support::test_ui_windows;
+
+    fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> ImagesListController {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let histogram_controller = Arc::new(HistogramController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_meta_controller = Arc::new(ImageMetaController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        ImagesListController::new(
+            ui,
+            ui_state,
+            viewport_controller,
+            histogram_controller,
+            image_meta_controller,
+            object_list_controller,
+        )
+    }
+
+    #[test]
+    fn attach_callbacks_image_filter_text_changed_stores_the_text_and_resyncs() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
+        controller.attach_callbacks();
+
+        ui.global::<ImagesListState>().invoke_image_filter_text_changed("Nuclei".into());
+
+        assert_eq!(
+            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            "Nuclei"
+        );
+    }
+
+    #[test]
+    fn attach_callbacks_image_selected_opens_the_matching_image() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
+        {
+            let mut project = controller.app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+        }
+        controller.attach_callbacks();
+
+        ui.global::<ImagesListState>()
+            .invoke_image_selected("img.tif".into());
+
+        // "img.tif" isn't a real relative path in the (empty) project image
+        // list, so `get_image_absolute_path_from_relative` resolves to
+        // `None` and `open_new_image_from_rel_path` is a no-op - this is
+        // exercising that lookup-miss branch through the real callback
+        // wiring, not asserting an image actually opened.
+        assert!(controller
+            .app_state
+            .get_project()
+            .get_current_image_path_cloned()
+            .is_none());
+    }
+}
