@@ -157,8 +157,9 @@ impl TemplateController {
         };
 
         let dialog = match target {
-            TemplateTarget::Pipeline(_) => rfd::FileDialog::new()
-                .add_filter("Pipeline template", &[PIPELINE_EXTENSIONS]),
+            TemplateTarget::Pipeline(_) => {
+                rfd::FileDialog::new().add_filter("Pipeline template", &[PIPELINE_EXTENSIONS])
+            }
             TemplateTarget::Project => rfd::FileDialog::new()
                 .add_filter("Project template", &[PROJECT_FILE_TEMPLATE_EXTENSIONS]),
         };
@@ -232,7 +233,10 @@ mod tests {
 
     #[test]
     fn split_author_name_single_word_has_no_last_name() {
-        assert_eq!(split_author_name("Ada"), ("Ada".to_string(), "".to_string()));
+        assert_eq!(
+            split_author_name("Ada"),
+            ("Ada".to_string(), "".to_string())
+        );
     }
 
     #[test]
@@ -254,7 +258,11 @@ mod tests {
     fn parse_tags_splits_on_commas_and_trims_whitespace() {
         assert_eq!(
             parse_tags("cells, uptake , microscopy"),
-            vec!["cells".to_string(), "uptake".to_string(), "microscopy".to_string()]
+            vec![
+                "cells".to_string(),
+                "uptake".to_string(),
+                "microscopy".to_string()
+            ]
         );
     }
 

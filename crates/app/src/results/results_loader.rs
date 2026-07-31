@@ -2277,7 +2277,12 @@ mod tests {
         assert_eq!(rust_rows.len(), sql_rows.len(), "same number of groups");
         for (rust_row, sql_row) in rust_rows.iter().zip(sql_rows.iter()) {
             assert_eq!(rust_row.values.len(), sql_row.values.len());
-            for (i, (r, s)) in rust_row.values.iter().zip(sql_row.values.iter()).enumerate() {
+            for (i, (r, s)) in rust_row
+                .values
+                .iter()
+                .zip(sql_row.values.iter())
+                .enumerate()
+            {
                 match (r.parse::<f64>(), s.parse::<f64>()) {
                     (Ok(rf), Ok(sf)) => assert!(
                         (rf - sf).abs() < 1e-6,
@@ -2285,7 +2290,8 @@ mod tests {
                         rust_row.values.first()
                     ),
                     _ => assert_eq!(
-                        r, s,
+                        r,
+                        s,
                         "column {i} of group {:?} (non-numeric)",
                         rust_row.values.first()
                     ),

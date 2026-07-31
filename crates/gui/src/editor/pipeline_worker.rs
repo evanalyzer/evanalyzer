@@ -1,9 +1,10 @@
 use crate::{
     DialogType, GlobalAppState, PipelineRunningState, PipelinesPanelState, UiState,
     editor::{
-        classification_controller::ClassificationController, pipeline_task::PipelineTask,
+        classification_controller::ClassificationController,
+        object_list_controller::ObjectListController, pipeline_task::PipelineTask,
         pipelines_controller::PipelinesController, results_list_controller::ResultsListController,
-        object_list_controller::ObjectListController, viewport_controller::ViewportController,
+        viewport_controller::ViewportController,
     },
 };
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -207,7 +208,9 @@ impl PipelineWorker {
                             self_handle
                                 .classification_controller
                                 .sync_classification_to_slint();
-                            self_handle.viewport_controller.trigger_image_redraw_objects();
+                            self_handle
+                                .viewport_controller
+                                .trigger_image_redraw_objects();
                         }
                         let ui_handle = self.app_state.ui_handle.clone();
                         let _ = slint::invoke_from_event_loop(move || {
@@ -323,7 +326,9 @@ impl PipelineWorker {
                         self_handle
                             .classification_controller
                             .sync_classification_to_slint();
-                        self_handle.viewport_controller.trigger_image_redraw_objects();
+                        self_handle
+                            .viewport_controller
+                            .trigger_image_redraw_objects();
                     } else {
                         self_handle
                             .results_list_controller

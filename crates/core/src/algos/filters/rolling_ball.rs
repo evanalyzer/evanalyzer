@@ -741,7 +741,14 @@ impl RollingBall {
                 _ => unreachable!("invalid filter1d direction"),
             };
             Self::line_slide_parabola(
-                data, start_pixel, point_inc, length, coeff2, cache, next_point, None,
+                data,
+                start_pixel,
+                point_inc,
+                length,
+                coeff2,
+                cache,
+                next_point,
+                None,
             );
         }
     }
@@ -811,10 +818,8 @@ impl RollingBall {
                     // Time-consuming recalculation of the search limit: wait
                     // a bit after the slope was last updated.
                     let b = (0.5f32 * min_slope / coeff2) as f64;
-                    let max_search = i1 as f64
-                        + b
-                        + (b * b + ((v1 - min_value) / coeff2) as f64).sqrt()
-                        + 1.0; // numeric overflow may make this negative
+                    let max_search =
+                        i1 as f64 + b + (b * b + ((v1 - min_value) / coeff2) as f64).sqrt() + 1.0; // numeric overflow may make this negative
                     let max_search = max_search as i32;
                     if max_search < search_to && max_search > 0 {
                         search_to = max_search;
@@ -920,8 +925,8 @@ mod tests {
     /// that in-place write must not be observed by the other holder. This is
     /// exactly the copy-on-write boundary `Arc::make_mut` provides.
     #[test]
-    fn rolling_ball_does_not_mutate_a_shared_original_image() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn rolling_ball_does_not_mutate_a_shared_original_image()
+    -> Result<(), Box<dyn std::error::Error>> {
         let width = 40;
         let height = 40;
         let mut data = vec![0.0f32; width * height];
@@ -1188,8 +1193,8 @@ mod tests {
     /// `enlargeImage` - see the comment above the "Enlarge and Subtract"
     /// step in `execute` - and is a clean ground truth for `rollBall` itself.
     #[test]
-    fn test_rolling_ball_matches_cpp_reference_border_touching_peak() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn test_rolling_ball_matches_cpp_reference_border_touching_peak()
+    -> Result<(), Box<dyn std::error::Error>> {
         let width = 20;
         let height = 15;
         let mut data = vec![100.0f32; width * height];

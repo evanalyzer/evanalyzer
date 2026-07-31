@@ -65,9 +65,15 @@ fn export_scatter(args: ScatterArgs) -> Result<(), InternalErrors> {
     let filter = build_database_filter(&args.filter, true, 0, 0);
     let objects = loader.get_objects(filter)?;
 
-    let data =
-        compute_scatter(&objects, &args.x, &args.y, to_color_by(args.color_by), &specs, args.max_points)
-        .ok_or_else(|| column_not_found_error(&format!("{} / {}", args.x, args.y), &args.db))?;
+    let data = compute_scatter(
+        &objects,
+        &args.x,
+        &args.y,
+        to_color_by(args.color_by),
+        &specs,
+        args.max_points,
+    )
+    .ok_or_else(|| column_not_found_error(&format!("{} / {}", args.x, args.y), &args.db))?;
     save_scatter_png(&data, args.width, args.height, &args.out)?;
     println!("Saved scatter plot to {}", args.out.display());
     Ok(())
@@ -355,7 +361,11 @@ mod tests {
 
         let bytes = std::fs::read(&out).expect("read xlsx back");
         // XLSX files are zip archives - "PK\x03\x04" is the local-file-header magic.
-        assert!(bytes.len() > 4, "xlsx file is too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 4,
+            "xlsx file is too small: {} bytes",
+            bytes.len()
+        );
         assert_eq!(&bytes[..4], b"PK\x03\x04", "not a zip/xlsx file");
     }
 

@@ -1,8 +1,8 @@
 use crate::editor::project_settings_controller::{ProjectSettingsController, index_to_well_size};
 use crate::editor::results_table_controller::{ResultsTableController, model_to_vec};
 use crate::{
-    FilterItem, ResultsGroupBy, ResultsMatrixCell, ResultsMatrixKind, ResultsState, ResultsViewMode,
-    ResultsWindow, UiState,
+    FilterItem, ResultsGroupBy, ResultsMatrixCell, ResultsMatrixKind, ResultsState,
+    ResultsViewMode, ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
     AggFunc, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, HeatmapColorScheme, ResultsLoader,
@@ -154,7 +154,11 @@ impl ResultsMatrixController {
 
         *this.results_table_controller.image_filter.lock().unwrap() = Some(vec![image_name]);
         *this.results_table_controller.group_config.lock().unwrap() = GroupConfig::default();
-        *this.results_table_controller.coloc_detail_mode.lock().unwrap() = false;
+        *this
+            .results_table_controller
+            .coloc_detail_mode
+            .lock()
+            .unwrap() = false;
         *this.results_table_controller.current_page.lock().unwrap() = 0;
 
         ResultsTableController::spawn_reload(Arc::clone(&this.results_table_controller));
@@ -174,7 +178,12 @@ impl ResultsMatrixController {
         let window = this.results_ui.upgrade()?;
         let state = window.global::<ResultsState>();
 
-        let specs = this.results_table_controller.column_specs.lock().unwrap().clone();
+        let specs = this
+            .results_table_controller
+            .column_specs
+            .lock()
+            .unwrap()
+            .clone();
         let metric_options = plottable_labels(&specs);
 
         let mut metric_label = state.get_matrix_metric().to_string();
@@ -200,9 +209,7 @@ impl ResultsMatrixController {
         // "" (the "All classes" sentinel) means no class filter.
         let class_filter = state.get_matrix_class_filter().to_string();
 
-        state.set_matrix_metric_options(slint::ModelRc::new(slint::VecModel::from(
-            metric_options,
-        )));
+        state.set_matrix_metric_options(slint::ModelRc::new(slint::VecModel::from(metric_options)));
         state.set_matrix_metric(metric_label.clone().into());
         state.set_matrix_agg(agg_label.clone().into());
 
@@ -232,13 +239,16 @@ impl ResultsMatrixController {
             let ui = ui.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(window) = ui.upgrade() else { return };
-                window.global::<ResultsState>().set_matrix_status(status.into());
+                window
+                    .global::<ResultsState>()
+                    .set_matrix_status(status.into());
             });
         };
 
         // Keep the settings strip's plate/well controls fresh with whatever
         // is actually persisted, regardless of which window last edited them.
-        this.project_settings_controller.sync_project_settings_to_slint();
+        this.project_settings_controller
+            .sync_project_settings_to_slint();
 
         let MatrixComputeConfig {
             specs,
@@ -279,7 +289,12 @@ impl ResultsMatrixController {
         // doc comment). Class filtering uses Matrix's own decoupled
         // `matrix_class_filter` instead of the Table's `class_filter`.
         let class_filter = (!class_filter.is_empty()).then(|| vec![class_filter]);
-        let coloc_filter = this.results_table_controller.coloc_filter.lock().unwrap().clone();
+        let coloc_filter = this
+            .results_table_controller
+            .coloc_filter
+            .lock()
+            .unwrap()
+            .clone();
         let t_stack_filter = *this.results_table_controller.t_stack_filter.lock().unwrap();
         let z_stack_filter = *this.results_table_controller.z_stack_filter.lock().unwrap();
 
@@ -379,7 +394,8 @@ impl ResultsMatrixController {
                     project.plate.plate_cols = new_cols as i32;
                 }
                 this.app_state.mark_dirty();
-                this.project_settings_controller.sync_project_settings_to_slint();
+                this.project_settings_controller
+                    .sync_project_settings_to_slint();
 
                 result = compute_plate_matrix(
                     &objects,
@@ -394,7 +410,11 @@ impl ResultsMatrixController {
             }
 
             let status = if values.is_empty() {
-                match (result.required_span, result.group_count, &result.sample_label) {
+                match (
+                    result.required_span,
+                    result.group_count,
+                    &result.sample_label,
+                ) {
                     (Some((r, c)), ..) => format!(
                         "No wells fit — this data needs at least a {r} x {c} plate. Increase Plate size."
                     ),
@@ -485,7 +505,10 @@ impl ResultsMatrixController {
         let names = match loader.get_image_names() {
             Ok(names) => names,
             Err(e) => {
-                warn!("matrix regex autodetect failed to load image names: {:?}", e);
+                warn!(
+                    "matrix regex autodetect failed to load image names: {:?}",
+                    e
+                );
                 report_hint("Failed to load image names.".to_string());
                 return;
             }
@@ -493,7 +516,10 @@ impl ResultsMatrixController {
 
         match suggest_regex(&names) {
             Some(suggestion) => {
-                let hint = format!("Matched {}/{} filenames", suggestion.matched, suggestion.total);
+                let hint = format!(
+                    "Matched {}/{} filenames",
+                    suggestion.matched, suggestion.total
+                );
                 let pattern = suggestion.pattern;
 
                 {
@@ -502,7 +528,8 @@ impl ResultsMatrixController {
                     project.plate.grouping_regex = pattern.clone();
                 }
                 this.app_state.mark_dirty();
-                this.project_settings_controller.sync_project_settings_to_slint();
+                this.project_settings_controller
+                    .sync_project_settings_to_slint();
 
                 let ui = this.results_ui.clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -639,7 +666,10 @@ mod tests {
             column("image", "Image", true), // non-numeric, excluded upstream
         ];
 
-        let labels: Vec<String> = plottable_labels(&cols).iter().map(|s| s.to_string()).collect();
+        let labels: Vec<String> = plottable_labels(&cols)
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         assert_eq!(labels, vec!["Area (px)".to_string()]);
     }
@@ -648,7 +678,10 @@ mod tests {
 
     #[test]
     fn color_scheme_labels_lists_every_scheme_in_declaration_order() {
-        let labels: Vec<String> = color_scheme_labels().iter().map(|s| s.to_string()).collect();
+        let labels: Vec<String> = color_scheme_labels()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         assert_eq!(
             labels,
@@ -726,14 +759,14 @@ mod tests {
         // though the exact-string test above only pins one example.
         const HALF_STEP: f64 = 0.05 + 1e-9; // rounding half-step + float slop
         let sources = [
-            0.0,      // coloc partner count precision (0 decimals)
-            7.0,      // "
-            42.567,   // Area (px²) / channel bit precision (1 decimal)
-            -3.14,    // negative values must round the same way
-            123.45,   // Area (nm²) precision (2 decimals)
-            0.853,    // Circularity precision (3 decimals)
-            0.85,     // exactly at a rounding half-step (0.8 vs 0.9) - the
-                      // tightest case HALF_STEP has to cover
+            0.0,    // coloc partner count precision (0 decimals)
+            7.0,    // "
+            42.567, // Area (px²) / channel bit precision (1 decimal)
+            -3.14,  // negative values must round the same way
+            123.45, // Area (nm²) precision (2 decimals)
+            0.853,  // Circularity precision (3 decimals)
+            0.85,   // exactly at a rounding half-step (0.8 vs 0.9) - the
+                    // tightest case HALF_STEP has to cover
         ];
 
         for &source in &sources {
@@ -744,10 +777,9 @@ mod tests {
                 source.max(1.0),
                 HeatmapColorScheme::Viridis,
             );
-            let displayed: f64 = cell
-                .value
-                .parse()
-                .unwrap_or_else(|e| panic!("cell value {:?} must parse as a number: {e}", cell.value));
+            let displayed: f64 = cell.value.parse().unwrap_or_else(|e| {
+                panic!("cell value {:?} must parse as a number: {e}", cell.value)
+            });
 
             assert!(
                 (displayed - source).abs() <= HALF_STEP,
@@ -759,7 +791,13 @@ mod tests {
 
     #[test]
     fn matrix_cell_without_a_value_is_blank_and_unmarked() {
-        let cell = matrix_cell("B2".to_string(), None, 0.0, 100.0, HeatmapColorScheme::Viridis);
+        let cell = matrix_cell(
+            "B2".to_string(),
+            None,
+            0.0,
+            100.0,
+            HeatmapColorScheme::Viridis,
+        );
 
         assert_eq!(cell.label.as_str(), "");
         assert_eq!(cell.value.as_str(), "");
@@ -769,13 +807,43 @@ mod tests {
 
     #[test]
     fn matrix_cell_clamps_values_outside_the_range_to_the_scale_endpoints() {
-        let below = matrix_cell("x".to_string(), Some(-50.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
-        let at_min = matrix_cell("x".to_string(), Some(0.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
-        assert_eq!(below.color, at_min.color, "values below range_lo must clamp to t=0.0");
+        let below = matrix_cell(
+            "x".to_string(),
+            Some(-50.0),
+            0.0,
+            100.0,
+            HeatmapColorScheme::Grayscale,
+        );
+        let at_min = matrix_cell(
+            "x".to_string(),
+            Some(0.0),
+            0.0,
+            100.0,
+            HeatmapColorScheme::Grayscale,
+        );
+        assert_eq!(
+            below.color, at_min.color,
+            "values below range_lo must clamp to t=0.0"
+        );
 
-        let above = matrix_cell("x".to_string(), Some(500.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
-        let at_max = matrix_cell("x".to_string(), Some(100.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
-        assert_eq!(above.color, at_max.color, "values above range_hi must clamp to t=1.0");
+        let above = matrix_cell(
+            "x".to_string(),
+            Some(500.0),
+            0.0,
+            100.0,
+            HeatmapColorScheme::Grayscale,
+        );
+        let at_max = matrix_cell(
+            "x".to_string(),
+            Some(100.0),
+            0.0,
+            100.0,
+            HeatmapColorScheme::Grayscale,
+        );
+        assert_eq!(
+            above.color, at_max.color,
+            "values above range_hi must clamp to t=1.0"
+        );
     }
 
     // -- attach_callbacks (live ResultsWindow) -------------------------------------
@@ -789,29 +857,36 @@ mod tests {
         results_ui: slint::Weak<ResultsWindow>,
     ) -> (Arc<UiState>, Arc<ResultsMatrixController>) {
         let ui_state = test_ui_state();
-        let viewport_controller = Arc::new(crate::editor::viewport_controller::ViewportController::new(
-            slint::Weak::default(),
-            ui_state.clone(),
-        ));
-        let object_list_controller = Arc::new(crate::editor::object_list_controller::ObjectListController::new(
-            slint::Weak::default(),
-            ui_state.clone(),
-            viewport_controller.clone(),
-        ));
+        let viewport_controller =
+            Arc::new(crate::editor::viewport_controller::ViewportController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+            ));
+        let object_list_controller = Arc::new(
+            crate::editor::object_list_controller::ObjectListController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            ),
+        );
         let image_list_controller = Arc::new(ImagesListController::new(
             slint::Weak::default(),
             ui_state.clone(),
             viewport_controller.clone(),
-            Arc::new(crate::editor::histogram_controller::HistogramController::new(
-                slint::Weak::default(),
-                ui_state.clone(),
-                viewport_controller.clone(),
-            )),
-            Arc::new(crate::editor::image_meta_controller::ImageMetaController::new(
-                slint::Weak::default(),
-                ui_state.clone(),
-                viewport_controller.clone(),
-            )),
+            Arc::new(
+                crate::editor::histogram_controller::HistogramController::new(
+                    slint::Weak::default(),
+                    ui_state.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
+            Arc::new(
+                crate::editor::image_meta_controller::ImageMetaController::new(
+                    slint::Weak::default(),
+                    ui_state.clone(),
+                    viewport_controller.clone(),
+                ),
+            ),
             object_list_controller,
         ));
         let results_table_controller = Arc::new(ResultsTableController::new(
@@ -841,8 +916,11 @@ mod tests {
         controller.attach_callbacks();
 
         let state = results_ui.global::<ResultsState>();
-        let agg_options: Vec<String> =
-            state.get_matrix_agg_options().iter().map(|s| s.to_string()).collect();
+        let agg_options: Vec<String> = state
+            .get_matrix_agg_options()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(
             agg_options,
             vec!["Min", "Max", "Average", "Median", "Std. dev.", "Sum"]
@@ -853,6 +931,9 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        assert_eq!(color_options, vec!["Viridis", "Magma", "Plasma", "Grayscale"]);
+        assert_eq!(
+            color_options,
+            vec!["Viridis", "Magma", "Plasma", "Grayscale"]
+        );
     }
 }

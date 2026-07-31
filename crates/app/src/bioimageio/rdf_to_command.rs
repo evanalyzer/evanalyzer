@@ -87,7 +87,10 @@ pub fn configure_from_file(path: &Path) -> Result<ConfiguredModel, ConfigureErro
 /// Configures a command from an already-parsed RDF. `base_dir` is the directory
 /// relative weight `source` paths are resolved against (typically the folder
 /// containing `rdf.yaml`).
-pub fn configure(rdf: &RdfModel, base_dir: Option<&Path>) -> Result<ConfiguredModel, ConfigureError> {
+pub fn configure(
+    rdf: &RdfModel,
+    base_dir: Option<&Path>,
+) -> Result<ConfiguredModel, ConfigureError> {
     let source = rdf
         .torchscript_source()
         .ok_or_else(|| ConfigureError::NoTorchscriptWeights {
@@ -278,9 +281,9 @@ weights:
 "#;
         let rdf = parse_str(yaml).unwrap();
         match configure(&rdf, None) {
-            Err(ConfigureError::NoTorchscriptWeights {
-                has_state_dict, ..
-            }) => assert!(has_state_dict),
+            Err(ConfigureError::NoTorchscriptWeights { has_state_dict, .. }) => {
+                assert!(has_state_dict)
+            }
             other => panic!("expected NoTorchscriptWeights, got {other:?}"),
         }
     }
@@ -381,7 +384,10 @@ outputs:
         let cfg = configure(&rdf, None).unwrap();
         match cfg.command {
             PipelineCommand::UNet(s) => {
-                assert_eq!(s.foreground_channel, 2, "foreground must default to the last of 3 channels");
+                assert_eq!(
+                    s.foreground_channel, 2,
+                    "foreground must default to the last of 3 channels"
+                );
                 assert!(matches!(
                     s.output_mode,
                     AiSegmentationUnetUNetOutputModeSettings::SoftmaxClasses
@@ -405,10 +411,16 @@ weights:
         let cfg = configure(&rdf, None).unwrap();
         let default = UNetSettings::default();
         match cfg.command {
-            PipelineCommand::UNet(s) => assert_eq!(s.foreground_channel, default.foreground_channel),
+            PipelineCommand::UNet(s) => {
+                assert_eq!(s.foreground_channel, default.foreground_channel)
+            }
             other => panic!("expected UNet, got {other:?}"),
         }
-        assert!(cfg.notes.iter().any(|n| n.contains("Could not determine the output layout")));
+        assert!(
+            cfg.notes
+                .iter()
+                .any(|n| n.contains("Could not determine the output layout"))
+        );
     }
 
     #[test]
@@ -446,7 +458,9 @@ inputs:
         let rdf = parse_str(yaml).unwrap();
         let cfg = configure(&rdf, None).unwrap();
         match cfg.command {
-            PipelineCommand::Cellpose(s) => assert_eq!(s.input_channels, 8, "must clamp to the documented max of 8"),
+            PipelineCommand::Cellpose(s) => {
+                assert_eq!(s.input_channels, 8, "must clamp to the documented max of 8")
+            }
             other => panic!("expected Cellpose, got {other:?}"),
         }
     }
@@ -476,7 +490,11 @@ inputs:
     #[test]
     fn resolve_source_leaves_remote_urls_verbatim_and_notes_them() {
         let mut notes = Vec::new();
-        let path = resolve_source("https://example.com/model.pt", Some(Path::new("/models")), &mut notes);
+        let path = resolve_source(
+            "https://example.com/model.pt",
+            Some(Path::new("/models")),
+            &mut notes,
+        );
         assert_eq!(path, PathBuf::from("https://example.com/model.pt"));
         assert!(notes.iter().any(|n| n.contains("remote")));
     }
@@ -543,13 +561,19 @@ inputs:
             name: "m".into(),
             has_state_dict: false,
         };
-        assert!(!without_state_dict.to_string().contains("convert_cellpose.py"));
+        assert!(
+            !without_state_dict
+                .to_string()
+                .contains("convert_cellpose.py")
+        );
         assert!(without_state_dict.to_string().contains("'m'"));
     }
 
     #[test]
     fn configure_error_display_forwards_the_inner_rdf_error() {
-        let err = ConfigureError::Rdf(RdfError::NotAModel { kind: "dataset".into() });
+        let err = ConfigureError::Rdf(RdfError::NotAModel {
+            kind: "dataset".into(),
+        });
         assert_eq!(err.to_string(), "RDF describes a 'dataset', not a model");
     }
 
@@ -557,10 +581,15 @@ inputs:
     fn configure_error_source_is_only_set_for_the_rdf_variant() {
         use std::error::Error;
 
-        let rdf_err = ConfigureError::Rdf(RdfError::NotAModel { kind: "dataset".into() });
+        let rdf_err = ConfigureError::Rdf(RdfError::NotAModel {
+            kind: "dataset".into(),
+        });
         assert!(rdf_err.source().is_some());
 
-        let weights_err = ConfigureError::NoTorchscriptWeights { name: "m".into(), has_state_dict: false };
+        let weights_err = ConfigureError::NoTorchscriptWeights {
+            name: "m".into(),
+            has_state_dict: false,
+        };
         assert!(weights_err.source().is_none());
     }
 }

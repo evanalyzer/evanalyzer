@@ -4,7 +4,7 @@ mod modules;
 mod types;
 mod utils;
 
-pub use legacy_import::{import_legacy_project, LegacyImportError, LegacyImportOutcome};
+pub use legacy_import::{LegacyImportError, LegacyImportOutcome, import_legacy_project};
 
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
@@ -89,13 +89,19 @@ mod tests {
             match ext {
                 "evapt" => {
                     serde_json::from_str::<ProjectTemplate>(&json).unwrap_or_else(|e| {
-                        panic!("{} failed to deserialize as ProjectTemplate: {e}", path.display())
+                        panic!(
+                            "{} failed to deserialize as ProjectTemplate: {e}",
+                            path.display()
+                        )
                     });
                     checked_evapt += 1;
                 }
                 "evapipe" => {
                     serde_json::from_str::<PipelineTemplate>(&json).unwrap_or_else(|e| {
-                        panic!("{} failed to deserialize as PipelineTemplate: {e}", path.display())
+                        panic!(
+                            "{} failed to deserialize as PipelineTemplate: {e}",
+                            path.display()
+                        )
                     });
                     checked_evapipe += 1;
                 }
@@ -103,8 +109,16 @@ mod tests {
             }
         }
 
-        assert!(checked_evapt > 0, "no .evapt files found under {}", templates_dir.display());
-        assert!(checked_evapipe > 0, "no .evapipe files found under {}", templates_dir.display());
+        assert!(
+            checked_evapt > 0,
+            "no .evapt files found under {}",
+            templates_dir.display()
+        );
+        assert!(
+            checked_evapipe > 0,
+            "no .evapipe files found under {}",
+            templates_dir.display()
+        );
     }
 
     /// Regression test for the generator's "rich enum" support: a `TransformFunction`-like

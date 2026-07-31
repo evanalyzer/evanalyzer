@@ -13,8 +13,8 @@ use crate::pipeline::pipeline_cache::PipelineCache;
 use evanalyzer_cfg::core_types::InternalErrors;
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
-use std::sync::Arc;
 use macros::CommandsMeta;
+use std::sync::Arc;
 
 /// Specifies the feature extraction method for the Hessian matrix.
 ///

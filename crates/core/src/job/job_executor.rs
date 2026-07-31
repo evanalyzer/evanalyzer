@@ -2031,7 +2031,9 @@ mod execution_order_tests {
 #[cfg(test)]
 mod full_run_integration_tests {
     use super::*;
-    use crate::algos::{ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod};
+    use crate::algos::{
+        ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod,
+    };
     use crate::init_java_wrapper;
     use crate::pipeline::pipeline::CorePipelineSettings;
     use crate::storage::memory::MemoryExporter;
@@ -2114,7 +2116,9 @@ mod full_run_integration_tests {
             "expected an ImageCompleted event for the single processed image"
         );
         assert!(
-            !events.iter().any(|e| matches!(e, ProgressEvent::ImageFailed { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageFailed { .. })),
             "no image should have failed"
         );
         assert!(

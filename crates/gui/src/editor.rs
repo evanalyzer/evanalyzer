@@ -4,15 +4,13 @@ use crate::{
         ai_learning_controller::AiLearningController,
         classification_controller::ClassificationController,
         histogram_controller::HistogramController, image_meta_controller::ImageMetaController,
-        images_list_controller::ImagesListController, pipeline_worker::PipelineWorker,
-        pipelines_controller::PipelinesController,
+        images_list_controller::ImagesListController, object_list_controller::ObjectListController,
+        pipeline_worker::PipelineWorker, pipelines_controller::PipelinesController,
         project_settings_controller::ProjectSettingsController,
         results_list_controller::ResultsListController,
         results_matrix_controller::ResultsMatrixController,
-        results_table_controller::ResultsTableController, object_list_controller::ObjectListController,
-        template_controller::TemplateController,
-        undo_redo_controller::UndoRedoController,
-        viewport_controller::ViewportController,
+        results_table_controller::ResultsTableController, template_controller::TemplateController,
+        undo_redo_controller::UndoRedoController, viewport_controller::ViewportController,
         viewport_image_controller::ViewportImageController,
         viewport_object_controller::ViewPortObjectController,
     },
@@ -24,6 +22,7 @@ pub mod classification_controller;
 pub mod histogram_controller;
 pub mod image_meta_controller;
 pub mod images_list_controller;
+pub mod object_list_controller;
 pub mod pipeline_task;
 pub mod pipeline_worker;
 pub mod pipelines_controller;
@@ -32,10 +31,9 @@ pub mod project_settings_controller;
 pub mod results_list_controller;
 pub mod results_matrix_controller;
 pub mod results_table_controller;
-pub mod object_list_controller;
+pub mod template_controller;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub mod template_controller;
 pub mod undo_redo_controller;
 pub mod viewport_cache;
 pub mod viewport_controller;
@@ -99,10 +97,8 @@ impl Editor {
             viewport_controller.clone(),
         ));
 
-        let ai_learning_controller = Arc::new(AiLearningController::new(
-            ui.clone(),
-            app_state.clone(),
-        ));
+        let ai_learning_controller =
+            Arc::new(AiLearningController::new(ui.clone(), app_state.clone()));
 
         let image_meta_controller = Arc::new(ImageMetaController::new(
             ui.clone(),
@@ -145,10 +141,7 @@ impl Editor {
             object_list_controller.clone(),
         ));
 
-        let template_controller = Arc::new(TemplateController::new(
-            ui.clone(),
-            app_state.clone(),
-        ));
+        let template_controller = Arc::new(TemplateController::new(ui.clone(), app_state.clone()));
 
         let pipelines_controller = Arc::new(pipelines_controller::PipelinesController::new(
             ui.clone(),

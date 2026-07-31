@@ -1,4 +1,4 @@
-use crate::{image::ImageContainer, pipeline::pipeline::PipelineImageMeta, object::Object};
+use crate::{image::ImageContainer, object::Object, pipeline::pipeline::PipelineImageMeta};
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId, ObjectId};
 use kornia_apriltag::utils::Point2d;
 use kornia_image::Image;
@@ -308,9 +308,7 @@ mod cache_tests {
         let mut cache = ImageCache::default();
         let image = gray_container(1, 1, vec![7.0]);
         let id = MemoryId::PipelineContext(2);
-        cache
-            .images
-            .insert(ImageAddress::Memory(id), image.clone());
+        cache.images.insert(ImageAddress::Memory(id), image.clone());
 
         let fetched = cache.get_image_from_memory_cache(id).unwrap();
         assert!(Arc::ptr_eq(&fetched, &image));
@@ -383,9 +381,7 @@ mod cache_tests {
         let mut cache = ImageCache::default();
         let image = gray_container(1, 1, vec![9.0]);
         let id = MemoryId::PipelineContext(4);
-        cache
-            .images
-            .insert(ImageAddress::Memory(id), image.clone());
+        cache.images.insert(ImageAddress::Memory(id), image.clone());
 
         let fetched = cache
             .get_image_from_cache(&ImageAddress::Memory(id))

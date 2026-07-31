@@ -39,7 +39,11 @@ use crate::{
 /// segmentation and instance maps. Runs on GPU automatically if CUDA is
 /// available in the linked libtorch build, otherwise falls back to CPU.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment", next = "measure", display_name = "AI Stardist Segmentation")]
+#[cmdsmeta(
+    category = "segment",
+    next = "measure",
+    display_name = "AI Stardist Segmentation"
+)]
 pub struct Stardist {
     /// Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
     #[cmdsmeta(file_extensions = "pt,pth")]
@@ -377,7 +381,12 @@ impl Stardist {
     /// by descending score (highest-scoring objects are painted first).
     fn non_max_suppress(candidates: Vec<Candidate>, nms_threshold: f32) -> Vec<Candidate> {
         let mut order: Vec<usize> = (0..candidates.len()).collect();
-        order.sort_by(|&a, &b| candidates[b].score.partial_cmp(&candidates[a].score).unwrap());
+        order.sort_by(|&a, &b| {
+            candidates[b]
+                .score
+                .partial_cmp(&candidates[a].score)
+                .unwrap()
+        });
 
         let mut suppressed = vec![false; candidates.len()];
         let mut keep_order = Vec::new();
@@ -388,7 +397,9 @@ impl Stardist {
             }
             keep_order.push(i);
             for &j in &order {
-                if j == i || suppressed[j] || !Self::bbox_overlaps(&candidates[i].bbox, &candidates[j].bbox)
+                if j == i
+                    || suppressed[j]
+                    || !Self::bbox_overlaps(&candidates[i].bbox, &candidates[j].bbox)
                 {
                     continue;
                 }
@@ -460,7 +471,12 @@ mod tests {
     fn square(min_x: i64, min_y: i64, side: i64, score: f32) -> Candidate {
         let bbox = [min_x, min_y, min_x + side - 1, min_y + side - 1];
         let w = side as usize;
-        Candidate { score, bbox, mask: vec![true; w * w], area: w * w }
+        Candidate {
+            score,
+            bbox,
+            mask: vec![true; w * w],
+            area: w * w,
+        }
     }
 
     // ---- rasterize_polygon ----
@@ -476,7 +492,10 @@ mod tests {
         let bbox = [0, 0, 3, 3];
         let mask = Stardist::rasterize_polygon(&polygon, bbox);
         assert_eq!(mask.len(), 16);
-        assert!(mask.iter().all(|&b| b), "every pixel center lies inside the square");
+        assert!(
+            mask.iter().all(|&b| b),
+            "every pixel center lies inside the square"
+        );
     }
 
     #[test]
@@ -499,7 +518,11 @@ mod tests {
         let polygon = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
         let candidate = Stardist::build_candidate(0.9, &polygon, 4, 4)
             .expect("a large square overlapping the image must produce a candidate");
-        assert_eq!(candidate.bbox, [0, 0, 3, 3], "bbox must be clamped to the image dimensions");
+        assert_eq!(
+            candidate.bbox,
+            [0, 0, 3, 3],
+            "bbox must be clamped to the image dimensions"
+        );
     }
 
     #[test]
@@ -543,7 +566,10 @@ mod tests {
         let bbox = candidates[0].bbox;
         // The unscaled radius (1px) would collapse to a single pixel; scaled
         // by ~10x it must span a large fraction of the 10x10 image instead.
-        assert!(bbox[2] - bbox[0] > 4, "bbox must reflect the scaled radius, not the raw 1px ray length");
+        assert!(
+            bbox[2] - bbox[0] > 4,
+            "bbox must reflect the scaled radius, not the raw 1px ray length"
+        );
     }
 
     // ---- bbox_overlaps ----
@@ -588,7 +614,11 @@ mod tests {
 
     #[test]
     fn non_max_suppress_keeps_every_candidate_when_none_overlap() {
-        let candidates = vec![square(0, 0, 2, 0.9), square(10, 10, 2, 0.8), square(20, 20, 2, 0.7)];
+        let candidates = vec![
+            square(0, 0, 2, 0.9),
+            square(10, 10, 2, 0.8),
+            square(20, 20, 2, 0.7),
+        ];
         let kept = Stardist::non_max_suppress(candidates, 0.3);
         assert_eq!(kept.len(), 3);
     }
@@ -599,7 +629,10 @@ mod tests {
         let candidates = vec![square(0, 0, 4, 0.4), square(0, 0, 4, 0.9)];
         let kept = Stardist::non_max_suppress(candidates, 0.3);
         assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].score, 0.9, "the higher-scoring candidate must survive");
+        assert_eq!(
+            kept[0].score, 0.9,
+            "the higher-scoring candidate must survive"
+        );
     }
 
     #[test]
@@ -607,12 +640,20 @@ mod tests {
         // 4x4 squares shifted by 3px overlap in a 1x4 strip: iou = 4/(16+16-4) = 4/28 ≈ 0.14.
         let candidates = vec![square(0, 0, 4, 0.9), square(3, 0, 4, 0.8)];
         let kept = Stardist::non_max_suppress(candidates, 0.3);
-        assert_eq!(kept.len(), 2, "0.14 overlap must not exceed a 0.3 suppression threshold");
+        assert_eq!(
+            kept.len(),
+            2,
+            "0.14 overlap must not exceed a 0.3 suppression threshold"
+        );
     }
 
     #[test]
     fn non_max_suppress_returns_candidates_sorted_by_descending_score() {
-        let candidates = vec![square(0, 0, 2, 0.3), square(50, 50, 2, 0.9), square(100, 100, 2, 0.6)];
+        let candidates = vec![
+            square(0, 0, 2, 0.3),
+            square(50, 50, 2, 0.9),
+            square(100, 100, 2, 0.6),
+        ];
         let kept = Stardist::non_max_suppress(candidates, 0.3);
         let scores: Vec<f32> = kept.iter().map(|c| c.score).collect();
         assert_eq!(scores, vec![0.9, 0.6, 0.3]);
@@ -647,9 +688,15 @@ mod tests {
                 let idx = y * 4 + x;
                 if x < 2 && y < 2 {
                     assert_eq!(inst[idx], 1, "pixel ({x},{y}) should belong to instance 1");
-                    assert_eq!(seg[idx], 7, "pixel ({x},{y}) should carry the foreground class");
+                    assert_eq!(
+                        seg[idx], 7,
+                        "pixel ({x},{y}) should carry the foreground class"
+                    );
                 } else {
-                    assert_eq!(inst[idx], 0, "pixel ({x},{y}) should be reset to background");
+                    assert_eq!(
+                        inst[idx], 0,
+                        "pixel ({x},{y}) should be reset to background"
+                    );
                     assert_eq!(seg[idx], 0, "pixel ({x},{y}) should be reset to background");
                 }
             }

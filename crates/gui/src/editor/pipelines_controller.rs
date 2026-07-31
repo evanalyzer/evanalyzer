@@ -1,7 +1,7 @@
 use crate::AppWindow;
 use crate::DialogType;
-use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::object_list_controller::ObjectListController;
+use crate::editor::pipeline_task::PipelineTask;
 use crate::editor::template_controller::TemplateController;
 use crate::editor::viewport_controller::ViewportController;
 use crate::{
@@ -2235,7 +2235,8 @@ mod tests {
         ui.global::<PipelinesPanelState>().invoke_auto_preview(true);
         assert!(*controller.auto_preview_enabled.lock().unwrap());
 
-        ui.global::<PipelinesPanelState>().invoke_auto_preview(false);
+        ui.global::<PipelinesPanelState>()
+            .invoke_auto_preview(false);
         assert!(!*controller.auto_preview_enabled.lock().unwrap());
     }
 
@@ -2245,13 +2246,15 @@ mod tests {
         let (_ui_state, controller) = make_controller(ui.as_weak());
         controller.attach_callbacks();
 
-        ui.global::<PipelinesPanelState>().invoke_set_breakpoint(7, 2, 1);
+        ui.global::<PipelinesPanelState>()
+            .invoke_set_breakpoint(7, 2, 1);
         assert_eq!(
             *controller.breakpoint.lock().unwrap(),
             Some((7, 2, evanalyzer_core::BreakpointMode::Stop))
         );
 
-        ui.global::<PipelinesPanelState>().invoke_set_breakpoint(7, 2, 2);
+        ui.global::<PipelinesPanelState>()
+            .invoke_set_breakpoint(7, 2, 2);
         assert_eq!(
             *controller.breakpoint.lock().unwrap(),
             Some((7, 2, evanalyzer_core::BreakpointMode::Snapshot)),
@@ -2270,10 +2273,12 @@ mod tests {
 
         ui.global::<PipelinesPanelState>()
             .invoke_show_breakpoint_image_changed(true);
-        assert!(controller
-            .viewport_controller
-            .show_breakpoint
-            .load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            controller
+                .viewport_controller
+                .show_breakpoint
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
 
         ui.global::<PipelinesPanelState>()
             .invoke_breakpoint_view_mode_changed(1);
@@ -2293,7 +2298,14 @@ mod tests {
         ui.global::<PipelinesPanelState>().invoke_toggle_pipeline(1);
 
         let project = ui_state.get_project();
-        assert!(!project.pipelines.iter().find(|p| p.id.0 == 1).unwrap().enabled);
+        assert!(
+            !project
+                .pipelines
+                .iter()
+                .find(|p| p.id.0 == 1)
+                .unwrap()
+                .enabled
+        );
     }
 
     #[test]
@@ -2304,13 +2316,15 @@ mod tests {
         add_pipeline(&ui_state, 2);
         controller.attach_callbacks();
 
-        ui.global::<PipelinesPanelState>().invoke_move_pipeline_up(2);
+        ui.global::<PipelinesPanelState>()
+            .invoke_move_pipeline_up(2);
         {
             let project = ui_state.get_project();
             assert_eq!(project.pipelines[0].id, PipelineId(2));
         }
 
-        ui.global::<PipelinesPanelState>().invoke_move_pipeline_down(2);
+        ui.global::<PipelinesPanelState>()
+            .invoke_move_pipeline_down(2);
         let project = ui_state.get_project();
         assert_eq!(project.pipelines[1].id, PipelineId(2));
     }

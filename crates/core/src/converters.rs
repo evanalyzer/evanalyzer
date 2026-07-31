@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn length_unit_parses_all_known_symbols() {
-        assert_eq!(LengthUnit::try_from("m").unwrap(),  LengthUnit::Meter);
+        assert_eq!(LengthUnit::try_from("m").unwrap(), LengthUnit::Meter);
         assert_eq!(LengthUnit::try_from("cm").unwrap(), LengthUnit::Centimeter);
         assert_eq!(LengthUnit::try_from("mm").unwrap(), LengthUnit::Millimeter);
         assert_eq!(LengthUnit::try_from("µm").unwrap(), LengthUnit::Micrometer);
@@ -133,11 +133,11 @@ mod tests {
 
     #[test]
     fn length_unit_nanometer_factors_are_correct() {
-        assert_eq!(LengthUnit::Nanometer.to_nanometers_factor(),    1.0);
-        assert_eq!(LengthUnit::Micrometer.to_nanometers_factor(),   1_000.0);
-        assert_eq!(LengthUnit::Millimeter.to_nanometers_factor(),   1_000_000.0);
-        assert_eq!(LengthUnit::Centimeter.to_nanometers_factor(),   10_000_000.0);
-        assert_eq!(LengthUnit::Meter.to_nanometers_factor(),        1_000_000_000.0);
+        assert_eq!(LengthUnit::Nanometer.to_nanometers_factor(), 1.0);
+        assert_eq!(LengthUnit::Micrometer.to_nanometers_factor(), 1_000.0);
+        assert_eq!(LengthUnit::Millimeter.to_nanometers_factor(), 1_000_000.0);
+        assert_eq!(LengthUnit::Centimeter.to_nanometers_factor(), 10_000_000.0);
+        assert_eq!(LengthUnit::Meter.to_nanometers_factor(), 1_000_000_000.0);
     }
 
     // ---- wavelength_to_rgb_float ----

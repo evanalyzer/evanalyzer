@@ -18,8 +18,8 @@ use kornia_imgproc::filter::spatial_gradient_float;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use rayon::iter::IntoParallelRefMutIterator;
-use std::sync::Arc;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 /// The specific calculation to extract from the Structure Tensor.
 pub enum TensorMode {

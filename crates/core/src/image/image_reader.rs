@@ -776,88 +776,89 @@ impl ImageReader {
         // `pool[i % pool.len()]`. Each channel gets its own scratch buffer
         // and pinned reader, so this is safe to call concurrently across
         // channels - two channels never share a reader.
-        let read_channel = |i: usize, c_stack_to_read: &i32| -> Result<ImageChannel, InternalErrors> {
-            let reader = pool[i % pool.len()];
+        let read_channel =
+            |i: usize, c_stack_to_read: &i32| -> Result<ImageChannel, InternalErrors> {
+                let reader = pool[i % pool.len()];
 
-            // --- PREP READ PARAMETERS ---
-            let t_read = t_stack.min(series_info.nr_t_stacks.saturating_sub(1));
-            let c_read = *c_stack_to_read.min(&series_info.nr_c_stacks.saturating_sub(1));
+                // --- PREP READ PARAMETERS ---
+                let t_read = t_stack.min(series_info.nr_t_stacks.saturating_sub(1));
+                let c_read = *c_stack_to_read.min(&series_info.nr_c_stacks.saturating_sub(1));
 
-            // Reused for every read below (the initial load and every
-            // Z-slice): width/height/bit depth/channel count are constant
-            // across a single channel's Z-stack, so this scratch buffer
-            // only ever grows once instead of reallocating per slice.
-            let mut byte_scratch: Vec<u8> = Vec::new();
+                // Reused for every read below (the initial load and every
+                // Z-slice): width/height/bit depth/channel count are constant
+                // across a single channel's Z-stack, so this scratch buffer
+                // only ever grows once instead of reallocating per slice.
+                let mut byte_scratch: Vec<u8> = Vec::new();
 
-            // --- INITIAL IMAGE LOAD ---
-            let mut image = reader.read_image_tile(
-                series,
-                resolution_idx,
-                &ImagePlane {
-                    z: z_stack_range.start().clone(),
-                    c: c_read,
-                    t: t_read,
-                },
-                image_tile,
-                &mut byte_scratch,
-            )?;
+                // --- INITIAL IMAGE LOAD ---
+                let mut image = reader.read_image_tile(
+                    series,
+                    resolution_idx,
+                    &ImagePlane {
+                        z: z_stack_range.start().clone(),
+                        c: c_read,
+                        t: t_read,
+                    },
+                    image_tile,
+                    &mut byte_scratch,
+                )?;
 
-            // --- Z-PROJECTION LOGIC ---
-            if z_projection != ZProjection::None && !pyramid_info.is_rgb {
-                if let ImageContainer::F32Gray(mut gray_image) = image {
-                    for z in (z_stack_range.start() + 1)..=z_stack_range.end().clone() {
-                        let image_tmp = reader.read_image_tile(
-                            series,
-                            resolution_idx,
-                            &ImagePlane {
-                                z,
-                                c: c_read,
-                                t: t_read,
-                            },
-                            image_tile,
-                            &mut byte_scratch,
-                        )?;
+                // --- Z-PROJECTION LOGIC ---
+                if z_projection != ZProjection::None && !pyramid_info.is_rgb {
+                    if let ImageContainer::F32Gray(mut gray_image) = image {
+                        for z in (z_stack_range.start() + 1)..=z_stack_range.end().clone() {
+                            let image_tmp = reader.read_image_tile(
+                                series,
+                                resolution_idx,
+                                &ImagePlane {
+                                    z,
+                                    c: c_read,
+                                    t: t_read,
+                                },
+                                image_tile,
+                                &mut byte_scratch,
+                            )?;
 
-                        if let ImageContainer::F32Gray(image_tmp_gray) = image_tmp {
-                            let src = image_tmp_gray.as_slice();
-                            let dst = gray_image.as_slice_mut();
+                            if let ImageContainer::F32Gray(image_tmp_gray) = image_tmp {
+                                let src = image_tmp_gray.as_slice();
+                                let dst = gray_image.as_slice_mut();
 
-                            match z_projection {
-                                ZProjection::MaxIntensity => max_proj(dst, src),
-                                ZProjection::MinIntensity => min_proj(dst, src),
-                                ZProjection::AvgIntensity | ZProjection::SumIntensity => {
-                                    sum_proj(dst, src)
+                                match z_projection {
+                                    ZProjection::MaxIntensity => max_proj(dst, src),
+                                    ZProjection::MinIntensity => min_proj(dst, src),
+                                    ZProjection::AvgIntensity | ZProjection::SumIntensity => {
+                                        sum_proj(dst, src)
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
-                    }
 
-                    if z_projection == ZProjection::AvgIntensity {
-                        let n_inv = 1.0 / (series_info.nr_z_stacks) as f32;
-                        gray_image
-                            .as_slice_mut()
-                            .iter_mut()
-                            .for_each(|p| *p *= n_inv);
+                        if z_projection == ZProjection::AvgIntensity {
+                            let n_inv = 1.0 / (series_info.nr_z_stacks) as f32;
+                            gray_image
+                                .as_slice_mut()
+                                .iter_mut()
+                                .for_each(|p| *p *= n_inv);
+                        }
+                        image = ImageContainer::F32Gray(gray_image);
                     }
-                    image = ImageContainer::F32Gray(gray_image);
                 }
-            }
 
-            // --- METADATA & FINAL OBJECT ---
-            let channel_meta = series_info.channels.get(&c_stack_to_read).ok_or_else(|| {
-                InternalErrors::ImageReadError(format!("Series {} does not exist", series))
-            })?;
+                // --- METADATA & FINAL OBJECT ---
+                let channel_meta = series_info.channels.get(&c_stack_to_read).ok_or_else(|| {
+                    InternalErrors::ImageReadError(format!("Series {} does not exist", series))
+                })?;
 
-            Ok(ImageChannel {
-                image: Arc::new(image),
-                color: wavelength_to_rgb_float(channel_meta.emission_wave_length),
-                is_visible: true,
-                c_stack: *c_stack_to_read,
-                name: channel_meta.name.clone(),
-                is_rgb: pyramid_info.is_rgb,
-            })
-        };
+                Ok(ImageChannel {
+                    image: Arc::new(image),
+                    color: wavelength_to_rgb_float(channel_meta.emission_wave_length),
+                    is_visible: true,
+                    c_stack: *c_stack_to_read,
+                    name: channel_meta.name.clone(),
+                    is_rgb: pyramid_info.is_rgb,
+                })
+            };
 
         let resulting_images: Vec<ImageChannel> = if parallel {
             selected_channels
@@ -1242,7 +1243,11 @@ mod tests {
         );
 
         let reader = ImageReader::new(
-            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
+            &concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/multi-channel-4D-series.ome.tif"
+            )
+            .into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1284,7 +1289,11 @@ mod tests {
         );
 
         let reader = ImageReader::new(
-            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
+            &concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/multi-channel-4D-series.ome.tif"
+            )
+            .into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1322,7 +1331,11 @@ mod tests {
         init_java_wrapper(1000000000).unwrap();
 
         let reader = ImageReader::new(
-            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
+            &concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/multi-channel-4D-series.ome.tif"
+            )
+            .into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1344,7 +1357,10 @@ mod tests {
             .unwrap();
 
         let reference_data_f32 = read_raw_data(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0_max_intensity.raw"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/slice_Z0_C0_T0_max_intensity.raw"
+            ),
             8,
         );
 
@@ -1364,7 +1380,10 @@ mod tests {
     fn pooled_parallel_read_matches_sequential_read() {
         init_java_wrapper(1000000000).unwrap();
 
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        );
         let tile = ImageTile {
             offset_x: 0,
             offset_y: 0,
@@ -1402,7 +1421,10 @@ mod tests {
             pooled.len(),
             "must read the same number of channels"
         );
-        assert!(sequential.len() > 1, "test needs a genuinely multi-channel fixture");
+        assert!(
+            sequential.len() > 1,
+            "test needs a genuinely multi-channel fixture"
+        );
 
         // rayon's completion order isn't guaranteed to match input order.
         sequential.sort_by_key(|c| c.c_stack);
@@ -1429,7 +1451,11 @@ mod tests {
         init_java_wrapper(1000000000).unwrap();
 
         let reader = ImageReader::new(
-            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
+            &concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/multi-channel-4D-series.ome.tif"
+            )
+            .into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1451,7 +1477,10 @@ mod tests {
             .unwrap();
 
         let reference_data_f32 = read_raw_data(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0_min_intensity.raw"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/slice_Z0_C0_T0_min_intensity.raw"
+            ),
             8,
         );
 
@@ -1472,7 +1501,11 @@ mod tests {
         init_java_wrapper(1000000000).unwrap();
 
         let reader = ImageReader::new(
-            &concat!(env!("CARGO_MANIFEST_DIR"), "/tests/multi-channel-4D-series.ome.tif").into(),
+            &concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/multi-channel-4D-series.ome.tif"
+            )
+            .into(),
             ReadMode::Default,
         )
         .unwrap();
@@ -1494,7 +1527,10 @@ mod tests {
             .unwrap();
 
         let reference_data_f32 = read_raw_data(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/slice_Z0_C0_T0_avg_intensity.raw"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/slice_Z0_C0_T0_avg_intensity.raw"
+            ),
             8,
         );
 
@@ -1536,12 +1572,10 @@ mod tests {
 
         match result {
             ImageContainer::F32Rgb(img) => {
-                let expected: Vec<f32> = [
-                    10, 50, 90, 20, 60, 100, 30, 70, 110, 40, 80, 120,
-                ]
-                .iter()
-                .map(|&v| v as f32 / 255.0)
-                .collect();
+                let expected: Vec<f32> = [10, 50, 90, 20, 60, 100, 30, 70, 110, 40, 80, 120]
+                    .iter()
+                    .map(|&v| v as f32 / 255.0)
+                    .collect();
                 compare_data(&expected, img.as_slice(), 1e-6);
             }
             other => panic!("expected F32Rgb, got {other:?}"),
@@ -1717,10 +1751,16 @@ mod tests {
         let inv_divisor = 1.0 / 4095.0;
 
         let little_endian = decode_samples_parallel(&buffer, 12, true, inv_divisor);
-        assert_eq!(little_endian, vec![0x00FF as f32 * inv_divisor, 0x1000 as f32 * inv_divisor]);
+        assert_eq!(
+            little_endian,
+            vec![0x00FF as f32 * inv_divisor, 0x1000 as f32 * inv_divisor]
+        );
 
         let big_endian = decode_samples_parallel(&buffer, 12, false, inv_divisor);
-        assert_eq!(big_endian, vec![0xFF00 as f32 * inv_divisor, 0x0010 as f32 * inv_divisor]);
+        assert_eq!(
+            big_endian,
+            vec![0xFF00 as f32 * inv_divisor, 0x0010 as f32 * inv_divisor]
+        );
     }
 
     #[test]
@@ -1744,8 +1784,12 @@ mod tests {
             height: 3,
         };
         let source = ImageContainer::U32(ManagedImage {
-            data: Image::<u32, 1, CpuAllocator>::new(size, vec![7u32; size.width * size.height], CpuAllocator)
-                .unwrap(),
+            data: Image::<u32, 1, CpuAllocator>::new(
+                size,
+                vec![7u32; size.width * size.height],
+                CpuAllocator,
+            )
+            .unwrap(),
             tile_offset: Point2d { x: 1, y: 2 },
             plane: None,
         });

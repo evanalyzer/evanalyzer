@@ -100,7 +100,10 @@ mod tests {
     fn get_relative_key_returns_the_diff_from_root_when_a_root_is_given() {
         let root = PathBuf::from("/data/plate1");
         let image = Path::new("/data/plate1/well_A1/img.tif");
-        assert_eq!(get_relative_key(image, Some(&root)), Some(PathBuf::from("well_A1/img.tif")));
+        assert_eq!(
+            get_relative_key(image, Some(&root)),
+            Some(PathBuf::from("well_A1/img.tif"))
+        );
     }
 
     #[test]
@@ -117,7 +120,10 @@ mod tests {
         // test), not for "unrelated" paths.
         let root = PathBuf::from("/data/plate1");
         let image = Path::new("/other/img.tif");
-        assert_eq!(get_relative_key(image, Some(&root)), Some(PathBuf::from("../../other/img.tif")));
+        assert_eq!(
+            get_relative_key(image, Some(&root)),
+            Some(PathBuf::from("../../other/img.tif"))
+        );
     }
 
     #[test]
@@ -150,12 +156,18 @@ mod tests {
 
     #[test]
     fn is_in_root_true_for_a_path_under_the_root() {
-        assert!(is_in_root(Path::new("/data/plate1/img.tif"), Path::new("/data/plate1")));
+        assert!(is_in_root(
+            Path::new("/data/plate1/img.tif"),
+            Path::new("/data/plate1")
+        ));
     }
 
     #[test]
     fn is_in_root_false_for_a_path_outside_the_root() {
-        assert!(!is_in_root(Path::new("/other/img.tif"), Path::new("/data/plate1")));
+        assert!(!is_in_root(
+            Path::new("/other/img.tif"),
+            Path::new("/data/plate1")
+        ));
     }
 
     #[test]
@@ -163,7 +175,10 @@ mod tests {
         // `starts_with` is a path-component comparison, not a raw string
         // prefix, so "/data/plate10" must not be considered inside
         // "/data/plate1".
-        assert!(!is_in_root(Path::new("/data/plate10/img.tif"), Path::new("/data/plate1")));
+        assert!(!is_in_root(
+            Path::new("/data/plate10/img.tif"),
+            Path::new("/data/plate1")
+        ));
     }
 
     // ---- wavelength_to_rgb_float / wavelength_to_rgb_u32 ----

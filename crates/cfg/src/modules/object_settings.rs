@@ -39,7 +39,7 @@ pub struct IntensitySettings {
 #[serde(rename_all = "camelCase")]
 pub struct TrackSettings {
     pub id: TrackId,
-    pub object_ids: Vec<ObjectId>,        // Ordered list of ROIs over time
+    pub object_ids: Vec<ObjectId>,     // Ordered list of ROIs over time
     pub parent_track: Option<TrackId>, // If created by division
 }
 

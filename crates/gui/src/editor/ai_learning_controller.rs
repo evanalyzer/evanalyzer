@@ -1,9 +1,8 @@
 use crate::UiState;
 use crate::prelude::*;
 use crate::{
-    AiLearningState, AiTrainingSettingsSlint, AppWindow, ChannelState, DialogType,
-    FeatureRowSlint, GlobalAppState, ObjectMetricRowSlint, TrainingImageRowSlint,
-    TrainingObjectRowSlint,
+    AiLearningState, AiTrainingSettingsSlint, AppWindow, ChannelState, DialogType, FeatureRowSlint,
+    GlobalAppState, ObjectMetricRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint,
 };
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
@@ -322,7 +321,10 @@ impl AiLearningController {
             ui.global::<AiLearningState>()
                 .set_object_metrics(ModelRc::new(VecModel::from(rows)));
         }) {
-            warn!("Failed to sync AI classifier object metrics to Slint: {}", e);
+            warn!(
+                "Failed to sync AI classifier object metrics to Slint: {}",
+                e
+            );
         }
     }
 

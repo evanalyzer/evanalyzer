@@ -1923,10 +1923,8 @@ impl ResultsTableController {
                             state.set_filter_class_active(false);
                             state.set_filter_class_all_popup_checked(true);
 
-                            let mut matrix_class_options =
-                                vec![SharedString::from("All classes")];
-                            matrix_class_options
-                                .extend(cls_names.iter().map(SharedString::from));
+                            let mut matrix_class_options = vec![SharedString::from("All classes")];
+                            matrix_class_options.extend(cls_names.iter().map(SharedString::from));
                             state.set_matrix_class_options(slint::ModelRc::new(
                                 slint::VecModel::from(matrix_class_options),
                             ));
@@ -5093,7 +5091,10 @@ mod tests {
         let items = model_to_vec(&state.get_filter_image_items());
         assert!(!items.iter().find(|i| i.label == "a").unwrap().checked);
         assert!(items.iter().find(|i| i.label == "b").unwrap().checked);
-        assert!(state.get_filter_image_active(), "one unchecked item makes the filter active");
+        assert!(
+            state.get_filter_image_active(),
+            "one unchecked item makes the filter active"
+        );
     }
 
     #[test]
@@ -5102,8 +5103,14 @@ mod tests {
         let (_ui_state, controller) = make_controller(results_ui.as_weak());
         controller.attach_callbacks();
         let state = results_ui.global::<ResultsState>();
-        state.set_filter_image_items(to_model(vec![plain_item("a", false), plain_item("b", false)]));
-        state.set_filter_image_popup(to_model(vec![plain_item("a", false), plain_item("b", false)]));
+        state.set_filter_image_items(to_model(vec![
+            plain_item("a", false),
+            plain_item("b", false),
+        ]));
+        state.set_filter_image_popup(to_model(vec![
+            plain_item("a", false),
+            plain_item("b", false),
+        ]));
 
         state.invoke_image_select_all();
         let items = model_to_vec(&state.get_filter_image_items());
@@ -5129,7 +5136,11 @@ mod tests {
         assert!(!model_to_vec(&state.get_filter_class_items())[0].checked);
 
         state.invoke_class_select_all();
-        assert!(model_to_vec(&state.get_filter_class_items()).iter().all(|i| i.checked));
+        assert!(
+            model_to_vec(&state.get_filter_class_items())
+                .iter()
+                .all(|i| i.checked)
+        );
     }
 
     #[test]
@@ -5157,14 +5168,28 @@ mod tests {
         let (_ui_state, controller) = make_controller(results_ui.as_weak());
         controller.attach_callbacks();
         let state = results_ui.global::<ResultsState>();
-        state.set_column_items(to_model(vec![plain_item("Area", false), plain_item("Class", false)]));
-        state.set_column_popup(to_model(vec![plain_item("Area", false), plain_item("Class", false)]));
+        state.set_column_items(to_model(vec![
+            plain_item("Area", false),
+            plain_item("Class", false),
+        ]));
+        state.set_column_popup(to_model(vec![
+            plain_item("Area", false),
+            plain_item("Class", false),
+        ]));
 
         state.invoke_column_select_all();
-        assert!(model_to_vec(&state.get_column_items()).iter().all(|i| i.checked));
+        assert!(
+            model_to_vec(&state.get_column_items())
+                .iter()
+                .all(|i| i.checked)
+        );
 
         state.invoke_column_clear_all();
-        assert!(model_to_vec(&state.get_column_items()).iter().all(|i| !i.checked));
+        assert!(
+            model_to_vec(&state.get_column_items())
+                .iter()
+                .all(|i| !i.checked)
+        );
     }
 
     #[test]
@@ -5173,7 +5198,10 @@ mod tests {
         let (_ui_state, controller) = make_controller(results_ui.as_weak());
         controller.attach_callbacks();
         let state = results_ui.global::<ResultsState>();
-        state.set_filter_image_items(to_model(vec![plain_item("apple", false), plain_item("banana", false)]));
+        state.set_filter_image_items(to_model(vec![
+            plain_item("apple", false),
+            plain_item("banana", false),
+        ]));
 
         state.invoke_image_filter_search_changed("app".into());
 
@@ -5189,11 +5217,17 @@ mod tests {
         let (_ui_state, controller) = make_controller(results_ui.as_weak());
         controller.attach_callbacks();
 
-        results_ui.global::<ResultsState>()
+        results_ui
+            .global::<ResultsState>()
             .invoke_column_width_changed("area_px".into(), 120.0);
 
         assert_eq!(
-            controller.column_widths.lock().unwrap().get("area_px").copied(),
+            controller
+                .column_widths
+                .lock()
+                .unwrap()
+                .get("area_px")
+                .copied(),
             Some(120.0)
         );
     }

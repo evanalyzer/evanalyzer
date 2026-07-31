@@ -239,7 +239,9 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
             // which schemars renders as `oneOf` + a `const`-valued "type" property — the
             // standard JSON Schema representation for "different fields depending on which
             // option is selected" (mirrors a serde-tagged Rust enum / OpenAPI discriminator).
-            out.push_str("#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]\n");
+            out.push_str(
+                "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]\n",
+            );
             out.push_str("#[serde(tag = \"type\", rename_all = \"camelCase\")]\n");
         } else {
             out.push_str(
@@ -484,8 +486,11 @@ fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
         out.push_str("        match _s {\n");
         for variant in &enum_info.variants {
             if variant.is_rich() {
-                let field_names: Vec<&str> =
-                    variant.named_fields.iter().map(|f| f.name.as_str()).collect();
+                let field_names: Vec<&str> = variant
+                    .named_fields
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .collect();
                 let pattern = field_names.join(", ");
                 out.push_str(&format!(
                     "            {settings_name}::{} {{ {pattern} }} => {}::{} {{\n",
@@ -1630,9 +1635,12 @@ fn rich_enum_variant_param_defs(
                 };
                 return format!("{pattern} => vec![]");
             }
-            let field_names: Vec<&str> =
-                v.named_fields.iter().map(|f| f.name.as_str()).collect();
-            let pattern = format!("{settings_name}::{} {{ {} }}", v.name, field_names.join(", "));
+            let field_names: Vec<&str> = v.named_fields.iter().map(|f| f.name.as_str()).collect();
+            let pattern = format!(
+                "{settings_name}::{} {{ {} }}",
+                v.name,
+                field_names.join(", ")
+            );
             let field_literals: Vec<String> = v
                 .named_fields
                 .iter()
@@ -1776,7 +1784,15 @@ fn field_to_param_def(
         }
     }
 
-    match leaf_param_def_literal(ty, meta, &access, &routing_name, &display_label, &description, enums) {
+    match leaf_param_def_literal(
+        ty,
+        meta,
+        &access,
+        &routing_name,
+        &display_label,
+        &description,
+        enums,
+    ) {
         Some(literal) => vec![format!("vec![{literal}]")],
         None => vec![],
     }
@@ -2338,9 +2354,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     // override this via #[cmdsmeta(next = "...")] to decouple display grouping
     // from flow — e.g. StarDist/Cellpose are shown under `segment` yet flow
     // straight to `measure`, while U-Net (also `segment`) flows to `object`.
-    out.push_str(
-        "    /// Categories that may be inserted immediately after this command.\n",
-    );
+    out.push_str("    /// Categories that may be inserted immediately after this command.\n");
     out.push_str("    pub fn allowed_next(&self) -> &'static [CommandCategory] {\n");
     out.push_str("        match self {\n");
     for cmd in &algo_commands {
@@ -2348,7 +2362,12 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
         let next_variants: Vec<String> = match &cmd.struct_meta.next {
             Some(list) => list
                 .iter()
-                .map(|c| format!("CommandCategory::{}", category_to_enum_variant(&normalize_category(c))))
+                .map(|c| {
+                    format!(
+                        "CommandCategory::{}",
+                        category_to_enum_variant(&normalize_category(c))
+                    )
+                })
                 .collect(),
             None => default_next_for_category(variant)
                 .iter()
