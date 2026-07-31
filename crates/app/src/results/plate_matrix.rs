@@ -712,4 +712,121 @@ mod tests {
         assert_eq!(lo, 5.0);
         assert!(hi > lo);
     }
+
+    // ---- compute_well_matrix vs. the Table view's grouped-by-Image aggregate ----
+    //
+    // The Matrix (Well) view's per-image aggregate and the Table view's
+    // "group by Image" aggregate are computed by genuinely different code
+    // paths for the *same* concept (one aggregated value per image):
+    // `compute_well_matrix` here calls `aggregate_rows` (pure Rust) on
+    // objects already loaded into memory, while the Table view calls
+    // `aggregate_objects_sql` (DuckDB pushdown) directly against the file.
+    // A prior parity test already proved `aggregate_rows`/`aggregate_objects_sql`
+    // agree in the abstract; this one instead drives the *actual* production
+    // entry point (`compute_well_matrix`) side by side with the Table's, so a
+    // bug specific to well-filtering/placement in `compute_well_matrix`
+    // itself (not just the underlying aggregation) would also be caught.
+
+    use crate::results::results_loader::{
+        DatabaseFilter, ResultsLoader, aggregate_objects_sql, build_column_specs,
+    };
+    use crate::results::test_support::seed_results_db;
+
+    fn circularity_col() -> ColumnSpec {
+        ColumnSpec {
+            id: "circularity".into(),
+            label: "Circularity".into(),
+            filterable: false,
+            visible: true,
+        }
+    }
+
+    #[test]
+    fn compute_well_matrix_value_matches_the_table_views_grouped_by_image_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path); // baseline rows the well regex won't match
+
+        // Three objects sharing one field-of-view image in well "A14" - a
+        // circularity average with more decimal digits than either display's
+        // precision (0.85333...) so any precision-related divergence between
+        // the two paths wouldn't hide behind a suspiciously round number.
+        let conn = duckdb::Connection::open(&db_path).unwrap();
+        for (idx, circularity) in [0.85_f64, 0.86, 0.85].into_iter().enumerate() {
+            conn.execute(
+                "INSERT INTO objects (
+                    image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
+                    object_class_name, object_class_id, track_id,
+                    centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+                    bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                    bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+                    area_px, area_nm2, perimeter_px, perimeter_nm,
+                    circularity, solidity, aspect_ratio, roundness, compactness,
+                    major_axis_px, minor_axis_px, touches_edge,
+                    pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                    intensities_json, coloc_json
+                ) VALUES (
+                    'my_file_01_A14_01.tif', 'my_file_01_A14_01.tif', ?, 'ClassA', 1,
+                    '[\"ClassA\"]', '[1]', 0,
+                    0, 0, 0, 0, 0, 0, 10, 10, 0, 0, 0, 0,
+                    10, 10.0, 40, 40,
+                    ?, 1.0, 1.0, 1.0, 1.0, 10, 10, false,
+                    1.0, 1.0, 1.0, '{}', '{}'
+                )",
+                duckdb::params![format!("00000000-0000-0000-0000-0000000000{idx:02}"), circularity],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let loader = ResultsLoader::new(&db_path);
+        let all_objects = loader.get_objects(DatabaseFilter::default()).unwrap();
+
+        // ---- Matrix (Well) view's path: compute_well_matrix ----
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let well_result = compute_well_matrix(
+            &all_objects,
+            regex,
+            "A14",
+            AggFunc::Avg,
+            &circularity_col(),
+            1,
+            1,
+            &[1],
+        )
+        .expect("well A14 has sub-position data");
+        let matrix_value = well_result.cells[0].value.expect("cell must have a value");
+        assert_eq!(well_result.cells[0].count, 3);
+
+        // ---- Table view's path: aggregate_objects_sql, grouped by Image ----
+        let base_specs = build_column_specs(&[], &[]);
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            aggs: vec![AggFunc::Avg],
+            ..Default::default()
+        };
+        let (specs, rows) =
+            aggregate_objects_sql(&loader, DatabaseFilter::default(), &config, &base_specs).unwrap();
+        let value_col = specs.iter().position(|s| s.id == "circularity__avg").unwrap();
+        let table_row = rows
+            .iter()
+            .find(|r| r.values[0] == "my_file_01_A14_01.tif")
+            .expect("the well's image must appear as its own Table group");
+        let table_value: f64 = table_row.values[value_col].parse().unwrap();
+
+        // Both paths must agree exactly. Note this is *not* the raw average
+        // (0.85333...): both `aggregate_rows` (Matrix) and
+        // `aggregate_objects_sql` (Table) round to `metric_precision`
+        // (3 decimals for circularity) before the value is ever handed back
+        // as a `DisplayRow` string - `compute_well_matrix` re-parses that
+        // already-rounded string rather than keeping a full-precision float.
+        // So "equal" here means both independently rounded to 0.853, not
+        // that neither lost precision relative to the true mean.
+        assert_eq!(matrix_value, 0.853);
+        assert_eq!(table_value, 0.853);
+        assert!(
+            (matrix_value - table_value).abs() < 1e-9,
+            "Matrix Well value {matrix_value} must equal the Table's grouped-by-Image value {table_value}"
+        );
+    }
 }

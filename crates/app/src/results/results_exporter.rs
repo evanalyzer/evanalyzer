@@ -894,6 +894,69 @@ mod tests {
     }
 
     #[test]
+    fn export_to_csv_grouped_computes_the_correct_aggregated_values() {
+        // Unlike `export_to_csv_grouped_writes_one_aggregated_row_per_image`
+        // above (which only checks row *count*, since its fixture puts one
+        // object per image), this seeds real multi-object groups so the
+        // exported numbers actually exercise the aggregation math, not just
+        // the grouping/row-shape plumbing.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        // n=6, cycling 3 images x 2 classes, area_px = row index:
+        // img1={0,3} sum=3 avg=1.5; img2={1,4} sum=5 avg=2.5; img3={2,5} sum=7 avg=3.5.
+        seed_large_results_db(&db_path, 6);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[], &[]);
+
+        let group = GroupConfig {
+            group_by: GroupBy::Image,
+            aggs: vec![AggFunc::Sum, AggFunc::Avg],
+            ..Default::default()
+        };
+        let csv_path = dir.path().join("grouped_values.csv");
+        exporter
+            .export_to_csv(DatabaseFilter::default(), &group, &specs, &csv_path)
+            .unwrap();
+
+        let rows = parse_csv(&csv_path);
+        let header = &rows[0];
+        let area_sum_col = header
+            .iter()
+            .position(|h| h.contains("Area") && h.contains("sum"))
+            .expect("an Area [sum] column must be present");
+        let area_avg_col = header
+            .iter()
+            .position(|h| h.contains("Area") && h.contains("avg"))
+            .expect("an Area [avg] column must be present");
+        let image_col = header.iter().position(|h| h == "Image").unwrap();
+
+        let mut by_image: std::collections::HashMap<String, (String, String)> = rows[1..]
+            .iter()
+            .map(|r| {
+                (
+                    r[image_col].clone(),
+                    (r[area_sum_col].clone(), r[area_avg_col].clone()),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            by_image.remove("img1.tif"),
+            Some(("3.0".to_string(), "1.5".to_string()))
+        );
+        assert_eq!(
+            by_image.remove("img2.tif"),
+            Some(("5.0".to_string(), "2.5".to_string()))
+        );
+        assert_eq!(
+            by_image.remove("img3.tif"),
+            Some(("7.0".to_string(), "3.5".to_string()))
+        );
+    }
+
+    #[test]
     fn export_to_xlsx_writes_a_readable_workbook() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("results.duckdb");
@@ -921,6 +984,115 @@ mod tests {
         // XLSX is a ZIP container - "PK\x03\x04" is the local-file-header
         // magic every valid ZIP (and therefore every valid XLSX) starts with.
         assert_eq!(&bytes[0..4], b"PK\x03\x04", "not a valid XLSX/ZIP file");
+    }
+
+    #[test]
+    fn export_to_xlsx_writes_numeric_columns_as_real_excel_numbers_not_text() {
+        // `xlsx_row_writer`'s whole point is writing numeric-looking cells as
+        // actual Excel numbers (`write_number`) rather than text
+        // (`write_string`), so Excel formulas like SUM/AVERAGE work directly
+        // over an exported column. Every previous XLSX test reads cells back
+        // through `parse_xlsx`, which stringifies everything - a regression
+        // that silently switched to `write_string` for every column would
+        // still pass those. This reads the raw `calamine::Data` variant
+        // instead, so it actually distinguishes the two.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[], &[]);
+
+        let xlsx_path = dir.path().join("types.xlsx");
+        exporter
+            .export_to_xlsx(
+                DatabaseFilter::default(),
+                &GroupConfig::default(),
+                &specs,
+                &xlsx_path,
+            )
+            .unwrap();
+
+        let mut workbook = open_workbook_auto(&xlsx_path).expect("open exported xlsx");
+        let sheet = workbook
+            .worksheet_range("Results")
+            .expect("Results sheet");
+        let header: Vec<String> = sheet.rows().next().unwrap().iter().map(|c| c.to_string()).collect();
+        let area_col = header
+            .iter()
+            .position(|h| h.starts_with("Area (px"))
+            .expect("Area column header");
+        let image_col = header.iter().position(|h| h == "Image").unwrap();
+
+        let data_row = sheet.rows().nth(1).expect("one data row");
+        assert!(
+            matches!(data_row[area_col], Data::Float(_) | Data::Int(_)),
+            "numeric column must be a real Excel number, got {:?}",
+            data_row[area_col]
+        );
+        assert!(
+            matches!(&data_row[image_col], Data::String(_)),
+            "image name must stay a text cell, got {:?}",
+            data_row[image_col]
+        );
+    }
+
+    #[test]
+    fn export_to_csv_round_trips_values_containing_commas_and_quotes() {
+        // The `csv` crate handles RFC 4180 escaping itself, but this proves
+        // the actual export+reparse round trip preserves a class name with
+        // characters that would corrupt a naive comma-joined line - a
+        // realistic case since class names are free-form user text.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let image_name = "img \"weird\", name.tif";
+        let class_name = "Class, \"A\"";
+        let object_class_json = serde_json::to_string(&vec![class_name]).unwrap();
+        let conn = duckdb::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO objects (
+                image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
+                object_class_name, object_class_id, track_id,
+                centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+                bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+                area_px, area_nm2, perimeter_px, perimeter_nm,
+                circularity, solidity, aspect_ratio, roundness, compactness,
+                major_axis_px, minor_axis_px, touches_edge,
+                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                intensities_json, coloc_json
+            ) VALUES (
+                ?, ?, '00000000-0000-0000-0000-000000000099',
+                ?, 1, ?, '[1]', 0,
+                0, 0, 0, 0, 0, 0, 10, 10, 0, 0, 0, 0,
+                50, 50.0, 40, 40, 1.0, 1.0, 1.0, 1.0, 1.0, 10, 10, false,
+                1.0, 1.0, 1.0, '{}', '{}'
+            )",
+            duckdb::params![image_name, image_name, class_name, object_class_json],
+        )
+        .unwrap();
+        drop(conn);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let specs = build_column_specs(&[], &[]);
+        let csv_path = dir.path().join("special_chars.csv");
+        exporter
+            .export_to_csv(DatabaseFilter::default(), &GroupConfig::default(), &specs, &csv_path)
+            .unwrap();
+
+        let rows = parse_csv(&csv_path);
+        let header = &rows[0];
+        let image_col = header.iter().position(|h| h == "Image").unwrap();
+        let class_col = header.iter().position(|h| h == "Class").unwrap();
+        let row = rows[1..]
+            .iter()
+            .find(|r| r[image_col] == image_name)
+            .expect("the special-character row must round-trip through export");
+        assert_eq!(row[class_col], class_name);
     }
 
     // -------------------------------------------------------------------------
@@ -1042,6 +1214,160 @@ mod tests {
         // covered by live GUI verification rather than here - inspecting it
         // would need a zip/XML reader this crate doesn't otherwise depend on,
         // out of proportion to what a unit test should pull in.
+    }
+
+    #[test]
+    fn export_matrix_to_xlsx_writes_the_same_rounded_value_the_table_view_shows() {
+        // `compute_plate_matrix`/`compute_well_matrix` (shared by the Table
+        // view, the GUI's live Matrix grid, and both Matrix export formats)
+        // already round every metric to `metric_precision(column_id)`
+        // decimals *before* any of these ever sees it - by re-parsing the
+        // `aggregate_rows`-formatted display string rather than keeping a
+        // full-precision float. `export_matrix_to_xlsx` writes that value
+        // via plain `write_number` with no further `.set_num_format(...)`
+        // rounding on top, so it must land in the workbook exactly as
+        // Table shows it (unlike `export_matrix_to_csv`, which reformats
+        // to a fixed `{:.3}`, and the GUI's on-screen Matrix cell, which
+        // reformats to a fixed `{:.1}` - both *additional* roundings on top
+        // of this same first one, see the two tests below). Uses the raw
+        // `calamine::Data` value (not the `parse_xlsx` test helper, which
+        // itself special-cases whole-ish floats for display and would hide
+        // a real mismatch here).
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_plate_results_db(&db_path); // establishes the schema + wells A1/B2
+        let conn = duckdb::Connection::open(&db_path).unwrap();
+        // A new well "A2" (row 0, col 1 - within the 2x2 plate below, and
+        // untouched by seed_plate_results_db) with 3 objects: area_px =
+        // 10, 11, 11 -> avg = 32/3 = 10.6666... - genuinely non-terminating,
+        // so "full precision" and "rounded to N decimals" can't coincide.
+        for (idx, area) in [10u64, 11, 11].into_iter().enumerate() {
+            conn.execute(
+                "INSERT INTO objects (
+                    image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
+                    object_class_name, object_class_id, track_id,
+                    centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+                    bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                    bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+                    area_px, area_nm2, perimeter_px, perimeter_nm,
+                    circularity, solidity, aspect_ratio, roundness, compactness,
+                    major_axis_px, minor_axis_px, touches_edge,
+                    pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                    intensities_json, coloc_json
+                ) VALUES (
+                    'A2_extra.tif', 'A2/A2_extra.tif', ?, 'ClassA', 1,
+                    '[\"ClassA\"]', '[1]', 0,
+                    0, 0, 0, 0, 0, 0, 10, 10, 0, 0, 0, 0,
+                    ?, ?, 40, 40, 1.0, 1.0, 1.0, 1.0, 1.0, 10, 10, false,
+                    1.0, 1.0, 1.0, '{}', '{}'
+                )",
+                duckdb::params![
+                    format!("00000000-0000-0000-0000-0000000001{idx:02}"),
+                    area,
+                    area as f64
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let xlsx_path = dir.path().join("plate_precision.xlsx");
+        exporter
+            .export_matrix_to_xlsx(
+                DatabaseFilter::default(),
+                GroupBy::Folder,
+                "",
+                AggFunc::Avg,
+                &area_metric(),
+                2,
+                2,
+                HeatmapColorScheme::Viridis,
+                true,
+                0.0,
+                1.0,
+                &xlsx_path,
+            )
+            .unwrap();
+
+        let mut workbook = open_workbook_auto(&xlsx_path).unwrap();
+        let sheet = workbook.worksheet_range("Matrix").unwrap();
+        // Row "A" (sheet row 1), col "2" (sheet col 2: row-label col 0 + 1-indexed col 1 + 1).
+        let cell = sheet.get_value((1, 2)).expect("well A2's cell value");
+        let Data::Float(v) = cell else {
+            panic!("expected a numeric cell, got {cell:?}");
+        };
+        // True average is 32/3 = 10.6666..., but `area_px`'s
+        // `metric_precision` is 1 decimal, so the value every consumer
+        // (Table included) actually works with is the already-rounded 10.7.
+        assert!(
+            (v - 10.7).abs() < 1e-9,
+            "expected the metric_precision-rounded 10.7 (matching what the Table view shows), got {v}"
+        );
+    }
+
+    #[test]
+    fn export_matrix_to_csv_pads_to_a_fixed_3_decimals_even_when_the_table_view_shows_fewer() {
+        // Same fixture/value as the XLSX test above (10.7, already rounded
+        // to `area_px`'s 1-decimal `metric_precision`) - `export_matrix_to_csv`
+        // additionally reformats every value to a fixed `{:.3}`, so the CSV
+        // cell reads "10.700" even though the Table view (and the XLSX
+        // export) show "10.7". Same numeric value, cosmetically different
+        // text - documented so a future reader doesn't mistake the extra
+        // trailing zeros for a real precision difference.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_plate_results_db(&db_path);
+        let conn = duckdb::Connection::open(&db_path).unwrap();
+        for (idx, area) in [10u64, 11, 11].into_iter().enumerate() {
+            conn.execute(
+                "INSERT INTO objects (
+                    image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
+                    object_class_name, object_class_id, track_id,
+                    centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+                    bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                    bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+                    area_px, area_nm2, perimeter_px, perimeter_nm,
+                    circularity, solidity, aspect_ratio, roundness, compactness,
+                    major_axis_px, minor_axis_px, touches_edge,
+                    pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                    intensities_json, coloc_json
+                ) VALUES (
+                    'A2_extra.tif', 'A2/A2_extra.tif', ?, 'ClassA', 1,
+                    '[\"ClassA\"]', '[1]', 0,
+                    0, 0, 0, 0, 0, 0, 10, 10, 0, 0, 0, 0,
+                    ?, ?, 40, 40, 1.0, 1.0, 1.0, 1.0, 1.0, 10, 10, false,
+                    1.0, 1.0, 1.0, '{}', '{}'
+                )",
+                duckdb::params![
+                    format!("00000000-0000-0000-0000-0000000002{idx:02}"),
+                    area,
+                    area as f64
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let loader = Arc::new(ResultsLoader::new(db_path));
+        let exporter = ResultsExporter::new(loader);
+        let csv_path = dir.path().join("plate_precision.csv");
+        exporter
+            .export_matrix_to_csv(
+                DatabaseFilter::default(),
+                GroupBy::Folder,
+                "",
+                AggFunc::Avg,
+                &area_metric(),
+                2,
+                2,
+                &csv_path,
+            )
+            .unwrap();
+
+        let rows = parse_csv(&csv_path);
+        assert_eq!(rows[1][2], "10.700", "well A2 (row A, col 2)");
     }
 
     /// A well regex with the 4th capture group `compute_well_matrix` needs

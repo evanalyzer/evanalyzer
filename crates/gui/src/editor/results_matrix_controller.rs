@@ -679,6 +679,85 @@ mod tests {
     }
 
     #[test]
+    fn matrix_cell_always_shows_one_decimal_even_for_metrics_the_table_view_shows_with_more() {
+        // `matrix_cell`'s `{:.1}` is fixed regardless of which metric is
+        // plotted, but the Table view (and CSV/XLSX export) format each
+        // metric with its own `metric_precision` - 3 decimals for
+        // Circularity, 2 for Area (nm²), 0 for a coloc partner count, only
+        // Area (px²) and channel bit values happen to use 1. So for a
+        // circularity average of 0.853 (what the Table view would display
+        // verbatim, e.g. "0.853"), the on-screen Matrix cell shows "0.9" -
+        // a real loss of the two least-significant digits, not just
+        // cosmetic zero-padding (contrast `export_matrix_to_csv`, which
+        // only ever *adds* trailing zeros, never drops real digits).
+        // Documented here as current, intentional-or-not behavior - flag if
+        // the Matrix grid should instead respect each metric's own
+        // precision like every other view does.
+        let cell = matrix_cell(
+            "A1".to_string(),
+            Some(0.853),
+            0.0,
+            1.0,
+            HeatmapColorScheme::Grayscale,
+        );
+
+        assert_eq!(
+            cell.value.as_str(),
+            "0.9",
+            "Matrix cell drops precision the Table view (\"0.853\") would show"
+        );
+    }
+
+    #[test]
+    fn matrix_cell_displayed_value_always_stays_within_the_expected_rounding_tolerance() {
+        // Guardrail for the intentional precision loss documented above:
+        // `matrix_cell` is *allowed* to round its input down to 1 decimal
+        // (by design, kept as-is - see the test above), but the text it
+        // shows must still be a faithful rounding of the value it was
+        // given, not some unrelated/corrupted number. `{:.1}` rounds to the
+        // nearest 0.1, so the reparsed displayed value can never be more
+        // than half that (0.05) away from the source `f64`, regardless of
+        // how many decimals the source itself carries (this covers every
+        // real `metric_precision` case: 0 decimals for a coloc partner
+        // count, 1 for Area (px²)/channel bit values, 2 for Area (nm²), 3
+        // for Circularity). A future change to `matrix_cell` that reads the
+        // wrong field, applies the wrong scale, or otherwise mangles the
+        // value would push it outside this window and fail here even
+        // though the exact-string test above only pins one example.
+        const HALF_STEP: f64 = 0.05 + 1e-9; // rounding half-step + float slop
+        let sources = [
+            0.0,      // coloc partner count precision (0 decimals)
+            7.0,      // "
+            42.567,   // Area (px²) / channel bit precision (1 decimal)
+            -3.14,    // negative values must round the same way
+            123.45,   // Area (nm²) precision (2 decimals)
+            0.853,    // Circularity precision (3 decimals)
+            0.85,     // exactly at a rounding half-step (0.8 vs 0.9) - the
+                      // tightest case HALF_STEP has to cover
+        ];
+
+        for &source in &sources {
+            let cell = matrix_cell(
+                "A1".to_string(),
+                Some(source),
+                source.min(0.0),
+                source.max(1.0),
+                HeatmapColorScheme::Viridis,
+            );
+            let displayed: f64 = cell
+                .value
+                .parse()
+                .unwrap_or_else(|e| panic!("cell value {:?} must parse as a number: {e}", cell.value));
+
+            assert!(
+                (displayed - source).abs() <= HALF_STEP,
+                "source {source} rounded to {displayed}, which is more than one rounding \
+                 half-step (±{HALF_STEP}) away - not a valid 1-decimal rounding"
+            );
+        }
+    }
+
+    #[test]
     fn matrix_cell_without_a_value_is_blank_and_unmarked() {
         let cell = matrix_cell("B2".to_string(), None, 0.0, 100.0, HeatmapColorScheme::Viridis);
 
