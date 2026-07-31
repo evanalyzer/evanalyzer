@@ -1954,6 +1954,176 @@ mod tests {
         assert_eq!(chart.rgb.len(), 200 * 150 * 3);
     }
 
+    // -- "did it actually draw anything" sanity checks --------------------------
+    //
+    // The buffer-size tests above would still pass if a rendering bug left
+    // the canvas entirely blank (e.g. bars/points computed off-screen, or a
+    // color mistakenly matching the background) - a correctly *sized* image
+    // isn't the same as one that shows the data. These check the rendered
+    // pixels actually vary, without asserting exact colors/positions (which
+    // would make the test brittle against any legitimate styling change).
+
+    fn distinct_colors(rgb: &[u8]) -> std::collections::HashSet<[u8; 3]> {
+        rgb.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+    }
+
+    #[test]
+    fn render_histogram_with_data_is_not_a_blank_canvas() {
+        let data = HistogramData {
+            column_label: "Area".into(),
+            series: vec![HistogramSeries {
+                label: String::new(),
+                buckets: vec![
+                    HistogramBucket {
+                        range_start: 0.0,
+                        range_end: 1.0,
+                        count: 3,
+                    },
+                    HistogramBucket {
+                        range_start: 1.0,
+                        range_end: 2.0,
+                        count: 5,
+                    },
+                ],
+            }],
+            log_scale: false,
+            excluded_non_positive: 0,
+        };
+        let chart = render_histogram(&data, 200, 150).unwrap();
+
+        assert!(
+            distinct_colors(&chart.rgb).len() > 1,
+            "a histogram with real bucket counts must draw more than a solid background"
+        );
+    }
+
+    #[test]
+    fn render_scatter_with_points_is_not_a_blank_canvas() {
+        let data = ScatterData {
+            x_label: "Area".into(),
+            y_label: "Circularity".into(),
+            points: vec![
+                ScatterPoint {
+                    x: 1.0,
+                    y: 0.5,
+                    group: None,
+                },
+                ScatterPoint {
+                    x: 2.0,
+                    y: 0.8,
+                    group: None,
+                },
+                ScatterPoint {
+                    x: 5.0,
+                    y: 0.2,
+                    group: None,
+                },
+            ],
+            sampled_from: None,
+        };
+        let chart = render_scatter(&data, 200, 150).unwrap();
+
+        assert!(
+            distinct_colors(&chart.rgb).len() > 1,
+            "a scatter plot with real points must draw more than a solid background"
+        );
+    }
+
+    #[test]
+    fn render_heatmap_with_data_is_not_a_blank_canvas() {
+        let data = HeatmapData {
+            x_label: "X position (px)".into(),
+            y_label: "Y position (px)".into(),
+            value_label: "Count".into(),
+            cols: 2,
+            rows: 2,
+            cell_size: 10.0,
+            x_min: 0.0,
+            y_min: 0.0,
+            cells: vec![
+                HeatmapCell {
+                    count: 2,
+                    value: 2.0,
+                },
+                HeatmapCell {
+                    count: 0,
+                    value: 0.0,
+                },
+                HeatmapCell {
+                    count: 0,
+                    value: 0.0,
+                },
+                HeatmapCell {
+                    count: 1,
+                    value: 1.0,
+                },
+            ],
+        };
+        let chart = render_heatmap(
+            &data,
+            HeatmapColorScheme::Viridis,
+            HeatmapRange::Auto,
+            200,
+            150,
+        )
+        .unwrap();
+
+        assert!(
+            distinct_colors(&chart.rgb).len() > 1,
+            "a heatmap with populated cells must draw more than a solid background"
+        );
+    }
+
+    #[test]
+    fn render_heatmap_higher_value_cells_get_a_visually_different_color_than_lower_ones() {
+        // Not just "something was drawn" - the color scale must actually
+        // discriminate between cell values, matching what the legend
+        // promises (low = one end of the scheme, high = the other).
+        let data = HeatmapData {
+            x_label: "X position (px)".into(),
+            y_label: "Y position (px)".into(),
+            value_label: "Count".into(),
+            cols: 2,
+            rows: 1,
+            cell_size: 50.0,
+            x_min: 0.0,
+            y_min: 0.0,
+            cells: vec![
+                HeatmapCell {
+                    count: 1,
+                    value: 0.0,
+                },
+                HeatmapCell {
+                    count: 1,
+                    value: 100.0,
+                },
+            ],
+        };
+        let chart = render_heatmap(
+            &data,
+            HeatmapColorScheme::Viridis,
+            HeatmapRange::Auto,
+            200,
+            100,
+        )
+        .unwrap();
+
+        // Sample well inside each cell's half of the image (avoiding the
+        // legend/margins) - left half for the low-value cell, right half for
+        // the high-value one.
+        let pixel_at = |x: u32, y: u32| -> [u8; 3] {
+            let idx = ((y * chart.width + x) * 3) as usize;
+            [chart.rgb[idx], chart.rgb[idx + 1], chart.rgb[idx + 2]]
+        };
+        let low_pixel = pixel_at(chart.width / 6, chart.height / 2);
+        let high_pixel = pixel_at(chart.width * 5 / 6, chart.height / 2);
+
+        assert_ne!(
+            low_pixel, high_pixel,
+            "the low-value and high-value cells must render visually different colors"
+        );
+    }
+
     #[test]
     fn render_heatmap_auto_range_reports_zero_to_data_max() {
         let data = HeatmapData {

@@ -620,4 +620,239 @@ mod tests {
     }
     // `resolve_range` itself is tested in `evanalyzer_app::results::plate_matrix`
     // (this module just re-uses it) - no need to duplicate those cases here.
+
+    // -- plottable_labels ---------------------------------------------------------
+
+    fn column(id: &str, label: &str, visible: bool) -> ColumnSpec {
+        ColumnSpec {
+            id: id.to_string(),
+            label: label.to_string(),
+            filterable: false,
+            visible,
+        }
+    }
+
+    #[test]
+    fn plottable_labels_maps_each_plottable_columns_label_field() {
+        let cols = vec![
+            column("area_px", "Area (px)", true),
+            column("image", "Image", true), // non-numeric, excluded upstream
+        ];
+
+        let labels: Vec<String> = plottable_labels(&cols).iter().map(|s| s.to_string()).collect();
+
+        assert_eq!(labels, vec!["Area (px)".to_string()]);
+    }
+
+    // -- color_scheme_labels --------------------------------------------------------
+
+    #[test]
+    fn color_scheme_labels_lists_every_scheme_in_declaration_order() {
+        let labels: Vec<String> = color_scheme_labels().iter().map(|s| s.to_string()).collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                "Viridis".to_string(),
+                "Magma".to_string(),
+                "Plasma".to_string(),
+                "Grayscale".to_string(),
+            ]
+        );
+    }
+
+    // -- matrix_cell ----------------------------------------------------------------
+
+    #[test]
+    fn matrix_cell_with_a_value_formats_it_and_marks_has_value() {
+        let cell = matrix_cell(
+            "A1".to_string(),
+            Some(42.567),
+            0.0,
+            100.0,
+            HeatmapColorScheme::Grayscale,
+        );
+
+        assert_eq!(cell.label.as_str(), "A1");
+        assert_eq!(cell.value.as_str(), "42.6");
+        assert!(cell.has_value);
+    }
+
+    #[test]
+    fn matrix_cell_always_shows_one_decimal_even_for_metrics_the_table_view_shows_with_more() {
+        // `matrix_cell`'s `{:.1}` is fixed regardless of which metric is
+        // plotted, but the Table view (and CSV/XLSX export) format each
+        // metric with its own `metric_precision` - 3 decimals for
+        // Circularity, 2 for Area (nm²), 0 for a coloc partner count, only
+        // Area (px²) and channel bit values happen to use 1. So for a
+        // circularity average of 0.853 (what the Table view would display
+        // verbatim, e.g. "0.853"), the on-screen Matrix cell shows "0.9" -
+        // a real loss of the two least-significant digits, not just
+        // cosmetic zero-padding (contrast `export_matrix_to_csv`, which
+        // only ever *adds* trailing zeros, never drops real digits).
+        // Documented here as current, intentional-or-not behavior - flag if
+        // the Matrix grid should instead respect each metric's own
+        // precision like every other view does.
+        let cell = matrix_cell(
+            "A1".to_string(),
+            Some(0.853),
+            0.0,
+            1.0,
+            HeatmapColorScheme::Grayscale,
+        );
+
+        assert_eq!(
+            cell.value.as_str(),
+            "0.9",
+            "Matrix cell drops precision the Table view (\"0.853\") would show"
+        );
+    }
+
+    #[test]
+    fn matrix_cell_displayed_value_always_stays_within_the_expected_rounding_tolerance() {
+        // Guardrail for the intentional precision loss documented above:
+        // `matrix_cell` is *allowed* to round its input down to 1 decimal
+        // (by design, kept as-is - see the test above), but the text it
+        // shows must still be a faithful rounding of the value it was
+        // given, not some unrelated/corrupted number. `{:.1}` rounds to the
+        // nearest 0.1, so the reparsed displayed value can never be more
+        // than half that (0.05) away from the source `f64`, regardless of
+        // how many decimals the source itself carries (this covers every
+        // real `metric_precision` case: 0 decimals for a coloc partner
+        // count, 1 for Area (px²)/channel bit values, 2 for Area (nm²), 3
+        // for Circularity). A future change to `matrix_cell` that reads the
+        // wrong field, applies the wrong scale, or otherwise mangles the
+        // value would push it outside this window and fail here even
+        // though the exact-string test above only pins one example.
+        const HALF_STEP: f64 = 0.05 + 1e-9; // rounding half-step + float slop
+        let sources = [
+            0.0,      // coloc partner count precision (0 decimals)
+            7.0,      // "
+            42.567,   // Area (px²) / channel bit precision (1 decimal)
+            -3.14,    // negative values must round the same way
+            123.45,   // Area (nm²) precision (2 decimals)
+            0.853,    // Circularity precision (3 decimals)
+            0.85,     // exactly at a rounding half-step (0.8 vs 0.9) - the
+                      // tightest case HALF_STEP has to cover
+        ];
+
+        for &source in &sources {
+            let cell = matrix_cell(
+                "A1".to_string(),
+                Some(source),
+                source.min(0.0),
+                source.max(1.0),
+                HeatmapColorScheme::Viridis,
+            );
+            let displayed: f64 = cell
+                .value
+                .parse()
+                .unwrap_or_else(|e| panic!("cell value {:?} must parse as a number: {e}", cell.value));
+
+            assert!(
+                (displayed - source).abs() <= HALF_STEP,
+                "source {source} rounded to {displayed}, which is more than one rounding \
+                 half-step (±{HALF_STEP}) away - not a valid 1-decimal rounding"
+            );
+        }
+    }
+
+    #[test]
+    fn matrix_cell_without_a_value_is_blank_and_unmarked() {
+        let cell = matrix_cell("B2".to_string(), None, 0.0, 100.0, HeatmapColorScheme::Viridis);
+
+        assert_eq!(cell.label.as_str(), "");
+        assert_eq!(cell.value.as_str(), "");
+        assert!(!cell.has_value);
+        assert_eq!(cell.color, slint::Color::from_rgb_u8(0, 0, 0));
+    }
+
+    #[test]
+    fn matrix_cell_clamps_values_outside_the_range_to_the_scale_endpoints() {
+        let below = matrix_cell("x".to_string(), Some(-50.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
+        let at_min = matrix_cell("x".to_string(), Some(0.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
+        assert_eq!(below.color, at_min.color, "values below range_lo must clamp to t=0.0");
+
+        let above = matrix_cell("x".to_string(), Some(500.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
+        let at_max = matrix_cell("x".to_string(), Some(100.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
+        assert_eq!(above.color, at_max.color, "values above range_hi must clamp to t=1.0");
+    }
+
+    // -- attach_callbacks (live ResultsWindow) -------------------------------------
+
+    use crate::editor::images_list_controller::ImagesListController;
+    use crate::editor::results_table_controller::ResultsTableController;
+    use crate::editor::test_support::{test_ui_state, test_ui_windows};
+    use slint::Model;
+
+    fn make_controller(
+        results_ui: slint::Weak<ResultsWindow>,
+    ) -> (Arc<UiState>, Arc<ResultsMatrixController>) {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(crate::editor::viewport_controller::ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(crate::editor::object_list_controller::ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(crate::editor::histogram_controller::HistogramController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(crate::editor::image_meta_controller::ImageMetaController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller,
+        ));
+        let results_table_controller = Arc::new(ResultsTableController::new(
+            results_ui.clone(),
+            ui_state.clone(),
+            image_list_controller,
+        ));
+        let project_settings_controller = Arc::new(ProjectSettingsController::new(
+            slint::Weak::default(),
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let controller = Arc::new(ResultsMatrixController::new(
+            results_ui,
+            ui_state.clone(),
+            results_table_controller,
+            project_settings_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    #[test]
+    fn attach_callbacks_populates_the_agg_and_color_scheme_option_lists() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+
+        controller.attach_callbacks();
+
+        let state = results_ui.global::<ResultsState>();
+        let agg_options: Vec<String> =
+            state.get_matrix_agg_options().iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            agg_options,
+            vec!["Min", "Max", "Average", "Median", "Std. dev.", "Sum"]
+        );
+
+        let color_options: Vec<String> = state
+            .get_matrix_color_scheme_options()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(color_options, vec!["Viridis", "Magma", "Plasma", "Grayscale"]);
+    }
 }

@@ -2191,4 +2191,141 @@ mod tests {
             );
         }
     }
+
+    // -- attach_callbacks (live AppWindow) -----------------------------------------
+
+    use crate::editor::test_support::{test_ui_state, test_ui_windows};
+
+    fn make_controller(ui: slint::Weak<AppWindow>) -> (Arc<UiState>, Arc<PipelinesController>) {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let template_controller = Arc::new(TemplateController::new(ui.clone(), ui_state.clone()));
+        let controller = Arc::new(PipelinesController::new(
+            ui,
+            ui_state.clone(),
+            object_list_controller,
+            viewport_controller,
+            template_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    fn add_pipeline(ui_state: &UiState, id: u32) {
+        let mut project = ui_state.get_project_write();
+        project.add_pipeline(PipelineSettings {
+            id: PipelineId(id),
+            name: Some(format!("Pipeline {id}")),
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![],
+        });
+    }
+
+    #[test]
+    fn attach_callbacks_auto_preview_toggle_stores_the_flag() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        controller.attach_callbacks();
+
+        ui.global::<PipelinesPanelState>().invoke_auto_preview(true);
+        assert!(*controller.auto_preview_enabled.lock().unwrap());
+
+        ui.global::<PipelinesPanelState>().invoke_auto_preview(false);
+        assert!(!*controller.auto_preview_enabled.lock().unwrap());
+    }
+
+    #[test]
+    fn attach_callbacks_set_and_clear_breakpoint() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        controller.attach_callbacks();
+
+        ui.global::<PipelinesPanelState>().invoke_set_breakpoint(7, 2, 1);
+        assert_eq!(
+            *controller.breakpoint.lock().unwrap(),
+            Some((7, 2, evanalyzer_core::BreakpointMode::Stop))
+        );
+
+        ui.global::<PipelinesPanelState>().invoke_set_breakpoint(7, 2, 2);
+        assert_eq!(
+            *controller.breakpoint.lock().unwrap(),
+            Some((7, 2, evanalyzer_core::BreakpointMode::Snapshot)),
+            "mode 2 must map to Snapshot"
+        );
+
+        ui.global::<PipelinesPanelState>().invoke_clear_breakpoint();
+        assert!(controller.breakpoint.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn attach_callbacks_breakpoint_image_and_view_mode_forward_to_the_viewport_controller() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        controller.attach_callbacks();
+
+        ui.global::<PipelinesPanelState>()
+            .invoke_show_breakpoint_image_changed(true);
+        assert!(controller
+            .viewport_controller
+            .show_breakpoint
+            .load(std::sync::atomic::Ordering::Relaxed));
+
+        ui.global::<PipelinesPanelState>()
+            .invoke_breakpoint_view_mode_changed(1);
+        assert_eq!(
+            controller.viewport_controller.breakpoint_view_mode(),
+            crate::editor::viewport_controller::BreakpointViewMode::Segmentation
+        );
+    }
+
+    #[test]
+    fn attach_callbacks_toggle_pipeline_flips_enabled_and_resyncs() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        add_pipeline(&ui_state, 1);
+        controller.attach_callbacks();
+
+        ui.global::<PipelinesPanelState>().invoke_toggle_pipeline(1);
+
+        let project = ui_state.get_project();
+        assert!(!project.pipelines.iter().find(|p| p.id.0 == 1).unwrap().enabled);
+    }
+
+    #[test]
+    fn attach_callbacks_move_pipeline_up_and_down_reorder_the_list() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        add_pipeline(&ui_state, 1);
+        add_pipeline(&ui_state, 2);
+        controller.attach_callbacks();
+
+        ui.global::<PipelinesPanelState>().invoke_move_pipeline_up(2);
+        {
+            let project = ui_state.get_project();
+            assert_eq!(project.pipelines[0].id, PipelineId(2));
+        }
+
+        ui.global::<PipelinesPanelState>().invoke_move_pipeline_down(2);
+        let project = ui_state.get_project();
+        assert_eq!(project.pipelines[1].id, PipelineId(2));
+    }
+
+    #[test]
+    fn attach_callbacks_new_pipeline_adds_a_pipeline_with_the_next_free_id() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        add_pipeline(&ui_state, 5);
+        controller.attach_callbacks();
+
+        ui.global::<PipelinesPanelState>().invoke_new_pipeline();
+
+        let project = ui_state.get_project();
+        assert_eq!(project.pipelines.len(), 2);
+        assert!(project.pipelines.iter().any(|p| p.id == PipelineId(6)));
+    }
 }

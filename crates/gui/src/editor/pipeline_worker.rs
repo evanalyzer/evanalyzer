@@ -362,3 +362,46 @@ fn wait_for_task(task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>) -> P
     }
     task_slot.take().unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait_for_task_returns_immediately_if_a_task_is_already_posted() {
+        let task_request = Arc::new((
+            Mutex::new(Some(PipelineTask {
+                preview: true,
+                ..Default::default()
+            })),
+            Condvar::new(),
+        ));
+
+        let task = wait_for_task(task_request.clone());
+
+        assert!(task.preview);
+        // Taken out of the slot, not just peeked at.
+        assert!(task_request.0.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn wait_for_task_blocks_until_a_task_is_posted_from_another_thread() {
+        let task_request = Arc::new((Mutex::<Option<PipelineTask>>::new(None), Condvar::new()));
+        let poster = task_request.clone();
+
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let (lock, cvar) = &*poster;
+            *lock.lock().unwrap() = Some(PipelineTask {
+                job_name: Some("posted-from-another-thread".to_string()),
+                ..Default::default()
+            });
+            cvar.notify_one();
+        });
+
+        let task = wait_for_task(task_request);
+
+        assert_eq!(task.job_name.as_deref(), Some("posted-from-another-thread"));
+        handle.join().unwrap();
+    }
+}

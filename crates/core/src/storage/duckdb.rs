@@ -1545,6 +1545,136 @@ mod tests {
         );
     }
 
+    /// `area_px = width` for a `height == 1` bbox - lets these tests pick
+    /// exact metric values directly instead of reverse-engineering a bbox
+    /// shape for each one.
+    fn object_with_area(id: u128, area_px: u32) -> Object {
+        make_filled_object(id, [0, 0, area_px - 1, 0])
+    }
+
+    /// Every `AggregateSpec::agg_fns` entry actually used in production
+    /// (`AggFunc::sql_fn`, `results_loader.rs`) against two groups - one odd
+    /// count, one even count (median's two code paths) - with every expected
+    /// value hand-calculated independently of the implementation, not just
+    /// cross-checked against `apply_agg`. This is the direct correctness
+    /// check `apply_agg`'s own tests are for the Rust path; nothing
+    /// previously exercised `STDDEV_SAMP`/`MEDIAN`/`SUM`/`MIN`/`MAX` through
+    /// the actual SQL aggregation path at all.
+    #[test]
+    fn aggregate_objects_sum_min_max_median_and_stdev_match_hand_calculated_values() {
+        // img_a: odd count (5) -> MEDIAN is a plain middle element.
+        let odd = vec![
+            object_with_area(1, 10),
+            object_with_area(2, 20),
+            object_with_area(3, 30),
+            object_with_area(4, 40),
+            object_with_area(5, 50),
+        ];
+        // img_b: even count (4) -> MEDIAN averages the two middle elements.
+        let even = vec![
+            object_with_area(6, 10),
+            object_with_area(7, 20),
+            object_with_area(8, 30),
+            object_with_area(9, 40),
+        ];
+        let (_dir, reader) =
+            export_multi_image_and_open(vec![("img_a.tif", odd), ("img_b.tif", even)]);
+
+        let spec = AggregateSpec {
+            key_mode: GroupKeyMode::Image,
+            group_by_class: false,
+            split_colocalized: false,
+            metric_ids: vec!["area_px".to_string()],
+            agg_fns: vec!["SUM", "MIN", "MAX", "AVG", "MEDIAN", "STDDEV_SAMP"],
+        };
+        let rows = reader
+            .aggregate_objects(&ObjectFilter::default(), &spec)
+            .unwrap();
+
+        assert_eq!(rows.len(), 2);
+
+        let assert_row = |row: &AggregatedRow, expected: [f64; 6], tolerance: f64| {
+            let got: Vec<f64> = row.metric_values.iter().map(|v| v.unwrap()).collect();
+            for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+                assert!(
+                    (g - e).abs() <= tolerance,
+                    "{:?} col {i}: got {g}, expected {e}",
+                    row.group_key
+                );
+            }
+        };
+
+        // Values: 10,20,30,40,50 -> sum=150, min=10, max=50, avg=30, median=30
+        // (the middle element), sample stdev = sqrt(1000/4) = 15.8113883...
+        assert_row(
+            &rows[0],
+            [150.0, 10.0, 50.0, 30.0, 30.0, 1000f64.sqrt() / 2.0],
+            1e-9,
+        );
+        // Values: 10,20,30,40 -> sum=100, min=10, max=40, avg=25,
+        // median=(20+30)/2=25, sample stdev = sqrt(500/3) = 12.9099444...
+        assert_row(
+            &rows[1],
+            [100.0, 10.0, 40.0, 25.0, 25.0, (500f64 / 3.0).sqrt()],
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn aggregate_objects_stddev_samp_of_a_single_value_group_is_zero_not_null() {
+        // Sample stdev is mathematically undefined for n=1; DuckDB's
+        // STDDEV_SAMP returns SQL NULL there, but this codebase's Rust
+        // ground truth (`apply_agg`'s Stdev branch) reports 0.0 for a
+        // single-value input rather than leaving the cell blank - the
+        // `COALESCE(STDDEV_SAMP(...), CASE WHEN COUNT(...) >= 1 THEN 0.0 END)`
+        // in `aggregate_objects` exists specifically to recover that. This
+        // was previously untested end-to-end.
+        let solo = vec![object_with_area(1, 42)];
+        let (_dir, reader) = export_multi_image_and_open(vec![("img.tif", solo)]);
+
+        let spec = AggregateSpec {
+            key_mode: GroupKeyMode::Image,
+            group_by_class: false,
+            split_colocalized: false,
+            metric_ids: vec!["area_px".to_string()],
+            agg_fns: vec!["STDDEV_SAMP"],
+        };
+        let rows = reader
+            .aggregate_objects(&ObjectFilter::default(), &spec)
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].metric_values,
+            vec![Some(0.0)],
+            "a single-value group's sample stdev must be reported as 0.0, not NULL/blank"
+        );
+    }
+
+    #[test]
+    fn aggregate_objects_stddev_samp_of_identical_values_is_zero() {
+        let same = vec![
+            object_with_area(1, 25),
+            object_with_area(2, 25),
+            object_with_area(3, 25),
+        ];
+        let (_dir, reader) = export_multi_image_and_open(vec![("img.tif", same)]);
+
+        let spec = AggregateSpec {
+            key_mode: GroupKeyMode::Image,
+            group_by_class: false,
+            split_colocalized: false,
+            metric_ids: vec!["area_px".to_string()],
+            agg_fns: vec!["STDDEV_SAMP", "MEDIAN"],
+        };
+        let rows = reader
+            .aggregate_objects(&ObjectFilter::default(), &spec)
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].metric_values, vec![Some(0.0), Some(25.0)]);
+    }
+
     #[test]
     fn coloc_filter_restricts_to_matching_status() {
         const ID_COLOC: u128 = 1;

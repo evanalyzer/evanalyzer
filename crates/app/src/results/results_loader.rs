@@ -2252,6 +2252,210 @@ mod tests {
         assert_eq!(rows[1].values[1], "ClassB");
     }
 
+    // ---- aggregate_objects_sql / aggregate_rows parity ----
+    //
+    // `aggregate_rows` (pure Rust, drives the Matrix/Well view) and
+    // `aggregate_objects_sql` (DuckDB pushdown, drives the grouped Table view
+    // and grouped CSV/XLSX export) are two independent implementations of the
+    // same statistics that must never silently drift apart - a user grouping
+    // the same data in the Table view and the Matrix view, or exporting what
+    // they see in the Table, needs identical numbers either way.
+    // `aggregate_objects_sql`'s own doc comment calls `aggregate_rows` its
+    // "parity ground-truth", but nothing actually compared their outputs
+    // end-to-end before these tests - `duckdb.rs`'s tests only ever had one
+    // object per group (never exercising real aggregation), and
+    // `results_exporter.rs`'s grouped-export test only checked row counts.
+
+    use crate::results::test_support::{seed_large_coloc_db, seed_large_results_db};
+
+    /// Every numeric-metric column's formatted value must match within a
+    /// tight float tolerance (both sides format with `metric_precision`'s
+    /// decimal places, but comparing as text would mask a real mismatch that
+    /// happens to round the same way) - group-key/count columns must match
+    /// exactly as text.
+    fn assert_rows_match(rust_rows: &[DisplayRow], sql_rows: &[DisplayRow]) {
+        assert_eq!(rust_rows.len(), sql_rows.len(), "same number of groups");
+        for (rust_row, sql_row) in rust_rows.iter().zip(sql_rows.iter()) {
+            assert_eq!(rust_row.values.len(), sql_row.values.len());
+            for (i, (r, s)) in rust_row.values.iter().zip(sql_row.values.iter()).enumerate() {
+                match (r.parse::<f64>(), s.parse::<f64>()) {
+                    (Ok(rf), Ok(sf)) => assert!(
+                        (rf - sf).abs() < 1e-6,
+                        "column {i} of group {:?}: rust={r:?} sql={s:?}",
+                        rust_row.values.first()
+                    ),
+                    _ => assert_eq!(
+                        r, s,
+                        "column {i} of group {:?} (non-numeric)",
+                        rust_row.values.first()
+                    ),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aggregate_objects_sql_matches_aggregate_rows_grouped_by_image_for_every_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        // 60 objects, area_px = 0..60, cycling across 3 images x 2 classes ->
+        // 20 objects (10 per class) per image, real spread for every stat.
+        seed_large_results_db(&db_path, 60);
+
+        let loader = ResultsLoader::new(db_path);
+        let base_specs = build_column_specs(&[], &[]);
+        let all_objects = loader.get_objects(DatabaseFilter::default()).unwrap();
+        assert_eq!(all_objects.len(), 60);
+
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            aggs: vec![
+                AggFunc::Min,
+                AggFunc::Max,
+                AggFunc::Sum,
+                AggFunc::Avg,
+                AggFunc::Median,
+                AggFunc::Stdev,
+            ],
+            ..Default::default()
+        };
+
+        let (rust_specs, rust_rows) = aggregate_rows(&all_objects, &config, &base_specs);
+        let (sql_specs, sql_rows) =
+            aggregate_objects_sql(&loader, DatabaseFilter::default(), &config, &base_specs)
+                .unwrap();
+
+        assert_eq!(
+            rust_specs.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            sql_specs.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            "both paths must describe the same columns (build_group_specs is shared)"
+        );
+        assert_eq!(rust_rows.len(), 3, "3 distinct images");
+        assert_rows_match(&rust_rows, &sql_rows);
+    }
+
+    #[test]
+    fn aggregate_objects_sql_applies_the_class_filter_before_aggregating_same_as_aggregate_rows() {
+        // `aggregate_rows` only ever sees objects already filtered by
+        // `ResultsLoader::get_objects` in Rust; `aggregate_objects_sql`
+        // instead pushes the *same* `DatabaseFilter` down into the SQL
+        // query's WHERE clause itself - two independent filter
+        // implementations that must restrict to the identical subset before
+        // the aggregation math runs, or a filtered Table/export view would
+        // silently show aggregates computed over the wrong (unfiltered, or
+        // differently-filtered) rows.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_large_results_db(&db_path, 60);
+
+        let loader = ResultsLoader::new(db_path);
+        let base_specs = build_column_specs(&[], &[]);
+        let filter = DatabaseFilter {
+            class_filter: Some(vec!["ClassA".to_string()]),
+            ..Default::default()
+        };
+        let filtered_objects = loader.get_objects(filter.clone()).unwrap();
+        assert_eq!(
+            filtered_objects.len(),
+            30,
+            "sanity check: half of the 60 objects are ClassA"
+        );
+
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            aggs: vec![AggFunc::Sum, AggFunc::Avg, AggFunc::Stdev],
+            ..Default::default()
+        };
+
+        let (rust_specs, rust_rows) = aggregate_rows(&filtered_objects, &config, &base_specs);
+        let (sql_specs, sql_rows) =
+            aggregate_objects_sql(&loader, filter, &config, &base_specs).unwrap();
+
+        assert_eq!(
+            rust_specs.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            sql_specs.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        assert_eq!(rust_rows.len(), 3);
+        // Every group's count must reflect only the filtered (ClassA) rows -
+        // 10 per image, not the 20 total per image before filtering.
+        let count_col = rust_specs.iter().position(|s| s.id == "count").unwrap();
+        for row in &rust_rows {
+            assert_eq!(row.values[count_col], "10");
+        }
+        assert_rows_match(&rust_rows, &sql_rows);
+    }
+
+    #[test]
+    fn aggregate_objects_sql_matches_aggregate_rows_grouped_by_class_and_regex() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_large_results_db(&db_path, 60);
+
+        let loader = ResultsLoader::new(db_path);
+        let base_specs = build_column_specs(&[], &[]);
+        let all_objects = loader.get_objects(DatabaseFilter::default()).unwrap();
+
+        let config = GroupConfig {
+            group_by: GroupBy::Regex,
+            regex: r"^(img\d)".to_string(),
+            aggs: vec![AggFunc::Avg, AggFunc::Median, AggFunc::Stdev],
+            split_colocalized: false,
+            group_by_class: true,
+        };
+
+        let (rust_specs, mut rust_rows) = aggregate_rows(&all_objects, &config, &base_specs);
+        let (sql_specs, mut sql_rows) =
+            aggregate_objects_sql(&loader, DatabaseFilter::default(), &config, &base_specs)
+                .unwrap();
+
+        assert_eq!(
+            rust_specs.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            sql_specs.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        // 3 images x 2 classes = 6 groups; sort both the same way in case
+        // either side's group ordering (key, then class) differs in ties.
+        let sort_key = |r: &DisplayRow| (r.values[0].clone(), r.values[1].clone());
+        rust_rows.sort_by_key(sort_key);
+        sql_rows.sort_by_key(sort_key);
+        assert_eq!(rust_rows.len(), 6);
+        assert_rows_match(&rust_rows, &sql_rows);
+    }
+
+    #[test]
+    fn aggregate_objects_sql_matches_aggregate_rows_with_split_colocalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_large_coloc_db(&db_path, 30, 5);
+
+        let loader = ResultsLoader::new(db_path);
+        let base_specs = build_column_specs(&[], &[]);
+        let all_objects = loader.get_objects(DatabaseFilter::default()).unwrap();
+
+        let config = GroupConfig {
+            group_by: GroupBy::Image,
+            aggs: vec![AggFunc::Sum, AggFunc::Median, AggFunc::Stdev],
+            split_colocalized: true,
+            group_by_class: false,
+            ..Default::default()
+        };
+
+        let (rust_specs, rust_rows) = aggregate_rows(&all_objects, &config, &base_specs);
+        let (sql_specs, sql_rows) =
+            aggregate_objects_sql(&loader, DatabaseFilter::default(), &config, &base_specs)
+                .unwrap();
+
+        assert_eq!(
+            rust_specs.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            sql_specs.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rust_rows.len(),
+            2,
+            "one image, split into a colocalizing and a non-colocalizing bucket"
+        );
+        assert_rows_match(&rust_rows, &sql_rows);
+    }
+
     // ---- sort_display_rows ----
 
     #[test]
@@ -2352,5 +2556,90 @@ mod tests {
             rows.iter().map(|r| r.object_id_int).collect::<Vec<_>>(),
             vec![1, 2]
         );
+    }
+
+    fn area_row(id: i32, value: &str) -> DisplayRow {
+        DisplayRow {
+            object_id_int: id,
+            object_id: String::new(),
+            values: vec![value.to_string()],
+            stripe: id % 2 == 0,
+        }
+    }
+
+    #[test]
+    fn sort_display_rows_orders_negative_numbers_correctly() {
+        let specs = vec![ColumnSpec {
+            id: "area_px".into(),
+            label: "Area".into(),
+            filterable: false,
+            visible: true,
+        }];
+        let mut rows = vec![area_row(1, "-5"), area_row(2, "10"), area_row(3, "-20")];
+
+        sort_display_rows(&mut rows, &specs, "area_px", true);
+
+        assert_eq!(
+            rows.iter().map(|r| r.object_id_int).collect::<Vec<_>>(),
+            vec![3, 1, 2],
+            "-20 < -5 < 10"
+        );
+    }
+
+    #[test]
+    fn sort_display_rows_is_stable_for_tied_values() {
+        let specs = vec![ColumnSpec {
+            id: "area_px".into(),
+            label: "Area".into(),
+            filterable: false,
+            visible: true,
+        }];
+        // Three ties at "50", in this original order - a stable sort must
+        // preserve it exactly (relative to each other) either direction, so
+        // grouped rows with equal aggregates don't visibly reshuffle every
+        // reload.
+        let mut rows = vec![
+            area_row(1, "50"),
+            area_row(2, "10"),
+            area_row(3, "50"),
+            area_row(4, "50"),
+        ];
+
+        sort_display_rows(&mut rows, &specs, "area_px", true);
+        assert_eq!(
+            rows.iter().map(|r| r.object_id_int).collect::<Vec<_>>(),
+            vec![2, 1, 3, 4],
+            "ties (1,3,4) must keep their original relative order"
+        );
+
+        sort_display_rows(&mut rows, &specs, "area_px", false);
+        assert_eq!(
+            rows.iter().map(|r| r.object_id_int).collect::<Vec<_>>(),
+            vec![1, 3, 4, 2],
+            "descending must still keep tied rows (1,3,4) in their original relative order"
+        );
+    }
+
+    #[test]
+    fn sort_display_rows_missing_value_sorts_as_text_against_real_numbers() {
+        // A hidden/blank cell (`""`, e.g. a metric column that's toggled off)
+        // mixed with real numeric values in the same column: `"".parse::<f64>()`
+        // fails, so the comparison falls back to the text branch, which
+        // compares "" against the *string form* of the numeric side (e.g.
+        // "100") rather than skipping/nulling it - documenting this
+        // (deliberately unusual) behavior so a future change to it is a
+        // conscious decision, not an accidental regression.
+        let specs = vec![ColumnSpec {
+            id: "area_px".into(),
+            label: "Area".into(),
+            filterable: false,
+            visible: true,
+        }];
+        let mut rows = vec![area_row(1, "100"), area_row(2, ""), area_row(3, "50")];
+
+        sort_display_rows(&mut rows, &specs, "area_px", true);
+
+        // "" < "100" and "" < "50" lexicographically, so the blank sorts first.
+        assert_eq!(rows[0].object_id_int, 2);
     }
 }

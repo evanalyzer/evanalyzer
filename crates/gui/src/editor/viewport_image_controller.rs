@@ -609,3 +609,219 @@ impl ViewportImageController {
             });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
+    use crate::editor::viewport_cache::ViewportCache;
+
+    fn make_controller() -> (Arc<UiState>, Arc<ViewportImageController>) {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
+        let histogram_controller = Arc::new(HistogramController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_meta_controller = Arc::new(ImageMetaController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let controller = Arc::new(ViewportImageController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller,
+            viewport_cache,
+            histogram_controller,
+            image_meta_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    // -- update_viewport_size_in_viewport_state ----------------------------------
+
+    #[test]
+    fn update_viewport_size_stores_the_given_dimensions() {
+        let (_, controller) = make_controller();
+
+        controller.update_viewport_size_in_viewport_state(800.0, 600.0).unwrap();
+
+        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        assert_eq!(state.viewport_width, 800.0);
+        assert_eq!(state.viewport_height, 600.0);
+    }
+
+    // -- update_viewport_zoom_in_viewport_state ----------------------------------
+
+    #[test]
+    fn update_viewport_zoom_stores_zoom_and_offset() {
+        let (_, controller) = make_controller();
+
+        controller
+            .update_viewport_zoom_in_viewport_state(2.5, 10.0, -5.0)
+            .unwrap();
+
+        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        assert_eq!(state.zoom, 2.5);
+        assert_eq!(state.offset_x, 10.0);
+        assert_eq!(state.offset_y, -5.0);
+    }
+
+    // -- update_viewport_position_in_viewport_state ------------------------------
+
+    #[test]
+    fn update_viewport_position_stores_the_offset_and_leaves_zoom_untouched() {
+        let (_, controller) = make_controller();
+        controller
+            .update_viewport_zoom_in_viewport_state(3.0, 0.0, 0.0)
+            .unwrap();
+
+        controller
+            .update_viewport_position_in_viewport_state(42.0, -7.0)
+            .unwrap();
+
+        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        assert_eq!(state.offset_x, 42.0);
+        assert_eq!(state.offset_y, -7.0);
+        assert_eq!(state.zoom, 3.0, "position update must not touch zoom");
+    }
+
+    // -- update_mouse_position_in_viewport_state ---------------------------------
+
+    #[test]
+    fn update_mouse_position_stores_the_given_coordinates() {
+        let (_, controller) = make_controller();
+
+        controller.update_mouse_position_in_viewport_state(123.0, 456.0);
+
+        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        assert_eq!(state.mouse_pos_x, 123.0);
+        assert_eq!(state.mouse_pos_y, 456.0);
+    }
+
+    // -- update_channel_options_in_project ----------------------------------------
+
+    fn channel(idx: i32, active: bool) -> ChannelInfo {
+        ChannelInfo {
+            name: "ch".into(),
+            active,
+            idx,
+            color: slint::Color::from_rgb_u8(0, 0, 0),
+            emission_wave_length: 0.0,
+        }
+    }
+
+    #[test]
+    fn update_channel_options_stores_channel_visibility() {
+        let (ui_state, controller) = make_controller();
+
+        controller.update_channel_options_in_project(
+            vec![channel(0, true), channel(1, false)],
+            0,
+            0,
+            IntensityProjection::SingleStack,
+            1.0,
+        );
+
+        let project = ui_state.get_project();
+        let visibilities = project.get_image_channel_visibilities();
+        assert_eq!(visibilities.get(&0), Some(&true));
+        assert_eq!(visibilities.get(&1), Some(&false));
+    }
+
+    #[test]
+    fn update_channel_options_maps_every_projection_kind_to_its_z_stack_handling() {
+        let cases = [
+            (IntensityProjection::SingleStack, ZStackHandling::SingleStack, true),
+            (IntensityProjection::AllStacks, ZStackHandling::AllStacks, true),
+            (IntensityProjection::Max, ZStackHandling::MaxIntensity, false),
+            (IntensityProjection::Min, ZStackHandling::MinIntensity, false),
+            (IntensityProjection::Avg, ZStackHandling::AvgIntensity, false),
+            (IntensityProjection::Sum, ZStackHandling::SumIntensity, false),
+            (IntensityProjection::Middle, ZStackHandling::TakeTheMiddle, false),
+        ];
+
+        for (projection, expected_handling, expects_range) in cases {
+            let (ui_state, controller) = make_controller();
+
+            controller.update_channel_options_in_project(vec![], 3, 0, projection, 1.0);
+
+            let project = ui_state.get_project();
+            let z = project.get_z_stack().expect("z-stack settings must be set");
+            assert_eq!(z.z_projection, expected_handling);
+            if expects_range {
+                assert_eq!(z.z_range, Some(3..=3));
+            } else {
+                assert_eq!(z.z_range, None);
+            }
+        }
+    }
+
+    #[test]
+    fn update_channel_options_stores_playback_speed_and_t_stack() {
+        let (ui_state, controller) = make_controller();
+
+        controller.update_channel_options_in_project(
+            vec![],
+            0,
+            7,
+            IntensityProjection::SingleStack,
+            2.5,
+        );
+
+        let project = ui_state.get_project();
+        let t = project.get_t_stack().expect("t-stack settings must be set");
+        assert_eq!(t.t_stack, 7);
+        assert_eq!(t.playback_speed, 2.5);
+    }
+
+    // -- update_active_channel_in_project ------------------------------------------
+
+    #[test]
+    fn update_active_channel_stores_the_selected_channel_index() {
+        let (ui_state, controller) = make_controller();
+
+        controller.update_active_channel_in_project(&1);
+
+        let project = ui_state.get_project();
+        assert_eq!(project.get_selected_image_channel_idx(), 1);
+    }
+
+    // -- update_active_series_in_project --------------------------------------------
+
+    #[test]
+    fn update_active_series_stores_the_selected_series_on_the_current_image() {
+        let (ui_state, controller) = make_controller();
+
+        controller.update_active_series_in_project(&2);
+
+        let project = ui_state.get_project();
+        let entry = project
+            .get_current_image_settings()
+            .expect("fixture project has a current image");
+        assert_eq!(entry.selected_series, 2);
+    }
+
+    // -- sync_pixel_info_throttled / sync_actual_mouse_position_information_to_slint
+
+    #[test]
+    fn sync_actual_mouse_position_information_to_slint_without_cached_high_res_data_is_a_no_op() {
+        let (_, controller) = make_controller();
+        // `viewport_cache.active_high_res_data` is `None` in a fresh cache -
+        // must return early rather than panic.
+        controller.sync_actual_mouse_position_information_to_slint();
+    }
+
+    #[test]
+    fn sync_pixel_info_throttled_does_not_panic_on_first_or_repeated_calls() {
+        let (_, controller) = make_controller();
+        controller.sync_pixel_info_throttled();
+        controller.sync_pixel_info_throttled();
+    }
+}

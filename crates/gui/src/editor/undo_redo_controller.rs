@@ -108,3 +108,126 @@ impl UndoRedoController {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::pipelines_controller::PipelinesController;
+    use crate::editor::template_controller::TemplateController;
+    use crate::editor::test_support::{
+        project_with_one_image, test_ui_state_with_project, test_ui_windows,
+    };
+
+    fn make_controller() -> (Arc<UiState>, Arc<UndoRedoController>) {
+        make_controller_with_ui(slint::Weak::default())
+    }
+
+    fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> (Arc<UiState>, Arc<UndoRedoController>) {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let template_controller = Arc::new(TemplateController::new(ui.clone(), ui_state.clone()));
+        let pipelines_controller = Arc::new(PipelinesController::new(
+            ui.clone(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+            template_controller,
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(HistogramController::new(
+                ui.clone(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                ui.clone(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller.clone(),
+        ));
+        let project_settings_controller = Arc::new(ProjectSettingsController::new(
+            ui.clone(),
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let classification_controller = Arc::new(ClassificationController::new(
+            ui.clone(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+        ));
+        let controller = Arc::new(UndoRedoController::new(
+            ui,
+            ui_state.clone(),
+            image_list_controller,
+            project_settings_controller,
+            classification_controller,
+            pipelines_controller,
+            object_list_controller,
+            viewport_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    /// `refresh_all_panels` fans out to every other controller's Slint sync
+    /// call - with a dead `ui: Weak::default()` (as if the window had been
+    /// closed) every one of those must degrade to a no-op, not panic. This
+    /// is the only independently testable behavior in this controller: the
+    /// actual undo/redo bookkeeping lives in `UiState::undo`/`redo`, and
+    /// `attach_callbacks` only wires Slint callbacks.
+    #[test]
+    fn refresh_all_panels_does_not_panic_without_a_live_ui() {
+        let (_, controller) = make_controller();
+
+        controller.refresh_all_panels();
+    }
+
+    // -- attach_callbacks (live AppWindow) -----------------------------------------
+
+    #[test]
+    fn attach_callbacks_wires_the_toolbars_undo_and_redo_buttons_to_ui_state() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+
+        // Make an edit so there's a checkpoint to undo.
+        ui_state.get_project_write().metadata.name = "edited".to_string();
+        assert_eq!(ui_state.get_project().metadata.name, "edited");
+
+        ui.global::<ToolbarState>().invoke_undo_clicked();
+        assert_eq!(
+            ui_state.get_project().metadata.name,
+            "",
+            "the wired undo button must call UiState::undo() and restore the pre-edit state"
+        );
+
+        ui.global::<ToolbarState>().invoke_redo_clicked();
+        assert_eq!(
+            ui_state.get_project().metadata.name,
+            "edited",
+            "the wired redo button must call UiState::redo() and reapply the edit"
+        );
+    }
+
+    #[test]
+    fn attach_callbacks_undo_with_nothing_to_undo_does_not_panic_or_change_project_state() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+
+        ui.global::<ToolbarState>().invoke_undo_clicked();
+
+        assert_eq!(ui_state.get_project().metadata.name, "");
+    }
+}

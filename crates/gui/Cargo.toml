@@ -47,5 +47,8 @@ features = [
 
 [dev-dependencies]
 kornia-apriltag = {version = "0.1.10"}
+# Must track the exact `slint` version resolved workspace-wide (1.17.1, per
+# Cargo.lock) - this crate doesn't follow semver.
+i-slint-backend-testing = "=1.17.1"
 
 

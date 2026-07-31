@@ -1186,3 +1186,120 @@ mod dispatch_slot_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod breakpoint_state_tests {
+    use super::*;
+    use crate::editor::test_support::test_ui_state;
+    use evanalyzer_core::ManagedImage;
+    use kornia_apriltag::utils::Point2d;
+    use kornia_image::allocator::CpuAllocator;
+    use kornia_image::{Image, ImageSize};
+
+    fn make_controller() -> ViewportController {
+        ViewportController::new(slint::Weak::default(), test_ui_state())
+    }
+
+    fn gray_image() -> ImageContainer {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let image = Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 4], CpuAllocator).unwrap();
+        ImageContainer::F32Gray(ManagedImage {
+            data: image,
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        })
+    }
+
+    // -- breakpoint_view_mode / set_breakpoint_view_mode -----------------------
+
+    #[test]
+    fn breakpoint_view_mode_defaults_to_image() {
+        let controller = make_controller();
+        assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Image);
+    }
+
+    #[test]
+    fn set_breakpoint_view_mode_round_trips_every_valid_value() {
+        let controller = make_controller();
+
+        controller.set_breakpoint_view_mode(1);
+        assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Segmentation);
+
+        controller.set_breakpoint_view_mode(2);
+        assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Instances);
+
+        controller.set_breakpoint_view_mode(0);
+        assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Image);
+    }
+
+    #[test]
+    fn set_breakpoint_view_mode_out_of_range_falls_back_to_image() {
+        let controller = make_controller();
+        controller.set_breakpoint_view_mode(1);
+
+        controller.set_breakpoint_view_mode(99);
+
+        assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Image);
+    }
+
+    // -- set_show_breakpoint ------------------------------------------------------
+
+    #[test]
+    fn set_show_breakpoint_stores_the_given_flag() {
+        let controller = make_controller();
+        assert!(!controller.show_breakpoint.load(Ordering::Relaxed));
+
+        controller.set_show_breakpoint(true);
+        assert!(controller.show_breakpoint.load(Ordering::Relaxed));
+
+        controller.set_show_breakpoint(false);
+        assert!(!controller.show_breakpoint.load(Ordering::Relaxed));
+    }
+
+    // -- set_breakpoint_channel ----------------------------------------------------
+
+    #[test]
+    fn set_breakpoint_channel_stores_the_given_buffers_and_geometry() {
+        let controller = make_controller();
+
+        controller.set_breakpoint_channel(
+            gray_image(),
+            Some(gray_image()),
+            None,
+            10,
+            20,
+            2,
+            2,
+            8,
+            Some(3),
+        );
+
+        let stored = controller.breakpoint_channel.read().unwrap();
+        let data = stored.as_ref().expect("breakpoint channel must be set");
+        assert!(data.segmentation.is_some());
+        assert!(data.instances.is_none());
+        assert_eq!(data.tile_offset_x, 10);
+        assert_eq!(data.tile_offset_y, 20);
+        assert_eq!(data.tile_width, 2);
+        assert_eq!(data.tile_height, 2);
+        assert_eq!(data.nr_bits, 8);
+        assert_eq!(data.channel_idx, Some(3));
+    }
+
+    #[test]
+    fn set_breakpoint_channel_overwrites_a_previous_value() {
+        let controller = make_controller();
+        controller.set_breakpoint_channel(gray_image(), None, None, 0, 0, 1, 1, 8, None);
+
+        controller.set_breakpoint_channel(gray_image(), None, None, 5, 5, 1, 1, 16, Some(1));
+
+        let stored = controller.breakpoint_channel.read().unwrap();
+        let data = stored.as_ref().unwrap();
+        assert_eq!(data.tile_offset_x, 5);
+        assert_eq!(data.nr_bits, 16);
+        assert_eq!(data.channel_idx, Some(1));
+    }
+}

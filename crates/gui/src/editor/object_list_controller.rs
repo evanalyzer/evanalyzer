@@ -560,4 +560,216 @@ mod tests {
         assert_eq!(format_area_nm2(1000, &unit_px), "1.0 k");
         assert_eq!(format_area_nm2(1_000_000, &unit_px), "1.00 M");
     }
+
+    // -- compute_visible_rows / precompute_label_counts -----------------------
+
+    use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
+    use std::collections::HashSet;
+
+    fn object_with_class(id: u128, seg_class: u32, has_class: bool) -> ObjectMetricSettings {
+        let mut object_class = HashSet::new();
+        if has_class {
+            object_class.insert(ObjectClass::Valid(1));
+        }
+        ObjectMetricSettings {
+            id: evanalyzer_cfg::core_types::ObjectId(id),
+            segmentation_class: SegmentationClass(seg_class),
+            object_class,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compute_visible_rows_hides_unclassified_objects_by_default() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, false)); // unclassified
+        project.add_object(&object_with_class(2, 1, true)); // classified
+        let ui_state = test_ui_state_with_project(project);
+
+        assert!(
+            ui_state.get_project().hide_unclassified_objects(),
+            "hide_unclassified_objects defaults to true"
+        );
+        assert_eq!(compute_visible_rows(&ui_state), vec![1]);
+    }
+
+    #[test]
+    fn compute_visible_rows_includes_every_row_once_hiding_is_toggled_off() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, false));
+        project.add_object(&object_with_class(2, 1, true));
+        project.toggle_hide_unclassified_objects();
+        let ui_state = test_ui_state_with_project(project);
+
+        assert_eq!(compute_visible_rows(&ui_state), vec![0, 1]);
+    }
+
+    #[test]
+    fn compute_visible_rows_chains_preview_objects_after_manual_ones() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true)); // manual, index 0
+        project.tmp_settings.preview_objects.push(object_with_class(2, 1, true)); // preview, index 1
+        let ui_state = test_ui_state_with_project(project);
+
+        assert_eq!(compute_visible_rows(&ui_state), vec![0, 1]);
+    }
+
+    #[test]
+    fn precompute_label_counts_counts_per_segmentation_class_across_manual_and_preview() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true));
+        project.add_object(&object_with_class(2, 1, true));
+        project.add_object(&object_with_class(3, 2, true));
+        project.tmp_settings.preview_objects.push(object_with_class(4, 1, true));
+        let ui_state = test_ui_state_with_project(project);
+
+        let counts = precompute_label_counts(&ui_state);
+
+        assert_eq!(counts.get(&SegmentationClass(1)), Some(&3));
+        assert_eq!(counts.get(&SegmentationClass(2)), Some(&1));
+    }
+
+    #[test]
+    fn precompute_label_counts_is_empty_for_a_project_with_no_objects() {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+
+        assert!(precompute_label_counts(&ui_state).is_empty());
+    }
+
+    // -- object_rust_to_object_slint -------------------------------------------
+
+    fn class(id: u32, name: &str, color: u32) -> evanalyzer_cfg::settings::classification_settings::Class {
+        evanalyzer_cfg::settings::classification_settings::Class {
+            id: ObjectClass::Valid(id),
+            color,
+            name: name.to_string(),
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn object_rust_to_object_slint_resolves_a_registered_classs_name() {
+        let mut project = ProjectWithRuntime::default();
+        project.classification.classes.push(class(1, "Nuclei", 0x112233));
+        let mut object = ObjectMetricSettings::default();
+        object.object_class.insert(ObjectClass::Valid(1));
+
+        let slint_obj = object_rust_to_object_slint(&object, &project, 3, true, 0);
+
+        assert_eq!(slint_obj.display_name.as_str(), "Nuclei");
+        assert_eq!(slint_obj.label_count, 3);
+        let names: Vec<String> = slint_obj.class_names.iter().map(|s| s.to_string()).collect();
+        assert_eq!(names, vec!["Nuclei".to_string()]);
+    }
+
+    #[test]
+    fn object_rust_to_object_slint_falls_back_to_unclassified_for_an_unregistered_class() {
+        let project = ProjectWithRuntime::default(); // no classes registered
+        let mut object = ObjectMetricSettings::default();
+        object.object_class.insert(ObjectClass::Valid(99));
+
+        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 0);
+
+        assert_eq!(slint_obj.display_name.as_str(), "Unclassified");
+    }
+
+    #[test]
+    fn object_rust_to_object_slint_joins_multiple_class_names_with_a_comma() {
+        let mut project = ProjectWithRuntime::default();
+        project.classification.classes.push(class(1, "A", 0));
+        project.classification.classes.push(class(2, "B", 0));
+        let mut object = ObjectMetricSettings::default();
+        object.object_class.insert(ObjectClass::Valid(1));
+        object.object_class.insert(ObjectClass::Valid(2));
+
+        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 0);
+
+        // HashSet iteration order isn't guaranteed - just check both names
+        // appear, comma-joined, rather than asserting an exact order.
+        let dn = slint_obj.display_name.to_string();
+        assert!(dn.contains('A') && dn.contains('B') && dn.contains(','), "got {dn:?}");
+    }
+
+    #[test]
+    fn object_rust_to_object_slint_id_is_the_row_index_plus_one() {
+        let project = ProjectWithRuntime::default();
+        let object = ObjectMetricSettings::default();
+
+        let slint_obj = object_rust_to_object_slint(&object, &project, 0, true, 41);
+
+        assert_eq!(slint_obj.id, 42);
+    }
+
+    #[test]
+    fn object_rust_to_object_slint_partial_metrics_blanks_area_and_circularity() {
+        let project = ProjectWithRuntime::default();
+        let object = object_with_area_and_perimeter(500, 10.0);
+
+        let full = object_rust_to_object_slint(&object, &project, 0, true, 0);
+        let partial = object_rust_to_object_slint(&object, &project, 0, false, 0);
+
+        assert!(!full.area_nm2.is_empty());
+        assert_eq!(partial.area_nm2.as_str(), "");
+        assert_eq!(partial.circularity.as_str(), "-");
+    }
+
+    // -- ObjectModalBridge (Model impl) ----------------------------------------
+
+    fn bridge_for(ui_state: &Arc<UiState>) -> ObjectModalBridge {
+        ObjectModalBridge {
+            app_state: ui_state.clone(),
+            notify: ModelNotify::default(),
+            label_counts: precompute_label_counts(ui_state),
+            visible_rows: compute_visible_rows(ui_state),
+        }
+    }
+
+    #[test]
+    fn object_modal_bridge_row_count_matches_the_filtered_row_count() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, false)); // hidden by default
+        project.add_object(&object_with_class(2, 1, true));
+        let ui_state = test_ui_state_with_project(project);
+
+        let bridge = bridge_for(&ui_state);
+
+        assert_eq!(bridge.row_count(), 1);
+    }
+
+    #[test]
+    fn object_modal_bridge_row_data_maps_filtered_rows_back_to_the_underlying_position() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, false)); // filtered out, underlying row 0
+        project.add_object(&object_with_class(2, 1, true)); // kept, underlying row 1
+        let ui_state = test_ui_state_with_project(project);
+        let bridge = bridge_for(&ui_state);
+
+        // Row 0 of the *filtered* list is underlying row 1 - its `id` (which
+        // encodes `row_index + 1` against the unfiltered list) must reflect
+        // that, not the filtered position.
+        let row0 = bridge.row_data(0).expect("one visible row");
+        assert_eq!(row0.id, 2);
+        assert!(bridge.row_data(1).is_none());
+    }
+
+    #[test]
+    fn object_modal_bridge_row_data_reads_past_the_manual_list_from_preview_objects() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true)); // manual, underlying row 0
+        project.tmp_settings.preview_objects.push(object_with_class(2, 1, true)); // preview, underlying row 1
+        let ui_state = test_ui_state_with_project(project);
+        let bridge = bridge_for(&ui_state);
+
+        assert_eq!(bridge.row_count(), 2);
+        assert_eq!(bridge.row_data(0).unwrap().id, 1);
+        assert_eq!(bridge.row_data(1).unwrap().id, 2);
+    }
+
+    #[test]
+    fn object_modal_bridge_row_data_out_of_range_returns_none() {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let bridge = bridge_for(&ui_state);
+
+        assert!(bridge.row_data(0).is_none());
+    }
 }
