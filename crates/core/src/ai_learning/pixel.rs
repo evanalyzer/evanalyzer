@@ -10,6 +10,12 @@ use crate::image::ImageContainer;
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::InternalErrors;
+use smartcore::ensemble::random_forest_classifier::{
+    RandomForestClassifier, RandomForestClassifierParameters,
+};
+use smartcore::linalg::basic::matrix::DenseMatrix;
+use smartcore::metrics::distance::euclidian::Euclidian;
+use smartcore::neighbors::knn_classifier::{KNNClassifier, KNNClassifierParameters};
 use std::sync::Arc;
 
 /// Computed feature channels for one image, in `FeatureSpec::channels` order.
@@ -108,9 +114,66 @@ fn compute_channel(
     Ok(ctx.image)
 }
 
-/// Trains a pixel classifier from a labeled feature bank.
-/// TODO: signature will firm up once `ai_learning::model::Classifier` (the
-/// RandomForest/Knn/Mlp backend enum) and `SavedClassifier` exist.
-pub fn train(_features: &FeatureBank, _labels: &[usize]) -> Result<(), InternalErrors> {
-    todo!()
+/// Builds smartcore's `(X, y)` training data from labeled pixel samples.
+///
+/// `samples` are (x, y) pixel coordinates within the image `features` was
+/// computed from, paired 1:1 with `labels` — e.g. gathered from the pixels
+/// inside a user-labeled Object's mask (one row per masked pixel, label =
+/// that object's assigned class). Shared by every backend's `train_*` fn so
+/// they all see identical training data.
+fn build_training_data(
+    features: &FeatureBank,
+    samples: &[(usize, usize)],
+    labels: &[usize],
+) -> Result<(DenseMatrix<f32>, Vec<usize>), InternalErrors> {
+    if samples.len() != labels.len() {
+        return Err(InternalErrors::Internal(
+            "samples and labels must have the same length".to_string(),
+        ));
+    }
+    if samples.is_empty() {
+        return Err(InternalErrors::Internal(
+            "cannot train on zero samples".to_string(),
+        ));
+    }
+
+    let rows: Vec<Vec<f32>> = samples
+        .iter()
+        .map(|&(x, y)| features.feature_vector_at(x, y))
+        .collect();
+
+    let x = DenseMatrix::from_2d_vec(&rows).map_err(|e| InternalErrors::Internal(e.to_string()))?;
+    Ok((x, labels.to_vec()))
+}
+
+/// Trains a Random Forest pixel classifier from a labeled feature bank.
+///
+/// Returns the raw smartcore model directly for now — a first, working
+/// end-to-end path. Wrapping it behind a shared `Classifier`/`AiLearning`
+/// abstraction (so KNN/MLP can slot in the same way) is follow-up work, not
+/// yet done here.
+pub fn train_random_forest(
+    features: &FeatureBank,
+    samples: &[(usize, usize)],
+    labels: &[usize],
+) -> Result<RandomForestClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>>, InternalErrors> {
+    let (x, y) = build_training_data(features, samples, labels)?;
+
+    RandomForestClassifier::fit(&x, &y, RandomForestClassifierParameters::default())
+        .map_err(|e| InternalErrors::Internal(e.to_string()))
+}
+
+/// Trains a K-Nearest-Neighbors pixel classifier from a labeled feature bank.
+/// Uses smartcore's defaults (k=3, Euclidean distance, CoverTree search) —
+/// see `KNNClassifierParameters` if these need to be exposed as options later.
+pub fn train_knn(
+    features: &FeatureBank,
+    samples: &[(usize, usize)],
+    labels: &[usize],
+) -> Result<KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Euclidian<f32>>, InternalErrors>
+{
+    let (x, y) = build_training_data(features, samples, labels)?;
+
+    KNNClassifier::fit(&x, &y, KNNClassifierParameters::default())
+        .map_err(|e| InternalErrors::Internal(e.to_string()))
 }
