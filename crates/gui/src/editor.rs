@@ -1,6 +1,7 @@
 use crate::{
     AppWindow, ResultsWindow, UiState,
     editor::{
+        ai_learning_controller::AiLearningController,
         classification_controller::ClassificationController,
         histogram_controller::HistogramController, image_meta_controller::ImageMetaController,
         images_list_controller::ImagesListController, pipeline_worker::PipelineWorker,
@@ -18,6 +19,7 @@ use crate::{
 };
 use std::sync::Arc;
 
+pub mod ai_learning_controller;
 pub mod classification_controller;
 pub mod histogram_controller;
 pub mod image_meta_controller;
@@ -52,6 +54,7 @@ pub struct Editor {
     image_meta_controller: Arc<ImageMetaController>,
     project_settings_controller: Arc<ProjectSettingsController>,
     classification_controller: Arc<ClassificationController>,
+    ai_learning_controller: Arc<AiLearningController>,
     object_list_controller: Arc<ObjectListController>,
     pipelines_controller: Arc<PipelinesController>,
     pipeline_worker: Arc<PipelineWorker>,
@@ -94,6 +97,11 @@ impl Editor {
             app_state.clone(),
             object_list_controller.clone(),
             viewport_controller.clone(),
+        ));
+
+        let ai_learning_controller = Arc::new(AiLearningController::new(
+            ui.clone(),
+            app_state.clone(),
         ));
 
         let image_meta_controller = Arc::new(ImageMetaController::new(
@@ -207,6 +215,7 @@ impl Editor {
             image_meta_controller,
             project_settings_controller,
             classification_controller,
+            ai_learning_controller,
             object_list_controller,
             pipelines_controller,
             pipeline_worker,
@@ -226,6 +235,7 @@ impl Editor {
         self.image_meta_controller.attach_callbacks();
         self.project_settings_controller.attach_callbacks();
         self.classification_controller.attach_callbacks();
+        self.ai_learning_controller.attach_callbacks();
         self.viewport_object_controller.attach_callbacks();
         self.object_list_controller.attach_callbacks();
         self.pipelines_controller.attach_callbacks();

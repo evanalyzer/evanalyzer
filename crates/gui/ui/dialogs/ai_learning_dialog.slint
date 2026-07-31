@@ -1,0 +1,1029 @@
+import {
+    LineEdit,
+    ComboBox,
+    SpinBox,
+    CheckBox,
+    ListView,
+    ScrollView,
+} from "std-widgets.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+
+// -- Wire structs ---------------------------------------------------------
+
+// One feature channel for pixel-classifier training. `filter_type` selects
+// which fields are meaningful (see the ComboBox model below for the index
+// mapping) - mirrors `evanalyzer_core::ai_learning::pixel_settings::PreprocessingSteps`.
+export struct FeatureRowSlint {
+    // 0=Raw, 1=Gaussian Blur, 2=Sobel, 3=Laplacian, 4=Structure Tensor, 5=Hessian, 6=Rank Filter
+    filter_type: int,
+    sigma: float,
+    kernel_size: int,
+    // 0=Eigenvalue X, 1=Eigenvalue Y, 2=Coherence (Structure Tensor only)
+    structure_tensor_mode: int,
+    // 0=Determinant, 1=Eigenvalue X, 2=Eigenvalue Y (Hessian only)
+    hessian_mode: int,
+    // 0=Mean, 1=Median, 2=Min, 3=Max, 4=Outliers (Rank Filter only)
+    rank_stat: int,
+    rank_radius: float,
+    // Prepends a Gaussian-blur step before this filter (Laplacian-/Hessian-of-Gaussian),
+    // since Laplacian/Hessian themselves have no sigma of their own.
+    pre_blur_enabled: bool,
+    pre_blur_sigma: float,
+}
+
+// One selectable object metric (object-classifier training). Metrics that
+// would leak the label (object_class) or teach position instead of shape
+// (centroid) are intentionally not offered here at all.
+export struct ObjectMetricRowSlint {
+    label: string,
+    // See the metric_id mapping maintained on the Rust side.
+    metric_id: int,
+    // Channel index for per-channel intensity metrics, -1 otherwise.
+    channel_index: int,
+    selected: bool,
+}
+
+export struct TrainingImageRowSlint {
+    name: string,
+    path: string,
+    selected: bool,
+    annotated_object_count: int,
+}
+
+// One manually-annotated (painted) object available as a training sample.
+// `assigned_class_index` is an index into `AiLearningState.class_names`;
+// -1 means unlabeled - unlabeled rows are excluded from training.
+export struct TrainingObjectRowSlint {
+    object_id: int,
+    label: string,
+    assigned_class_index: int,
+    // Which project image this object belongs to, so assigning a class can
+    // locate the right object even when training from multiple images.
+    image_path: string,
+}
+
+export struct AiTrainingSettingsSlint {
+    // 0 = Pixel Classifier, 1 = Object Classifier
+    mode: int,
+    // 0 = Random Forest, 1 = K-Nearest Neighbors, 2 = Neural Network (MLP)
+    algorithm: int,
+
+    model_name: string,
+    // Non-empty once an existing model has been loaded for retraining.
+    loaded_model_path: string,
+
+    // -- Random Forest --
+    rf_n_trees: int,
+    rf_max_depth: int, // 0 = unlimited
+    rf_min_samples_split: int,
+    rf_min_samples_leaf: int,
+    rf_criterion: int, // 0 = Gini, 1 = Entropy
+    rf_max_features: int, // 0 = auto (sqrt of feature count)
+    rf_seed: int,
+    rf_out_of_bag_eval: bool,
+
+    // -- K-Nearest Neighbors --
+    knn_k: int,
+    knn_distance: int, // 0 = Euclidean, 1 = Manhattan, 2 = Minkowski
+    knn_search_algorithm: int, // 0 = Linear Search, 1 = Cover Tree
+    knn_weight: int, // 0 = Uniform, 1 = Distance-weighted
+
+    // -- Neural Network (MLP) --
+    mlp_hidden_layers: string, // comma-separated node counts, e.g. "64, 32"
+    mlp_activation: int, // 0 = ReLU, 1 = Sigmoid, 2 = Tanh
+    mlp_max_iterations: int,
+    mlp_epsilon: float, // convergence tolerance
+    mlp_learning_rate: float,
+    mlp_batch_size: int,
+    mlp_seed: int,
+
+    // -- Shared training options --
+    // Off for Random Forest (scale-insensitive); should default on for KNN/MLP.
+    normalize_features: bool,
+    balance_classes: bool,
+    validation_split: float, // fraction (0..1) held out to report accuracy
+
+    // -- Training data source --
+    use_other_images: bool,
+}
+
+export global AiLearningState {
+    in-out property <AiTrainingSettingsSlint> settings: {
+        mode: 0,
+        algorithm: 0,
+        model_name: "",
+        loaded_model_path: "",
+        rf_n_trees: 100,
+        rf_max_depth: 0,
+        rf_min_samples_split: 2,
+        rf_min_samples_leaf: 1,
+        rf_criterion: 0,
+        rf_max_features: 0,
+        rf_seed: 0,
+        rf_out_of_bag_eval: true,
+        knn_k: 3,
+        knn_distance: 0,
+        knn_search_algorithm: 1,
+        knn_weight: 0,
+        mlp_hidden_layers: "64, 32",
+        mlp_activation: 0,
+        mlp_max_iterations: 200,
+        mlp_epsilon: 0.001,
+        mlp_learning_rate: 0.01,
+        mlp_batch_size: 32,
+        mlp_seed: 0,
+        normalize_features: true,
+        balance_classes: true,
+        validation_split: 0.2,
+        use_other_images: false,
+    };
+
+    in-out property <[FeatureRowSlint]> feature_rows: [];
+    in-out property <[ObjectMetricRowSlint]> object_metrics: [];
+    in-out property <[TrainingImageRowSlint]> training_images: [];
+    in-out property <[TrainingObjectRowSlint]> training_objects: [];
+    // Project's ObjectClass names, used as the label picker's options for
+    // each training object row.
+    in property <[string]> class_names: [];
+
+    // Fired by the toolbar button, before the dialog is shown, so Rust can
+    // refresh class_names/object_metrics/training_images/training_objects
+    // from the current project rather than showing stale data from the
+    // last time the dialog was open.
+    callback open_requested();
+    callback cancel_clicked();
+    callback browse_existing_model_clicked();
+    callback add_feature_row_clicked();
+    callback remove_feature_row_clicked(int);
+    callback add_gaussian_scales_clicked(string); // comma-separated sigmas
+    callback toggle_image_selected(int);
+    callback assign_object_class(int, int); // (training_objects index, class_names index)
+    callback train_clicked(AiTrainingSettingsSlint, [FeatureRowSlint], [ObjectMetricRowSlint], [TrainingImageRowSlint], [TrainingObjectRowSlint]);
+
+    public function trigger_train() {
+        train_clicked(root.settings, root.feature_rows, root.object_metrics, root.training_images, root.training_objects);
+    }
+}
+
+// ----------------------------------------------------------
+component SectionHeader inherits Text {
+    color: Theme.text;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border-soft;
+}
+
+component FormLabel inherits Text {
+    vertical-alignment: center;
+    width: 130px;
+    color: Theme.text-dim;
+    font-size: 11px;
+}
+
+// ----------------------------------------------------------
+component FeatureRow inherits Rectangle {
+    in property <FeatureRowSlint> data;
+    in property <int> row_index;
+
+    height: 44px;
+    border-radius: Theme.radius-sm;
+    background: row-ta.has-hover ? Theme.raised : transparent;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        alignment: stretch;
+
+        ComboBox {
+            width: 150px;
+            model: ["Raw", "Gaussian Blur", "Sobel", "Laplacian", "Structure Tensor", "Hessian", "Rank Filter"];
+            current-index: root.data.filter_type;
+            selected(v) => {
+                AiLearningState.feature_rows[root.row_index].filter_type = self.current-index;
+            }
+        }
+
+        if root.data.filter_type == 1 || root.data.filter_type == 4: LineEdit {
+            width: 70px;
+            text: root.data.sigma;
+            edited(v) => {
+                AiLearningState.feature_rows[root.row_index].sigma = v.to-float();
+            }
+        }
+
+        if root.data.filter_type == 4: ComboBox {
+            width: 130px;
+            model: ["Eigenvalue X", "Eigenvalue Y", "Coherence"];
+            current-index: root.data.structure_tensor_mode;
+            selected(v) => {
+                AiLearningState.feature_rows[root.row_index].structure_tensor_mode = self.current-index;
+            }
+        }
+
+        if root.data.filter_type == 5: ComboBox {
+            width: 130px;
+            model: ["Determinant", "Eigenvalue X", "Eigenvalue Y"];
+            current-index: root.data.hessian_mode;
+            selected(v) => {
+                AiLearningState.feature_rows[root.row_index].hessian_mode = self.current-index;
+            }
+        }
+
+        if root.data.filter_type == 6: ComboBox {
+            width: 110px;
+            model: ["Mean", "Median", "Min", "Max", "Outliers"];
+            current-index: root.data.rank_stat;
+            selected(v) => {
+                AiLearningState.feature_rows[root.row_index].rank_stat = self.current-index;
+            }
+        }
+
+        if root.data.filter_type == 6: LineEdit {
+            width: 70px;
+            text: root.data.rank_radius;
+            edited(v) => {
+                AiLearningState.feature_rows[root.row_index].rank_radius = v.to-float();
+            }
+        }
+
+        // Laplacian/Hessian have no sigma of their own - offer an optional
+        // Gaussian pre-smoothing step (Laplacian-/Hessian-of-Gaussian).
+        if root.data.filter_type == 3 || root.data.filter_type == 5: CheckBox {
+            text: "Pre-blur";
+            checked: root.data.pre_blur_enabled;
+            toggled => {
+                AiLearningState.feature_rows[root.row_index].pre_blur_enabled = self.checked;
+            }
+        }
+
+        if (root.data.filter_type == 3 || root.data.filter_type == 5) && root.data.pre_blur_enabled: LineEdit {
+            width: 60px;
+            text: root.data.pre_blur_sigma;
+            edited(v) => {
+                AiLearningState.feature_rows[root.row_index].pre_blur_sigma = v.to-float();
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Rectangle {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            background: remove-ta.has-hover ? Theme.raised : transparent;
+            Text {
+                text: "✕";
+                color: Theme.text-dim;
+                font-size: 11px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            remove-ta := TouchArea {
+                clicked => {
+                    AiLearningState.remove_feature_row_clicked(root.row_index);
+                }
+            }
+        }
+    }
+
+    row-ta := TouchArea {
+        // Purely for row hover feedback; the controls above handle their own input.
+    }
+}
+
+// ----------------------------------------------------------
+component ObjectMetricRow inherits Rectangle {
+    in property <ObjectMetricRowSlint> data;
+    in property <int> row_index;
+
+    height: 30px;
+
+    HorizontalLayout {
+        padding-left: 4px;
+        spacing: 8px;
+        CheckBox {
+            text: root.data.label;
+            checked: root.data.selected;
+            toggled => {
+                AiLearningState.object_metrics[root.row_index].selected = self.checked;
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+component TrainingImageRow inherits Rectangle {
+    in property <TrainingImageRowSlint> data;
+    in property <int> row_index;
+
+    height: 32px;
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 8px;
+        spacing: 8px;
+        alignment: stretch;
+
+        CheckBox {
+            text: root.data.name;
+            checked: root.data.selected;
+            toggled => {
+                AiLearningState.toggle_image_selected(root.row_index);
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: root.data.annotated_object_count + " objects";
+            color: Theme.text-mute;
+            font-size: 10.5px;
+            font-family: Theme.font-mono;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ----------------------------------------------------------
+component TrainingObjectRow inherits Rectangle {
+    in property <TrainingObjectRowSlint> data;
+    in property <int> row_index;
+
+    height: 32px;
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 8px;
+        alignment: stretch;
+
+        Text {
+            text: root.data.label;
+            color: Theme.text;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        ComboBox {
+            width: 140px;
+            model: AiLearningState.class_names;
+            current-index: root.data.assigned_class_index;
+            selected(v) => {
+                AiLearningState.assign_object_class(root.row_index, self.current-index);
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+export component AiLearningDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 760px;
+        height: 840px;
+        background: Theme.panel;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        clip: true;
+
+        VerticalLayout {
+            spacing: 0;
+
+            // ----- HEADER -----
+            Rectangle {
+                height: 56px;
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: stretch;
+
+                    Text {
+                        text: "Train Classifier";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 5px;
+                        background: close-ta.has-hover ? Theme.raised : transparent;
+                        Text {
+                            text: "✕";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-ta := TouchArea {
+                            clicked => {
+                                AiLearningState.cancel_clicked();
+                                GlobalAppState.active-dialog = DialogType.none;
+                            }
+                        }
+                    }
+                }
+
+                Divider {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                }
+            }
+
+            // ----- BODY -----
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg;
+
+                ScrollView {
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 20px;
+
+                        // -- Model identity --
+                        VerticalLayout {
+                            spacing: 12px;
+                            SectionHeader {
+                                text: "Model";
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "Classifier Type:";
+                                }
+                                mode-combo := ComboBox {
+                                    model: ["Pixel Classifier", "Object Classifier"];
+                                    current-index <=> AiLearningState.settings.mode;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "Model Name:";
+                                }
+                                LineEdit {
+                                    placeholder-text: "e.g. nuclei-pixel-classifier";
+                                    text <=> AiLearningState.settings.model_name;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "";
+                                }
+                                AppButton {
+                                    text: "Load Existing Model...";
+                                    clicked => {
+                                        AiLearningState.browse_existing_model_clicked();
+                                    }
+                                }
+                            }
+
+                            if AiLearningState.settings.loaded_model_path != "": HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "";
+                                }
+                                Text {
+                                    text: "Loaded: " + AiLearningState.settings.loaded_model_path;
+                                    color: Theme.text-mute;
+                                    font-size: 10.5px;
+                                    font-family: Theme.font-mono;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+
+                        Divider { }
+
+                        // -- Algorithm + hyperparameters --
+                        VerticalLayout {
+                            spacing: 12px;
+                            SectionHeader {
+                                text: "Algorithm";
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "Algorithm:";
+                                }
+                                algorithm-combo := ComboBox {
+                                    model: ["Random Forest", "K-Nearest Neighbors", "Neural Network (MLP)"];
+                                    current-index <=> AiLearningState.settings.algorithm;
+                                }
+                            }
+
+                            // Random Forest
+                            if algorithm-combo.current-index == 0: VerticalLayout {
+                                spacing: 10px;
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Number of Trees:";
+                                    }
+                                    SpinBox {
+                                        minimum: 1;
+                                        maximum: 2000;
+                                        value <=> AiLearningState.settings.rf_n_trees;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Max Tree Depth:";
+                                    }
+                                    SpinBox {
+                                        minimum: 0;
+                                        maximum: 200;
+                                        value <=> AiLearningState.settings.rf_max_depth;
+                                    }
+                                    Text {
+                                        text: "0 = unlimited";
+                                        color: Theme.text-mute;
+                                        font-size: 10px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Min Samples Split:";
+                                    }
+                                    SpinBox {
+                                        minimum: 2;
+                                        maximum: 1000;
+                                        value <=> AiLearningState.settings.rf_min_samples_split;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Min Samples Leaf:";
+                                    }
+                                    SpinBox {
+                                        minimum: 1;
+                                        maximum: 1000;
+                                        value <=> AiLearningState.settings.rf_min_samples_leaf;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Split Criterion:";
+                                    }
+                                    ComboBox {
+                                        model: ["Gini", "Entropy"];
+                                        current-index <=> AiLearningState.settings.rf_criterion;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Features per Split:";
+                                    }
+                                    SpinBox {
+                                        minimum: 0;
+                                        maximum: 1000;
+                                        value <=> AiLearningState.settings.rf_max_features;
+                                    }
+                                    Text {
+                                        text: "0 = auto (√features)";
+                                        color: Theme.text-mute;
+                                        font-size: 10px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Random Seed:";
+                                    }
+                                    SpinBox {
+                                        minimum: 0;
+                                        maximum: 999999;
+                                        value <=> AiLearningState.settings.rf_seed;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "";
+                                    }
+                                    CheckBox {
+                                        text: "Estimate accuracy from out-of-bag samples";
+                                        checked <=> AiLearningState.settings.rf_out_of_bag_eval;
+                                    }
+                                }
+                            }
+
+                            // K-Nearest Neighbors
+                            if algorithm-combo.current-index == 1: VerticalLayout {
+                                spacing: 10px;
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "K (Neighbors):";
+                                    }
+                                    SpinBox {
+                                        minimum: 1;
+                                        maximum: 200;
+                                        value <=> AiLearningState.settings.knn_k;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Distance Metric:";
+                                    }
+                                    ComboBox {
+                                        model: ["Euclidean", "Manhattan", "Minkowski"];
+                                        current-index <=> AiLearningState.settings.knn_distance;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Search Algorithm:";
+                                    }
+                                    ComboBox {
+                                        model: ["Linear Search", "Cover Tree"];
+                                        current-index <=> AiLearningState.settings.knn_search_algorithm;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Vote Weighting:";
+                                    }
+                                    ComboBox {
+                                        model: ["Uniform", "Distance-weighted"];
+                                        current-index <=> AiLearningState.settings.knn_weight;
+                                    }
+                                }
+                            }
+
+                            // Neural Network (MLP)
+                            if algorithm-combo.current-index == 2: VerticalLayout {
+                                spacing: 10px;
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Hidden Layers:";
+                                    }
+                                    LineEdit {
+                                        placeholder-text: "e.g. 64, 32";
+                                        text <=> AiLearningState.settings.mlp_hidden_layers;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Activation:";
+                                    }
+                                    ComboBox {
+                                        model: ["ReLU", "Sigmoid", "Tanh"];
+                                        current-index <=> AiLearningState.settings.mlp_activation;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Max Iterations:";
+                                    }
+                                    SpinBox {
+                                        minimum: 1;
+                                        maximum: 100000;
+                                        value <=> AiLearningState.settings.mlp_max_iterations;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Epsilon:";
+                                    }
+                                    LineEdit {
+                                        text: AiLearningState.settings.mlp_epsilon;
+                                        edited(v) => {
+                                            AiLearningState.settings.mlp_epsilon = v.to-float();
+                                        }
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Learning Rate:";
+                                    }
+                                    LineEdit {
+                                        text: AiLearningState.settings.mlp_learning_rate;
+                                        edited(v) => {
+                                            AiLearningState.settings.mlp_learning_rate = v.to-float();
+                                        }
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Batch Size:";
+                                    }
+                                    SpinBox {
+                                        minimum: 1;
+                                        maximum: 10000;
+                                        value <=> AiLearningState.settings.mlp_batch_size;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Random Seed:";
+                                    }
+                                    SpinBox {
+                                        minimum: 0;
+                                        maximum: 999999;
+                                        value <=> AiLearningState.settings.mlp_seed;
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider { }
+
+                        // -- Pixel classifier: feature channels --
+                        if mode-combo.current-index == 0: VerticalLayout {
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                alignment: space-between;
+                                SectionHeader {
+                                    text: "Feature Channels";
+                                }
+                                AppButton {
+                                    text: "+ Add Feature";
+                                    clicked => {
+                                        AiLearningState.add_feature_row_clicked();
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                height: 180px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                border-radius: Theme.radius-sm;
+
+                                ListView {
+                                    for data[index] in AiLearningState.feature_rows: FeatureRow {
+                                        data: data;
+                                        row_index: index;
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                FormLabel {
+                                    text: "Quick add scales:";
+                                }
+                                gaussian-scales-input := LineEdit {
+                                    placeholder-text: "e.g. 1, 2, 4, 8";
+                                }
+                                AppButton {
+                                    text: "Add";
+                                    clicked => {
+                                        AiLearningState.add_gaussian_scales_clicked(gaussian-scales-input.text);
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- Object classifier: metrics --
+                        if mode-combo.current-index == 1: VerticalLayout {
+                            spacing: 10px;
+                            SectionHeader {
+                                text: "Object Metrics";
+                            }
+                            Text {
+                                text: "Assigned class and position are intentionally excluded to avoid label leakage and location-based overfitting.";
+                                color: Theme.text-mute;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                            }
+
+                            Rectangle {
+                                height: 200px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                border-radius: Theme.radius-sm;
+
+                                ListView {
+                                    for data[index] in AiLearningState.object_metrics: ObjectMetricRow {
+                                        data: data;
+                                        row_index: index;
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider { }
+
+                        // -- Shared training options --
+                        VerticalLayout {
+                            spacing: 12px;
+                            SectionHeader {
+                                text: "Training Options";
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "";
+                                }
+                                CheckBox {
+                                    text: "Normalize features (recommended for KNN / MLP)";
+                                    checked <=> AiLearningState.settings.normalize_features;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "";
+                                }
+                                CheckBox {
+                                    text: "Balance classes (helps with imbalanced annotations)";
+                                    checked <=> AiLearningState.settings.balance_classes;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "Validation Split:";
+                                }
+                                LineEdit {
+                                    text: AiLearningState.settings.validation_split;
+                                    edited(v) => {
+                                        AiLearningState.settings.validation_split = v.to-float();
+                                    }
+                                }
+                                Text {
+                                    text: "fraction held out to report accuracy";
+                                    color: Theme.text-mute;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        Divider { }
+
+                        // -- Training data source --
+                        VerticalLayout {
+                            spacing: 10px;
+                            SectionHeader {
+                                text: "Training Data Source";
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "";
+                                }
+                                CheckBox {
+                                    text: "Include annotations from other images";
+                                    checked <=> AiLearningState.settings.use_other_images;
+                                }
+                            }
+
+                            if AiLearningState.settings.use_other_images: Rectangle {
+                                height: 150px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                border-radius: Theme.radius-sm;
+
+                                ListView {
+                                    for data[index] in AiLearningState.training_images: TrainingImageRow {
+                                        data: data;
+                                        row_index: index;
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider { }
+
+                        // -- Labeled training objects --
+                        VerticalLayout {
+                            spacing: 10px;
+                            SectionHeader {
+                                text: "Training Objects";
+                            }
+                            Text {
+                                text: "Only manually-painted objects with a class assigned below are used for training.";
+                                color: Theme.text-mute;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                            }
+
+                            Rectangle {
+                                height: 220px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                border-radius: Theme.radius-sm;
+
+                                ListView {
+                                    for data[index] in AiLearningState.training_objects: TrainingObjectRow {
+                                        data: data;
+                                        row_index: index;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ----- FOOTER -----
+            Rectangle {
+                height: 56px;
+                background: Theme.bg;
+                border-color: Theme.border-soft;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: end;
+
+                    AppButton {
+                        text: "Cancel";
+                        clicked => {
+                            AiLearningState.cancel_clicked();
+                            GlobalAppState.active-dialog = DialogType.none;
+                        }
+                    }
+
+                    AppButton {
+                        text: "Train";
+                        primary: true;
+                        clicked => {
+                            AiLearningState.trigger_train();
+                            GlobalAppState.active-dialog = DialogType.none;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
