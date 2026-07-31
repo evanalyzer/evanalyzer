@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod ai_learning;
 mod algos;
 mod converters;
 mod extlibs;
