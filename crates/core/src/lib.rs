@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+#[cfg(feature = "ai")]
 mod ai_learning;
 mod algos;
 mod converters;
