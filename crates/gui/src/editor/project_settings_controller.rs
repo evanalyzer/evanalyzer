@@ -301,3 +301,91 @@ fn well_size_to_idx(row: i32, col: i32) -> i32 {
     }
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- index_to_well_size / well_size_to_idx ---------------------------------
+
+    #[test]
+    fn index_to_well_size_covers_every_known_plate_format() {
+        assert_eq!(index_to_well_size(0), (1, 1));
+        assert_eq!(index_to_well_size(1), (2, 3));
+        assert_eq!(index_to_well_size(9), (8, 12));
+        assert_eq!(index_to_well_size(12), (48, 72));
+    }
+
+    #[test]
+    fn index_to_well_size_out_of_range_falls_back_to_1x1() {
+        assert_eq!(index_to_well_size(13), (1, 1));
+        assert_eq!(index_to_well_size(-1), (1, 1));
+    }
+
+    #[test]
+    fn well_size_to_idx_is_the_inverse_of_index_to_well_size_for_every_known_index() {
+        for i in 0..=12 {
+            let (rows, cols) = index_to_well_size(i);
+            assert_eq!(well_size_to_idx(rows, cols), i);
+        }
+    }
+
+    #[test]
+    fn well_size_to_idx_of_an_unknown_dimension_pair_falls_back_to_zero() {
+        assert_eq!(well_size_to_idx(7, 7), 0);
+    }
+
+    // -- index_to_grouping_mode / grouping_mode_to_index -----------------------
+
+    #[test]
+    fn index_to_grouping_mode_no_grouping() {
+        let (mode, regex) = index_to_grouping_mode(0, &"ignored".to_string());
+        assert_eq!(mode, GroupingMode::NoGrouping);
+        assert_eq!(regex, "");
+    }
+
+    #[test]
+    fn index_to_grouping_mode_folder_name() {
+        let (mode, regex) = index_to_grouping_mode(1, &"ignored".to_string());
+        assert_eq!(mode, GroupingMode::FolderName);
+        assert_eq!(regex, "");
+    }
+
+    #[test]
+    fn index_to_grouping_mode_file_name_presets_carry_their_fixed_regex() {
+        let (mode, regex) = index_to_grouping_mode(2, &"ignored".to_string());
+        assert_eq!(mode, GroupingMode::FileName);
+        assert_eq!(regex, "(.*)_([0-9]*)");
+
+        let (mode, regex) = index_to_grouping_mode(3, &"ignored".to_string());
+        assert_eq!(mode, GroupingMode::FileName);
+        assert_eq!(regex, "((.)([0-9]+))_([0-9]+)");
+    }
+
+    #[test]
+    fn index_to_grouping_mode_custom_index_passes_through_the_given_regex() {
+        let (mode, regex) = index_to_grouping_mode(4, &"my-custom-regex".to_string());
+        assert_eq!(mode, GroupingMode::FileName);
+        assert_eq!(regex, "my-custom-regex");
+    }
+
+    #[test]
+    fn grouping_mode_to_index_round_trips_every_index_to_grouping_mode_case() {
+        for (index, regex) in [
+            (0, ""),
+            (1, ""),
+            (2, "(.*)_([0-9]*)"),
+            (3, "((.)([0-9]+))_([0-9]+)"),
+        ] {
+            let (mode, produced_regex) = index_to_grouping_mode(index, &"unused".to_string());
+            assert_eq!(produced_regex, regex);
+            assert_eq!(grouping_mode_to_index(&mode, &produced_regex), index);
+        }
+    }
+
+    #[test]
+    fn grouping_mode_to_index_unrecognized_regex_maps_to_the_custom_index() {
+        let index = grouping_mode_to_index(&GroupingMode::FileName, &"something-else".to_string());
+        assert_eq!(index, 4);
+    }
+}

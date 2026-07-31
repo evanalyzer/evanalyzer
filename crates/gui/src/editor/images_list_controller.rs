@@ -482,3 +482,95 @@ impl ImagesListController {
             .ok();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::test_support::test_ui_state;
+
+    fn make_controller() -> ImagesListController {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let histogram_controller = Arc::new(HistogramController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_meta_controller = Arc::new(ImageMetaController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        ImagesListController::new(
+            slint::Weak::default(),
+            ui_state,
+            viewport_controller,
+            histogram_controller,
+            image_meta_controller,
+            object_list_controller,
+        )
+    }
+
+    #[test]
+    fn update_image_filter_text_in_project_stores_the_given_text() {
+        let controller = make_controller();
+
+        controller.update_image_filter_text_in_project("Nuclei");
+
+        assert_eq!(
+            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            "Nuclei"
+        );
+    }
+
+    #[test]
+    fn update_image_filter_text_in_project_overwrites_a_previous_value() {
+        let controller = make_controller();
+        controller.update_image_filter_text_in_project("first");
+
+        controller.update_image_filter_text_in_project("second");
+
+        assert_eq!(
+            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            "second"
+        );
+    }
+
+    #[test]
+    fn open_new_image_already_under_the_project_root_just_sets_it_as_current() {
+        let controller = Arc::new(make_controller());
+        {
+            let mut project = controller.app_state.get_project_write();
+            project.images.root = Some(PathBuf::from("/data/images"));
+        }
+        let image_path = PathBuf::from("/data/images/img.tif");
+
+        controller.open_new_image(&image_path);
+
+        let project = controller.app_state.get_project();
+        assert_eq!(project.get_current_image_path_cloned(), Some(image_path));
+        // Must not have touched the root - it was already correct.
+        assert_eq!(project.images.root, Some(PathBuf::from("/data/images")));
+    }
+
+    #[test]
+    fn open_new_image_outside_the_project_root_switches_the_root_to_its_parent_dir() {
+        let controller = Arc::new(make_controller());
+        // No root set yet (fresh project) - the image is by definition not
+        // part of it, so this must take the "change root" branch.
+        let image_path = PathBuf::from("/some/other/place/img.tif");
+
+        controller.open_new_image(&image_path);
+
+        let project = controller.app_state.get_project();
+        assert_eq!(project.images.root, Some(PathBuf::from("/some/other/place")));
+    }
+}

@@ -620,4 +620,82 @@ mod tests {
     }
     // `resolve_range` itself is tested in `evanalyzer_app::results::plate_matrix`
     // (this module just re-uses it) - no need to duplicate those cases here.
+
+    // -- plottable_labels ---------------------------------------------------------
+
+    fn column(id: &str, label: &str, visible: bool) -> ColumnSpec {
+        ColumnSpec {
+            id: id.to_string(),
+            label: label.to_string(),
+            filterable: false,
+            visible,
+        }
+    }
+
+    #[test]
+    fn plottable_labels_maps_each_plottable_columns_label_field() {
+        let cols = vec![
+            column("area_px", "Area (px)", true),
+            column("image", "Image", true), // non-numeric, excluded upstream
+        ];
+
+        let labels: Vec<String> = plottable_labels(&cols).iter().map(|s| s.to_string()).collect();
+
+        assert_eq!(labels, vec!["Area (px)".to_string()]);
+    }
+
+    // -- color_scheme_labels --------------------------------------------------------
+
+    #[test]
+    fn color_scheme_labels_lists_every_scheme_in_declaration_order() {
+        let labels: Vec<String> = color_scheme_labels().iter().map(|s| s.to_string()).collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                "Viridis".to_string(),
+                "Magma".to_string(),
+                "Plasma".to_string(),
+                "Grayscale".to_string(),
+            ]
+        );
+    }
+
+    // -- matrix_cell ----------------------------------------------------------------
+
+    #[test]
+    fn matrix_cell_with_a_value_formats_it_and_marks_has_value() {
+        let cell = matrix_cell(
+            "A1".to_string(),
+            Some(42.567),
+            0.0,
+            100.0,
+            HeatmapColorScheme::Grayscale,
+        );
+
+        assert_eq!(cell.label.as_str(), "A1");
+        assert_eq!(cell.value.as_str(), "42.6");
+        assert!(cell.has_value);
+    }
+
+    #[test]
+    fn matrix_cell_without_a_value_is_blank_and_unmarked() {
+        let cell = matrix_cell("B2".to_string(), None, 0.0, 100.0, HeatmapColorScheme::Viridis);
+
+        assert_eq!(cell.label.as_str(), "");
+        assert_eq!(cell.value.as_str(), "");
+        assert!(!cell.has_value);
+        assert_eq!(cell.color, slint::Color::from_rgb_u8(0, 0, 0));
+    }
+
+    #[test]
+    fn matrix_cell_clamps_values_outside_the_range_to_the_scale_endpoints() {
+        let below = matrix_cell("x".to_string(), Some(-50.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
+        let at_min = matrix_cell("x".to_string(), Some(0.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
+        assert_eq!(below.color, at_min.color, "values below range_lo must clamp to t=0.0");
+
+        let above = matrix_cell("x".to_string(), Some(500.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
+        let at_max = matrix_cell("x".to_string(), Some(100.0), 0.0, 100.0, HeatmapColorScheme::Grayscale);
+        assert_eq!(above.color, at_max.color, "values above range_hi must clamp to t=1.0");
+    }
 }

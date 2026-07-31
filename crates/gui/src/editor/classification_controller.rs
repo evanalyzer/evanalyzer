@@ -339,3 +339,176 @@ impl Model for ClassificationModelBridge {
         &self.notify
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::test_support::test_ui_state;
+
+    fn make_controller() -> (Arc<UiState>, Arc<ClassificationController>) {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let controller = Arc::new(ClassificationController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            object_list_controller,
+            viewport_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    fn settings(class_id: i32, name: &str) -> ClassSettingsSlint {
+        ClassSettingsSlint {
+            class_id,
+            name: name.into(),
+            notes: "".into(),
+            color: Color::from_rgb_u8(10, 20, 30),
+        }
+    }
+
+    #[test]
+    fn update_class_settings_with_a_negative_id_adds_a_new_class() {
+        let (ui_state, controller) = make_controller();
+
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.classification.classes.len(), 1);
+        assert_eq!(project.classification.classes[0].id, ObjectClass::Valid(1));
+        assert_eq!(project.classification.classes[0].name, "Nuclei");
+    }
+
+    #[test]
+    fn update_class_settings_with_an_existing_id_replaces_that_class_in_place() {
+        let (ui_state, controller) = make_controller();
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+
+        controller.update_class_settings_in_project(settings(1, "Renamed"));
+
+        let project = ui_state.get_project();
+        assert_eq!(
+            project.classification.classes.len(),
+            1,
+            "updating must not create a second class"
+        );
+        assert_eq!(project.classification.classes[0].name, "Renamed");
+    }
+
+    #[test]
+    fn update_class_settings_for_an_unknown_id_leaves_the_class_list_unchanged() {
+        let (ui_state, controller) = make_controller();
+
+        // No class with id 1 exists yet - `update_class` should fail (and be
+        // logged), not panic or create one.
+        controller.update_class_settings_in_project(settings(1, "Ghost"));
+
+        let project = ui_state.get_project();
+        assert!(project.classification.classes.is_empty());
+    }
+
+    #[test]
+    fn update_class_settings_stores_the_given_color_as_argb() {
+        let (ui_state, controller) = make_controller();
+        let color = Color::from_rgb_u8(10, 20, 30);
+
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.classification.classes[0].color, color.as_argb_encoded());
+    }
+
+    // -- ClassificationModelBridge (Model impl) --------------------------------
+
+    fn bridge_for(ui_state: &Arc<UiState>) -> ClassificationModelBridge {
+        ClassificationModelBridge {
+            app_state: ui_state.clone(),
+            notify: ModelNotify::default(),
+        }
+    }
+
+    #[test]
+    fn classification_model_bridge_row_count_matches_the_number_of_registered_classes() {
+        let (ui_state, controller) = make_controller();
+        controller.update_class_settings_in_project(settings(-1, "A"));
+        controller.update_class_settings_in_project(settings(-1, "B"));
+
+        let bridge = bridge_for(&ui_state);
+
+        assert_eq!(bridge.row_count(), 2);
+    }
+
+    #[test]
+    fn classification_model_bridge_row_data_decodes_the_hex_color_and_id() {
+        let (ui_state, controller) = make_controller();
+        controller.update_class_settings_in_project(ClassSettingsSlint {
+            class_id: -1,
+            name: "Nuclei".into(),
+            notes: "".into(),
+            color: Color::from_rgb_u8(0x11, 0x22, 0x33),
+        });
+
+        let bridge = bridge_for(&ui_state);
+        let row = bridge.row_data(0).expect("one class was added");
+
+        assert_eq!(row.id, 1); // add_class assigns id 1 to the first class
+        assert_eq!(row.name.as_str(), "Nuclei");
+        assert_eq!(row.color, Color::from_rgb_u8(0x11, 0x22, 0x33));
+    }
+
+    #[test]
+    fn classification_model_bridge_row_data_counts_objects_carrying_that_class() {
+        let ui_state = crate::editor::test_support::test_ui_state_with_project(
+            crate::editor::test_support::project_with_one_image(),
+        );
+        {
+            let mut project = ui_state.get_project_write();
+            project.classification.classes.push(evanalyzer_cfg::settings::classification_settings::Class {
+                id: ObjectClass::Valid(1),
+                color: 0,
+                name: "Nuclei".to_string(),
+                notes: String::new(),
+            });
+            let mut with_class = evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default();
+            with_class.object_class.insert(ObjectClass::Valid(1));
+            project.add_object(&with_class);
+            project.add_object(&evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default());
+        }
+
+        let bridge = bridge_for(&ui_state);
+        let row = bridge.row_data(0).expect("one class registered");
+
+        assert_eq!(row.count, 1);
+    }
+
+    #[test]
+    fn classification_model_bridge_row_data_reflects_visibility_toggles() {
+        let (ui_state, controller) = make_controller();
+        controller.update_class_settings_in_project(settings(-1, "Nuclei"));
+
+        assert!(
+            bridge_for(&ui_state).row_data(0).unwrap().visible,
+            "classes are visible by default"
+        );
+
+        ui_state
+            .get_project_write()
+            .toggle_class_visibility(ObjectClass::Valid(1));
+
+        assert!(!bridge_for(&ui_state).row_data(0).unwrap().visible);
+    }
+
+    #[test]
+    fn classification_model_bridge_row_data_out_of_range_returns_none() {
+        let (ui_state, _controller) = make_controller();
+
+        assert!(bridge_for(&ui_state).row_data(0).is_none());
+    }
+}

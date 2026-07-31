@@ -134,17 +134,8 @@ impl TemplateController {
         ui.global::<GlobalAppState>()
             .set_active_dialog(DialogType::None);
 
-        let author_name = meta_slint.author_name.to_string();
-        let mut author_parts = author_name.split_whitespace();
-        let author_first_name = author_parts.next().unwrap_or("").to_string();
-        let author_last_name = author_parts.collect::<Vec<_>>().join(" ");
-
-        let tags: Vec<String> = meta_slint
-            .tags
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let (author_first_name, author_last_name) = split_author_name(&meta_slint.author_name);
+        let tags = parse_tags(&meta_slint.tags);
 
         let meta = MetaData {
             name: meta_slint.name.to_string(),
@@ -196,5 +187,92 @@ impl TemplateController {
                 Err(e) => warn!("Failed to save template: {e}"),
             }
         });
+    }
+}
+
+/// Splits a full "First Last Middle..." name into `(first, rest-joined-with-spaces)`.
+/// Pulled out of `on_confirm` so this logic is unit-testable without needing a
+/// live `AppWindow` to read `TemplateMetaState` from.
+fn split_author_name(full_name: &str) -> (String, String) {
+    let mut parts = full_name.split_whitespace();
+    let first = parts.next().unwrap_or("").to_string();
+    let last = parts.collect::<Vec<_>>().join(" ");
+    (first, last)
+}
+
+/// Parses a comma-separated tag string into a trimmed, non-empty tag list.
+fn parse_tags(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- split_author_name -----------------------------------------------------
+
+    #[test]
+    fn split_author_name_splits_first_and_last() {
+        assert_eq!(
+            split_author_name("Ada Lovelace"),
+            ("Ada".to_string(), "Lovelace".to_string())
+        );
+    }
+
+    #[test]
+    fn split_author_name_joins_middle_names_into_the_last_name_part() {
+        assert_eq!(
+            split_author_name("Ada Augusta Lovelace"),
+            ("Ada".to_string(), "Augusta Lovelace".to_string())
+        );
+    }
+
+    #[test]
+    fn split_author_name_single_word_has_no_last_name() {
+        assert_eq!(split_author_name("Ada"), ("Ada".to_string(), "".to_string()));
+    }
+
+    #[test]
+    fn split_author_name_empty_string_yields_two_empty_parts() {
+        assert_eq!(split_author_name(""), ("".to_string(), "".to_string()));
+    }
+
+    #[test]
+    fn split_author_name_collapses_repeated_whitespace() {
+        assert_eq!(
+            split_author_name("  Ada   Lovelace  "),
+            ("Ada".to_string(), "Lovelace".to_string())
+        );
+    }
+
+    // -- parse_tags --------------------------------------------------------------
+
+    #[test]
+    fn parse_tags_splits_on_commas_and_trims_whitespace() {
+        assert_eq!(
+            parse_tags("cells, uptake , microscopy"),
+            vec!["cells".to_string(), "uptake".to_string(), "microscopy".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_tags_drops_empty_entries_from_stray_commas() {
+        assert_eq!(
+            parse_tags("cells,,uptake,"),
+            vec!["cells".to_string(), "uptake".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_tags_of_an_empty_string_is_an_empty_list() {
+        assert!(parse_tags("").is_empty());
+    }
+
+    #[test]
+    fn parse_tags_of_only_whitespace_is_an_empty_list() {
+        assert!(parse_tags("   ").is_empty());
     }
 }

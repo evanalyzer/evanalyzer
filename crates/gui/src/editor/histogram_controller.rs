@@ -160,3 +160,52 @@ impl HistogramController {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::test_support::{project_with_one_image, test_ui_state, test_ui_state_with_project};
+
+    fn make_controller(ui_state: Arc<UiState>) -> Arc<HistogramController> {
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        Arc::new(HistogramController::new(
+            slint::Weak::default(),
+            ui_state,
+            viewport_controller,
+        ))
+    }
+
+    #[test]
+    fn update_histogram_settings_writes_the_active_channels_histogram() {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let controller = make_controller(ui_state.clone());
+
+        controller.update_histogram_settings_in_project(0.1, 0.9, 0.0, 1.0);
+
+        let project = ui_state.get_project();
+        let hist = project
+            .get_histograms_from_selected_channel()
+            .expect("channel 0 must now have histogram settings");
+        assert_eq!(hist.min, 0.1);
+        assert_eq!(hist.max, 0.9);
+        assert_eq!(hist.min_limit, 0.0);
+        assert_eq!(hist.max_limit, 1.0);
+    }
+
+    #[test]
+    fn update_histogram_settings_without_a_current_image_does_not_panic() {
+        // No image is set as "current" in this fixture - the write must be a
+        // silent no-op (matches `with_current_series_mut` returning `None`),
+        // not a panic.
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state.clone());
+
+        controller.update_histogram_settings_in_project(0.1, 0.9, 0.0, 1.0);
+
+        let project = ui_state.get_project();
+        assert!(project.get_histograms_from_selected_channel().is_none());
+    }
+}

@@ -344,3 +344,53 @@ impl ImageMetaController {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::test_support::test_ui_state;
+    use std::sync::Arc;
+
+    fn make_controller() -> (Arc<UiState>, ImageMetaController) {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let controller = ImageMetaController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller,
+        );
+        (ui_state, controller)
+    }
+
+    #[test]
+    fn set_manual_pixel_sizes_writes_the_global_pixel_size_override() {
+        let (ui_state, controller) = make_controller();
+
+        controller.set_manual_pixel_sizes(1.5, 2.5, 3.5);
+
+        let project = ui_state.get_project();
+        let sizes = project.get_pixel_sizes();
+        assert_eq!(sizes.x, 1.5);
+        assert_eq!(sizes.y, 2.5);
+        assert_eq!(sizes.z, 3.5);
+    }
+
+    #[test]
+    fn reset_manual_pixel_sizes_clears_a_previously_set_override() {
+        let (ui_state, controller) = make_controller();
+        controller.set_manual_pixel_sizes(9.0, 9.0, 9.0);
+
+        controller.reset_manual_pixel_sizes();
+
+        // No image is loaded in this fixture project, so with the override
+        // cleared `get_pixel_sizes` falls back to its hardcoded default.
+        let project = ui_state.get_project();
+        let sizes = project.get_pixel_sizes();
+        assert_eq!(sizes.x, 1.0);
+        assert_eq!(sizes.y, 1.0);
+        assert_eq!(sizes.z, 1.0);
+    }
+}

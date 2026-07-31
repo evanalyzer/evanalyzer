@@ -860,3 +860,194 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
         tags: ModelRc::new(VecModel::from(tags)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
+    use evanalyzer_cfg::settings::meta_data::MetaData;
+    use evanalyzer_cfg::settings::plate_settings::PlateSettings;
+    use slint::Model;
+
+    fn template_with_meta(meta: MetaData, pipeline_count: usize) -> ProjectTemplate {
+        ProjectTemplate {
+            meta,
+            classification: ClassificationSettings::default(),
+            plate: PlateSettings::default(),
+            pipelines: (0..pipeline_count)
+                .map(|_| evanalyzer_cfg::settings::templates::PipelineTemplate {
+                    meta: MetaData::default(),
+                    pipeline_steps: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn project_template_to_def_carries_the_given_id_and_pipeline_count() {
+        let template = template_with_meta(MetaData::default(), 3);
+        let def = project_template_to_def(7, &template);
+
+        assert_eq!(def.id, 7);
+        assert_eq!(def.pipeline_count, 3);
+    }
+
+    #[test]
+    fn project_template_to_def_joins_first_and_last_author_name_with_a_space() {
+        let meta = MetaData {
+            author_first_name: "Ada".into(),
+            author_last_name: "Lovelace".into(),
+            ..Default::default()
+        };
+        let def = project_template_to_def(0, &template_with_meta(meta, 0));
+
+        assert_eq!(def.author.as_str(), "Ada Lovelace");
+    }
+
+    #[test]
+    fn project_template_to_def_trims_a_missing_last_name_instead_of_leaving_trailing_whitespace() {
+        let meta = MetaData {
+            author_first_name: "Ada".into(),
+            author_last_name: "".into(),
+            ..Default::default()
+        };
+        let def = project_template_to_def(0, &template_with_meta(meta, 0));
+
+        assert_eq!(def.author.as_str(), "Ada");
+    }
+
+    #[test]
+    fn project_template_to_def_formats_creation_time_as_year_month_day() {
+        let meta = MetaData {
+            creation_time: chrono::DateTime::parse_from_rfc3339("2026-03-05T12:34:56Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            ..Default::default()
+        };
+        let def = project_template_to_def(0, &template_with_meta(meta, 0));
+
+        assert_eq!(def.creation_time.as_str(), "2026-03-05");
+    }
+
+    #[test]
+    fn project_template_to_def_copies_tags_into_the_slint_model() {
+        let meta = MetaData {
+            tags: vec!["cells".to_string(), "uptake".to_string()],
+            ..Default::default()
+        };
+        let def = project_template_to_def(0, &template_with_meta(meta, 0));
+
+        let tags: Vec<String> = def.tags.iter().map(|t| t.to_string()).collect();
+        assert_eq!(tags, vec!["cells".to_string(), "uptake".to_string()]);
+    }
+
+    // -- guard_discard / run_pending_action -----------------------------------
+
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::object_list_controller::ObjectListController;
+    use crate::editor::results_table_controller::ResultsTableController;
+    use crate::editor::test_support::test_ui_state;
+    use crate::editor::viewport_controller::ViewportController;
+
+    fn make_controller() -> (Arc<UiState>, Arc<ProjectController>) {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(HistogramController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller.clone(),
+        ));
+        let project_settings_controller = Arc::new(ProjectSettingsController::new(
+            slint::Weak::default(),
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let classification_controller = Arc::new(ClassificationController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+        ));
+        let template_controller = Arc::new(TemplateController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let pipelines_controller = Arc::new(PipelinesController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+            template_controller.clone(),
+        ));
+        let results_table_controller = Arc::new(ResultsTableController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            image_list_controller.clone(),
+        ));
+        let results_list_controller = Arc::new(ResultsListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            results_table_controller,
+        ));
+        let controller = Arc::new(ProjectController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            image_list_controller,
+            project_settings_controller,
+            classification_controller,
+            pipelines_controller,
+            results_list_controller,
+            template_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    #[test]
+    fn guard_discard_stashes_the_action_when_the_project_is_dirty() {
+        let (ui_state, controller) = make_controller();
+        ui_state.mark_dirty();
+
+        controller.guard_discard(PendingAction::Quit);
+
+        assert!(
+            controller.pending_action.lock().unwrap().is_some(),
+            "a dirty project must stash the action instead of running it"
+        );
+    }
+
+    #[test]
+    fn guard_discard_runs_immediately_without_stashing_when_the_project_is_clean() {
+        let (ui_state, controller) = make_controller();
+        assert!(!ui_state.is_dirty());
+
+        // `Quit` runs synchronously via `invoke_from_event_loop` (a safe
+        // no-op without a live UI) rather than spawning a background thread,
+        // so this is deterministic to assert on.
+        controller.guard_discard(PendingAction::Quit);
+
+        assert!(
+            controller.pending_action.lock().unwrap().is_none(),
+            "a clean project must run the action immediately, not stash it"
+        );
+    }
+}

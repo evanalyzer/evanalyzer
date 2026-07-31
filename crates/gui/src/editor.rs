@@ -31,6 +31,8 @@ pub mod results_list_controller;
 pub mod results_matrix_controller;
 pub mod results_table_controller;
 pub mod object_list_controller;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod template_controller;
 pub mod undo_redo_controller;
 pub mod viewport_cache;

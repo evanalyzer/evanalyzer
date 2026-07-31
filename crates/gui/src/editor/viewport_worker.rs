@@ -802,3 +802,255 @@ pub(crate) fn histogram_to_svg_fast(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_core::{ImagePlane, ManagedImage};
+    use kornia_apriltag::utils::Point2d;
+    use kornia_image::allocator::CpuAllocator;
+    use kornia_image::{Image, ImageSize};
+
+    // -- hsv_to_rgb8 ------------------------------------------------------------
+
+    #[test]
+    fn hsv_to_rgb8_pure_colors_at_each_sixth_of_the_hue_wheel() {
+        assert_eq!(hsv_to_rgb8(0.0, 1.0, 1.0), (255, 0, 0)); // red
+        assert_eq!(hsv_to_rgb8(1.0 / 3.0, 1.0, 1.0), (0, 255, 0)); // green
+        assert_eq!(hsv_to_rgb8(2.0 / 3.0, 1.0, 1.0), (0, 0, 255)); // blue
+    }
+
+    #[test]
+    fn hsv_to_rgb8_zero_saturation_is_a_gray_shade() {
+        let (r, g, b) = hsv_to_rgb8(0.5, 0.0, 0.5);
+        assert_eq!(r, g);
+        assert_eq!(g, b);
+        assert_eq!(r, 128);
+    }
+
+    #[test]
+    fn hsv_to_rgb8_zero_value_is_black_regardless_of_hue() {
+        assert_eq!(hsv_to_rgb8(0.3, 1.0, 0.0), (0, 0, 0));
+    }
+
+    // -- label_to_rgb8 / render_labels_to_rgb8 -----------------------------------
+
+    #[test]
+    fn label_to_rgb8_zero_is_always_black() {
+        assert_eq!(label_to_rgb8(0), Rgb8Pixel { r: 0, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn label_to_rgb8_is_deterministic_for_the_same_id() {
+        assert_eq!(label_to_rgb8(42), label_to_rgb8(42));
+    }
+
+    #[test]
+    fn label_to_rgb8_distinct_ids_usually_render_distinct_colors() {
+        // Not a strict guarantee for every possible pair, but consecutive
+        // small IDs (the common case - connected-components output) must not
+        // collide, otherwise adjacent objects would be indistinguishable.
+        assert_ne!(label_to_rgb8(1), label_to_rgb8(2));
+        assert_ne!(label_to_rgb8(2), label_to_rgb8(3));
+    }
+
+    #[test]
+    fn render_labels_to_rgb8_maps_every_pixel_through_label_to_rgb8() {
+        let labels = vec![0u32, 5, 5, 0];
+        let mut dest = vec![Rgb8Pixel { r: 9, g: 9, b: 9 }; 4];
+
+        render_labels_to_rgb8(&labels, &mut dest);
+
+        assert_eq!(dest[0], Rgb8Pixel { r: 0, g: 0, b: 0 });
+        assert_eq!(dest[1], label_to_rgb8(5));
+        assert_eq!(dest[2], label_to_rgb8(5));
+        assert_eq!(dest[3], Rgb8Pixel { r: 0, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn render_labels_to_rgb8_stops_at_the_shorter_of_the_two_slices() {
+        let labels = vec![7u32, 7, 7];
+        let mut dest = vec![Rgb8Pixel { r: 9, g: 9, b: 9 }; 1];
+
+        // Must not panic when the buffers have mismatched lengths.
+        render_labels_to_rgb8(&labels, &mut dest);
+
+        assert_eq!(dest[0], label_to_rgb8(7));
+    }
+
+    // -- apply_auto_adjust --------------------------------------------------------
+
+    fn gray_container(pixels: Vec<f32>) -> ImageContainer {
+        let len = pixels.len();
+        let image = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: len,
+                height: 1,
+            },
+            pixels,
+            CpuAllocator,
+        )
+        .unwrap();
+        ImageContainer::F32Gray(ManagedImage {
+            data: image,
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        })
+    }
+
+    #[test]
+    fn apply_auto_adjust_rgb_images_always_use_the_full_fixed_range() {
+        let img = gray_container(vec![0.1, 0.9]);
+        assert_eq!(apply_auto_adjust(&img, true), (0.0, 1.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn apply_auto_adjust_empty_gray_image_falls_back_to_the_default_range() {
+        let img = gray_container(vec![]);
+        assert_eq!(apply_auto_adjust(&img, false), (0.0, 1.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn apply_auto_adjust_uniform_image_collapses_min_and_max_to_the_same_value() {
+        let img = gray_container(vec![0.5; 200]);
+        let (min, max, min_limit, max_limit) = apply_auto_adjust(&img, false);
+        assert_eq!(min, 0.5);
+        assert_eq!(max, 0.5);
+        assert_eq!(min_limit, 0.49);
+        assert_eq!(max_limit, 0.51);
+    }
+
+    #[test]
+    fn apply_auto_adjust_clips_extreme_outliers_out_of_the_display_range() {
+        // 5000 pixels -> 500-element sample (every 10th pixel), giving
+        // low_idx=2 / high_idx=497 (see `apply_auto_adjust`'s doc comment).
+        // Only pixels at indices that are multiples of 10 land in the
+        // sample, so outliers must be placed there to actually affect the
+        // computed range - 2 outliers on each side (fewer than low_idx=2's
+        // position) get skipped by the percentile window entirely.
+        let mut pixels = vec![0.5f32; 5000];
+        pixels[0] = -100.0;
+        pixels[10] = -100.0;
+        pixels[4980] = 100.0;
+        pixels[4990] = 100.0;
+        let img = gray_container(pixels);
+
+        let (min, max, min_limit, max_limit) = apply_auto_adjust(&img, false);
+        assert_eq!(min, 0.5, "the 2 low outliers must be clipped out of the range");
+        assert_eq!(max, 0.5, "the 2 high outliers must be clipped out of the range");
+        assert_eq!(min_limit, 0.49);
+        assert_eq!(max_limit, 0.51);
+    }
+
+    #[test]
+    fn apply_auto_adjust_limits_are_clamped_to_the_0_1_range() {
+        let img = gray_container(vec![0.0; 100]);
+        let (_, _, min_limit, _) = apply_auto_adjust(&img, false);
+        assert_eq!(min_limit, 0.0, "min - 0.01 must clamp at 0.0, not go negative");
+
+        let img = gray_container(vec![1.0; 100]);
+        let (_, _, _, max_limit) = apply_auto_adjust(&img, false);
+        assert_eq!(max_limit, 1.0, "max + 0.01 must clamp at 1.0");
+    }
+
+    // -- prepare_image_channels_for_slint -----------------------------------------
+
+    fn ctx_for(data: &[f32]) -> ChannelCtx<'_> {
+        ChannelCtx {
+            image_data: data,
+            histogram: HistogramSettings {
+                min: 0.0,
+                max: 1.0,
+                min_limit: 0.0,
+                max_limit: 1.0,
+            },
+            color: [1.0, 0.0, 0.0],
+            r_factor: 255.0,
+            g_factor: 0.0,
+            b_factor: 0.0,
+            offset: 0.0,
+            h_mult: 4.0, // num_bins (4) / (max_limit - min_limit)
+            channel_idx: 0,
+        }
+    }
+
+    #[test]
+    fn prepare_image_channels_for_slint_maps_pixels_through_the_color_factors() {
+        let data = [0.0f32, 0.9];
+        let ctx = ctx_for(&data);
+        let mut dest = vec![Rgb8Pixel { r: 9, g: 9, b: 9 }; 2];
+
+        prepare_image_channels_for_slint(&[ctx], &mut dest, 4, false, &vec![0], false);
+
+        assert_eq!(dest[0], Rgb8Pixel { r: 0, g: 0, b: 0 });
+        // (0.9 + offset(0.0)) * r_factor(255.0) = 229.5 -> truncated to 229
+        assert_eq!(dest[1], Rgb8Pixel { r: 229, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn prepare_image_channels_for_slint_without_histogram_flag_returns_no_histograms() {
+        let data = [0.0f32, 0.9];
+        let ctx = ctx_for(&data);
+        let mut dest = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; 2];
+
+        let hists =
+            prepare_image_channels_for_slint(&[ctx], &mut dest, 4, false, &vec![0], false);
+
+        assert!(hists.is_empty());
+    }
+
+    #[test]
+    fn prepare_image_channels_for_slint_builds_a_normalized_per_channel_histogram() {
+        let data = [0.0f32, 0.9];
+        let ctx = ctx_for(&data);
+        let mut dest = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; 2];
+
+        let hists = prepare_image_channels_for_slint(&[ctx], &mut dest, 4, true, &vec![0], false);
+
+        assert_eq!(hists.len(), 1);
+        // p=0.0 -> bin 0; p=0.9 -> bin (0.9*4)=3 (truncated); bins 1,2 empty.
+        // Normalized against the max count (1), so both hit bins read 1.0.
+        assert_eq!(hists[0], vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn prepare_image_channels_for_slint_hidden_channels_are_excluded_from_the_output() {
+        let data = [1.0f32];
+        let ctx = ctx_for(&data);
+        let mut dest = vec![Rgb8Pixel { r: 9, g: 9, b: 9 }; 1];
+
+        // visible_channels doesn't include channel_idx 0, so it must be skipped entirely.
+        prepare_image_channels_for_slint(&[ctx], &mut dest, 4, false, &vec![], false);
+
+        assert_eq!(dest[0], Rgb8Pixel { r: 0, g: 0, b: 0 });
+    }
+
+    // -- histogram_to_svg_fast -----------------------------------------------------
+
+    #[test]
+    fn histogram_to_svg_fast_drops_empty_histograms() {
+        let histos = vec![(vec![], [1.0, 0.0, 0.0]), (vec![0.5, 1.0], [0.0, 1.0, 0.0])];
+        let result = histogram_to_svg_fast(&histos, 2);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn histogram_to_svg_fast_path_starts_and_ends_on_the_baseline() {
+        let histos = vec![(vec![0.0, 1.0, 0.0], [1.0, 1.0, 1.0])];
+        let result = histogram_to_svg_fast(&histos, 3);
+        let path: String = result[0].path.to_string();
+
+        assert!(path.starts_with("M 0 100"));
+        assert!(path.ends_with("100 100 Z"));
+    }
+
+    #[test]
+    fn histogram_to_svg_fast_a_full_bin_reaches_the_top_of_the_viewbox() {
+        let histos = vec![(vec![1.0], [1.0, 1.0, 1.0])];
+        let result = histogram_to_svg_fast(&histos, 1);
+        let path: String = result[0].path.to_string();
+
+        // val=1.0 -> y = (1.0 - 1.0) * 100.0 = 0.00 (top of a 100x100 viewBox)
+        assert!(path.contains(" 0.00 0.00"), "path was: {path}");
+    }
+}

@@ -108,3 +108,88 @@ impl UndoRedoController {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::pipelines_controller::PipelinesController;
+    use crate::editor::template_controller::TemplateController;
+    use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project};
+
+    fn make_controller() -> (Arc<UiState>, Arc<UndoRedoController>) {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let viewport_controller = Arc::new(ViewportController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let template_controller = Arc::new(TemplateController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let pipelines_controller = Arc::new(PipelinesController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+            template_controller,
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+            Arc::new(HistogramController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            Arc::new(ImageMetaController::new(
+                slint::Weak::default(),
+                ui_state.clone(),
+                viewport_controller.clone(),
+            )),
+            object_list_controller.clone(),
+        ));
+        let project_settings_controller = Arc::new(ProjectSettingsController::new(
+            slint::Weak::default(),
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
+        let classification_controller = Arc::new(ClassificationController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            object_list_controller.clone(),
+            viewport_controller.clone(),
+        ));
+        let controller = Arc::new(UndoRedoController::new(
+            slint::Weak::default(),
+            ui_state.clone(),
+            image_list_controller,
+            project_settings_controller,
+            classification_controller,
+            pipelines_controller,
+            object_list_controller,
+            viewport_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    /// `refresh_all_panels` fans out to every other controller's Slint sync
+    /// call - with a dead `ui: Weak::default()` (as if the window had been
+    /// closed) every one of those must degrade to a no-op, not panic. This
+    /// is the only independently testable behavior in this controller: the
+    /// actual undo/redo bookkeeping lives in `UiState::undo`/`redo`, and
+    /// `attach_callbacks` only wires Slint callbacks.
+    #[test]
+    fn refresh_all_panels_does_not_panic_without_a_live_ui() {
+        let (_, controller) = make_controller();
+
+        controller.refresh_all_panels();
+    }
+}
