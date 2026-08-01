@@ -11,6 +11,8 @@
 ## Algorithms
 - [ ] Add measure distance command
 - [ ] Allow to train pixel classifier
+- [ ] Add fill holes command
+- [ ] Add AI Object classifier command
 
 ## GUI review (Slint/gui crate)
 

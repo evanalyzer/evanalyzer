@@ -18,6 +18,14 @@
     "classes": [
       {
         "id": {
+          "VALID": 0
+        },
+        "color": "#97978f",
+        "name": "Background",
+        "notes": ""
+      },
+      {
+        "id": {
           "VALID": 15
         },
         "color": "#5EFF00",

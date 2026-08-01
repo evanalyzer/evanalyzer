@@ -1600,6 +1600,10 @@
             }
           }
         },
+        "excludeFromTraining": {
+          "type": "boolean",
+          "default": false
+        },
         "id": {
           "$ref": "#/$defs/ObjectId"
         },

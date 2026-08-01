@@ -1073,7 +1073,9 @@ impl ProjectExt for ProjectWithRuntime {
         // project still has `schema_version: 0` from `Default`).
         self.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
 
-        // AI command `model_path`s are stored relative to the project's own
+        // Every command's file-path field (AI model paths today - see
+        // `relativize_file_paths`'s doc comment for why this isn't limited to
+        // those specifically) is stored relative to the project's own
         // directory on disk so the project keeps working after the folder is
         // moved or copied elsewhere - but only in the serialized copy; the
         // in-memory settings keep absolute paths so the rest of the app
@@ -1081,7 +1083,7 @@ impl ProjectExt for ProjectWithRuntime {
         // know about the project directory to resolve them.
         let mut on_disk_settings = self.settings.clone();
         if let Some(project_dir) = final_path.parent() {
-            crate::extensions::utils::relativize_model_paths(
+            crate::extensions::utils::relativize_file_paths(
                 &mut on_disk_settings.pipelines,
                 project_dir,
             );
@@ -1378,7 +1380,7 @@ pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors
     // file's own directory, so the rest of the app can keep treating them as
     // plain absolute paths.
     if let Some(project_dir) = path.parent() {
-        crate::extensions::utils::resolve_model_paths(&mut inner.pipelines, project_dir);
+        crate::extensions::utils::resolve_file_paths(&mut inner.pipelines, project_dir);
     }
 
     let mut project = ProjectWithRuntime {

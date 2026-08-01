@@ -19,6 +19,14 @@
     "classes": [
       {
         "id": {
+          "VALID": 0
+        },
+        "color": "#97978f",
+        "name": "Background",
+        "notes": ""
+      },
+      {
+        "id": {
           "VALID": 4
         },
         "color": "#3399FF",
@@ -430,7 +438,7 @@
           "enabled": true,
           "command": {
             "type": "classifyObjects",
-             "inputClasses": [
+            "inputClasses": [
               {
                 "VALID": 11
               }
@@ -558,9 +566,7 @@
           "enabled": true,
           "command": {
             "type": "classifyObjects",
-            "originSegmentation": [
-              
-            ],
+            "originSegmentation": [],
             "inputClasses": [
               {
                 "VALID": 21
@@ -607,7 +613,6 @@
             "minColocArea": 0.0
           }
         }
-
       ]
     },
     {
@@ -676,8 +681,7 @@
           "enabled": true,
           "command": {
             "type": "classifyObjects",
-            "originSegmentation": [
-            ],
+            "originSegmentation": [],
             "inputClasses": [
               {
                 "VALID": 1

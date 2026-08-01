@@ -131,6 +131,12 @@ impl AiLearningController {
 
         let manager = self.clone();
         ui.global::<AiLearningState>()
+            .on_toggle_object_excluded(move |row_index| {
+                manager.toggle_object_excluded(row_index);
+            });
+
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
             .on_browse_existing_model_clicked(move || {
                 manager.browse_existing_model();
             });
@@ -252,6 +258,41 @@ impl AiLearningController {
         drop(project);
 
         row.assigned_class_index = class_index;
+        state.set_training_objects(ModelRc::new(VecModel::from(rows)));
+    }
+
+    /// Flips `exclude_from_training` on one training object - the label
+    /// itself (`object_class`) is left untouched, only whether it
+    /// contributes a training sample the next time `train` runs.
+    fn toggle_object_excluded(self: &Arc<Self>, row_index: i32) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let state = ui.global::<AiLearningState>();
+        let mut rows: Vec<TrainingObjectRowSlint> = state.get_training_objects().iter().collect();
+        let Some(row) = rows.get_mut(row_index as usize) else {
+            return;
+        };
+
+        let image_path = PathBuf::from(row.image_path.as_str());
+        let object_id = row.object_id;
+        let mut project = self.app_state.get_project_write();
+        let mut excluded = row.excluded;
+        if let Some(entry) = project.images.list.get_mut(&image_path) {
+            let series_idx = entry.selected_series;
+            if let Some(series) = entry.series.get_mut(&series_idx)
+                && let Some(obj) = series
+                    .objects
+                    .iter_mut()
+                    .find(|o| o.id.0 as i32 == object_id)
+            {
+                obj.exclude_from_training = !obj.exclude_from_training;
+                excluded = obj.exclude_from_training;
+            }
+        }
+        drop(project);
+
+        row.excluded = excluded;
         state.set_training_objects(ModelRc::new(VecModel::from(rows)));
     }
 
@@ -533,12 +574,11 @@ impl AiLearningController {
         }
     }
 
-    /// Class checklist for the object classifier's "Classes to Train"
-    /// section - one row per project class, pre-checked for classes that
-    /// already have at least one labeled object (a convenient starting
-    /// point, not a restriction: the user can check/uncheck freely). Unused
-    /// for pixel classifiers, which auto-include every class with data
-    /// instead - see `evanalyzer_app::ai_learning::pixel_class_labels_from_project`.
+    /// Class checklist for the "Classes to Train" section, shared by both
+    /// pixel- and object-classifier training - one row per project class,
+    /// pre-checked for classes that already have at least one labeled object
+    /// (a convenient starting point, not a restriction: the user can
+    /// check/uncheck freely either way).
     pub fn sync_class_selection_to_slint(self: &Arc<Self>) {
         let ui_weak = self.ui.clone();
         let app_state = self.app_state.clone();
@@ -759,6 +799,7 @@ fn push_object_rows(
             label: format!("Object #{} (area {} px)", obj.id.0, obj.area).into(),
             assigned_class_index,
             image_path: path.to_string_lossy().to_string().into(),
+            excluded: obj.exclude_from_training,
         });
     }
 }
@@ -822,7 +863,10 @@ fn build_ai_learning_settings(
                     .map(feature_row_to_preprocessing_steps)
                     .collect(),
             },
-            class_labels: evanalyzer_app::ai_learning::pixel_class_labels_from_project(project),
+            class_labels: evanalyzer_app::ai_learning::pixel_class_labels_from_project(
+                project,
+                selected_classes,
+            ),
         }
     } else {
         AiLearningClassifierSettings::Object {
@@ -1438,5 +1482,190 @@ mod tests {
         assert_eq!(settings.mlp_learning_rate, 0.01);
         assert_eq!(settings.mlp_batch_size, 16);
         assert_eq!(settings.mlp_seed, 3);
+    }
+
+    // -- Callback-driven Slint state mutations ------------------------------
+    //
+    // These handlers mutate `AiLearningState` directly (no
+    // `invoke_from_event_loop`, unlike the `sync_*_to_slint` methods above),
+    // so their effect is observable synchronously right after invoking the
+    // wired callback - see `crate::editor::test_support::test_ui_windows`'s
+    // doc comment for why this headless harness doesn't need a real display.
+
+    use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project, test_ui_windows};
+    use evanalyzer_app::extensions::project_ext::ProjectExt;
+    use evanalyzer_cfg::core_types::ObjectId;
+    use evanalyzer_cfg::settings::classification_settings::Class;
+
+    fn make_controller_with_ui(
+        ui: slint::Weak<AppWindow>,
+        app_state: Arc<UiState>,
+    ) -> Arc<AiLearningController> {
+        Arc::new(AiLearningController::new(ui, app_state))
+    }
+
+    #[test]
+    fn attach_callbacks_add_feature_row_appends_a_default_row() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        controller.attach_callbacks();
+
+        ui.global::<AiLearningState>()
+            .invoke_add_feature_row_clicked();
+
+        let rows: Vec<FeatureRowSlint> = ui.global::<AiLearningState>().get_feature_rows().iter().collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].filter_type, 1); // Gaussian Blur, per default_feature_row
+    }
+
+    #[test]
+    fn attach_callbacks_remove_feature_row_drops_the_given_index() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        controller.attach_callbacks();
+        let state = ui.global::<AiLearningState>();
+        state.set_feature_rows(ModelRc::new(VecModel::from(vec![
+            FeatureRowSlint { filter_type: 0, ..default_feature_row() },
+            FeatureRowSlint { filter_type: 2, ..default_feature_row() },
+        ])));
+
+        state.invoke_remove_feature_row_clicked(0);
+
+        let rows: Vec<FeatureRowSlint> = state.get_feature_rows().iter().collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].filter_type, 2);
+    }
+
+    #[test]
+    fn attach_callbacks_remove_feature_row_out_of_range_is_a_no_op() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        controller.attach_callbacks();
+        let state = ui.global::<AiLearningState>();
+        state.set_feature_rows(ModelRc::new(VecModel::from(vec![default_feature_row()])));
+
+        state.invoke_remove_feature_row_clicked(99);
+
+        assert_eq!(state.get_feature_rows().iter().count(), 1);
+    }
+
+    #[test]
+    fn attach_callbacks_add_gaussian_scales_parses_a_csv_list_and_skips_unparsable_entries() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        controller.attach_callbacks();
+
+        ui.global::<AiLearningState>()
+            .invoke_add_gaussian_scales_clicked("1, x, 2.5, , 4".into());
+
+        let rows: Vec<FeatureRowSlint> = ui.global::<AiLearningState>().get_feature_rows().iter().collect();
+        let sigmas: Vec<f32> = rows.iter().map(|r| r.sigma).collect();
+        assert_eq!(sigmas, vec![1.0, 2.5, 4.0]);
+        assert!(rows.iter().all(|r| r.filter_type == 1), "each scale is a GaussianBlur row");
+    }
+
+    #[test]
+    fn attach_callbacks_toggle_image_selected_flips_only_the_given_row() {
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        controller.attach_callbacks();
+        let state = ui.global::<AiLearningState>();
+        state.set_training_images(ModelRc::new(VecModel::from(vec![
+            TrainingImageRowSlint { name: "a".into(), path: "a.tif".into(), selected: false, annotated_object_count: 0 },
+            TrainingImageRowSlint { name: "b".into(), path: "b.tif".into(), selected: false, annotated_object_count: 0 },
+        ])));
+
+        state.invoke_toggle_image_selected(1);
+
+        let rows: Vec<TrainingImageRowSlint> = state.get_training_images().iter().collect();
+        assert!(!rows[0].selected);
+        assert!(rows[1].selected);
+    }
+
+    #[test]
+    fn attach_callbacks_assign_object_class_labels_the_project_object_and_updates_the_row() {
+        let (ui, _results_ui) = test_ui_windows();
+        let mut project = project_with_one_image();
+        project.classification.classes_mut().push(Class {
+            id: evanalyzer_cfg::core_types::ObjectClass::Valid(1),
+            name: "Cell".into(),
+            ..Default::default()
+        });
+        let object_id = ObjectId(1);
+        project.add_object(&ObjectMetricSettings {
+            id: object_id.clone(),
+            ..Default::default()
+        });
+        let ui_state = test_ui_state_with_project(project);
+        let controller = make_controller_with_ui(ui.as_weak(), ui_state.clone());
+        controller.attach_callbacks();
+        let state = ui.global::<AiLearningState>();
+        state.set_training_objects(ModelRc::new(VecModel::from(vec![TrainingObjectRowSlint {
+            object_id: object_id.0 as i32,
+            label: "Object #1".into(),
+            assigned_class_index: -1,
+            image_path: "img.tif".into(),
+            excluded: false,
+        }])));
+
+        // classes()[0] is the auto-prepended Background class - "Cell" is at index 1.
+        state.invoke_assign_object_class(0, 1);
+
+        let project = ui_state.get_project();
+        let obj = &project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0];
+        assert!(obj.object_class.contains(&evanalyzer_cfg::core_types::ObjectClass::Valid(1)));
+        drop(project);
+
+        let rows: Vec<TrainingObjectRowSlint> = state.get_training_objects().iter().collect();
+        assert_eq!(rows[0].assigned_class_index, 1);
+    }
+
+    #[test]
+    fn attach_callbacks_toggle_object_excluded_flips_the_flag_on_the_project_object() {
+        let (ui, _results_ui) = test_ui_windows();
+        let mut project = project_with_one_image();
+        let object_id = ObjectId(1);
+        project.add_object(&ObjectMetricSettings {
+            id: object_id.clone(),
+            ..Default::default()
+        });
+        let ui_state = test_ui_state_with_project(project);
+        let controller = make_controller_with_ui(ui.as_weak(), ui_state.clone());
+        controller.attach_callbacks();
+        let state = ui.global::<AiLearningState>();
+        state.set_training_objects(ModelRc::new(VecModel::from(vec![TrainingObjectRowSlint {
+            object_id: object_id.0 as i32,
+            label: "Object #1".into(),
+            assigned_class_index: -1,
+            image_path: "img.tif".into(),
+            excluded: false,
+        }])));
+
+        state.invoke_toggle_object_excluded(0);
+
+        let project = ui_state.get_project();
+        let obj = &project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0];
+        assert!(obj.exclude_from_training);
+        drop(project);
+
+        let rows: Vec<TrainingObjectRowSlint> = state.get_training_objects().iter().collect();
+        assert!(rows[0].excluded);
+
+        // Toggling again flips it back.
+        state.invoke_toggle_object_excluded(0);
+        let project = ui_state.get_project();
+        assert!(!project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0].exclude_from_training);
+    }
+
+    #[test]
+    fn attach_callbacks_assign_object_class_with_an_unknown_row_index_is_a_no_op() {
+        let (ui, _results_ui) = test_ui_windows();
+        let ui_state = crate::editor::test_support::test_ui_state();
+        let controller = make_controller_with_ui(ui.as_weak(), ui_state);
+        controller.attach_callbacks();
+
+        // No panic with an empty training_objects list.
+        ui.global::<AiLearningState>().invoke_assign_object_class(0, 0);
+        ui.global::<AiLearningState>().invoke_toggle_object_excluded(0);
     }
 }
