@@ -9,7 +9,8 @@ use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::prelude::Backend;
 use burn::record::{BinBytesRecorder, FullPrecisionSettings, Recorder};
 use burn::tensor::{Int, Tensor, TensorData};
-use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::settings::ai_learning_settings::MlpSettings;
 use serde::{Deserialize, Serialize};
 
 /// The MLP backend used for both training and inference. Autodiff-wrapped even
@@ -114,22 +115,25 @@ pub(crate) fn predict_mlp(
 /// Trains a small feed-forward classifier via a manual training loop (no
 /// `Learner`/dashboard — appropriate for a model this size, per burn's own
 /// "Custom Training Loop" guidance) using Adam and cross-entropy loss.
+///
+/// `labels` are dense indices into the owning job's `class_labels` (see
+/// `ai_learning::utils::validate_training_data`'s doc comment) — `n_classes`
+/// sizes the output layer explicitly instead of inferring it from
+/// `max(labels) + 1`, which silently undersizes the network if the
+/// highest-index class happens to have zero training samples.
+///
+/// TODO: `settings.activation`/`batch_size`/`seed` are not wired in yet —
+/// training always uses ReLU, full-batch gradient descent, and no seed
+/// control. Only `hidden_layers`, `epochs` and `learning_rate` are used.
 pub fn fit_mlp(
     rows: &[Vec<f32>],
-    labels: &[SegmentationClass],
-    hidden_layers: &[usize],
-    epochs: usize,
-    learning_rate: f64,
+    labels: &[usize],
+    n_classes: usize,
+    settings: &MlpSettings,
 ) -> Result<Classifier, InternalErrors> {
     validate_training_data(rows, labels)?;
     let n_in = rows[0].len();
-    let n_out = labels
-        .iter()
-        .copied()
-        .max()
-        .map(|m| m.as_usize() + 1)
-        .unwrap_or(0);
-    if n_in == 0 || n_out == 0 {
+    if n_in == 0 || n_classes == 0 {
         return Err(InternalErrors::Internal(
             "cannot train MLP with zero input features or output classes".to_string(),
         ));
@@ -139,19 +143,19 @@ pub fn fit_mlp(
     let n_rows = rows.len();
     let flat: Vec<f32> = rows.iter().flatten().copied().collect();
     let x = Tensor::<MlpBackend, 2>::from_data(TensorData::new(flat, [n_rows, n_in]), &device);
-    let y_i64: Vec<i64> = labels.iter().map(|&l| l.as_u32() as i64).collect();
+    let y_i64: Vec<i64> = labels.iter().map(|&l| l as i64).collect();
     let y = Tensor::<MlpBackend, 1, Int>::from_data(TensorData::new(y_i64, [n_rows]), &device);
 
-    let mut model = Mlp::<MlpBackend>::new(&device, n_in, hidden_layers, n_out);
+    let mut model = Mlp::<MlpBackend>::new(&device, n_in, &settings.hidden_layers, n_classes);
     let mut optim = AdamConfig::new().init();
 
-    for _ in 0..epochs {
+    for _ in 0..settings.epochs {
         let out = model.forward(x.clone());
         let loss = CrossEntropyLossConfig::new()
             .init(&out.device())
             .forward(out, y.clone());
         let grads = GradientsParams::from_grads(loss.backward(), &model);
-        model = optim.step(learning_rate, model, grads);
+        model = optim.step(settings.learning_rate, model, grads);
     }
 
     let recorder = BinBytesRecorder::<FullPrecisionSettings>::default();
@@ -162,8 +166,8 @@ pub fn fit_mlp(
     Ok(Classifier::Mlp {
         architecture: MlpArchitecture {
             n_in,
-            hidden: hidden_layers.to_vec(),
-            n_out,
+            hidden: settings.hidden_layers.clone(),
+            n_out: n_classes,
         },
         weights,
     })
