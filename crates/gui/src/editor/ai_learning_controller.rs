@@ -680,7 +680,12 @@ impl AiLearningController {
                 return;
             };
             let project = app_state.get_project();
-            let current_path = project.get_current_image_path_cloned();
+            // `images.list` is keyed by path *relative* to `images.root` -
+            // `get_current_image_path_cloned` returns the *absolute* path
+            // (see its doc comment vs. `get_current_rel_image_path_cloned`'s),
+            // so comparing against it directly here would never match,
+            // letting the current image sneak into "other images" too.
+            let current_path = project.get_current_rel_image_path_cloned();
 
             let rows: Vec<TrainingImageRowSlint> = project
                 .images
@@ -739,7 +744,13 @@ impl AiLearningController {
 
             let project = app_state.get_project();
             let classes = project.classification.classes().clone();
-            let current_path = project.get_current_image_path_cloned();
+            // Must be the *relative* path - it becomes `TrainingObjectRowSlint::image_path`,
+            // which `assign_object_class`/`toggle_object_excluded` look up
+            // directly in `images.list` (keyed by relative path). Using the
+            // absolute path here (`get_current_image_path_cloned`) made that
+            // lookup silently fail for every object on the current image -
+            // clicking either control appeared to do nothing.
+            let current_path = project.get_current_rel_image_path_cloned();
 
             let mut rows = Vec::new();
             if let Some(path) = &current_path {

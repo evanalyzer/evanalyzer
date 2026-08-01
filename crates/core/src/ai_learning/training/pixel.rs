@@ -490,6 +490,86 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compute_pixel_features_runs_a_laplacian_step() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::LaplacianSettings;
+
+        // Must run without erroring - proves the Laplacian match arm in
+        // `compute_channel` actually executes. The exact output value is
+        // `Laplacian`'s own implementation detail (covered by its own
+        // algorithm tests, see the earlier multi-step-chain test's comment
+        // for why this test doesn't assert on it).
+        let ctx = gray_context(3, 3, vec![5.0; 9]);
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![PreprocessingSteps::Laplacian(LaplacianSettings {
+                kernel_size: 3,
+            })]],
+        };
+
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+        assert_eq!(bank.n_features(), 1);
+    }
+
+    #[test]
+    fn compute_pixel_features_runs_a_structure_tensor_step() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            FiltersStructureTensorTensorModeSettings, StructureTensorSettings,
+        };
+
+        let ctx = gray_context(3, 3, vec![5.0; 9]);
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![PreprocessingSteps::StructureTensor(
+                StructureTensorSettings {
+                    mode: FiltersStructureTensorTensorModeSettings::EigenvaluesX,
+                    kernel_size: 3,
+                    sigma: 1.0,
+                },
+            )]],
+        };
+
+        // Must run without erroring - proves the StructureTensor match arm
+        // in `compute_channel` actually executes.
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+        assert_eq!(bank.n_features(), 1);
+    }
+
+    #[test]
+    fn compute_pixel_features_runs_a_hessian_step() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            FiltersHessianHessianModeSettings, HessianSettings,
+        };
+
+        let ctx = gray_context(3, 3, vec![5.0; 9]);
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![PreprocessingSteps::Hessian(HessianSettings {
+                mode: FiltersHessianHessianModeSettings::Determinant,
+            })]],
+        };
+
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+        assert_eq!(bank.n_features(), 1);
+    }
+
+    #[test]
+    fn compute_pixel_features_runs_a_rank_filter_step() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            FiltersRankFilterRankFilterTypeSettings, RankFilterSettings,
+        };
+
+        let ctx = gray_context(3, 3, vec![5.0; 9]);
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![PreprocessingSteps::RankFilter(RankFilterSettings {
+                radius: 1.0,
+                filter_type: FiltersRankFilterRankFilterTypeSettings::Median,
+            })]],
+        };
+
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+        assert_eq!(bank.n_features(), 1);
+        // A flat image's median is the flat value itself.
+        assert_eq!(bank.feature_vector_at(1, 1), vec![5.0]);
+    }
+
     // -- PixelTrainingJob::run (paths that need no image I/O) ------------------
 
     fn empty_pixel_job() -> PixelTrainingJob {
@@ -615,6 +695,100 @@ mod tests {
             panic!("expected Internal, got a different variant");
         };
         assert!(msg.contains("zero samples"));
+    }
+
+    // -- PixelTrainingJob::run (real image I/O) ---------------------------
+    //
+    // Everything above deliberately avoids touching the filesystem/JVM (see
+    // this section's sibling above). This one real end-to-end run - reading
+    // an actual fixture through Bio-Formats, tiling it, computing features,
+    // and fitting a classifier - is what exercises the rest of `run`'s body
+    // (the tile grid / z-stack / `ImageReader` machinery around line
+    // 197 onward) that no amount of synthetic-data unit testing reaches.
+
+    use bitvec::prelude::*;
+    use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+
+    /// A `[x_min, y_min, x_max, y_max]` inclusive bbox, fully-filled mask -
+    /// same construction as `ai_learning::utils::tests::square_object`, but
+    /// building the settings type directly since `PixelTrainingJob::run`
+    /// reconstructs an `Object` from `ObjectMetricSettings` itself.
+    fn full_square_object_settings(
+        id: u128,
+        x_min: u32,
+        y_min: u32,
+        side: u32,
+        segmentation_class: SegmentationClass,
+    ) -> ObjectMetricSettings {
+        let area = (side * side) as usize;
+        ObjectMetricSettings {
+            id: evanalyzer_cfg::core_types::ObjectId(id),
+            segmentation_class,
+            bbox: [x_min, y_min, x_min + side - 1, y_min + side - 1],
+            mask_data: bitvec![u64, Lsb0; 1; area],
+            area,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn run_trains_end_to_end_against_a_real_image_fixture() {
+        crate::init_java_wrapper(1_000_000_000).unwrap();
+
+        let fixture = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        ));
+
+        // Two small, non-overlapping, differently-classed regions in the
+        // fixture's top-left corner - real pixel values, but the exact
+        // values don't matter here (unlike `random_forest.rs`'s own fit
+        // tests): this test's job is to prove the tile-reading/feature/fit
+        // pipeline runs end to end, not that the model classifies well.
+        let cell = full_square_object_settings(1, 0, 0, 2, SegmentationClass(1));
+        let background = full_square_object_settings(2, 10, 10, 2, SegmentationClass(2));
+
+        let mut job = empty_pixel_job();
+        job.settings.classifier = AiLearningClassifierSettings::Pixel {
+            feature_spec: AiLearningPixelFeatureSettings {
+                channels: vec![vec![]], // raw pixel value
+            },
+            class_labels: vec![
+                PixelClassLabel {
+                    class: SegmentationClass(1),
+                    name: "Cell".into(),
+                },
+                PixelClassLabel {
+                    class: SegmentationClass(2),
+                    name: "Background".into(),
+                },
+            ],
+        };
+        job.images.push(TrainingImage {
+            path: fixture,
+            series: 0,
+            labeled_objects: vec![cell, background],
+        });
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let saved = job.run(tx, cancel).unwrap();
+
+        let AiLearningClassifierSettings::Pixel { class_labels, .. } = &saved.settings.classifier
+        else {
+            panic!("expected a Pixel classifier configuration to round-trip through `finish`");
+        };
+        assert_eq!(class_labels.len(), 2);
+
+        let events: Vec<_> = rx.iter().collect();
+        assert!(events.iter().any(|e| matches!(e, TrainingProgressEvent::Training)));
+        assert!(events.iter().any(|e| matches!(e, TrainingProgressEvent::Finished)));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::ImageTilesScheduled { total_tiles, .. } if *total_tiles > 0)),
+            "the fixture image must actually get tiled and read, not silently skipped"
+        );
     }
 }
 
