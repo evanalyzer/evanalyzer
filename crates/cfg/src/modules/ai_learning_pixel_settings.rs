@@ -1,7 +1,8 @@
-use evanalyzer_cfg::settings::pipeline_command_settings::{
+use crate::modules::pipeline_command_settings::{
     EdgeDetectionSobelSettings, GaussianBlurSettings, HessianSettings, LaplacianSettings,
     RankFilterSettings, StructureTensorSettings,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A single preprocessing step within one feature channel's chain (an inner
@@ -29,7 +30,7 @@ use serde::{Deserialize, Serialize};
 /// same as a database migration, not a normal refactor. Adding a new variant
 /// is safe; changing or deleting an existing one silently breaks every model
 /// already saved with it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum PreprocessingSteps {
     GaussianBlur(GaussianBlurSettings),
     EdgeDetectionSobel(EdgeDetectionSobelSettings),
@@ -47,12 +48,12 @@ pub enum PreprocessingSteps {
 ///
 /// SERIALIZATION-CRITICAL — see `PreprocessingSteps` doc comment above; the
 /// same never-rename/never-remove rule applies to this type's own fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeatureSpec {
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AiLearningPixelFeatureSettings {
     pub channels: Vec<Vec<PreprocessingSteps>>,
 }
 
-impl FeatureSpec {
+impl AiLearningPixelFeatureSettings {
     /// Convenience: same filter at several scales, e.g. gaussian_scales(&[1.0, 2.0, 4.0], 5).
     /// Values outside [0.1, 5.0] will be silently clamped by GaussianBlur's own
     /// `From<GaussianBlurSettings>` conversion — see the `PreprocessingSteps` doc comment.

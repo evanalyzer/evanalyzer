@@ -1,5 +1,7 @@
-use super::model::{self, Classifier};
-use super::pixel_settings::{FeatureSpec, PreprocessingSteps};
+use crate::ai_learning::model::Classifier;
+use crate::ai_learning::model::knn::fit_knn;
+use crate::ai_learning::model::mlp;
+use crate::ai_learning::model::random_forest::fit_random_forest;
 use crate::algos::EdgeDetectionSobel;
 use crate::algos::GaussianBlur;
 use crate::algos::Hessian;
@@ -11,6 +13,9 @@ use crate::image::ImageContainer;
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::SegmentationClass;
+use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
+use evanalyzer_cfg::settings::ai_learning_pixel_settings::PreprocessingSteps;
 use std::sync::Arc;
 
 /// Computed feature channels for one image, in `FeatureSpec::channels` order.
@@ -50,7 +55,7 @@ impl FeatureBank {
 /// filters never step on each other's input.
 pub fn compute_pixel_features(
     template: &PipelineContext,
-    spec: &FeatureSpec,
+    spec: &AiLearningPixelFeatureSettings,
 ) -> Result<FeatureBank, InternalErrors> {
     let size = template.image.size();
     let mut channels = Vec::with_capacity(spec.channels.len());
@@ -128,9 +133,9 @@ fn build_rows(features: &FeatureBank, samples: &[(usize, usize)]) -> Vec<Vec<f32
 pub fn train_random_forest(
     features: &FeatureBank,
     samples: &[(usize, usize)],
-    labels: &[usize],
+    labels: &[SegmentationClass],
 ) -> Result<Classifier, InternalErrors> {
-    model::fit_random_forest(&build_rows(features, samples), labels)
+    fit_random_forest(&build_rows(features, samples), labels)
 }
 
 /// Trains a K-Nearest-Neighbors pixel classifier from a labeled feature bank.
@@ -139,21 +144,21 @@ pub fn train_random_forest(
 pub fn train_knn(
     features: &FeatureBank,
     samples: &[(usize, usize)],
-    labels: &[usize],
+    labels: &[SegmentationClass],
 ) -> Result<Classifier, InternalErrors> {
-    model::fit_knn(&build_rows(features, samples), labels)
+    fit_knn(&build_rows(features, samples), labels)
 }
 
 /// Trains a small feed-forward (MLP) pixel classifier from a labeled feature bank.
 pub fn train_mlp(
     features: &FeatureBank,
     samples: &[(usize, usize)],
-    labels: &[usize],
+    labels: &[SegmentationClass],
     hidden_layers: &[usize],
     epochs: usize,
     learning_rate: f64,
 ) -> Result<Classifier, InternalErrors> {
-    model::fit_mlp(
+    mlp::fit_mlp(
         &build_rows(features, samples),
         labels,
         hidden_layers,

@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// One selectable object-classifier feature, mapped directly onto `Object`'s
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// never be renamed, removed, or have their meaning changed - treat this the
 /// same as a database migration, not a normal refactor. Adding a new variant
 /// is safe.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum ObjectMetric {
     Area,
     Perimeter,
@@ -43,7 +44,7 @@ pub enum ObjectMetric {
 /// identical inputs.
 ///
 /// SERIALIZATION-CRITICAL — see `ObjectMetric` doc comment above.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObjectFeatureSpec {
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AiLearningObjectFeatureSettings {
     pub metrics: Vec<ObjectMetric>,
 }
