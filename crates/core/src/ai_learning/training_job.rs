@@ -1,12 +1,12 @@
-use super::model::{self, CURRENT_SAVED_CLASSIFIER_VERSION, FeatureRecipe, SavedClassifier};
-use super::pixel::compute_pixel_features;
-use super::pixel_settings::FeatureSpec;
+use super::model::{self, CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier};
+use super::pixel_trainer::compute_pixel_features;
 use crate::ZProjection;
 use crate::image::{ImageReader, ImageTile, ReadMode};
 use crate::object::Object;
 use crate::pipeline::pipeline::PipelineImageMeta;
 use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
+use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
 use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use kornia_image::ImageSize;
@@ -35,17 +35,7 @@ const TILE_SIZE: usize = 4096;
 pub struct TrainingImage {
     pub path: PathBuf,
     pub series: i32,
-    pub labeled_objects: Vec<(ObjectMetricSettings, usize)>,
-}
-
-pub enum TrainingBackend {
-    RandomForest,
-    Knn,
-    Mlp {
-        hidden_layers: Vec<usize>,
-        epochs: usize,
-        learning_rate: f64,
-    },
+    pub labeled_objects: Vec<ObjectMetricSettings>,
 }
 
 pub enum TrainingProgressEvent {
@@ -100,9 +90,6 @@ pub struct PixelTrainingJob {
     /// each one as its own training sample at the same (x, y) - so sample
     /// count scales with z-depth for that mode, worth knowing going in.
     pub z_stack_handling: ZStackHandling,
-    pub feature_spec: FeatureSpec,
-    pub backend: TrainingBackend,
-    pub class_labels: Vec<SegmentationClass>,
 }
 
 impl PixelTrainingJob {
@@ -110,6 +97,7 @@ impl PixelTrainingJob {
     /// the background the way pipeline execution does.
     pub fn run(
         &self,
+        backend: &AiLearningSettings,
         progress: Sender<TrainingProgressEvent>,
         cancel: Arc<AtomicBool>,
     ) -> Result<SavedClassifier, InternalErrors> {
@@ -118,7 +106,7 @@ impl PixelTrainingJob {
         });
 
         let mut rows: Vec<Vec<f32>> = Vec::new();
-        let mut labels: Vec<usize> = Vec::new();
+        let mut labels: Vec<SegmentationClass> = Vec::new();
 
         for (image_index, training_image) in self.images.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
@@ -163,10 +151,15 @@ impl PixelTrainingJob {
                 height: full_height,
             };
 
-            let labeled_objects: Vec<(Object, usize)> = training_image
+            let labeled_objects: Vec<(Object, SegmentationClass)> = training_image
                 .labeled_objects
                 .iter()
-                .map(|(settings, label)| (Object::from_object_settings(settings.clone()), *label))
+                .map(|settings| {
+                    (
+                        Object::from_object_settings(settings.clone()),
+                        settings.segmentation_class,
+                    )
+                })
                 .collect();
 
             let (z_projection, z_range) =
@@ -284,6 +277,7 @@ impl PixelTrainingJob {
     /// wire this up the same way it already wires up pipeline execution.
     pub fn run_async(
         self,
+        backend: &AiLearningSettings,
     ) -> (
         JoinHandle<Result<SavedClassifier, InternalErrors>>,
         Receiver<TrainingProgressEvent>,

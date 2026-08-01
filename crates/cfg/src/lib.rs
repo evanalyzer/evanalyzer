@@ -11,6 +11,7 @@ pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
 pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evapt";
 pub const PIPELINE_EXTENSIONS: &str = &"evapipe";
 pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
+pub const EVANALYZER_TRAINED_AI_MODELS: &str = &"evamodel";
 /// Project file extension used by the old (pre-rewrite) application.
 pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 
