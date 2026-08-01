@@ -163,6 +163,162 @@ mod tests {
         }
     }
 
+    /// A project with two labeled objects (one per class) in one image -
+    /// enough for `gather_labeled_objects`/`ObjectTrainingJob` to have real
+    /// data to fit a classifier from, with no image files needed (object-
+    /// classifier training reads only already-computed metrics).
+    fn project_with_two_labeled_objects() -> ProjectSettings {
+        use evanalyzer_cfg::core_types::ObjectClass;
+        use evanalyzer_cfg::settings::classification_settings::Class;
+        use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+        use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+
+        let mut project = ProjectSettings::default();
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(1),
+            name: "A".into(),
+            ..Default::default()
+        });
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(2),
+            name: "B".into(),
+            ..Default::default()
+        });
+
+        let mut series = SeriesSettings::default();
+        series.objects.push(ObjectMetricSettings {
+            area: 10,
+            object_class: [ObjectClass::Valid(1)].into(),
+            ..Default::default()
+        });
+        series.objects.push(ObjectMetricSettings {
+            area: 1000,
+            object_class: [ObjectClass::Valid(2)].into(),
+            ..Default::default()
+        });
+        let mut entry = ImageEntry::default();
+        entry.series.insert(0, series);
+        project.images.list.insert(PathBuf::from("img.tif"), entry);
+
+        project
+    }
+
+    fn two_class_object_settings() -> AiLearningSettings {
+        use evanalyzer_cfg::core_types::ObjectClass;
+        use evanalyzer_cfg::settings::ai_learning_object_settings::ObjectMetric;
+        use evanalyzer_cfg::settings::ai_learning_settings::ObjectClassLabel;
+
+        AiLearningSettings {
+            metadata: Default::default(),
+            backend: AiLearningBackendSettings::RandomForest(Default::default()),
+            classifier: AiLearningClassifierSettings::Object {
+                feature_spec: AiLearningObjectFeatureSettings {
+                    metrics: vec![ObjectMetric::Area],
+                },
+                class_labels: vec![
+                    ObjectClassLabel {
+                        class: ObjectClass::Valid(1),
+                        name: "A".into(),
+                    },
+                    ObjectClassLabel {
+                        class: ObjectClass::Valid(2),
+                        name: "B".into(),
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn run_trains_and_saves_a_model_end_to_end() {
+        let file = TempProjectFile::new(&project_with_two_labeled_objects());
+        let settings_path = file.path.parent().unwrap().join("settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string(&two_class_object_settings()).unwrap(),
+        )
+        .unwrap();
+
+        let result = run(TrainClassifierArgs {
+            project: file.path.clone(),
+            settings: settings_path,
+            model_name: Some("test-model".into()),
+            channel: 0,
+            t_stack: 0,
+            z_stack_handling: ZStackHandlingArg::SingleStack,
+        });
+
+        assert!(result.is_ok(), "expected training to succeed: {:?}", result.err());
+        let model_path = file
+            .path
+            .parent()
+            .unwrap()
+            .join("models")
+            .join("test-model.evamodel");
+        assert!(
+            model_path.exists(),
+            "trained model must be saved to <project_dir>/models/<name>.evamodel"
+        );
+    }
+
+    #[test]
+    fn run_falls_back_to_settings_metadata_name_when_model_name_is_not_given() {
+        let file = TempProjectFile::new(&project_with_two_labeled_objects());
+        let settings_path = file.path.parent().unwrap().join("settings.json");
+        let mut settings = two_class_object_settings();
+        settings.metadata.name = "from-metadata".into();
+        std::fs::write(&settings_path, serde_json::to_string(&settings).unwrap()).unwrap();
+
+        let result = run(TrainClassifierArgs {
+            project: file.path.clone(),
+            settings: settings_path,
+            model_name: None,
+            channel: 0,
+            t_stack: 0,
+            z_stack_handling: ZStackHandlingArg::SingleStack,
+        });
+
+        assert!(result.is_ok(), "expected training to succeed: {:?}", result.err());
+        let model_path = file
+            .path
+            .parent()
+            .unwrap()
+            .join("models")
+            .join("from-metadata.evamodel");
+        assert!(
+            model_path.exists(),
+            "--model-name omitted must fall back to settings.metadata.name"
+        );
+    }
+
+    #[test]
+    fn print_training_progress_does_not_panic_for_any_event_variant() {
+        // Purely a "doesn't panic" smoke test - `print_training_progress`
+        // only formats to stdout, so there's nothing else to assert on any
+        // one event; the end-to-end tests above exercise it for real through
+        // a live progress channel.
+        print_training_progress(TrainingProgressEvent::Started { total: 3 });
+        print_training_progress(TrainingProgressEvent::ImageTilesScheduled {
+            image_index: 0,
+            total_tiles: 4,
+        });
+        print_training_progress(TrainingProgressEvent::TileProcessed {
+            image_index: 0,
+            tile_index: 1,
+            total_tiles: 4,
+        });
+        print_training_progress(TrainingProgressEvent::ItemCompleted { index: 1, total: 3 });
+        print_training_progress(TrainingProgressEvent::ImageFailed {
+            path: PathBuf::from("broken.tif"),
+        });
+        print_training_progress(TrainingProgressEvent::ObjectSkipped {
+            index: 2,
+            reason: "ambiguous class".into(),
+        });
+        print_training_progress(TrainingProgressEvent::Training);
+        print_training_progress(TrainingProgressEvent::Finished);
+    }
+
     #[test]
     fn to_z_stack_handling_maps_every_variant() {
         assert!(matches!(

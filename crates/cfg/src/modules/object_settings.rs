@@ -55,6 +55,13 @@ pub struct ObjectMetricSettings {
     // Dedicated class after classify object
     pub object_class: HashSet<ObjectClass>,
 
+    // Excludes this object from AI classifier training even though it has an
+    // `object_class` assigned (e.g. a bad/outlier annotation) - unlike
+    // leaving `object_class` empty, the label is kept for display/manual
+    // classification purposes, just not used as a training sample.
+    #[serde(default)]
+    pub exclude_from_training: bool,
+
     // Colocalization
     pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,
 

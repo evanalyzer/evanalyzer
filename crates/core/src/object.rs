@@ -512,6 +512,11 @@ impl Object {
             id: self.id.clone(),
             segmentation_class: self.segmentation_class,
             object_class: self.object_class.clone(),
+            // A freshly extracted/measured `Object` has no notion of
+            // training exclusion - that's a manual decision made later on
+            // the already-persisted `ObjectMetricSettings`, in the AI
+            // training dialog, not something re-derived here.
+            exclude_from_training: false,
             colocalized_with: self.colocalized_with.clone(),
             parent_id: self.parent_id.clone(),
             children: self.children.clone(),

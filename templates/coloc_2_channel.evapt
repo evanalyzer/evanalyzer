@@ -18,6 +18,14 @@
     "classes": [
       {
         "id": {
+          "VALID": 0
+        },
+        "color": "#97978f",
+        "name": "Background",
+        "notes": ""
+      },
+      {
+        "id": {
           "VALID": 4
         },
         "color": "#3399FF",
@@ -557,11 +565,11 @@
           "enabled": true,
           "command": {
             "type": "classifyObjects",
-            "originSegmentation": [
-              
-            ],
+            "originSegmentation": [],
             "inputClasses": [
-              {"VALID": 21}
+              {
+                "VALID": 21
+              }
             ],
             "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
             "outputClass": "UNSET",
@@ -604,7 +612,6 @@
             "minColocArea": 0.0
           }
         }
-
       ]
     },
     {
@@ -673,10 +680,12 @@
           "enabled": true,
           "command": {
             "type": "classifyObjects",
-            "originSegmentation": [
-              
+            "originSegmentation": [],
+            "inputClasses": [
+              {
+                "VALID": 1
+              }
             ],
-            "inputClasses": [{"VALID": 1}],
             "matchHandling": "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
             "outputClass": "UNSET",
             "overlappingWith": "UNSET",

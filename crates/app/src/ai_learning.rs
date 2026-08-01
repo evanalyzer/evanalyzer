@@ -139,6 +139,7 @@ fn gather_pixel_training_images(
         let labeled_objects: Vec<ObjectMetricSettings> = series
             .objects
             .iter()
+            .filter(|object| !object.exclude_from_training)
             .filter_map(|object| {
                 let label = resolve_pixel_label(class_labels, &object.object_class)?;
                 let mut labeled = object.clone();
@@ -170,7 +171,7 @@ fn gather_labeled_objects(project: &ProjectSettings) -> Vec<ObjectMetricSettings
         .values()
         .filter_map(|entry| entry.series.get(&entry.selected_series))
         .flat_map(|series| series.objects.iter())
-        .filter(|object| !object.object_class.is_empty())
+        .filter(|object| !object.object_class.is_empty() && !object.exclude_from_training)
         .cloned()
         .collect()
 }
@@ -197,12 +198,15 @@ fn resolve_pixel_label(
     Some(first.class)
 }
 
-/// Classes that appear in at least one project object's `object_class` set,
-/// across every image (not just labeled/relevant ones - a broader "does any
-/// data exist for this class at all" scan than `gather_pixel_training_images`
-/// or `gather_labeled_objects` do, since it just needs the set of ids, not
-/// the objects themselves). Also used by the GUI to pre-check classes with
-/// existing data in the object training dialog's class checklist.
+/// Classes that appear in at least one non-excluded project object's
+/// `object_class` set, across every image (not just labeled/relevant ones -
+/// a broader "does any data exist for this class at all" scan than
+/// `gather_pixel_training_images` or `gather_labeled_objects` do, since it
+/// just needs the set of ids, not the objects themselves). Objects with
+/// `exclude_from_training` set don't count, so a class whose only labeled
+/// objects have all been excluded doesn't get pre-checked as if it had
+/// usable data. Also used by the GUI to pre-check classes with existing data
+/// in the training dialog's class checklist.
 pub fn used_object_classes(project: &ProjectSettings) -> std::collections::HashSet<ObjectClass> {
     project
         .images
@@ -210,25 +214,28 @@ pub fn used_object_classes(project: &ProjectSettings) -> std::collections::HashS
         .values()
         .filter_map(|entry| entry.series.get(&entry.selected_series))
         .flat_map(|series| series.objects.iter())
+        .filter(|object| !object.exclude_from_training)
         .flat_map(|object| object.object_class.iter().copied())
         .collect()
 }
 
 /// Builds `AiLearningClassifierSettings::Pixel::class_labels` from a
-/// project's classification classes, restricted to ones with at least one
-/// labeled object somewhere in the project. A class with zero training
-/// examples can't usefully be a prediction target (an MLP's output layer
-/// would get an untrained neuron for it; RF/KNN would just never predict
-/// it), so it's excluded rather than offered as a hollow choice - unlike the
-/// object classifier side (see `object_class_labels_from_project`), there's
-/// no dialog affordance for a user to deliberately pick an unused class here.
-pub fn pixel_class_labels_from_project(project: &ProjectSettings) -> Vec<PixelClassLabel> {
-    let used = used_object_classes(project);
+/// project's classification classes, restricted to `selected` - the training
+/// dialog's own class checklist, shared with the object classifier side (see
+/// `object_class_labels_from_project`). Not restricted to classes that
+/// already have data: a class can be selected ahead of painting/labeling it,
+/// same as on the object side - it's the dialog's default pre-check
+/// (`used_object_classes`), not this function, that steers users toward
+/// classes with existing data.
+pub fn pixel_class_labels_from_project(
+    project: &ProjectSettings,
+    selected: &std::collections::HashSet<ObjectClass>,
+) -> Vec<PixelClassLabel> {
     project
         .classification
         .classes()
         .iter()
-        .filter(|class| used.contains(&class.id))
+        .filter(|class| selected.contains(&class.id))
         .filter_map(|class| {
             class.id.to_u32().map(|id| PixelClassLabel {
                 class: SegmentationClass(id),
@@ -239,11 +246,11 @@ pub fn pixel_class_labels_from_project(project: &ProjectSettings) -> Vec<PixelCl
 }
 
 /// Builds `AiLearningClassifierSettings::Object::class_labels` restricted to
-/// `selected` - the object training dialog's own class checklist. Unlike the
-/// pixel side, this isn't inferred from which classes happen to have data:
-/// object classifiers are commonly trained to distinguish a deliberately
-/// curated subset of classes, so the choice is left to the user rather than
-/// auto-including everything with at least one example.
+/// `selected` - the object training dialog's own class checklist. Not
+/// inferred from which classes happen to have data: object classifiers are
+/// commonly trained to distinguish a deliberately curated subset of classes,
+/// so the choice is left to the user rather than auto-including everything
+/// with at least one example.
 pub fn object_class_labels_from_project(
     project: &ProjectSettings,
     selected: &std::collections::HashSet<ObjectClass>,
@@ -364,7 +371,8 @@ mod tests {
             },
         );
 
-        let class_labels = pixel_class_labels_from_project(&project);
+        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let class_labels = pixel_class_labels_from_project(&project, &selected);
         let images = gather_pixel_training_images(&project, &class_labels).unwrap();
 
         assert_eq!(images.len(), 1);
@@ -400,7 +408,8 @@ mod tests {
             },
         );
 
-        let class_labels = pixel_class_labels_from_project(&project);
+        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let class_labels = pixel_class_labels_from_project(&project, &selected);
         let Err(err) = gather_pixel_training_images(&project, &class_labels) else {
             panic!("labeled data with no image root must error, not train on 0 samples");
         };
@@ -442,7 +451,98 @@ mod tests {
     }
 
     #[test]
-    fn pixel_class_labels_from_project_excludes_classes_with_no_labeled_objects() {
+    fn gather_labeled_objects_skips_a_labeled_object_marked_excluded() {
+        let mut project = ProjectSettings::default();
+        let path = PathBuf::from("a.tif");
+        let mut excluded = labeled_object(1, ObjectClass::Valid(1));
+        excluded.exclude_from_training = true;
+        project.images.list.insert(
+            path.clone(),
+            ImageEntry {
+                rel_path: path,
+                file_size: 0,
+                selected_series: 0,
+                series: std::collections::BTreeMap::from([(
+                    0,
+                    SeriesSettings {
+                        objects: vec![excluded, labeled_object(2, ObjectClass::Valid(1))],
+                        ..Default::default()
+                    },
+                )]),
+            },
+        );
+
+        let objects = gather_labeled_objects(&project);
+
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].id, ObjectId(2));
+    }
+
+    #[test]
+    fn used_object_classes_ignores_a_class_whose_only_object_is_excluded() {
+        let mut project = ProjectSettings::default();
+        let path = PathBuf::from("a.tif");
+        let mut excluded = labeled_object(1, ObjectClass::Valid(1));
+        excluded.exclude_from_training = true;
+        project.images.list.insert(
+            path.clone(),
+            ImageEntry {
+                rel_path: path,
+                file_size: 0,
+                selected_series: 0,
+                series: std::collections::BTreeMap::from([(
+                    0,
+                    SeriesSettings {
+                        objects: vec![excluded],
+                        ..Default::default()
+                    },
+                )]),
+            },
+        );
+
+        assert!(used_object_classes(&project).is_empty());
+    }
+
+    #[test]
+    fn gather_pixel_training_images_skips_an_excluded_object_even_if_its_class_is_selected() {
+        let mut project = ProjectSettings::default();
+        project.images.root = Some(PathBuf::from("/data/images"));
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(1),
+            name: "Cell".into(),
+            ..Default::default()
+        });
+        let path = PathBuf::from("a.tif");
+        let mut excluded = labeled_object(1, ObjectClass::Valid(1));
+        excluded.exclude_from_training = true;
+        project.images.list.insert(
+            path.clone(),
+            ImageEntry {
+                rel_path: path,
+                file_size: 0,
+                selected_series: 0,
+                series: std::collections::BTreeMap::from([(
+                    0,
+                    SeriesSettings {
+                        objects: vec![excluded],
+                        ..Default::default()
+                    },
+                )]),
+            },
+        );
+
+        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let class_labels = pixel_class_labels_from_project(&project, &selected);
+        let images = gather_pixel_training_images(&project, &class_labels).unwrap();
+
+        assert!(
+            images.is_empty(),
+            "the only labeled object is excluded, so the image has nothing to train from"
+        );
+    }
+
+    #[test]
+    fn pixel_class_labels_from_project_only_includes_the_selected_classes() {
         let mut project = ProjectSettings::default();
         project.classification.classes_mut().push(Class {
             id: ObjectClass::Valid(1),
@@ -451,9 +551,12 @@ mod tests {
         });
         project.classification.classes_mut().push(Class {
             id: ObjectClass::Valid(2),
-            name: "Unused".into(),
+            name: "Nucleus".into(),
             ..Default::default()
         });
+
+        // Both classes have data, but only Valid(1) is selected - same
+        // selection-is-a-user-choice behavior as the object classifier side.
         let path = PathBuf::from("a.tif");
         project.images.list.insert(
             path.clone(),
@@ -464,17 +567,40 @@ mod tests {
                 series: std::collections::BTreeMap::from([(
                     0,
                     SeriesSettings {
-                        objects: vec![labeled_object(1, ObjectClass::Valid(1))],
+                        objects: vec![
+                            labeled_object(1, ObjectClass::Valid(1)),
+                            labeled_object(2, ObjectClass::Valid(2)),
+                        ],
                         ..Default::default()
                     },
                 )]),
             },
         );
 
-        let labels = pixel_class_labels_from_project(&project);
+        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let labels = pixel_class_labels_from_project(&project, &selected);
 
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0].name, "Cell");
+    }
+
+    #[test]
+    fn pixel_class_labels_from_project_allows_selecting_a_class_with_no_labeled_pixels_yet() {
+        // Unlike the old (usage-restricted) behavior, a class can be
+        // selected ahead of painting any pixels for it - mirrors
+        // `object_class_labels_from_project`, which never restricted this.
+        let mut project = ProjectSettings::default();
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(1),
+            name: "Not Yet Painted".into(),
+            ..Default::default()
+        });
+
+        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let labels = pixel_class_labels_from_project(&project, &selected);
+
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].name, "Not Yet Painted");
     }
 
     #[test]

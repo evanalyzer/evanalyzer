@@ -42,6 +42,7 @@ impl ClassificationSettings {
         }
     }
 
+    #[allow(dead_code)]
     pub fn new_from_existing(mut classes: Vec<Class>) -> Self {
         let mut all_classes = vec![Class {
             id: ObjectClass::BACKGROUND,
@@ -56,10 +57,12 @@ impl ClassificationSettings {
         }
     }
 
+    #[allow(dead_code)]
     pub fn classes_mut(&mut self) -> &mut Vec<Class> {
         &mut self.classes
     }
 
+    #[allow(dead_code)]
     pub fn classes(&self) -> &Vec<Class> {
         &self.classes
     }

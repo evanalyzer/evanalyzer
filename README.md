@@ -352,6 +352,70 @@ EVAnalyzer reads files through Bio-Formats and supports all formats it provides.
 
 ## Development Setup
 
+### Adding a new pipeline command
+
+Pipeline commands (`Blur`, `Threshold`, `Cellpose`, …) are declared once, in
+`evanalyzer_core`, and generated everywhere else. To add one:
+
+1. Write a plain struct in `crates/core/src/algos/<category>/<name>.rs`:
+
+   ```rust
+   #[derive(CommandsMeta)]
+   #[cmdsmeta(category = "segment", display_name = "My Command")]
+   pub struct MyCommand {
+       #[cmdsmeta(min = 1, max = 100, step = 1, default = 10)]
+       pub some_number: usize,
+
+       /// Path to a trained model.
+       #[cmdsmeta(file_extensions = "pt,pth")]
+       pub model_path: PathBuf,
+   }
+
+   impl ImageAlgorithm for MyCommand {
+       fn execute(&self, ctx: &mut PipelineContext, cache: &mut PipelineCache) -> Result<(), InternalErrors> {
+           /* ... */
+       }
+       fn name(&self) -> &'static str { "MyCommand" }
+   }
+   ```
+
+2. Build. `crates/cfg/build/pipeline_commands_generator.rs` re-scans every
+   `#[derive(CommandsMeta)]` struct in the workspace and (re)generates
+   `crates/cfg/src/modules/pipeline_command.rs`,
+   `pipeline_command_settings.rs`, and `crates/core/src/job/algos_from_config.rs`
+   (all `// @generated - do not edit by hand`) - a settings mirror, the
+   `PipelineCommand` enum variant, `to_parameters()`/`apply_param_change()`
+   for the pipeline editor UI, and the `From<...Settings> for MyCommand`
+   conversion all come from this one struct definition. Nothing to wire up
+   by hand.
+
+Field types drive their own UI/behavior generically, purely from the Rust
+type - no per-field opt-in needed:
+
+- `PathBuf` → a "Browse…" file picker (`ParamType::FilePath`) **and**
+  automatic project-relative storage: `evanalyzer_app::extensions::utils::
+  relativize_file_paths`/`resolve_file_paths` rewrite *every* `FilePath`
+  field on save/load (keyed off `ParamType`, not a per-command list), so a
+  `PathBuf` field on a brand-new command is already portable across moved/
+  copied project folders with nothing added here. `#[cmdsmeta(file_extensions
+  = "...")]` (comma-separated, no dots) only narrows the file picker's
+  filter - it does not opt the field into `FilePath` handling, that's
+  automatic. See the doc comment on `commands_meta_derive` in
+  `crates/core/macros/src/lib.rs` for the full list of field-level
+  `#[cmdsmeta(...)]` keys (`min`/`max`/`step`/`default`/`unit`/`regex`/
+  `optional`/`visible`/`file_extensions`).
+
+One thing that *isn't* generated and needs a manual touch: `#[derive(...)]`
+assigns each `PipelineCommand` variant a numeric id in **alphabetical order
+by struct name**, contiguous from 0. Inserting a new command shifts every
+alphabetically-later command's id by one. `crates/cfg/tests/pipeline_command_
+coverage.rs` is a hand-written test file (kept separate because the generated
+file it tests can't carry inline tests) that hardcodes some of these ids to
+target specific commands - after adding a command, run
+`cargo test -p evanalyzer_cfg --test pipeline_command_coverage` and fix
+any id that shifted; a failure there means the test table is stale, not that
+the new command broke something.
+
 ### Toolchain
 
 ```sh

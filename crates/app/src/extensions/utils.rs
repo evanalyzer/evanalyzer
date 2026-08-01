@@ -1,3 +1,4 @@
+use evanalyzer_cfg::settings::parameter_def::ParamType;
 use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
 use pathdiff::diff_paths;
@@ -13,50 +14,85 @@ pub fn get_relative_key(image_path: &Path, images_root: Option<&PathBuf>) -> Opt
     }
 }
 
-/// Returns the `model_path` field of AI commands that carry a trained-model
-/// path (Cellpose/Stardist/UNet/PixelClassifier); `None` for every other
-/// command.
-fn model_path_mut(command: &mut PipelineCommand) -> Option<&mut PathBuf> {
-    match command {
-        PipelineCommand::Cellpose(s) => Some(&mut s.model_path),
-        PipelineCommand::Stardist(s) => Some(&mut s.model_path),
-        PipelineCommand::UNet(s) => Some(&mut s.model_path),
-        PipelineCommand::PixelClassifier(s) => Some(&mut s.model_path),
-        _ => None,
-    }
+/// Returns `(field_name, new_value)` for every top-level `ParamType::FilePath`
+/// field on `command` whose current value passes `keep`, with `new_value`
+/// computed by `rewrite`. Driven entirely by `to_parameters()`'s generic,
+/// codegen-derived `ParamType` classification (any `PathBuf`-typed field
+/// automatically becomes `ParamType::FilePath` - see
+/// `crates/cfg/build/pipeline_commands_generator.rs`'s `"PathBuf" =>` arm),
+/// not a hardcoded list of command/field names - see this module's doc
+/// comment on [`relativize_file_paths`] for why that matters. Collecting into
+/// a `Vec` first (rather than calling `apply_param_change` inline) sidesteps
+/// borrowing `to_parameters()`'s `&self` and `apply_param_change`'s `&mut
+/// self` at the same time.
+fn file_path_changes(
+    command: &PipelineCommand,
+    keep: impl Fn(&Path) -> bool,
+    rewrite: impl Fn(&Path) -> Option<PathBuf>,
+) -> Vec<(String, PathBuf)> {
+    command
+        .to_parameters()
+        .into_iter()
+        .filter(|p| p.param_type == ParamType::FilePath && !p.value.is_empty())
+        .filter_map(|p| {
+            let path = PathBuf::from(&p.value);
+            if !keep(&path) {
+                return None;
+            }
+            rewrite(&path).map(|new_path| (p.name, new_path))
+        })
+        .collect()
 }
 
-/// Rewrites every AI command's `model_path` in `pipelines` to be relative to
-/// `project_dir`, so a saved project stays valid when the project folder is
-/// moved or copied to another machine - mirrors `get_relative_key`'s
-/// handling of image paths. A path that can't be related to `project_dir`
-/// (e.g. a different drive on Windows) is left absolute.
-pub fn relativize_model_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
+/// Rewrites every `PathBuf`-typed command field in `pipelines` (Cellpose /
+/// Stardist / UNet / PixelClassifier's `model_path` today - and, without any
+/// further change here, whatever field a future command declares the same
+/// way) to be relative to `project_dir`, so a saved project stays valid when
+/// the project folder is moved or copied to another machine - mirrors
+/// `get_relative_key`'s handling of image paths.
+///
+/// This is intentionally generic rather than matching specific command
+/// variants/field names: adding a `pub some_path: PathBuf` field to any
+/// `#[derive(CommandsMeta)]` struct already makes it a `ParamType::FilePath`
+/// (that's what drives the "Browse…" button in the pipeline editor too), and
+/// that alone is now enough to make it project-relative on save - no edit
+/// needed here. See `README.md`'s "Adding a new pipeline command" section and
+/// the `file_extensions` doc comment in `crates/core/macros/src/lib.rs`.
+///
+/// A path that can't be related to `project_dir` (e.g. a different drive on
+/// Windows) is left absolute.
+pub fn relativize_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
     for pipeline in pipelines {
         for step in &mut pipeline.steps {
-            if let Some(path) = model_path_mut(&mut step.command)
-                && !path.as_os_str().is_empty()
-                && path.is_absolute()
-                && let Some(relative) = diff_paths(path.as_path(), project_dir)
-            {
-                *path = relative;
+            let changes = file_path_changes(
+                &step.command,
+                |path| path.is_absolute(),
+                |path| diff_paths(path, project_dir),
+            );
+            for (name, relative) in changes {
+                step.command
+                    .apply_param_change(&name, &relative.to_string_lossy());
             }
         }
     }
 }
 
-/// The inverse of [`relativize_model_paths`]: resolves every AI command's
-/// `model_path` against `project_dir` when it's stored as a relative path.
+/// The inverse of [`relativize_file_paths`]: resolves every `PathBuf`-typed
+/// command field against `project_dir` when it's stored as a relative path.
 /// Already-absolute paths (e.g. projects saved before this existed) are left
-/// untouched.
-pub fn resolve_model_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
+/// untouched. Generic for the same reason `relativize_file_paths` is - see
+/// its doc comment.
+pub fn resolve_file_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
     for pipeline in pipelines {
         for step in &mut pipeline.steps {
-            if let Some(path) = model_path_mut(&mut step.command)
-                && path.is_relative()
-                && !path.as_os_str().is_empty()
-            {
-                *path = project_dir.join(path.as_path());
+            let changes = file_path_changes(
+                &step.command,
+                |path| path.is_relative(),
+                |path| Some(project_dir.join(path)),
+            );
+            for (name, absolute) in changes {
+                step.command
+                    .apply_param_change(&name, &absolute.to_string_lossy());
             }
         }
     }
@@ -188,7 +224,7 @@ mod tests {
         assert_eq!(get_relative_key(image, Some(&root)), None);
     }
 
-    // ---- relativize_model_paths / resolve_model_paths ----
+    // ---- relativize_file_paths / resolve_file_paths ----
 
     fn pipeline_with(command: PipelineCommand) -> PipelineSettings {
         use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
@@ -213,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn relativize_model_paths_rewrites_an_absolute_path_under_the_project_dir() {
+    fn relativize_file_paths_rewrites_an_absolute_path_under_the_project_dir() {
         use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
 
         let mut pipelines = vec![pipeline_with(PipelineCommand::PixelClassifier(
@@ -223,7 +259,7 @@ mod tests {
             },
         ))];
 
-        relativize_model_paths(&mut pipelines, Path::new("/data/project"));
+        relativize_file_paths(&mut pipelines, Path::new("/data/project"));
 
         assert_eq!(
             pixel_classifier_model_path(&pipelines[0]),
@@ -232,30 +268,62 @@ mod tests {
     }
 
     #[test]
-    fn relativize_model_paths_leaves_an_empty_path_untouched() {
+    fn relativize_file_paths_leaves_an_empty_path_untouched() {
         use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
 
         let mut pipelines = vec![pipeline_with(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         ))];
 
-        relativize_model_paths(&mut pipelines, Path::new("/data/project"));
+        relativize_file_paths(&mut pipelines, Path::new("/data/project"));
 
         assert_eq!(pixel_classifier_model_path(&pipelines[0]), &PathBuf::new());
     }
 
     #[test]
-    fn relativize_model_paths_ignores_commands_without_a_model_path() {
+    fn relativize_file_paths_ignores_commands_without_a_file_path_field() {
         use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
 
         let mut pipelines = vec![pipeline_with(PipelineCommand::Blur(BlurSettings::default()))];
 
-        // Must not panic on a command variant with no `model_path` field.
-        relativize_model_paths(&mut pipelines, Path::new("/data/project"));
+        // Must not panic on a command variant with no `ParamType::FilePath` field.
+        relativize_file_paths(&mut pipelines, Path::new("/data/project"));
     }
 
     #[test]
-    fn resolve_model_paths_joins_a_relative_path_onto_the_project_dir() {
+    fn relativize_file_paths_handles_stardist_and_unet_the_same_way_as_pixel_classifier() {
+        // No command name is special-cased in the implementation - any
+        // `PathBuf` field works the same way, demonstrated here with two
+        // more of the four current FilePath-bearing commands (Cellpose is
+        // covered separately by the round-trip test below).
+        use evanalyzer_cfg::settings::pipeline_command_settings::{StardistSettings, UNetSettings};
+
+        let mut pipelines = vec![
+            pipeline_with(PipelineCommand::Stardist(StardistSettings {
+                model_path: PathBuf::from("/data/project/models/stardist.pt"),
+                ..Default::default()
+            })),
+            pipeline_with(PipelineCommand::UNet(UNetSettings {
+                model_path: PathBuf::from("/data/project/models/unet.pt"),
+                ..Default::default()
+            })),
+        ];
+
+        relativize_file_paths(&mut pipelines, Path::new("/data/project"));
+
+        let PipelineCommand::Stardist(stardist) = &pipelines[0].steps[0].command else {
+            panic!("expected a Stardist command");
+        };
+        assert_eq!(stardist.model_path, PathBuf::from("models/stardist.pt"));
+
+        let PipelineCommand::UNet(unet) = &pipelines[1].steps[0].command else {
+            panic!("expected a UNet command");
+        };
+        assert_eq!(unet.model_path, PathBuf::from("models/unet.pt"));
+    }
+
+    #[test]
+    fn resolve_file_paths_joins_a_relative_path_onto_the_project_dir() {
         use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
 
         let mut pipelines = vec![pipeline_with(PipelineCommand::PixelClassifier(
@@ -265,7 +333,7 @@ mod tests {
             },
         ))];
 
-        resolve_model_paths(&mut pipelines, Path::new("/data/project"));
+        resolve_file_paths(&mut pipelines, Path::new("/data/project"));
 
         assert_eq!(
             pixel_classifier_model_path(&pipelines[0]),
@@ -274,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_paths_leaves_an_already_absolute_path_untouched() {
+    fn resolve_file_paths_leaves_an_already_absolute_path_untouched() {
         use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
 
         // A project saved before this feature existed, or one whose model
@@ -286,7 +354,7 @@ mod tests {
             },
         ))];
 
-        resolve_model_paths(&mut pipelines, Path::new("/data/project"));
+        resolve_file_paths(&mut pipelines, Path::new("/data/project"));
 
         assert_eq!(
             pixel_classifier_model_path(&pipelines[0]),
@@ -295,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn relativize_then_resolve_model_paths_round_trips() {
+    fn relativize_then_resolve_file_paths_round_trips() {
         use evanalyzer_cfg::settings::pipeline_command_settings::CellposeSettings;
 
         let original = PathBuf::from("/data/project/models/cyto.pt");
@@ -305,8 +373,8 @@ mod tests {
         }))];
         let project_dir = Path::new("/data/project");
 
-        relativize_model_paths(&mut pipelines, project_dir);
-        resolve_model_paths(&mut pipelines, project_dir);
+        relativize_file_paths(&mut pipelines, project_dir);
+        resolve_file_paths(&mut pipelines, project_dir);
 
         let PipelineCommand::Cellpose(settings) = &pipelines[0].steps[0].command else {
             panic!("expected a Cellpose command");

@@ -64,14 +64,21 @@ export struct TrainingObjectRowSlint {
     // Which project image this object belongs to, so assigning a class can
     // locate the right object even when training from multiple images.
     image_path: string,
+    // Excludes this object from training even though it has a class
+    // assigned (e.g. a bad/outlier annotation) - the label itself is kept,
+    // only its use as a training sample is skipped. Persists on the
+    // project's `ObjectMetricSettings::exclude_from_training`.
+    excluded: bool,
 }
 
 // One of the project's classification classes, offered as a checkbox for
-// object-classifier training (object-classifier `class_labels` are a
-// deliberate user selection, not inferred from which classes happen to have
-// data - see `object_class_labels_from_project`'s doc comment). Not used for
-// pixel classifiers, which auto-include every class with at least one
-// labeled pixel instead.
+// which classes become prediction targets - shared by both pixel- and
+// object-classifier training (`class_labels` is a deliberate user selection,
+// not purely inferred from which classes happen to have data - see
+// `pixel_class_labels_from_project`'s/`object_class_labels_from_project`'s
+// doc comments). Pre-checked by default for classes with at least one
+// labeled object (`sync_class_selection_to_slint`), but not restricted to
+// them - a class can be selected ahead of labeling it.
 export struct ClassSelectionRowSlint {
     class_index: int, // index into AiLearningState.class_names
     name: string,
@@ -177,8 +184,8 @@ export global AiLearningState {
     in-out property <[ObjectMetricRowSlint]> object_metrics: [];
     in-out property <[TrainingImageRowSlint]> training_images: [];
     in-out property <[TrainingObjectRowSlint]> training_objects: [];
-    // Which project classes to train an object classifier on - see
-    // `ClassSelectionRowSlint`'s doc comment. Not used for pixel classifiers.
+    // Which project classes to train on - see `ClassSelectionRowSlint`'s doc
+    // comment. Shared by both pixel- and object-classifier training.
     in-out property <[ClassSelectionRowSlint]> class_selection: [];
     // Project's ObjectClass names, used as the label picker's options for
     // each training object row.
@@ -211,6 +218,7 @@ export global AiLearningState {
     callback add_gaussian_scales_clicked(string); // comma-separated sigmas
     callback toggle_image_selected(int);
     callback assign_object_class(int, int); // (training_objects index, class_names index)
+    callback toggle_object_excluded(int); // training_objects index
     callback train_clicked(AiTrainingSettingsSlint, [FeatureRowSlint], [ObjectMetricRowSlint], [TrainingImageRowSlint], [TrainingObjectRowSlint], [ClassSelectionRowSlint]);
 
     public function trigger_train() {
@@ -465,6 +473,14 @@ component TrainingObjectRow inherits Rectangle {
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
+        }
+
+        CheckBox {
+            text: "Train on this";
+            checked: !root.data.excluded;
+            toggled => {
+                AiLearningState.toggle_object_excluded(root.row_index);
+            }
         }
 
         ComboBox {
@@ -1008,8 +1024,8 @@ export component AiLearningDialog inherits Rectangle {
                             }
                         }
 
-                        // -- Object classifier: which classes to train on --
-                        if mode-combo.current-index == 1: VerticalLayout {
+                        // -- Which classes to train on (both modes) --
+                        VerticalLayout {
                             spacing: 10px;
                             SectionHeader {
                                 text: "Classes to Train";
