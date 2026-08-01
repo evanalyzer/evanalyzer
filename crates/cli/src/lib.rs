@@ -18,5 +18,6 @@ pub fn run(command: CliCommand) -> Result<(), InternalErrors> {
         CliCommand::Export(args) => commands::export::run(args),
         CliCommand::View(args) => commands::view::run(args),
         CliCommand::Columns(args) => commands::view::run_columns(args),
+        CliCommand::TrainClassifier(args) => commands::train_classifier::run(args),
     }
 }

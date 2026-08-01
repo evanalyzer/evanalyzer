@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 #[cfg(feature = "ai")]
-mod ai_learning;
+pub mod ai_learning;
 mod algos;
 mod converters;
 mod extlibs;
@@ -74,3 +74,15 @@ pub use crate::storage::duckdb::{
 };
 pub use crate::storage::file::CsvExporter;
 pub use crate::storage::memory::MemoryExporter;
+
+// AI classifier training
+#[cfg(feature = "ai")]
+pub use crate::ai_learning::model::SavedClassifier;
+#[cfg(feature = "ai")]
+pub use crate::ai_learning::model::{load_from_file as load_classifier_from_file, save_to_file as save_classifier_to_file};
+#[cfg(feature = "ai")]
+pub use crate::ai_learning::training::object::ObjectTrainingJob;
+#[cfg(feature = "ai")]
+pub use crate::ai_learning::training::pixel::PixelTrainingJob;
+#[cfg(feature = "ai")]
+pub use crate::ai_learning::training_job::{TrainingImage, TrainingProgressEvent};

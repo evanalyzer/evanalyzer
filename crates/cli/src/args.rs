@@ -15,6 +15,8 @@ pub enum CliCommand {
     View(ViewArgs),
     /// List the column ids available for --group-by / chart axes in a results database
     Columns(ColumnsArgs),
+    /// Train a pixel or object classifier from a project's labeled objects and save it under models/
+    TrainClassifier(TrainClassifierArgs),
 }
 
 #[derive(Args)]
@@ -36,6 +38,50 @@ pub struct AnalyzeArgs {
     /// .evadb filename. If omitted, a random two-word name is generated.
     #[arg(long)]
     pub job_name: Option<String>,
+}
+
+#[derive(Args)]
+pub struct TrainClassifierArgs {
+    /// Project file (.evaproj) to train from - every object with an assigned
+    /// class, across every image already in the project, is used as training
+    /// data (no per-run selection, matching how `analyze` runs over every
+    /// image in the project by default)
+    #[arg(long)]
+    pub project: PathBuf,
+
+    /// Path to a JSON file describing the model: metadata, backend
+    /// hyperparameters (Random Forest / KNN / MLP), and the feature
+    /// spec + class labels to train (an `AiLearningSettings` document)
+    #[arg(long)]
+    pub settings: PathBuf,
+
+    /// Name for the saved model file, under <project-dir>/models/. If
+    /// omitted, uses the name from --settings's metadata.
+    #[arg(long)]
+    pub model_name: Option<String>,
+
+    /// Image channel to read (pixel classifiers only)
+    #[arg(long, default_value_t = 0)]
+    pub channel: i32,
+
+    /// Time frame to read, alongside --channel (pixel classifiers only)
+    #[arg(long, default_value_t = 0)]
+    pub t_stack: i32,
+
+    /// How to handle z-stacks (pixel classifiers only)
+    #[arg(long, value_enum, default_value = "single-stack")]
+    pub z_stack_handling: ZStackHandlingArg,
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+pub enum ZStackHandlingArg {
+    SingleStack,
+    AllStacks,
+    MaxIntensity,
+    MinIntensity,
+    AvgIntensity,
+    SumIntensity,
+    TakeTheMiddle,
 }
 
 #[derive(Args)]

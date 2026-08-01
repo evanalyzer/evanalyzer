@@ -51,7 +51,7 @@ pub fn generate_analyze_job_from_project_settings(
 ) -> Result<JobExecutor, InternalErrors> {
     let class_names: std::collections::HashMap<_, _> = config
         .classification
-        .classes
+        .classes()
         .iter()
         .filter_map(|c| {
             c.id.to_u32().map(|n| {

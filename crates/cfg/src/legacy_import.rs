@@ -185,13 +185,12 @@ fn convert_classification(
     old: &LegacyClassification,
     warnings: &mut Vec<String>,
 ) -> ClassificationSettings {
-    ClassificationSettings {
-        classes: old
-            .classes
-            .iter()
-            .map(|c| convert_class(c, warnings))
-            .collect(),
-    }
+    let classes = old
+        .classes
+        .iter()
+        .map(|c| convert_class(c, warnings))
+        .collect();
+    ClassificationSettings::new_from_existing(classes)
 }
 
 fn convert_class(old: &LegacyClass, warnings: &mut Vec<String>) -> Class {
@@ -1120,10 +1119,13 @@ mod tests {
         assert_eq!(p.metadata.author_last_name, "Danmayr");
         assert_eq!(p.metadata.author_organization, "evanalyzer.org");
 
-        assert_eq!(p.classification.classes.len(), 2);
-        assert_eq!(p.classification.classes[0].id, ObjectClass::Valid(1));
-        assert_eq!(p.classification.classes[0].color, 0x3399FF);
-        assert_eq!(p.classification.classes[1].id, ObjectClass::Unset);
+        // classes()[0] is always the auto-prepended Background class - see
+        // `ClassificationSettings::new_from_existing`.
+        assert_eq!(p.classification.classes().len(), 3);
+        assert_eq!(p.classification.classes()[0].id, ObjectClass::BACKGROUND);
+        assert_eq!(p.classification.classes()[1].id, ObjectClass::Valid(1));
+        assert_eq!(p.classification.classes()[1].color, 0x3399FF);
+        assert_eq!(p.classification.classes()[2].id, ObjectClass::Unset);
 
         assert_eq!(p.plate.grouping_mode, GroupingMode::FolderName);
         assert_eq!(p.plate.well_rows, 2);
@@ -1630,7 +1632,9 @@ mod tests {
             "pipelines": []
         }"##;
         let outcome = import_legacy_project(json).unwrap();
-        assert_eq!(outcome.project.classification.classes[0].color, 0x9933FF);
+        // classes()[0] is the auto-prepended Background class; the imported
+        // one (with the unparseable color) lands at index 1.
+        assert_eq!(outcome.project.classification.classes()[1].color, 0x9933FF);
     }
 
     // ---- plate edge cases ----
