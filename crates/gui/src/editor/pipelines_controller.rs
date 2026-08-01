@@ -14,12 +14,18 @@ use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::PipelineId;
+use evanalyzer_cfg::core_types::SegmentationClass;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
+use evanalyzer_cfg::settings::ai_learning_settings::{AiLearningClassifierSettings, PixelClassLabel};
 use evanalyzer_cfg::settings::images_settings::{ImageEntry, ImageSettings};
 use evanalyzer_cfg::settings::parameter_def::{ParamType as CfgParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::CommandMeta;
+use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, all_command_meta, default_command,
+};
+use evanalyzer_cfg::settings::pipeline_command_settings::{
+    PixelClassifierSettings, SegmentationMappingSettings,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -28,6 +34,7 @@ use log::debug;
 use log::info;
 use log::warn;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::{Condvar, Mutex, atomic::AtomicBool};
@@ -879,7 +886,7 @@ impl PipelinesController {
                         }
                     };
 
-                    let (new_summary, params_now) = {
+                    let (new_summary, params_now, needs_full_resync) = {
                         let mut project = manager.app_state.get_project_write();
                         let Some(pipeline) =
                             project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id)
@@ -890,8 +897,37 @@ impl PipelinesController {
                             return;
                         };
                         step.command.apply_param_change(&param_name, &value_str);
-                        (step.command.to_summary(), step.command.to_parameters())
+
+                        // A PixelClassifier's `segmentation_mapping` row count is
+                        // driven by the loaded model's own class count, not
+                        // something the user adds/removes rows for - resize it
+                        // to match whenever the model changes. This changes the
+                        // group's row count (not just one value), so the single-
+                        // value patch below can't reflect it; fall back to a
+                        // full resync instead, same as a changed field set does.
+                        let mut needs_full_resync = false;
+                        if param_name == "model_path"
+                            && let PipelineCommand::PixelClassifier(settings) = &mut step.command
+                        {
+                            reconcile_pixel_classifier_mapping(settings);
+                            needs_full_resync = true;
+                        }
+
+                        (
+                            step.command.to_summary(),
+                            step.command.to_parameters(),
+                            needs_full_resync,
+                        )
                     }; // write lock dropped here
+
+                    if needs_full_resync {
+                        manager.sync_steps_of_selected_pipeline_to_slint(
+                            PipelineId(pipeline_id),
+                            false,
+                        );
+                        manager.pipeline_settings_changed();
+                        return;
+                    }
 
                     // Update the affected step in the Slint model: summary + the
                     // changed param's value (and, for multi-select toggles, its flags).
@@ -1030,6 +1066,13 @@ impl PipelinesController {
                     }
                 },
             );
+
+            // Show a PixelClassifier step's loaded model info (metadata + classes)
+            let manager = self.clone();
+            ui.global::<PipelinesPanelState>()
+                .on_show_model_info(move |step_id| {
+                    manager.show_pixel_classifier_model_info(step_id as usize);
+                });
 
             // Browse for a file (e.g. a TorchScript model path) - opens a native
             // file picker filtered by the given comma-separated extensions,
@@ -1350,6 +1393,49 @@ impl PipelinesController {
         }) {
             warn!("Failed to disable auto-preview toggle in Slint: {e}");
         }
+    }
+
+    /// Loads the model currently set on a `PixelClassifier` step's
+    /// `model_path` and shows its metadata via the shared warning/info
+    /// dialog - see `pipelines_controller`'s module doc comment on why this
+    /// reuses that dialog instead of a bespoke one.
+    fn show_pixel_classifier_model_info(self: &Arc<Self>, step_idx: usize) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id() as u32;
+
+        let model_path = {
+            let project = self.app_state.get_project();
+            let Some(pipeline) = project.pipelines.iter().find(|p| p.id.0 == pipeline_id) else {
+                return;
+            };
+            let Some(step) = pipeline.steps.get(step_idx) else {
+                return;
+            };
+            let PipelineCommand::PixelClassifier(settings) = &step.command else {
+                return;
+            };
+            settings.model_path.clone()
+        };
+
+        let (title, message) = match evanalyzer_core::load_classifier_from_file(&model_path) {
+            Ok(saved) => (
+                "Pixel Classifier Model".to_string(),
+                format_pixel_classifier_model_info(&saved),
+            ),
+            Err(e) => (
+                "Could not load model".to_string(),
+                format!("Could not load '{}':\n\n{e}", model_path.display()),
+            ),
+        };
+
+        let warning = ui.global::<WarningState>();
+        warning.set_info(true);
+        warning.set_title(title.into());
+        warning.set_message(message.into());
+        ui.global::<GlobalAppState>()
+            .set_active_dialog(DialogType::Warning);
     }
 
     fn modify_group_item(
@@ -1771,10 +1857,36 @@ impl PipelinesController {
                 let commands: Vec<SlintPipelineCommand> = step_data
                     .into_iter()
                     .map(|d| {
+                        let is_pixel_classifier = d.name.as_str() == PIXEL_CLASSIFIER_COMMAND_NAME;
+                        // Model class id -> the model's own display name, for
+                        // relabeling `segmentation_mapping`'s `segmentation_class`
+                        // leaves below (best-effort: empty if the model hasn't
+                        // been set or fails to load - those rows just keep their
+                        // raw numeric label in that case).
+                        let model_class_names: std::collections::HashMap<u32, String> =
+                            if is_pixel_classifier {
+                                d.parameters
+                                    .iter()
+                                    .find(|p| p.name == "model_path")
+                                    .and_then(|p| {
+                                        load_pixel_classifier_class_labels(Path::new(&p.value))
+                                    })
+                                    .map(|labels| {
+                                        labels
+                                            .into_iter()
+                                            .map(|l| (l.class.as_u32(), l.name))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                std::collections::HashMap::new()
+                            };
+
                         let params: Vec<CommandParameter> = d
                             .parameters
                             .into_iter()
                             .map(|p| {
+                                let p_name = p.name.clone();
                                 let group_items: Vec<GroupItem> = p
                                     .groups
                                     .into_iter()
@@ -1782,80 +1894,53 @@ impl PipelinesController {
                                         fields: ModelRc::new(VecModel::from(
                                             group
                                                 .into_iter()
-                                                .map(|lp| LeafParam {
-                                                    name: lp.name.into(),
-                                                    display_name: lp.display_name.into(),
-                                                    description: lp.description.into(),
-                                                    value: lp.value.into(),
-                                                    param_type: match lp.param_type {
-                                                        CfgParamType::Number => ParamType::Number,
-                                                        CfgParamType::Text => ParamType::Text,
-                                                        CfgParamType::Dropdown => {
-                                                            ParamType::Dropdown
-                                                        }
-                                                        CfgParamType::Toggle => ParamType::Toggle,
-                                                        CfgParamType::Slider => ParamType::Slider,
-                                                        CfgParamType::Spinner => ParamType::Spinner,
-                                                        CfgParamType::Group => ParamType::Group,
-                                                        CfgParamType::ObjClass => {
-                                                            ParamType::ObjClass
-                                                        }
-                                                        CfgParamType::SegClass => {
-                                                            ParamType::SegClass
-                                                        }
-                                                        CfgParamType::MultiObjClass => {
-                                                            ParamType::MultiObjClass
-                                                        }
-                                                        CfgParamType::MultiSegClass => {
-                                                            ParamType::MultiSegClass
-                                                        }
-                                                        CfgParamType::PixelUnits => {
-                                                            ParamType::PixelUnits
-                                                        }
-                                                        CfgParamType::SizeUnits => {
-                                                            ParamType::SizeUnits
-                                                        }
-                                                        CfgParamType::Label => ParamType::Label,
-                                                        CfgParamType::FilePath => {
-                                                            ParamType::FilePath
-                                                        }
-                                                    },
-                                                    options: ModelRc::new(VecModel::from(
-                                                        lp.options
-                                                            .into_iter()
-                                                            .map(SharedString::from)
-                                                            .collect::<Vec<_>>(),
-                                                    )),
-                                                    min: lp.min,
-                                                    max: lp.max,
-                                                    step: lp.step,
+                                                .map(|lp| {
+                                                    let relabeled = is_pixel_classifier
+                                                        && p_name == "segmentation_mapping"
+                                                        && lp.name == "segmentation_class";
+                                                    let model_name = relabeled
+                                                        .then(|| lp.value.parse::<u32>().ok())
+                                                        .flatten()
+                                                        .and_then(|id| model_class_names.get(&id));
+                                                    let (param_type, value) = match model_name {
+                                                        Some(name) => (
+                                                            ParamType::Label,
+                                                            format!("{name} (id {})", lp.value),
+                                                        ),
+                                                        None => (
+                                                            map_cfg_param_type(lp.param_type),
+                                                            lp.value.clone(),
+                                                        ),
+                                                    };
+                                                    LeafParam {
+                                                        name: lp.name.into(),
+                                                        display_name: lp.display_name.into(),
+                                                        description: lp.description.into(),
+                                                        value: value.into(),
+                                                        param_type,
+                                                        options: ModelRc::new(VecModel::from(
+                                                            lp.options
+                                                                .into_iter()
+                                                                .map(SharedString::from)
+                                                                .collect::<Vec<_>>(),
+                                                        )),
+                                                        min: lp.min,
+                                                        max: lp.max,
+                                                        step: lp.step,
+                                                    }
                                                 })
                                                 .collect::<Vec<_>>(),
                                         )),
                                     })
                                     .collect();
+                                let has_model_info =
+                                    is_pixel_classifier && p_name == "model_path" && !p.value.is_empty();
                                 CommandParameter {
                                     name: p.name.into(),
                                     display_name: p.display_name.into(),
                                     description: p.description.into(),
                                     value: p.value.into(),
-                                    param_type: match p.param_type {
-                                        CfgParamType::Number => ParamType::Number,
-                                        CfgParamType::Text => ParamType::Text,
-                                        CfgParamType::Dropdown => ParamType::Dropdown,
-                                        CfgParamType::Toggle => ParamType::Toggle,
-                                        CfgParamType::Slider => ParamType::Slider,
-                                        CfgParamType::Spinner => ParamType::Spinner,
-                                        CfgParamType::Group => ParamType::Group,
-                                        CfgParamType::ObjClass => ParamType::ObjClass,
-                                        CfgParamType::SegClass => ParamType::SegClass,
-                                        CfgParamType::MultiObjClass => ParamType::MultiObjClass,
-                                        CfgParamType::MultiSegClass => ParamType::MultiSegClass,
-                                        CfgParamType::PixelUnits => ParamType::PixelUnits,
-                                        CfgParamType::SizeUnits => ParamType::SizeUnits,
-                                        CfgParamType::Label => ParamType::Label,
-                                        CfgParamType::FilePath => ParamType::FilePath,
-                                    },
+                                    param_type: map_cfg_param_type(p.param_type),
                                     options: ModelRc::new(VecModel::from(
                                         p.options
                                             .into_iter()
@@ -1866,6 +1951,7 @@ impl PipelinesController {
                                     max: p.max,
                                     step: p.step,
                                     group_items: ModelRc::new(VecModel::from(group_items)),
+                                    has_model_info,
                                 }
                             })
                             .collect();
@@ -1993,6 +2079,105 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         creation_time: "".into(),
     };
     detail
+}
+
+fn map_cfg_param_type(t: CfgParamType) -> ParamType {
+    match t {
+        CfgParamType::Number => ParamType::Number,
+        CfgParamType::Text => ParamType::Text,
+        CfgParamType::Dropdown => ParamType::Dropdown,
+        CfgParamType::Toggle => ParamType::Toggle,
+        CfgParamType::Slider => ParamType::Slider,
+        CfgParamType::Spinner => ParamType::Spinner,
+        CfgParamType::Group => ParamType::Group,
+        CfgParamType::ObjClass => ParamType::ObjClass,
+        CfgParamType::SegClass => ParamType::SegClass,
+        CfgParamType::MultiObjClass => ParamType::MultiObjClass,
+        CfgParamType::MultiSegClass => ParamType::MultiSegClass,
+        CfgParamType::PixelUnits => ParamType::PixelUnits,
+        CfgParamType::SizeUnits => ParamType::SizeUnits,
+        CfgParamType::Label => ParamType::Label,
+        CfgParamType::FilePath => ParamType::FilePath,
+    }
+}
+
+/// Display name `PixelClassifier` commands report via `CommandsMeta`'s
+/// `display_name` - used to special-case the `model_path` field's info
+/// button and the `segmentation_mapping` row labels, since neither fits the
+/// otherwise fully generic, codegen-driven parameter rendering.
+const PIXEL_CLASSIFIER_COMMAND_NAME: &str = "AI Pixel Classifier";
+
+/// Loads `model_path` and returns the classes it declares, or `None` if the
+/// path is empty, unreadable, or not a pixel classifier model. Swallowing
+/// the error here is deliberate: callers use this for best-effort UI
+/// affordances (row labels, info button availability), not validation - the
+/// pipeline step's own `execute()` is what surfaces a real error.
+fn load_pixel_classifier_class_labels(model_path: &Path) -> Option<Vec<PixelClassLabel>> {
+    if model_path.as_os_str().is_empty() {
+        return None;
+    }
+    let saved = evanalyzer_core::load_classifier_from_file(model_path).ok()?;
+    let AiLearningClassifierSettings::Pixel { class_labels, .. } = saved.settings.classifier
+    else {
+        return None;
+    };
+    Some(class_labels)
+}
+
+/// After `model_path` changes on a `PixelClassifier` step, resizes
+/// `segmentation_mapping` to exactly one entry per class the newly loaded
+/// model declares - the model's classes are a closed set fixed by the file,
+/// not something to freely add/remove rows for by hand. Existing
+/// `object_class_id` choices are preserved wherever the same model class is
+/// still present; new entries (or a load failure, which clears the list -
+/// there's nothing to map without a readable model) default to
+/// `SegmentationClass::BACKGROUND`.
+fn reconcile_pixel_classifier_mapping(settings: &mut PixelClassifierSettings) {
+    let Some(class_labels) = load_pixel_classifier_class_labels(&settings.model_path) else {
+        settings.segmentation_mapping.clear();
+        return;
+    };
+    let old = std::mem::take(&mut settings.segmentation_mapping);
+    settings.segmentation_mapping = class_labels
+        .iter()
+        .map(|label| {
+            let object_class_id = old
+                .iter()
+                .find(|m| m.segmentation_class == label.class)
+                .map(|m| m.object_class_id)
+                .unwrap_or(SegmentationClass::BACKGROUND);
+            SegmentationMappingSettings {
+                segmentation_class: label.class,
+                object_class_id,
+            }
+        })
+        .collect();
+}
+
+/// Formats a `SavedClassifier`'s metadata + declared classes for the
+/// PixelClassifier step's info dialog.
+fn format_pixel_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> String {
+    let meta = &saved.settings.metadata;
+    let mut out = format!("{}\n", meta.name);
+    if !meta.short_description.is_empty() {
+        out.push_str(&format!("{}\n", meta.short_description));
+    }
+    if !meta.description.is_empty() {
+        out.push_str(&format!("\n{}\n", meta.description));
+    }
+    let author = format!("{} {}", meta.author_first_name, meta.author_last_name)
+        .trim()
+        .to_string();
+    if !author.is_empty() {
+        out.push_str(&format!("\nAuthor: {author}\n"));
+    }
+    if let AiLearningClassifierSettings::Pixel { class_labels, .. } = &saved.settings.classifier {
+        out.push_str("\nClasses:\n");
+        for label in class_labels {
+            out.push_str(&format!("  - {} (id {})\n", label.name, label.class.as_u32()));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

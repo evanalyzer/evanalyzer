@@ -63,6 +63,12 @@ export struct CommandParameter {
         max: float,
         step: float,
         group-items: [GroupItem],
+        // True only for a `PixelClassifier` step's `model_path` field, once a
+        // model is set - shows an info button that opens the model's saved
+        // metadata (name/description/classes). Computed in Rust rather than
+        // matched on `name`/`display-name` here, so this is the one place
+        // that knows "this is the PixelClassifier command".
+        has-model-info: bool,
     }
 
 export struct PipelineCommand {
@@ -1252,6 +1258,7 @@ component ParamRow inherits VerticalLayout {
         callback item-field-changed(int, string, string);
         callback add-item();
         callback remove-item(int);
+        callback show-model-info();
         property <string> browsed-path: "";
 
         spacing: 4px;
@@ -1359,6 +1366,30 @@ component ParamRow inherits VerticalLayout {
                             fp-input.text = root.browsed-path;
                             root.changed(root.browsed-path);
                         }
+                    }
+                }
+            }
+
+            if p.has-model-info: Rectangle {
+                width: 26px;
+                height: 26px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: info-ta.has-hover ? Theme.accent.with-alpha(0.2) : Theme.panel;
+                Text {
+                    text: "i";
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: Theme.text-dim;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                info-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.show-model-info();
                     }
                 }
             }
@@ -1742,6 +1773,9 @@ component StepRow inherits Rectangle {
                         remove-item(idx) => {
                             PipelinesPanelState.remove-group-item(step.id, p.name, idx);
                         }
+                        show-model-info => {
+                            PipelinesPanelState.show-model-info(step.id);
+                        }
                     }
 
                     HorizontalLayout {
@@ -2003,6 +2037,7 @@ export global PipelinesPanelState {
     callback param-changed(int, string, string);
         callback add-group-item(int, string);    // step-id, param-name
     callback remove-group-item(int, string, int); // step-id, param-name, item-idx
+    callback show-model-info(int); // step-id
 
     callback run-all();
         callback dry-run();

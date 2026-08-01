@@ -350,3 +350,271 @@ fn resolve_label(class_labels: &[PixelClassLabel], class: SegmentationClass) -> 
     class_labels.iter().position(|l| l.class == class)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::settings::ai_learning_settings::AiLearningBackendSettings;
+    use evanalyzer_cfg::settings::ai_learning_settings::RandomForestSettings;
+    use evanalyzer_cfg::settings::meta_data::MetaData;
+    use kornia_image::{Image, ImageSize};
+    use kornia_tensor::CpuAllocator;
+
+    fn gray_context(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize { width, height },
+            values,
+            CpuAllocator,
+        )
+        .unwrap();
+        PipelineContext::new_from_image_test(img).unwrap()
+    }
+
+    // -- resolve_label ---------------------------------------------------------
+
+    #[test]
+    fn resolve_label_finds_the_matching_class() {
+        let labels = vec![
+            PixelClassLabel {
+                class: SegmentationClass(5),
+                name: "Cell".into(),
+            },
+            PixelClassLabel {
+                class: SegmentationClass(6),
+                name: "Background".into(),
+            },
+        ];
+        assert_eq!(resolve_label(&labels, SegmentationClass(6)), Some(1));
+    }
+
+    #[test]
+    fn resolve_label_is_none_for_an_unconfigured_class() {
+        let labels = vec![PixelClassLabel {
+            class: SegmentationClass(5),
+            name: "Cell".into(),
+        }];
+        assert_eq!(resolve_label(&labels, SegmentationClass(99)), None);
+    }
+
+    // -- compute_pixel_features / FeatureBank -----------------------------------
+
+    #[test]
+    fn compute_pixel_features_an_empty_step_chain_is_the_raw_pixel_value() {
+        let ctx = gray_context(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![]], // one raw channel, no preprocessing
+        };
+
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+
+        assert_eq!(bank.n_features(), 1);
+        assert_eq!(bank.feature_vector_at(0, 0), vec![1.0]);
+        assert_eq!(bank.feature_vector_at(1, 0), vec![2.0]);
+        assert_eq!(bank.feature_vector_at(0, 1), vec![3.0]);
+        assert_eq!(bank.feature_vector_at(1, 1), vec![4.0]);
+    }
+
+    #[test]
+    fn compute_pixel_features_produces_one_channel_per_spec_entry() {
+        let ctx = gray_context(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![], vec![]], // two raw channels
+        };
+
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+
+        assert_eq!(bank.n_features(), 2);
+        assert_eq!(bank.feature_vector_at(0, 0), vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn compute_pixel_features_runs_a_single_preprocessing_step() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::EdgeDetectionSobelSettings;
+
+        // A flat image has zero gradient everywhere - Sobel output should be
+        // all zeros, which is enough to prove the step actually ran (as
+        // opposed to `compute_channel`'s empty-chain shortcut being hit by
+        // mistake) without needing to hand-verify a specific kernel result.
+        let ctx = gray_context(3, 3, vec![5.0; 9]);
+        let spec = AiLearningPixelFeatureSettings {
+            channels: vec![vec![PreprocessingSteps::EdgeDetectionSobel(
+                EdgeDetectionSobelSettings { kernel_size: 3 },
+            )]],
+        };
+
+        let bank = compute_pixel_features(&ctx, &spec).unwrap();
+
+        assert_eq!(bank.n_features(), 1);
+        assert_eq!(bank.feature_vector_at(1, 1), vec![0.0]);
+    }
+
+    #[test]
+    fn compute_pixel_features_chains_multiple_steps_in_one_channel() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::GaussianBlurSettings;
+
+        // Two GaussianBlur steps back to back on a non-flat image -
+        // exercises `compute_channel`'s multi-step loop (every other test
+        // here only ever runs zero or one step). The exact output value is
+        // `GaussianBlur`'s own implementation detail (covered by its own
+        // algorithm tests); this test's job is only to prove both steps
+        // actually ran, checked by comparing against running the identical
+        // step just once.
+        #[rustfmt::skip]
+        let values = vec![
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 10.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+        ];
+        let step = || {
+            PreprocessingSteps::GaussianBlur(GaussianBlurSettings {
+                kernel_size: 3,
+                sigma: 1.0,
+            })
+        };
+
+        let once = AiLearningPixelFeatureSettings {
+            channels: vec![vec![step()]],
+        };
+        let twice = AiLearningPixelFeatureSettings {
+            channels: vec![vec![step(), step()]],
+        };
+
+        let bank_once = compute_pixel_features(&gray_context(4, 4, values.clone()), &once).unwrap();
+        let bank_twice = compute_pixel_features(&gray_context(4, 4, values), &twice).unwrap();
+
+        assert_eq!(bank_twice.n_features(), 1);
+        assert_ne!(
+            bank_once.feature_vector_at(2, 1),
+            bank_twice.feature_vector_at(2, 1),
+            "a second blur pass must further smooth the impulse, proving the chain didn't stop after the first step"
+        );
+    }
+
+    // -- PixelTrainingJob::run (paths that need no image I/O) ------------------
+
+    fn empty_pixel_job() -> PixelTrainingJob {
+        PixelTrainingJob {
+            settings: AiLearningSettings {
+                metadata: MetaData::default(),
+                backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
+                classifier: AiLearningClassifierSettings::Pixel {
+                    feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+                    class_labels: vec![PixelClassLabel {
+                        class: SegmentationClass(1),
+                        name: "Cell".into(),
+                    }],
+                },
+            },
+            images: vec![],
+            channel: 0,
+            t_stack: 0,
+            z_stack_handling: ZStackHandling::SingleStack,
+        }
+    }
+
+    #[test]
+    fn run_errors_for_an_object_classifier_configuration() {
+        let mut job = empty_pixel_job();
+        job.settings.classifier = AiLearningClassifierSettings::Object {
+            feature_spec: evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings {
+                metrics: vec![],
+            },
+            class_labels: vec![],
+        };
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let err = job.run(tx, cancel).unwrap_err();
+        assert!(matches!(err, InternalErrors::Internal(_)));
+    }
+
+    #[test]
+    fn run_with_no_images_fails_to_train_on_zero_samples() {
+        let job = empty_pixel_job();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let err = job.run(tx, cancel).unwrap_err();
+        let InternalErrors::Internal(msg) = err else {
+            panic!("expected Internal, got a different variant");
+        };
+        assert!(msg.contains("zero samples"));
+    }
+
+    #[test]
+    fn run_returns_cancelled_when_the_flag_is_already_set_and_images_are_pending() {
+        let mut job = empty_pixel_job();
+        job.images.push(TrainingImage {
+            path: PathBuf::from("does-not-exist.tif"),
+            series: 0,
+            labeled_objects: vec![],
+        });
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(true));
+
+        let err = job.run(tx, cancel).unwrap_err();
+        assert!(matches!(err, InternalErrors::Cancelled));
+    }
+
+    #[test]
+    fn run_skips_an_image_with_no_labeled_objects_without_touching_the_filesystem() {
+        // `labeled_objects: vec![]` must be treated as "nothing to train from
+        // in this image" and skipped *before* `ImageReader::new` is ever
+        // called - proven here by pointing `path` at a file that doesn't
+        // exist and getting the same "zero samples" error `run` gives for no
+        // images at all, not an `ImageFailed`-driven one.
+        let mut job = empty_pixel_job();
+        job.images.push(TrainingImage {
+            path: PathBuf::from("does-not-exist.tif"),
+            series: 0,
+            labeled_objects: vec![],
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let err = job.run(tx, cancel).unwrap_err();
+        let InternalErrors::Internal(msg) = err else {
+            panic!("expected Internal, got a different variant");
+        };
+        assert!(msg.contains("zero samples"));
+
+        let events: Vec<_> = rx.iter().collect();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::ItemCompleted { index: 0, .. })),
+            "an image with no labeled objects still counts as processed"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, TrainingProgressEvent::ImageFailed { .. })),
+            "must be skipped before any file I/O is attempted, not reported as a failed read"
+        );
+    }
+
+    #[test]
+    fn run_skips_an_image_whose_objects_match_no_configured_class_label() {
+        // Every object's `segmentation_class` fails to `resolve_label` -
+        // `labeled_objects` collapses to empty the same way `vec![]` does
+        // above, so this must also skip without any file I/O.
+        use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+
+        let mut job = empty_pixel_job(); // class_labels only configures SegmentationClass(1)
+        job.images.push(TrainingImage {
+            path: PathBuf::from("does-not-exist.tif"),
+            series: 0,
+            labeled_objects: vec![ObjectMetricSettings {
+                segmentation_class: SegmentationClass(99), // not in class_labels
+                ..Default::default()
+            }],
+        });
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let err = job.run(tx, cancel).unwrap_err();
+        let InternalErrors::Internal(msg) = err else {
+            panic!("expected Internal, got a different variant");
+        };
+        assert!(msg.contains("zero samples"));
+    }
+}
+

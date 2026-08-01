@@ -66,12 +66,23 @@ export struct TrainingObjectRowSlint {
     image_path: string,
 }
 
+// One of the project's classification classes, offered as a checkbox for
+// object-classifier training (object-classifier `class_labels` are a
+// deliberate user selection, not inferred from which classes happen to have
+// data - see `object_class_labels_from_project`'s doc comment). Not used for
+// pixel classifiers, which auto-include every class with at least one
+// labeled pixel instead.
+export struct ClassSelectionRowSlint {
+    class_index: int, // index into AiLearningState.class_names
+    name: string,
+    selected: bool,
+}
+
 export struct AiTrainingSettingsSlint {
     // 0 = Pixel Classifier, 1 = Object Classifier
     mode: int,
     // 0 = Random Forest, 1 = K-Nearest Neighbors, 2 = Neural Network (MLP)
     algorithm: int,
-
     model_name: string,
     // Non-empty once an existing model has been loaded for retraining.
     loaded_model_path: string,
@@ -125,23 +136,35 @@ export global AiLearningState {
         model_name: "",
         loaded_model_path: "",
         pixel_channel: 0,
-        rf_n_trees: 100,
-        rf_max_depth: 0,
+        // 50 trees capped at depth 20: enough for good pixel/object-classifier
+        // accuracy without the runtime blowing up at inference time - a deep,
+        // unbounded forest classifies fast to train (a handful of thousand
+        // labeled pixels/objects) but scales tree-walk cost with both tree
+        // count and depth at *prediction* time, which for a pixel classifier
+        // means every pixel of every image, not just the training set.
+        rf_n_trees: 50,
+        rf_max_depth: 20,
         rf_min_samples_split: 2,
         rf_min_samples_leaf: 1,
         rf_criterion: 0,
         rf_max_features: 0,
         rf_seed: 0,
         rf_out_of_bag_eval: true,
-        knn_k: 3,
+        // k=5 (odd, avoids ties) with distance weighting: microscopy features
+        // are noisy enough that a slightly larger, distance-weighted
+        // neighborhood gives steadier decision boundaries than k=3 uniform.
+        knn_k: 5,
         knn_distance: 0,
         knn_search_algorithm: 1,
-        knn_weight: 0,
+        knn_weight: 1,
         mlp_hidden_layers: "64, 32",
         mlp_activation: 0,
         mlp_max_iterations: 200,
         mlp_epsilon: 0.001,
-        mlp_learning_rate: 0.01,
+        // Adam's own recommended default - 0.01 (the previous default) is on
+        // the high side for Adam and risks unstable/oscillating convergence,
+        // especially with full-batch gradient steps.
+        mlp_learning_rate: 0.001,
         mlp_batch_size: 32,
         mlp_seed: 0,
         normalize_features: true,
@@ -154,6 +177,9 @@ export global AiLearningState {
     in-out property <[ObjectMetricRowSlint]> object_metrics: [];
     in-out property <[TrainingImageRowSlint]> training_images: [];
     in-out property <[TrainingObjectRowSlint]> training_objects: [];
+    // Which project classes to train an object classifier on - see
+    // `ClassSelectionRowSlint`'s doc comment. Not used for pixel classifiers.
+    in-out property <[ClassSelectionRowSlint]> class_selection: [];
     // Project's ObjectClass names, used as the label picker's options for
     // each training object row.
     in property <[string]> class_names: [];
@@ -161,13 +187,17 @@ export global AiLearningState {
     // picker's options - index matches `settings.pixel_channel`.
     in property <[string]> channel_names: [];
 
-    // Set by Rust when a pre-flight check fails (e.g. no model name, no
-    // labeled data) - shown as an inline banner instead of routing through
-    // the app-wide warning dialog, which would replace this dialog entirely
-    // and lose the user's in-progress settings. Empty = no error to show.
-    // Cleared on every `open_requested` so a stale error never lingers into
-    // the next session.
-    in-out property <string> training_error: "";
+    // Set by Rust for pre-flight check failures (e.g. no model name, no
+    // labeled data) and for training progress/results - shown as an inline
+    // banner instead of routing through the app-wide warning dialog, which
+    // would replace this dialog entirely (hiding it, since only one dialog
+    // can be active at a time) and lose the user's in-progress settings.
+    // The dialog is never closed automatically, including when training
+    // finishes, so the user can see the result and immediately retrain.
+    // Empty message = no banner to show. Cleared on every `open_requested`
+    // so a stale message never lingers into the next session.
+    in-out property <string> training_status: "";
+    in-out property <bool> training_status_is_error: false;
 
     // Fired by the toolbar button, before the dialog is shown, so Rust can
     // refresh class_names/object_metrics/training_images/training_objects
@@ -181,10 +211,10 @@ export global AiLearningState {
     callback add_gaussian_scales_clicked(string); // comma-separated sigmas
     callback toggle_image_selected(int);
     callback assign_object_class(int, int); // (training_objects index, class_names index)
-    callback train_clicked(AiTrainingSettingsSlint, [FeatureRowSlint], [ObjectMetricRowSlint], [TrainingImageRowSlint], [TrainingObjectRowSlint]);
+    callback train_clicked(AiTrainingSettingsSlint, [FeatureRowSlint], [ObjectMetricRowSlint], [TrainingImageRowSlint], [TrainingObjectRowSlint], [ClassSelectionRowSlint]);
 
     public function trigger_train() {
-        train_clicked(root.settings, root.feature_rows, root.object_metrics, root.training_images, root.training_objects);
+        train_clicked(root.settings, root.feature_rows, root.object_metrics, root.training_images, root.training_objects, root.class_selection);
     }
 }
 
@@ -229,7 +259,15 @@ component FeatureRow inherits Rectangle {
 
         ComboBox {
             width: 150px;
-            model: ["Raw", "Gaussian Blur", "Sobel", "Laplacian", "Structure Tensor", "Hessian", "Rank Filter"];
+            model: [
+                "Raw",
+                "Gaussian Blur",
+                "Sobel",
+                "Laplacian",
+                "Structure Tensor",
+                "Hessian",
+                "Rank Filter"
+            ];
             current-index: root.data.filter_type;
             selected(v) => {
                 AiLearningState.feature_rows[root.row_index].filter_type = self.current-index;
@@ -322,10 +360,31 @@ component FeatureRow inherits Rectangle {
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
+
             remove-ta := TouchArea {
                 clicked => {
                     AiLearningState.remove_feature_row_clicked(root.row_index);
                 }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------
+component ClassSelectionRow inherits Rectangle {
+    in property <ClassSelectionRowSlint> data;
+    in property <int> row_index;
+
+    height: 30px;
+
+    HorizontalLayout {
+        padding-left: 4px;
+        spacing: 8px;
+        CheckBox {
+            text: root.data.name;
+            checked: root.data.selected;
+            toggled => {
+                AiLearningState.class_selection[root.row_index].selected = self.checked;
             }
         }
     }
@@ -513,6 +572,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "Classifier Type:";
                                 }
+
                                 mode-combo := ComboBox {
                                     model: ["Pixel Classifier", "Object Classifier"];
                                     current-index <=> AiLearningState.settings.mode;
@@ -524,6 +584,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "Model Name:";
                                 }
+
                                 LineEdit {
                                     placeholder-text: "e.g. nuclei-pixel-classifier";
                                     text <=> AiLearningState.settings.model_name;
@@ -535,6 +596,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "";
                                 }
+
                                 AppButton {
                                     text: "Load Existing Model...";
                                     clicked => {
@@ -548,6 +610,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "";
                                 }
+
                                 Text {
                                     text: "Loaded: " + AiLearningState.settings.loaded_model_path;
                                     color: Theme.text-mute;
@@ -572,6 +635,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "Algorithm:";
                                 }
+
                                 algorithm-combo := ComboBox {
                                     model: ["Random Forest", "K-Nearest Neighbors", "Neural Network (MLP)"];
                                     current-index <=> AiLearningState.settings.algorithm;
@@ -587,6 +651,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Number of Trees:";
                                     }
+
                                     SpinBox {
                                         minimum: 1;
                                         maximum: 2000;
@@ -599,11 +664,13 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Max Tree Depth:";
                                     }
+
                                     SpinBox {
                                         minimum: 0;
                                         maximum: 200;
                                         value <=> AiLearningState.settings.rf_max_depth;
                                     }
+
                                     Text {
                                         text: "0 = unlimited";
                                         color: Theme.text-mute;
@@ -617,6 +684,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Min Samples Split:";
                                     }
+
                                     SpinBox {
                                         minimum: 2;
                                         maximum: 1000;
@@ -629,6 +697,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Min Samples Leaf:";
                                     }
+
                                     SpinBox {
                                         minimum: 1;
                                         maximum: 1000;
@@ -641,6 +710,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Split Criterion:";
                                     }
+
                                     ComboBox {
                                         model: ["Gini", "Entropy"];
                                         current-index <=> AiLearningState.settings.rf_criterion;
@@ -652,11 +722,13 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Features per Split:";
                                     }
+
                                     SpinBox {
                                         minimum: 0;
                                         maximum: 1000;
                                         value <=> AiLearningState.settings.rf_max_features;
                                     }
+
                                     Text {
                                         text: "0 = auto (√features)";
                                         color: Theme.text-mute;
@@ -670,6 +742,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Random Seed:";
                                     }
+
                                     SpinBox {
                                         minimum: 0;
                                         maximum: 999999;
@@ -682,6 +755,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "";
                                     }
+
                                     CheckBox {
                                         text: "Estimate accuracy from out-of-bag samples";
                                         checked <=> AiLearningState.settings.rf_out_of_bag_eval;
@@ -698,6 +772,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "K (Neighbors):";
                                     }
+
                                     SpinBox {
                                         minimum: 1;
                                         maximum: 200;
@@ -710,6 +785,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Distance Metric:";
                                     }
+
                                     ComboBox {
                                         model: ["Euclidean", "Manhattan", "Minkowski"];
                                         current-index <=> AiLearningState.settings.knn_distance;
@@ -721,6 +797,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Search Algorithm:";
                                     }
+
                                     ComboBox {
                                         model: ["Linear Search", "Cover Tree"];
                                         current-index <=> AiLearningState.settings.knn_search_algorithm;
@@ -732,6 +809,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Vote Weighting:";
                                     }
+
                                     ComboBox {
                                         model: ["Uniform", "Distance-weighted"];
                                         current-index <=> AiLearningState.settings.knn_weight;
@@ -748,6 +826,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Hidden Layers:";
                                     }
+
                                     LineEdit {
                                         placeholder-text: "e.g. 64, 32";
                                         text <=> AiLearningState.settings.mlp_hidden_layers;
@@ -759,6 +838,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Activation:";
                                     }
+
                                     ComboBox {
                                         model: ["ReLU", "Sigmoid", "Tanh"];
                                         current-index <=> AiLearningState.settings.mlp_activation;
@@ -770,6 +850,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Max Iterations:";
                                     }
+
                                     SpinBox {
                                         minimum: 1;
                                         maximum: 100000;
@@ -782,6 +863,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Epsilon:";
                                     }
+
                                     LineEdit {
                                         text: AiLearningState.settings.mlp_epsilon;
                                         edited(v) => {
@@ -795,6 +877,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Learning Rate:";
                                     }
+
                                     LineEdit {
                                         text: AiLearningState.settings.mlp_learning_rate;
                                         edited(v) => {
@@ -808,6 +891,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Batch Size:";
                                     }
+
                                     SpinBox {
                                         minimum: 1;
                                         maximum: 10000;
@@ -820,6 +904,7 @@ export component AiLearningDialog inherits Rectangle {
                                     FormLabel {
                                         text: "Random Seed:";
                                     }
+
                                     SpinBox {
                                         minimum: 0;
                                         maximum: 999999;
@@ -840,6 +925,7 @@ export component AiLearningDialog inherits Rectangle {
                                 SectionHeader {
                                     text: "Feature Channels";
                                 }
+
                                 AppButton {
                                     text: "+ Add Feature";
                                     clicked => {
@@ -853,6 +939,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "Image Channel:";
                                 }
+
                                 ComboBox {
                                     model: AiLearningState.channel_names;
                                     current-index <=> AiLearningState.settings.pixel_channel;
@@ -878,9 +965,11 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "Quick add scales:";
                                 }
+
                                 gaussian-scales-input := LineEdit {
                                     placeholder-text: "e.g. 1, 2, 4, 8";
                                 }
+
                                 AppButton {
                                     text: "Add";
                                     clicked => {
@@ -896,6 +985,7 @@ export component AiLearningDialog inherits Rectangle {
                             SectionHeader {
                                 text: "Object Metrics";
                             }
+
                             Text {
                                 text: "Assigned class and position are intentionally excluded to avoid label leakage and location-based overfitting.";
                                 color: Theme.text-mute;
@@ -918,6 +1008,35 @@ export component AiLearningDialog inherits Rectangle {
                             }
                         }
 
+                        // -- Object classifier: which classes to train on --
+                        if mode-combo.current-index == 1: VerticalLayout {
+                            spacing: 10px;
+                            SectionHeader {
+                                text: "Classes to Train";
+                            }
+
+                            Text {
+                                text: "Only the checked classes become prediction targets. Pre-checked classes already have at least one labeled object.";
+                                color: Theme.text-mute;
+                                font-size: 10px;
+                                wrap: word-wrap;
+                            }
+
+                            Rectangle {
+                                height: 150px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                border-radius: Theme.radius-sm;
+
+                                ListView {
+                                    for data[index] in AiLearningState.class_selection: ClassSelectionRow {
+                                        data: data;
+                                        row_index: index;
+                                    }
+                                }
+                            }
+                        }
+
                         Divider { }
 
                         // -- Shared training options --
@@ -932,6 +1051,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "";
                                 }
+
                                 CheckBox {
                                     text: "Normalize features (recommended for KNN / MLP)";
                                     checked <=> AiLearningState.settings.normalize_features;
@@ -943,6 +1063,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "";
                                 }
+
                                 CheckBox {
                                     text: "Balance classes (helps with imbalanced annotations)";
                                     checked <=> AiLearningState.settings.balance_classes;
@@ -954,12 +1075,14 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "Validation Split:";
                                 }
+
                                 LineEdit {
                                     text: AiLearningState.settings.validation_split;
                                     edited(v) => {
                                         AiLearningState.settings.validation_split = v.to-float();
                                     }
                                 }
+
                                 Text {
                                     text: "fraction held out to report accuracy";
                                     color: Theme.text-mute;
@@ -983,6 +1106,7 @@ export component AiLearningDialog inherits Rectangle {
                                 FormLabel {
                                     text: "";
                                 }
+
                                 CheckBox {
                                     text: "Include annotations from other images";
                                     checked <=> AiLearningState.settings.use_other_images;
@@ -1012,6 +1136,7 @@ export component AiLearningDialog inherits Rectangle {
                             SectionHeader {
                                 text: "Training Objects";
                             }
+
                             Text {
                                 text: "Only manually-painted objects with a class assigned below are used for training.";
                                 color: Theme.text-mute;
@@ -1037,20 +1162,22 @@ export component AiLearningDialog inherits Rectangle {
                 }
             }
 
-            // ----- ERROR BANNER -----
-            // Shown instead of the app-wide warning dialog for pre-flight
-            // training errors, so the dialog (and the user's settings) stay
-            // in place while they fix the problem.
-            if AiLearningState.training_error != "": Rectangle {
+            // ----- STATUS BANNER -----
+            // Shown instead of the app-wide warning dialog for both
+            // pre-flight validation failures and training progress/results,
+            // so the dialog (and the user's settings) stay in place - the
+            // dialog is never closed automatically, including on training
+            // completion, so the user can see the result and retrain.
+            if AiLearningState.training_status != "": Rectangle {
                 background: Theme.bg;
                 border-width: 1px;
-                border-color: #c0392b;
+                border-color: AiLearningState.training_status_is_error ? #c0392b : #27ae60;
 
                 HorizontalLayout {
                     padding: 10px;
                     Text {
-                        text: AiLearningState.training_error;
-                        color: #e74c3c;
+                        text: AiLearningState.training_status;
+                        color: AiLearningState.training_status_is_error ? #e74c3c : #2ecc71;
                         font-size: 11px;
                         wrap: word-wrap;
                         horizontal-alignment: left;
@@ -1070,7 +1197,7 @@ export component AiLearningDialog inherits Rectangle {
                     alignment: end;
 
                     AppButton {
-                        text: "Cancel";
+                        text: "Close";
                         clicked => {
                             AiLearningState.cancel_clicked();
                             GlobalAppState.active-dialog = DialogType.none;

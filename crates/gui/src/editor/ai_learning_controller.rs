@@ -1,11 +1,12 @@
 use crate::UiState;
 use crate::prelude::*;
 use crate::{
-    AiLearningState, AiTrainingSettingsSlint, AppWindow, ChannelState, DialogType, FeatureRowSlint,
-    GlobalAppState, ObjectMetricRowSlint, TrainingImageRowSlint, TrainingObjectRowSlint,
-    WarningState,
+    AiLearningState, AiTrainingSettingsSlint, AppWindow, ChannelState, ClassSelectionRowSlint,
+    DialogType, FeatureRowSlint, GlobalAppState, ObjectMetricRowSlint, TrainingImageRowSlint,
+    TrainingObjectRowSlint,
 };
 use evanalyzer_app::ai_learning::{PixelTrainingParams, TrainingJob};
+use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::ai_learning_object_settings::{
     AiLearningObjectFeatureSettings, ObjectMetric,
 };
@@ -87,8 +88,11 @@ impl AiLearningController {
             manager.sync_object_metrics_to_slint();
             manager.sync_training_images_to_slint();
             manager.sync_training_objects_to_slint();
+            manager.sync_class_selection_to_slint();
             if let Some(ui) = manager.ui.upgrade() {
-                ui.global::<AiLearningState>().set_training_error("".into());
+                let state = ui.global::<AiLearningState>();
+                state.set_training_status("".into());
+                state.set_training_status_is_error(false);
                 ui.global::<GlobalAppState>()
                     .set_active_dialog(DialogType::AiLearning);
             }
@@ -133,13 +137,19 @@ impl AiLearningController {
 
         let manager = self.clone();
         ui.global::<AiLearningState>().on_train_clicked(
-            move |settings, feature_rows, object_metrics, training_images, training_objects| {
+            move |settings,
+                  feature_rows,
+                  object_metrics,
+                  training_images,
+                  training_objects,
+                  class_selection| {
                 manager.train(
                     settings,
                     feature_rows,
                     object_metrics,
                     training_images,
                     training_objects,
+                    class_selection,
                 );
             },
         );
@@ -245,9 +255,14 @@ impl AiLearningController {
         state.set_training_objects(ModelRc::new(VecModel::from(rows)));
     }
 
+    /// Loads a previously trained `.evamodel` and repopulates the dialog from
+    /// it - algorithm/hyperparameters, feature selection (feature rows for a
+    /// pixel classifier, metric/class checkboxes for an object classifier)
+    /// and the model name - so retraining with more labeled data doesn't
+    /// require re-entering the whole configuration by hand.
     fn browse_existing_model(self: &Arc<Self>) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("AI Classifier Model", &["bincode", "model"])
+            .add_filter("AI Classifier Model", &[evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS])
             .pick_file()
         else {
             return;
@@ -255,15 +270,70 @@ impl AiLearningController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+
+        let saved = match evanalyzer_core::load_classifier_from_file(&path) {
+            Ok(saved) => saved,
+            Err(e) => {
+                self.set_training_status(
+                    &format!("Could not load '{}': {e}", path.display()),
+                    true,
+                );
+                return;
+            }
+        };
+
         let state = ui.global::<AiLearningState>();
         let mut settings = state.get_settings();
         settings.loaded_model_path = path.to_string_lossy().to_string().into();
-        if settings.model_name.is_empty() {
-            if let Some(stem) = path.file_stem() {
-                settings.model_name = stem.to_string_lossy().to_string().into();
+        settings.model_name = if saved.settings.metadata.name.trim().is_empty() {
+            path.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default()
+                .into()
+        } else {
+            saved.settings.metadata.name.clone().into()
+        };
+        apply_loaded_backend_settings(&mut settings, &saved.settings.backend);
+
+        match &saved.settings.classifier {
+            AiLearningClassifierSettings::Pixel { feature_spec, .. } => {
+                settings.mode = 0;
+                let rows: Vec<FeatureRowSlint> = feature_spec
+                    .channels
+                    .iter()
+                    .map(|steps| preprocessing_steps_to_feature_row(steps))
+                    .collect();
+                state.set_feature_rows(ModelRc::new(VecModel::from(rows)));
+            }
+            AiLearningClassifierSettings::Object {
+                feature_spec,
+                class_labels,
+            } => {
+                settings.mode = 1;
+
+                let mut metric_rows: Vec<ObjectMetricRowSlint> =
+                    state.get_object_metrics().iter().collect();
+                for row in &mut metric_rows {
+                    row.selected = feature_spec.metrics.contains(&object_metric_row_to_metric(row));
+                }
+                state.set_object_metrics(ModelRc::new(VecModel::from(metric_rows)));
+
+                let project = self.app_state.get_project();
+                let classes = project.classification.classes().clone();
+                drop(project);
+                let mut class_rows: Vec<ClassSelectionRowSlint> =
+                    state.get_class_selection().iter().collect();
+                for row in &mut class_rows {
+                    let class_id = classes.get(row.class_index as usize).map(|c| c.id);
+                    row.selected =
+                        class_id.is_some_and(|id| class_labels.iter().any(|l| l.class == id));
+                }
+                state.set_class_selection(ModelRc::new(VecModel::from(class_rows)));
             }
         }
+
         state.set_settings(settings);
+        self.set_training_status(&format!("Loaded settings from '{}'.", path.display()), false);
     }
 
     // -- Training entry point ------------------------------------------------
@@ -282,17 +352,18 @@ impl AiLearningController {
         object_metrics: ModelRc<ObjectMetricRowSlint>,
         _training_images: ModelRc<TrainingImageRowSlint>,
         _training_objects: ModelRc<TrainingObjectRowSlint>,
+        class_selection: ModelRc<ClassSelectionRowSlint>,
     ) {
         let model_name = settings.model_name.trim().to_string();
         if model_name.is_empty() {
-            self.set_training_error("Enter a model name before training.");
+            self.set_training_status("Enter a model name before training.", true);
             return;
         }
 
         let project = self.app_state.get_project();
         let Some(project_path) = project.tmp_settings.current_project.clone() else {
             drop(project);
-            self.set_training_error("Save the project before training a classifier.");
+            self.set_training_status("Save the project before training a classifier.", true);
             return;
         };
         let project_dir = project_path
@@ -303,10 +374,23 @@ impl AiLearningController {
         let project_settings = project.settings.clone();
         drop(project);
 
+        let selected_classes: std::collections::HashSet<ObjectClass> = class_selection
+            .iter()
+            .filter(|c| c.selected)
+            .filter_map(|c| {
+                project_settings
+                    .classification
+                    .classes()
+                    .get(c.class_index as usize)
+                    .map(|class| class.id)
+            })
+            .collect();
+
         let ai_settings = build_ai_learning_settings(
             &settings,
             &feature_rows.iter().collect::<Vec<_>>(),
             &object_metrics.iter().collect::<Vec<_>>(),
+            &selected_classes,
             &project_settings,
         );
 
@@ -333,7 +417,7 @@ impl AiLearningController {
         ) {
             Ok(job) => job,
             Err(e) => {
-                self.set_training_error(&e.to_string());
+                self.set_training_status(&e.to_string(), true);
                 return;
             }
         };
@@ -343,18 +427,18 @@ impl AiLearningController {
             TrainingJob::Object(j) => !j.objects.is_empty(),
         };
         if !has_training_data {
-            self.set_training_error(
+            self.set_training_status(
                 "No labeled training data found - assign a class to at least one object before training.",
+                true,
             );
             return;
         }
 
-        // Every pre-flight check passed - close the dialog and hand off to
-        // the background worker. Failures from here on (job errors, save
-        // errors) happen well after the dialog is gone, so they're reported
-        // via the app-wide warning dialog instead of the inline banner.
+        // Every pre-flight check passed - hand off to the background worker.
+        // The dialog is never closed here (or on completion below) so the
+        // user can watch it finish and immediately retrain if they want to.
         info!("Starting classifier training ('{model_name}')");
-        self.close_dialog();
+        self.set_training_status("Training started...", false);
         let manager = self.clone();
         std::thread::spawn(move || {
             let (handle, rx, _cancel) = job.run_async();
@@ -378,23 +462,23 @@ impl AiLearningController {
                     ) {
                         Ok(path) => {
                             info!("Classifier training completed: {}", path.display());
-                            manager.show_info(
-                                "Training complete",
-                                &format!("Model saved to {}", path.display()),
+                            manager.set_training_status(
+                                &format!("Training complete. Model saved to {}", path.display()),
+                                false,
                             );
                         }
                         Err(e) => {
                             warn!("Failed to save trained classifier: {e}");
-                            manager.show_warning(
-                                "Training completed, but saving failed",
-                                &e.to_string(),
+                            manager.set_training_status(
+                                &format!("Training completed, but saving failed: {e}"),
+                                true,
                             );
                         }
                     }
                 }
                 Err(e) => {
                     warn!("Classifier training failed: {e}");
-                    manager.show_warning("Training failed", &e.to_string());
+                    manager.set_training_status(&format!("Training failed: {e}"), true);
                 }
             }
         });
@@ -402,55 +486,26 @@ impl AiLearningController {
 
     // -- Notifications ---------------------------------------------------
 
-    /// Shows a pre-flight validation error inline in the dialog itself
-    /// (`training_error`) instead of the app-wide warning dialog - swapping
-    /// to `DialogType::Warning` would replace this dialog outright, so the
-    /// user would lose their in-progress settings just to be told to fix one
-    /// of them. Only used for checks that run before the dialog would
-    /// otherwise close; see `train`.
-    fn set_training_error(self: &Arc<Self>, message: &str) {
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
-        ui.global::<AiLearningState>()
-            .set_training_error(message.into());
-    }
-
-    fn close_dialog(self: &Arc<Self>) {
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
-        ui.global::<GlobalAppState>()
-            .set_active_dialog(DialogType::None);
-    }
-
-    /// Shows the generic warning dialog (error style), mirroring
-    /// `ProjectController::show_warning` - there's no dedicated training
-    /// progress/result UI yet, so training completion and failures both
-    /// surface through this shared dialog.
-    fn show_warning(self: &Arc<Self>, title: &str, message: &str) {
-        self.show_warning_with_style(title, message, false);
-    }
-
-    fn show_info(self: &Arc<Self>, title: &str, message: &str) {
-        self.show_warning_with_style(title, message, true);
-    }
-
-    fn show_warning_with_style(self: &Arc<Self>, title: &str, message: &str, info: bool) {
-        let title = title.to_owned();
+    /// Shows a pre-flight validation error, training-started notice, or
+    /// training result inline in the dialog itself (`training_status`)
+    /// instead of the app-wide warning dialog - swapping to
+    /// `DialogType::Warning` would replace this dialog outright (only one
+    /// dialog can be active at a time), hiding it and losing the user's
+    /// in-progress settings. The dialog is never closed automatically,
+    /// including when training finishes, so the user can see the result and
+    /// retrain immediately. Callable from any thread (used from both the
+    /// synchronous pre-flight checks and the background training thread).
+    fn set_training_status(self: &Arc<Self>, message: &str, is_error: bool) {
         let message = message.to_owned();
         let ui_weak = self.ui.clone();
         if let Err(e) = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                let warning = ui.global::<WarningState>();
-                warning.set_info(info);
-                warning.set_title(title.into());
-                warning.set_message(message.into());
-                ui.global::<GlobalAppState>()
-                    .set_active_dialog(DialogType::Warning);
+                let state = ui.global::<AiLearningState>();
+                state.set_training_status(message.into());
+                state.set_training_status_is_error(is_error);
             }
         }) {
-            warn!("Failed to show warning dialog: {e}");
+            warn!("Failed to update training status: {e}");
         }
     }
 
@@ -475,6 +530,43 @@ impl AiLearningController {
                 .set_class_names(ModelRc::new(VecModel::from(names)));
         }) {
             warn!("Failed to sync AI classifier class names to Slint: {}", e);
+        }
+    }
+
+    /// Class checklist for the object classifier's "Classes to Train"
+    /// section - one row per project class, pre-checked for classes that
+    /// already have at least one labeled object (a convenient starting
+    /// point, not a restriction: the user can check/uncheck freely). Unused
+    /// for pixel classifiers, which auto-include every class with data
+    /// instead - see `evanalyzer_app::ai_learning::pixel_class_labels_from_project`.
+    pub fn sync_class_selection_to_slint(self: &Arc<Self>) {
+        let ui_weak = self.ui.clone();
+        let app_state = self.app_state.clone();
+        if let Err(e) = slint::invoke_from_event_loop(move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let project = app_state.get_project();
+            let used = evanalyzer_app::ai_learning::used_object_classes(&project.settings);
+            let rows: Vec<ClassSelectionRowSlint> = project
+                .classification
+                .classes()
+                .iter()
+                .enumerate()
+                .map(|(i, c)| ClassSelectionRowSlint {
+                    class_index: i as i32,
+                    name: c.name.clone().into(),
+                    selected: used.contains(&c.id),
+                })
+                .collect();
+            drop(project);
+            ui.global::<AiLearningState>()
+                .set_class_selection(ModelRc::new(VecModel::from(rows)));
+        }) {
+            warn!(
+                "Failed to sync AI classifier class selection to Slint: {}",
+                e
+            );
         }
     }
 
@@ -680,6 +772,7 @@ fn build_ai_learning_settings(
     settings: &AiTrainingSettingsSlint,
     feature_rows: &[FeatureRowSlint],
     object_metrics: &[ObjectMetricRowSlint],
+    selected_classes: &std::collections::HashSet<ObjectClass>,
     project: &ProjectSettings,
 ) -> AiLearningSettings {
     let backend = match settings.algorithm {
@@ -740,7 +833,10 @@ fn build_ai_learning_settings(
                     .map(object_metric_row_to_metric)
                     .collect(),
             },
-            class_labels: evanalyzer_app::ai_learning::object_class_labels_from_project(project),
+            class_labels: evanalyzer_app::ai_learning::object_class_labels_from_project(
+                project,
+                selected_classes,
+            ),
         }
     };
 
@@ -832,6 +928,153 @@ fn feature_row_to_preprocessing_steps(row: &FeatureRowSlint) -> Vec<Preprocessin
     }
 }
 
+fn hessian_mode_to_row(mode: &FiltersHessianHessianModeSettings) -> i32 {
+    match mode {
+        FiltersHessianHessianModeSettings::EigenvaluesX => 1,
+        FiltersHessianHessianModeSettings::EigenvaluesY => 2,
+        FiltersHessianHessianModeSettings::Determinant => 0,
+    }
+}
+
+/// The inverse of [`feature_row_to_preprocessing_steps`], used to repopulate
+/// the dialog's feature-row editor from a loaded model's `feature_spec` (see
+/// `browse_existing_model`). Any chain shape that dialog itself would never
+/// produce (e.g. a model saved outside this GUI) falls back to Raw rather
+/// than guessing at intent.
+fn preprocessing_steps_to_feature_row(steps: &[PreprocessingSteps]) -> FeatureRowSlint {
+    match steps {
+        [] => FeatureRowSlint {
+            filter_type: 0,
+            ..default_feature_row()
+        },
+        [PreprocessingSteps::GaussianBlur(s)] => FeatureRowSlint {
+            filter_type: 1,
+            kernel_size: s.kernel_size as i32,
+            sigma: s.sigma,
+            ..default_feature_row()
+        },
+        [PreprocessingSteps::EdgeDetectionSobel(s)] => FeatureRowSlint {
+            filter_type: 2,
+            kernel_size: s.kernel_size as i32,
+            ..default_feature_row()
+        },
+        [PreprocessingSteps::Laplacian(s)] => FeatureRowSlint {
+            filter_type: 3,
+            kernel_size: s.kernel_size as i32,
+            pre_blur_enabled: false,
+            ..default_feature_row()
+        },
+        [PreprocessingSteps::GaussianBlur(blur), PreprocessingSteps::Laplacian(s)] => {
+            FeatureRowSlint {
+                filter_type: 3,
+                kernel_size: s.kernel_size as i32,
+                pre_blur_enabled: true,
+                pre_blur_sigma: blur.sigma,
+                ..default_feature_row()
+            }
+        }
+        [PreprocessingSteps::StructureTensor(s)] => FeatureRowSlint {
+            filter_type: 4,
+            kernel_size: s.kernel_size as i32,
+            sigma: s.sigma,
+            structure_tensor_mode: match s.mode {
+                FiltersStructureTensorTensorModeSettings::EigenvaluesY => 1,
+                FiltersStructureTensorTensorModeSettings::Coherence => 2,
+                FiltersStructureTensorTensorModeSettings::EigenvaluesX => 0,
+            },
+            ..default_feature_row()
+        },
+        [PreprocessingSteps::Hessian(s)] => FeatureRowSlint {
+            filter_type: 5,
+            pre_blur_enabled: false,
+            hessian_mode: hessian_mode_to_row(&s.mode),
+            ..default_feature_row()
+        },
+        [PreprocessingSteps::GaussianBlur(blur), PreprocessingSteps::Hessian(s)] => {
+            FeatureRowSlint {
+                filter_type: 5,
+                pre_blur_enabled: true,
+                pre_blur_sigma: blur.sigma,
+                hessian_mode: hessian_mode_to_row(&s.mode),
+                ..default_feature_row()
+            }
+        }
+        [PreprocessingSteps::RankFilter(s)] => {
+            let (rank_stat, rank_threshold) = match &s.filter_type {
+                FiltersRankFilterRankFilterTypeSettings::Median => (1, default_feature_row().rank_threshold),
+                FiltersRankFilterRankFilterTypeSettings::Min => (2, default_feature_row().rank_threshold),
+                FiltersRankFilterRankFilterTypeSettings::Max => (3, default_feature_row().rank_threshold),
+                FiltersRankFilterRankFilterTypeSettings::Outliers(t) => (4, *t),
+                FiltersRankFilterRankFilterTypeSettings::Mean => (0, default_feature_row().rank_threshold),
+            };
+            FeatureRowSlint {
+                filter_type: 6,
+                rank_radius: s.radius as f32,
+                rank_stat,
+                rank_threshold,
+                ..default_feature_row()
+            }
+        }
+        _ => FeatureRowSlint {
+            filter_type: 0,
+            ..default_feature_row()
+        },
+    }
+}
+
+/// Copies a loaded model's backend hyperparameters onto the dialog's
+/// settings, including which algorithm/mode is selected. See
+/// `browse_existing_model`.
+fn apply_loaded_backend_settings(settings: &mut AiTrainingSettingsSlint, backend: &AiLearningBackendSettings) {
+    match backend {
+        AiLearningBackendSettings::RandomForest(s) => {
+            settings.algorithm = 0;
+            settings.rf_n_trees = s.n_trees as i32;
+            settings.rf_max_depth = s.max_depth.map(|d| d as i32).unwrap_or(0);
+            settings.rf_min_samples_split = s.min_samples_split as i32;
+            settings.rf_min_samples_leaf = s.min_samples_leaf as i32;
+            settings.rf_criterion = match s.criterion {
+                SplitCriterion::Entropy => 1,
+                SplitCriterion::Gini | SplitCriterion::ClassificationError => 0,
+            };
+            settings.rf_max_features = s.m.map(|m| m as i32).unwrap_or(0);
+            settings.rf_seed = s.seed as i32;
+            settings.rf_out_of_bag_eval = s.keep_samples;
+        }
+        AiLearningBackendSettings::Knn(s) => {
+            settings.algorithm = 1;
+            settings.knn_k = s.k as i32;
+            settings.knn_search_algorithm = match s.algorithm {
+                KNNAlgorithmName::CoverTree => 1,
+                KNNAlgorithmName::LinearSearch => 0,
+            };
+            settings.knn_weight = match s.weight {
+                KNNWeightFunction::Distance => 1,
+                KNNWeightFunction::Uniform => 0,
+            };
+        }
+        AiLearningBackendSettings::Mlp(s) => {
+            settings.algorithm = 2;
+            settings.mlp_hidden_layers = s
+                .hidden_layers
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+                .into();
+            settings.mlp_activation = match s.activation {
+                MlpActivation::Sigmoid => 1,
+                MlpActivation::Tanh => 2,
+                MlpActivation::Relu => 0,
+            };
+            settings.mlp_max_iterations = s.epochs as i32;
+            settings.mlp_learning_rate = s.learning_rate as f32;
+            settings.mlp_batch_size = s.batch_size as i32;
+            settings.mlp_seed = s.seed as i32;
+        }
+    }
+}
+
 /// `row.metric_id` encoding mirrors `OBJECT_METRICS`/`INTENSITY_METRIC_BASE`/
 /// `INTENSITY_STATS` above.
 fn object_metric_row_to_metric(row: &ObjectMetricRowSlint) -> ObjectMetric {
@@ -885,5 +1128,315 @@ fn log_training_progress(event: &TrainingProgressEvent) {
         }
         TrainingProgressEvent::Training => info!("Fitting model..."),
         TrainingProgressEvent::Finished => info!("Training finished"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- parse_hidden_layers -----------------------------------------------
+
+    #[test]
+    fn parse_hidden_layers_parses_a_comma_separated_list() {
+        assert_eq!(parse_hidden_layers("64, 32, 16"), vec![64, 32, 16]);
+    }
+
+    #[test]
+    fn parse_hidden_layers_drops_zero_and_unparsable_entries() {
+        assert_eq!(parse_hidden_layers("64, 0, x, 32"), vec![64, 32]);
+    }
+
+    #[test]
+    fn parse_hidden_layers_returns_empty_for_blank_input() {
+        assert_eq!(parse_hidden_layers(""), Vec::<usize>::new());
+    }
+
+    // -- feature_row_to_preprocessing_steps / preprocessing_steps_to_feature_row --
+
+    fn row(filter_type: i32) -> FeatureRowSlint {
+        FeatureRowSlint {
+            filter_type,
+            ..default_feature_row()
+        }
+    }
+
+    #[test]
+    fn raw_row_round_trips_through_an_empty_step_chain() {
+        let steps = feature_row_to_preprocessing_steps(&row(0));
+        assert!(steps.is_empty());
+        assert_eq!(preprocessing_steps_to_feature_row(&steps).filter_type, 0);
+    }
+
+    #[test]
+    fn gaussian_blur_row_round_trips_kernel_size_and_sigma() {
+        let mut r = row(1);
+        r.kernel_size = 7;
+        r.sigma = 2.5;
+
+        let steps = feature_row_to_preprocessing_steps(&r);
+        assert!(matches!(steps.as_slice(), [PreprocessingSteps::GaussianBlur(_)]));
+
+        let back = preprocessing_steps_to_feature_row(&steps);
+        assert_eq!(back.filter_type, 1);
+        assert_eq!(back.kernel_size, 7);
+        assert_eq!(back.sigma, 2.5);
+    }
+
+    #[test]
+    fn sobel_row_round_trips_kernel_size() {
+        let mut r = row(2);
+        r.kernel_size = 5;
+
+        let steps = feature_row_to_preprocessing_steps(&r);
+        let back = preprocessing_steps_to_feature_row(&steps);
+        assert_eq!(back.filter_type, 2);
+        assert_eq!(back.kernel_size, 5);
+    }
+
+    #[test]
+    fn laplacian_without_pre_blur_round_trips_as_a_single_step() {
+        let mut r = row(3);
+        r.kernel_size = 5;
+        r.pre_blur_enabled = false;
+
+        let steps = feature_row_to_preprocessing_steps(&r);
+        assert!(matches!(steps.as_slice(), [PreprocessingSteps::Laplacian(_)]));
+
+        let back = preprocessing_steps_to_feature_row(&steps);
+        assert_eq!(back.filter_type, 3);
+        assert_eq!(back.kernel_size, 5);
+        assert!(!back.pre_blur_enabled);
+    }
+
+    #[test]
+    fn laplacian_of_gaussian_round_trips_both_steps() {
+        let mut r = row(3);
+        r.kernel_size = 5;
+        r.pre_blur_enabled = true;
+        r.pre_blur_sigma = 1.5;
+
+        let steps = feature_row_to_preprocessing_steps(&r);
+        assert!(matches!(
+            steps.as_slice(),
+            [PreprocessingSteps::GaussianBlur(_), PreprocessingSteps::Laplacian(_)]
+        ));
+
+        let back = preprocessing_steps_to_feature_row(&steps);
+        assert_eq!(back.filter_type, 3);
+        assert_eq!(back.kernel_size, 5);
+        assert!(back.pre_blur_enabled);
+        assert_eq!(back.pre_blur_sigma, 1.5);
+    }
+
+    #[test]
+    fn structure_tensor_row_round_trips_mode_kernel_and_sigma() {
+        for mode in [0, 1, 2] {
+            let mut r = row(4);
+            r.kernel_size = 9;
+            r.sigma = 3.0;
+            r.structure_tensor_mode = mode;
+
+            let steps = feature_row_to_preprocessing_steps(&r);
+            let back = preprocessing_steps_to_feature_row(&steps);
+            assert_eq!(back.filter_type, 4, "mode {mode}");
+            assert_eq!(back.kernel_size, 9, "mode {mode}");
+            assert_eq!(back.sigma, 3.0, "mode {mode}");
+            assert_eq!(back.structure_tensor_mode, mode, "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn hessian_without_pre_blur_round_trips_mode() {
+        for mode in [0, 1, 2] {
+            let mut r = row(5);
+            r.hessian_mode = mode;
+            r.pre_blur_enabled = false;
+
+            let steps = feature_row_to_preprocessing_steps(&r);
+            assert!(matches!(steps.as_slice(), [PreprocessingSteps::Hessian(_)]));
+
+            let back = preprocessing_steps_to_feature_row(&steps);
+            assert_eq!(back.filter_type, 5, "mode {mode}");
+            assert_eq!(back.hessian_mode, mode, "mode {mode}");
+            assert!(!back.pre_blur_enabled, "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn hessian_of_gaussian_round_trips_mode_and_pre_blur_sigma() {
+        let mut r = row(5);
+        r.hessian_mode = 2;
+        r.pre_blur_enabled = true;
+        r.pre_blur_sigma = 0.8;
+        r.kernel_size = 5; // used for the pre-blur step, not Hessian itself
+
+        let steps = feature_row_to_preprocessing_steps(&r);
+        assert!(matches!(
+            steps.as_slice(),
+            [PreprocessingSteps::GaussianBlur(_), PreprocessingSteps::Hessian(_)]
+        ));
+
+        let back = preprocessing_steps_to_feature_row(&steps);
+        assert_eq!(back.filter_type, 5);
+        assert_eq!(back.hessian_mode, 2);
+        assert!(back.pre_blur_enabled);
+        assert_eq!(back.pre_blur_sigma, 0.8);
+    }
+
+    #[test]
+    fn rank_filter_round_trips_every_stat_including_outliers_threshold() {
+        for (stat, threshold) in [(0, 50.0), (1, 50.0), (2, 50.0), (3, 50.0), (4, 12.5)] {
+            let mut r = row(6);
+            r.rank_radius = 3.0;
+            r.rank_stat = stat;
+            r.rank_threshold = threshold;
+
+            let steps = feature_row_to_preprocessing_steps(&r);
+            assert!(matches!(steps.as_slice(), [PreprocessingSteps::RankFilter(_)]));
+
+            let back = preprocessing_steps_to_feature_row(&steps);
+            assert_eq!(back.filter_type, 6, "stat {stat}");
+            assert_eq!(back.rank_radius, 3.0, "stat {stat}");
+            assert_eq!(back.rank_stat, stat, "stat {stat}");
+            if stat == 4 {
+                assert_eq!(back.rank_threshold, threshold, "stat {stat}");
+            }
+        }
+    }
+
+    #[test]
+    fn preprocessing_steps_to_feature_row_falls_back_to_raw_for_an_unrecognized_shape() {
+        // Two Sobel steps in a row is not a shape this dialog would ever
+        // produce - must degrade to Raw rather than panicking or guessing.
+        let steps = vec![
+            PreprocessingSteps::EdgeDetectionSobel(EdgeDetectionSobelSettings { kernel_size: 3 }),
+            PreprocessingSteps::EdgeDetectionSobel(EdgeDetectionSobelSettings { kernel_size: 3 }),
+        ];
+        assert_eq!(preprocessing_steps_to_feature_row(&steps).filter_type, 0);
+    }
+
+    // -- object_metric_row_to_metric ----------------------------------------
+
+    fn metric_row(metric_id: i32, channel_index: i32) -> ObjectMetricRowSlint {
+        ObjectMetricRowSlint {
+            label: "".into(),
+            metric_id,
+            channel_index,
+            selected: false,
+        }
+    }
+
+    #[test]
+    fn object_metric_row_to_metric_maps_non_intensity_ids() {
+        assert_eq!(object_metric_row_to_metric(&metric_row(0, -1)), ObjectMetric::Area);
+        assert_eq!(
+            object_metric_row_to_metric(&metric_row(12, -1)),
+            ObjectMetric::Eccentricity
+        );
+    }
+
+    #[test]
+    fn object_metric_row_to_metric_maps_intensity_ids_with_their_channel() {
+        assert_eq!(
+            object_metric_row_to_metric(&metric_row(INTENSITY_METRIC_BASE + 1, 2)),
+            ObjectMetric::IntensityMin(2)
+        );
+        assert_eq!(
+            object_metric_row_to_metric(&metric_row(INTENSITY_METRIC_BASE, 0)),
+            ObjectMetric::IntensitySum(0)
+        );
+    }
+
+    // -- apply_loaded_backend_settings --------------------------------------
+
+    fn default_settings() -> AiTrainingSettingsSlint {
+        AiTrainingSettingsSlint::default()
+    }
+
+    #[test]
+    fn apply_loaded_backend_settings_populates_random_forest_fields() {
+        let mut settings = default_settings();
+        apply_loaded_backend_settings(
+            &mut settings,
+            &AiLearningBackendSettings::RandomForest(RandomForestSettings {
+                criterion: SplitCriterion::Entropy,
+                max_depth: Some(12),
+                min_samples_leaf: 3,
+                min_samples_split: 4,
+                n_trees: 80,
+                m: Some(5),
+                keep_samples: false,
+                seed: 7,
+            }),
+        );
+
+        assert_eq!(settings.algorithm, 0);
+        assert_eq!(settings.rf_n_trees, 80);
+        assert_eq!(settings.rf_max_depth, 12);
+        assert_eq!(settings.rf_min_samples_leaf, 3);
+        assert_eq!(settings.rf_min_samples_split, 4);
+        assert_eq!(settings.rf_criterion, 1);
+        assert_eq!(settings.rf_max_features, 5);
+        assert_eq!(settings.rf_seed, 7);
+        assert!(!settings.rf_out_of_bag_eval);
+    }
+
+    #[test]
+    fn apply_loaded_backend_settings_maps_an_unlimited_depth_to_zero() {
+        let mut settings = default_settings();
+        apply_loaded_backend_settings(
+            &mut settings,
+            &AiLearningBackendSettings::RandomForest(RandomForestSettings {
+                max_depth: None,
+                ..RandomForestSettings::default()
+            }),
+        );
+        assert_eq!(
+            settings.rf_max_depth, 0,
+            "None (unlimited) must round-trip to the dialog's 0-means-unlimited sentinel"
+        );
+    }
+
+    #[test]
+    fn apply_loaded_backend_settings_populates_knn_fields() {
+        let mut settings = default_settings();
+        apply_loaded_backend_settings(
+            &mut settings,
+            &AiLearningBackendSettings::Knn(KnnSettings {
+                algorithm: KNNAlgorithmName::CoverTree,
+                weight: KNNWeightFunction::Distance,
+                k: 9,
+            }),
+        );
+
+        assert_eq!(settings.algorithm, 1);
+        assert_eq!(settings.knn_k, 9);
+        assert_eq!(settings.knn_search_algorithm, 1);
+        assert_eq!(settings.knn_weight, 1);
+    }
+
+    #[test]
+    fn apply_loaded_backend_settings_populates_mlp_fields() {
+        let mut settings = default_settings();
+        apply_loaded_backend_settings(
+            &mut settings,
+            &AiLearningBackendSettings::Mlp(MlpSettings {
+                hidden_layers: vec![64, 32],
+                activation: MlpActivation::Tanh,
+                epochs: 150,
+                learning_rate: 0.01,
+                batch_size: 16,
+                seed: 3,
+            }),
+        );
+
+        assert_eq!(settings.algorithm, 2);
+        assert_eq!(settings.mlp_hidden_layers, "64, 32");
+        assert_eq!(settings.mlp_activation, 2);
+        assert_eq!(settings.mlp_max_iterations, 150);
+        assert_eq!(settings.mlp_learning_rate, 0.01);
+        assert_eq!(settings.mlp_batch_size, 16);
+        assert_eq!(settings.mlp_seed, 3);
     }
 }

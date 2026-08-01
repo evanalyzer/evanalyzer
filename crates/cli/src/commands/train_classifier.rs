@@ -164,6 +164,110 @@ mod tests {
     }
 
     #[test]
+    fn to_z_stack_handling_maps_every_variant() {
+        assert!(matches!(
+            to_z_stack_handling(ZStackHandlingArg::SingleStack),
+            ZStackHandling::SingleStack
+        ));
+        assert!(matches!(
+            to_z_stack_handling(ZStackHandlingArg::AllStacks),
+            ZStackHandling::AllStacks
+        ));
+        assert!(matches!(
+            to_z_stack_handling(ZStackHandlingArg::MaxIntensity),
+            ZStackHandling::MaxIntensity
+        ));
+        assert!(matches!(
+            to_z_stack_handling(ZStackHandlingArg::MinIntensity),
+            ZStackHandling::MinIntensity
+        ));
+        assert!(matches!(
+            to_z_stack_handling(ZStackHandlingArg::AvgIntensity),
+            ZStackHandling::AvgIntensity
+        ));
+        assert!(matches!(
+            to_z_stack_handling(ZStackHandlingArg::SumIntensity),
+            ZStackHandling::SumIntensity
+        ));
+        assert!(matches!(
+            to_z_stack_handling(ZStackHandlingArg::TakeTheMiddle),
+            ZStackHandling::TakeTheMiddle
+        ));
+    }
+
+    #[test]
+    fn run_errors_when_the_settings_file_does_not_exist() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+
+        let result = run(TrainClassifierArgs {
+            project: file.path.clone(),
+            settings: file.path.parent().unwrap().join("does_not_exist.json"),
+            model_name: Some("test-model".into()),
+            channel: 0,
+            t_stack: 0,
+            z_stack_handling: ZStackHandlingArg::SingleStack,
+        });
+
+        let err = result.expect_err("a missing settings file must be reported, not panic");
+        let InternalErrors::Io(msg) = err else {
+            panic!("expected Io, got {err:?}");
+        };
+        assert!(msg.contains("Could not read settings file"));
+    }
+
+    #[test]
+    fn run_errors_when_the_settings_file_is_malformed_json() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+        let settings_path = file.path.parent().unwrap().join("settings.json");
+        std::fs::write(&settings_path, b"{ this is not valid json").unwrap();
+
+        let result = run(TrainClassifierArgs {
+            project: file.path.clone(),
+            settings: settings_path,
+            model_name: Some("test-model".into()),
+            channel: 0,
+            t_stack: 0,
+            z_stack_handling: ZStackHandlingArg::SingleStack,
+        });
+
+        let err = result.expect_err("malformed settings JSON must be reported, not panic");
+        let InternalErrors::InvalidArgument(msg) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(msg.contains("Could not parse"));
+    }
+
+    #[test]
+    fn run_errors_when_model_name_is_whitespace_only() {
+        // `--model-name` is `Some`, but trims to nothing - same rejection as
+        // not passing it at all (`run_errors_when_no_model_name_is_available`),
+        // exercised separately since it's a different branch of the
+        // `unwrap_or_else` upstream of the shared `.trim().is_empty()` check.
+        let file = TempProjectFile::new(&ProjectSettings::default());
+        let settings_path = file.path.parent().unwrap().join("settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string(&empty_object_settings()).unwrap(),
+        )
+        .unwrap();
+
+        let result = run(TrainClassifierArgs {
+            project: file.path.clone(),
+            settings: settings_path,
+            model_name: Some("   ".into()),
+            channel: 0,
+            t_stack: 0,
+            z_stack_handling: ZStackHandlingArg::SingleStack,
+        });
+
+        let err = result.expect_err("a whitespace-only --model-name must be rejected");
+        let InternalErrors::InvalidArgument(msg) = err else {
+            panic!("expected InvalidArgument, got {err:?}");
+        };
+        assert!(msg.contains("No model name"));
+    }
+
+    #[test]
     fn run_errors_when_the_project_file_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");

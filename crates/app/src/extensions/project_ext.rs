@@ -1073,7 +1073,21 @@ impl ProjectExt for ProjectWithRuntime {
         // project still has `schema_version: 0` from `Default`).
         self.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
 
-        let json = serde_json::to_string_pretty(&self.settings)
+        // AI command `model_path`s are stored relative to the project's own
+        // directory on disk so the project keeps working after the folder is
+        // moved or copied elsewhere - but only in the serialized copy; the
+        // in-memory settings keep absolute paths so the rest of the app
+        // (pipeline preview, the model-info dialog, ...) doesn't need to
+        // know about the project directory to resolve them.
+        let mut on_disk_settings = self.settings.clone();
+        if let Some(project_dir) = final_path.parent() {
+            crate::extensions::utils::relativize_model_paths(
+                &mut on_disk_settings.pipelines,
+                project_dir,
+            );
+        }
+
+        let json = serde_json::to_string_pretty(&on_disk_settings)
             .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
         fs::write(final_path.clone(), json)?;
 
@@ -1358,6 +1372,14 @@ pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors
         )));
     }
     inner.migrate();
+
+    // Reverse of the relativization `save_project_as` does on write - resolve
+    // AI command `model_path`s back to absolute now, using this project
+    // file's own directory, so the rest of the app can keep treating them as
+    // plain absolute paths.
+    if let Some(project_dir) = path.parent() {
+        crate::extensions::utils::resolve_model_paths(&mut inner.pipelines, project_dir);
+    }
 
     let mut project = ProjectWithRuntime {
         settings: inner,
@@ -1807,6 +1829,47 @@ mod tests {
         let objects = &loaded.images.list.get(Path::new("img.tif")).unwrap().series[&0].objects;
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].area, 1234);
+    }
+
+    #[test]
+    fn save_project_as_stores_ai_model_paths_relative_to_the_project_dir() {
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
+        use evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.evaproj");
+        let absolute_model_path = dir.path().join("models").join("nuclei.evamodel");
+
+        let mut project = ProjectWithRuntime::default();
+        let mut step_pipeline = pipeline(1);
+        step_pipeline.steps.push(PipelineStepSettings {
+            enabled: true,
+            command: PipelineCommand::PixelClassifier(PixelClassifierSettings {
+                model_path: absolute_model_path.clone(),
+                ..Default::default()
+            }),
+        });
+        project.add_pipeline(step_pipeline);
+        project.save_project_as(&path).unwrap();
+
+        // On disk, the path is relative to the project directory - not the
+        // absolute temp-dir path it was set from - so the project stays
+        // valid if the folder is moved or copied elsewhere.
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("models/nuclei.evamodel") && !written.contains(&*absolute_model_path.to_string_lossy()),
+            "expected a relative model path on disk, got: {written}"
+        );
+
+        // Reloading resolves it straight back to the original absolute path
+        // - the rest of the app never has to know about relative storage.
+        let loaded = load_project(&path).expect("load should succeed");
+        let PipelineCommand::PixelClassifier(settings) = &loaded.pipelines[0].steps[0].command
+        else {
+            panic!("expected a PixelClassifier command");
+        };
+        assert_eq!(settings.model_path, absolute_model_path);
     }
 
     // -- Pipeline management ---------------------------------------------

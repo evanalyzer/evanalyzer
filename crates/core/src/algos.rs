@@ -13,6 +13,10 @@ mod spartial_transform;
 #[cfg(feature = "ai")]
 pub use self::ai_segmentation::cellpose::Cellpose;
 #[cfg(feature = "ai")]
+pub use self::ai_segmentation::pixel_classifier::PixelClassifier;
+#[cfg(feature = "ai")]
+pub use self::ai_segmentation::pixel_classifier::SegmentationMapping;
+#[cfg(feature = "ai")]
 pub use self::ai_segmentation::stardist::Stardist;
 #[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNet;
