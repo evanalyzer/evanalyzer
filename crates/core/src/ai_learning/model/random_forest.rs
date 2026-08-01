@@ -38,3 +38,54 @@ pub fn fit_random_forest(
         .map_err(|e| InternalErrors::Internal(e.to_string()))?;
     Ok(Classifier::RandomForest(model))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two well-separated clusters (label 0 near 0.0, label 1 near 10.0 on
+    /// every feature) - trivial for any working classifier to fit exactly,
+    /// so a wrong prediction here means the settings -> smartcore-params
+    /// wiring (or the dense-matrix/label plumbing) is broken, not that the
+    /// model just didn't generalize.
+    fn two_cluster_dataset() -> (Vec<Vec<f32>>, Vec<usize>) {
+        let mut rows = Vec::new();
+        let mut labels = Vec::new();
+        for i in 0..15 {
+            let jitter = (i % 3) as f32 * 0.1;
+            rows.push(vec![0.0 + jitter, 0.0 + jitter]);
+            labels.push(0);
+            rows.push(vec![10.0 + jitter, 10.0 + jitter]);
+            labels.push(1);
+        }
+        (rows, labels)
+    }
+
+    #[test]
+    fn fit_random_forest_separates_two_well_separated_clusters() {
+        let (rows, labels) = two_cluster_dataset();
+        let settings = RandomForestSettings {
+            n_trees: 10,
+            max_depth: Some(5),
+            min_samples_leaf: 1,
+            min_samples_split: 2,
+            seed: 42,
+            ..Default::default()
+        };
+
+        let classifier = fit_random_forest(&rows, &labels, &settings).unwrap();
+
+        let predictions = classifier
+            .predict(&[vec![0.05, 0.05], vec![10.05, 10.05]])
+            .unwrap();
+        assert_eq!(predictions, vec![0, 1]);
+    }
+
+    #[test]
+    fn fit_random_forest_rejects_mismatched_rows_and_labels() {
+        let rows = vec![vec![0.0], vec![1.0]];
+        let labels = [0usize];
+        let err = fit_random_forest(&rows, &labels, &RandomForestSettings::default()).unwrap_err();
+        assert!(matches!(err, InternalErrors::Internal(_)));
+    }
+}

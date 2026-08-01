@@ -174,3 +174,184 @@ fn resolve_label(
     Ok(index)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai_learning::model::Classifier;
+    use crate::object::{Intensity, ObjectInit};
+    use evanalyzer_cfg::core_types::ObjectId;
+    use evanalyzer_cfg::settings::ai_learning_settings::{
+        AiLearningBackendSettings, AiLearningSettings, KnnSettings, PixelClassLabel,
+    };
+    use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
+    use evanalyzer_cfg::settings::meta_data::MetaData;
+    use indexmap::IndexMap;
+
+    // -- compute_object_features ---------------------------------------------
+
+    #[test]
+    fn compute_object_features_reads_geometry_and_intensity_metrics_in_order() {
+        let mut intensities = IndexMap::new();
+        intensities.insert(
+            0,
+            Intensity {
+                sum_intensity: 40.0,
+                min_intensity: 1.0,
+                max_intensity: 9.0,
+                avg_intensity: 5.0,
+                pixel_values: vec![],
+            },
+        );
+        let object = Object::new(ObjectInit {
+            area: 42,
+            touches_edge: true,
+            intensities,
+            ..Default::default()
+        });
+        let spec = AiLearningObjectFeatureSettings {
+            metrics: vec![
+                ObjectMetric::Area,
+                ObjectMetric::TouchesEdge,
+                ObjectMetric::IntensityAvg(0),
+                ObjectMetric::IntensitySum(0),
+            ],
+        };
+
+        let features = compute_object_features(&object, &spec);
+
+        assert_eq!(features, vec![42.0, 1.0, 5.0, 40.0]);
+    }
+
+    #[test]
+    fn compute_object_features_defaults_missing_intensity_channel_to_zero() {
+        let object = Object::new(ObjectInit::default());
+        let spec = AiLearningObjectFeatureSettings {
+            metrics: vec![ObjectMetric::IntensityAvg(3)],
+        };
+
+        assert_eq!(compute_object_features(&object, &spec), vec![0.0]);
+    }
+
+    // -- resolve_label ---------------------------------------------------------
+
+    fn class_label(id: u32, name: &str) -> ObjectClassLabel {
+        ObjectClassLabel {
+            class: ObjectClass::Valid(id),
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn resolve_label_matches_the_one_configured_class() {
+        let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
+        let object_class = HashSet::from([ObjectClass::Valid(2)]);
+        assert_eq!(resolve_label(&labels, &object_class), Ok(1));
+    }
+
+    #[test]
+    fn resolve_label_errors_when_no_class_matches() {
+        let labels = vec![class_label(1, "Cell")];
+        let object_class = HashSet::from([ObjectClass::Valid(99)]);
+        assert!(resolve_label(&labels, &object_class).is_err());
+    }
+
+    #[test]
+    fn resolve_label_errors_when_multiple_classes_match() {
+        let labels = vec![class_label(1, "Cell"), class_label(2, "Background")];
+        let object_class = HashSet::from([ObjectClass::Valid(1), ObjectClass::Valid(2)]);
+        assert!(resolve_label(&labels, &object_class).is_err());
+    }
+
+    // -- ObjectTrainingJob::run -------------------------------------------------
+
+    fn labeled_object(id: u128, class: ObjectClass, area: usize) -> ObjectMetricSettings {
+        ObjectMetricSettings {
+            id: ObjectId(id),
+            object_class: HashSet::from([class]),
+            area,
+            ..Default::default()
+        }
+    }
+
+    fn object_job(objects: Vec<ObjectMetricSettings>) -> ObjectTrainingJob {
+        ObjectTrainingJob {
+            settings: AiLearningSettings {
+                metadata: MetaData::default(),
+                backend: AiLearningBackendSettings::Knn(KnnSettings {
+                    k: 2,
+                    ..Default::default()
+                }),
+                classifier: AiLearningClassifierSettings::Object {
+                    feature_spec: AiLearningObjectFeatureSettings {
+                        metrics: vec![ObjectMetric::Area],
+                    },
+                    class_labels: vec![class_label(1, "Small"), class_label(2, "Big")],
+                },
+            },
+            objects,
+        }
+    }
+
+    #[test]
+    fn run_trains_a_classifier_from_labeled_objects() {
+        let job = object_job(vec![
+            labeled_object(1, ObjectClass::Valid(1), 1),
+            labeled_object(2, ObjectClass::Valid(1), 2),
+            labeled_object(3, ObjectClass::Valid(2), 100),
+            labeled_object(4, ObjectClass::Valid(2), 101),
+        ]);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let saved = job.run(tx, cancel).unwrap();
+
+        assert!(matches!(saved.classifier, Classifier::Knn(_)));
+    }
+
+    #[test]
+    fn run_skips_objects_with_an_unresolvable_class_and_reports_it() {
+        let job = object_job(vec![
+            labeled_object(1, ObjectClass::Valid(1), 1),
+            labeled_object(2, ObjectClass::Valid(99), 2), // not in class_labels
+            labeled_object(3, ObjectClass::Valid(2), 100),
+        ]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        job.run(tx, cancel).unwrap();
+        let events: Vec<TrainingProgressEvent> = rx.try_iter().collect();
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::ObjectSkipped { index: 1, .. }))
+        );
+    }
+
+    #[test]
+    fn run_returns_cancelled_when_the_flag_is_already_set() {
+        let job = object_job(vec![labeled_object(1, ObjectClass::Valid(1), 1)]);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(true));
+
+        let err = job.run(tx, cancel).unwrap_err();
+        assert!(matches!(err, InternalErrors::Cancelled));
+    }
+
+    #[test]
+    fn run_errors_for_a_pixel_classifier_configuration() {
+        let mut job = object_job(vec![]);
+        job.settings.classifier = AiLearningClassifierSettings::Pixel {
+            feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
+            class_labels: vec![PixelClassLabel {
+                class: evanalyzer_cfg::core_types::SegmentationClass(1),
+                name: "X".into(),
+            }],
+        };
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let err = job.run(tx, cancel).unwrap_err();
+        assert!(matches!(err, InternalErrors::Internal(_)));
+    }
+}

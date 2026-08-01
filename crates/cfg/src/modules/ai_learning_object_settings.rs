@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// never be renamed, removed, or have their meaning changed - treat this the
 /// same as a database migration, not a normal refactor. Adding a new variant
 /// is safe.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum ObjectMetric {
     Area,
     Perimeter,

@@ -197,14 +197,38 @@ fn resolve_pixel_label(
     Some(first.class)
 }
 
-/// Builds `AiLearningClassifierSettings::{Pixel,Object}::class_labels` from a
-/// project's classification classes - every class becomes a candidate label,
-/// same universe the training dialog's class picker already offers.
+/// Classes that appear in at least one project object's `object_class` set,
+/// across every image (not just labeled/relevant ones - a broader "does any
+/// data exist for this class at all" scan than `gather_pixel_training_images`
+/// or `gather_labeled_objects` do, since it just needs the set of ids, not
+/// the objects themselves). Also used by the GUI to pre-check classes with
+/// existing data in the object training dialog's class checklist.
+pub fn used_object_classes(project: &ProjectSettings) -> std::collections::HashSet<ObjectClass> {
+    project
+        .images
+        .list
+        .values()
+        .filter_map(|entry| entry.series.get(&entry.selected_series))
+        .flat_map(|series| series.objects.iter())
+        .flat_map(|object| object.object_class.iter().copied())
+        .collect()
+}
+
+/// Builds `AiLearningClassifierSettings::Pixel::class_labels` from a
+/// project's classification classes, restricted to ones with at least one
+/// labeled object somewhere in the project. A class with zero training
+/// examples can't usefully be a prediction target (an MLP's output layer
+/// would get an untrained neuron for it; RF/KNN would just never predict
+/// it), so it's excluded rather than offered as a hollow choice - unlike the
+/// object classifier side (see `object_class_labels_from_project`), there's
+/// no dialog affordance for a user to deliberately pick an unused class here.
 pub fn pixel_class_labels_from_project(project: &ProjectSettings) -> Vec<PixelClassLabel> {
+    let used = used_object_classes(project);
     project
         .classification
         .classes()
         .iter()
+        .filter(|class| used.contains(&class.id))
         .filter_map(|class| {
             class.id.to_u32().map(|id| PixelClassLabel {
                 class: SegmentationClass(id),
@@ -214,11 +238,21 @@ pub fn pixel_class_labels_from_project(project: &ProjectSettings) -> Vec<PixelCl
         .collect()
 }
 
-pub fn object_class_labels_from_project(project: &ProjectSettings) -> Vec<ObjectClassLabel> {
+/// Builds `AiLearningClassifierSettings::Object::class_labels` restricted to
+/// `selected` - the object training dialog's own class checklist. Unlike the
+/// pixel side, this isn't inferred from which classes happen to have data:
+/// object classifiers are commonly trained to distinguish a deliberately
+/// curated subset of classes, so the choice is left to the user rather than
+/// auto-including everything with at least one example.
+pub fn object_class_labels_from_project(
+    project: &ProjectSettings,
+    selected: &std::collections::HashSet<ObjectClass>,
+) -> Vec<ObjectClassLabel> {
     project
         .classification
         .classes()
         .iter()
+        .filter(|class| selected.contains(&class.id))
         .map(|class| ObjectClassLabel {
             class: class.id,
             name: class.name.clone(),
@@ -405,6 +439,85 @@ mod tests {
         let objects = gather_labeled_objects(&project);
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].id, ObjectId(1));
+    }
+
+    #[test]
+    fn pixel_class_labels_from_project_excludes_classes_with_no_labeled_objects() {
+        let mut project = ProjectSettings::default();
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(1),
+            name: "Cell".into(),
+            ..Default::default()
+        });
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(2),
+            name: "Unused".into(),
+            ..Default::default()
+        });
+        let path = PathBuf::from("a.tif");
+        project.images.list.insert(
+            path.clone(),
+            ImageEntry {
+                rel_path: path,
+                file_size: 0,
+                selected_series: 0,
+                series: std::collections::BTreeMap::from([(
+                    0,
+                    SeriesSettings {
+                        objects: vec![labeled_object(1, ObjectClass::Valid(1))],
+                        ..Default::default()
+                    },
+                )]),
+            },
+        );
+
+        let labels = pixel_class_labels_from_project(&project);
+
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].name, "Cell");
+    }
+
+    #[test]
+    fn object_class_labels_from_project_only_includes_the_selected_classes() {
+        let mut project = ProjectSettings::default();
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(1),
+            name: "Cell".into(),
+            ..Default::default()
+        });
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(2),
+            name: "Nucleus".into(),
+            ..Default::default()
+        });
+
+        // Both classes have data, but only Valid(1) is selected - the
+        // selection is a user choice, not inferred from usage.
+        let path = PathBuf::from("a.tif");
+        project.images.list.insert(
+            path.clone(),
+            ImageEntry {
+                rel_path: path,
+                file_size: 0,
+                selected_series: 0,
+                series: std::collections::BTreeMap::from([(
+                    0,
+                    SeriesSettings {
+                        objects: vec![
+                            labeled_object(1, ObjectClass::Valid(1)),
+                            labeled_object(2, ObjectClass::Valid(2)),
+                        ],
+                        ..Default::default()
+                    },
+                )]),
+            },
+        );
+
+        let selected = HashSet::from([ObjectClass::Valid(1)]);
+        let labels = object_class_labels_from_project(&project, &selected);
+
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].name, "Cell");
     }
 
     #[test]

@@ -994,30 +994,41 @@ impl Default for CellposeSettings {
     }
 }
 
-///  A filter that segments an image into discrete classes based on intensity.
+///  A pixel classifier trained via the app's AI training dialog
+///  (an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),
+///  applied here as a pipeline segmentation step: every pixel is classified
+///  independently (reusing the same feature recipe used at training time),
+///  then remapped through `segmentation_mapping` into this project's own
+///  classes and written to the segmentation map - the same output shape
+///  `Threshold` produces, so downstream steps (extraction, classification)
+///  don't need to care which one ran.
 ///
-///  This supports "Multi-Otsu" style behavior by allowing a vector of
-///  [`ThresholdSettings`]. Each pixel is evaluated against the settings to
-///  determine which `object_class_id` it belongs to.
-///
+///  Predicted classes with no matching `segmentation_mapping` entry are
+///  written as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`
+///  leaves pixels outside every configured range as background - mapping
+///  only the classes you care about is a deliberate simplification, not an
+///  oversight.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PixelClassifierSettings {
-    ///  Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
+    ///  Path to a trained pixel classifier model, saved from the AI training dialog.
     pub model_path: PathBuf,
-    ///  Segmentation mapping list.
-    ///
-    ///  Maps the segmentation class from the pixel classifier output to a segmentation class of the project
+    ///  Maps the model's predicted classes to this project's segmentation classes.
     pub segmentation_mapping: Vec<SegmentationMappingSettings>,
 }
 
-///  Configuration for a single thresholding operation within a multi-threshold stack.
+///  Maps one class the model was trained to predict to a class ID meaningful
+///  in this project. Model class IDs are a snapshot taken at training time
+///  (see `evanalyzer_cfg::PixelClassLabel`'s doc comment) and aren't
+///  guaranteed to line up with this project's own `SegmentationClass` IDs -
+///  this is the bridge between the two.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SegmentationMappingSettings {
-    ///  Segmentation class from the classifier model
+    ///  Segmentation class predicted by the classifier model.
     pub segmentation_class: SegmentationClass,
-    ///  The classification ID assigned to pixels falling the segmentation class from the model
+    ///  The project's own segmentation class pixels predicted as
+    ///  `segmentation_class` are written as.
     pub object_class_id: SegmentationClass,
 }
 

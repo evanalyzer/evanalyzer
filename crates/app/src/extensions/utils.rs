@@ -1,3 +1,5 @@
+use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
 use pathdiff::diff_paths;
 use std::{
     fs,
@@ -8,6 +10,55 @@ pub fn get_relative_key(image_path: &Path, images_root: Option<&PathBuf>) -> Opt
     match images_root {
         Some(root) => diff_paths(image_path, root),
         None => Some(image_path.to_path_buf()),
+    }
+}
+
+/// Returns the `model_path` field of AI commands that carry a trained-model
+/// path (Cellpose/Stardist/UNet/PixelClassifier); `None` for every other
+/// command.
+fn model_path_mut(command: &mut PipelineCommand) -> Option<&mut PathBuf> {
+    match command {
+        PipelineCommand::Cellpose(s) => Some(&mut s.model_path),
+        PipelineCommand::Stardist(s) => Some(&mut s.model_path),
+        PipelineCommand::UNet(s) => Some(&mut s.model_path),
+        PipelineCommand::PixelClassifier(s) => Some(&mut s.model_path),
+        _ => None,
+    }
+}
+
+/// Rewrites every AI command's `model_path` in `pipelines` to be relative to
+/// `project_dir`, so a saved project stays valid when the project folder is
+/// moved or copied to another machine - mirrors `get_relative_key`'s
+/// handling of image paths. A path that can't be related to `project_dir`
+/// (e.g. a different drive on Windows) is left absolute.
+pub fn relativize_model_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
+    for pipeline in pipelines {
+        for step in &mut pipeline.steps {
+            if let Some(path) = model_path_mut(&mut step.command)
+                && !path.as_os_str().is_empty()
+                && path.is_absolute()
+                && let Some(relative) = diff_paths(path.as_path(), project_dir)
+            {
+                *path = relative;
+            }
+        }
+    }
+}
+
+/// The inverse of [`relativize_model_paths`]: resolves every AI command's
+/// `model_path` against `project_dir` when it's stored as a relative path.
+/// Already-absolute paths (e.g. projects saved before this existed) are left
+/// untouched.
+pub fn resolve_model_paths(pipelines: &mut [PipelineSettings], project_dir: &Path) {
+    for pipeline in pipelines {
+        for step in &mut pipeline.steps {
+            if let Some(path) = model_path_mut(&mut step.command)
+                && path.is_relative()
+                && !path.as_os_str().is_empty()
+            {
+                *path = project_dir.join(path.as_path());
+            }
+        }
     }
 }
 
@@ -135,6 +186,132 @@ mod tests {
         let root = PathBuf::from("/data/plate1");
         let image = Path::new("relative/img.tif");
         assert_eq!(get_relative_key(image, Some(&root)), None);
+    }
+
+    // ---- relativize_model_paths / resolve_model_paths ----
+
+    fn pipeline_with(command: PipelineCommand) -> PipelineSettings {
+        use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
+
+        PipelineSettings {
+            id: PipelineId(0),
+            name: None,
+            image_source: ImageAddress::Channel(0),
+            enabled: true,
+            steps: vec![evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings {
+                enabled: true,
+                command,
+            }],
+        }
+    }
+
+    fn pixel_classifier_model_path(pipeline: &PipelineSettings) -> &PathBuf {
+        let PipelineCommand::PixelClassifier(settings) = &pipeline.steps[0].command else {
+            panic!("expected a PixelClassifier command");
+        };
+        &settings.model_path
+    }
+
+    #[test]
+    fn relativize_model_paths_rewrites_an_absolute_path_under_the_project_dir() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
+
+        let mut pipelines = vec![pipeline_with(PipelineCommand::PixelClassifier(
+            PixelClassifierSettings {
+                model_path: PathBuf::from("/data/project/models/nuclei.evamodel"),
+                ..Default::default()
+            },
+        ))];
+
+        relativize_model_paths(&mut pipelines, Path::new("/data/project"));
+
+        assert_eq!(
+            pixel_classifier_model_path(&pipelines[0]),
+            &PathBuf::from("models/nuclei.evamodel")
+        );
+    }
+
+    #[test]
+    fn relativize_model_paths_leaves_an_empty_path_untouched() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
+
+        let mut pipelines = vec![pipeline_with(PipelineCommand::PixelClassifier(
+            PixelClassifierSettings::default(),
+        ))];
+
+        relativize_model_paths(&mut pipelines, Path::new("/data/project"));
+
+        assert_eq!(pixel_classifier_model_path(&pipelines[0]), &PathBuf::new());
+    }
+
+    #[test]
+    fn relativize_model_paths_ignores_commands_without_a_model_path() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
+
+        let mut pipelines = vec![pipeline_with(PipelineCommand::Blur(BlurSettings::default()))];
+
+        // Must not panic on a command variant with no `model_path` field.
+        relativize_model_paths(&mut pipelines, Path::new("/data/project"));
+    }
+
+    #[test]
+    fn resolve_model_paths_joins_a_relative_path_onto_the_project_dir() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
+
+        let mut pipelines = vec![pipeline_with(PipelineCommand::PixelClassifier(
+            PixelClassifierSettings {
+                model_path: PathBuf::from("models/nuclei.evamodel"),
+                ..Default::default()
+            },
+        ))];
+
+        resolve_model_paths(&mut pipelines, Path::new("/data/project"));
+
+        assert_eq!(
+            pixel_classifier_model_path(&pipelines[0]),
+            &PathBuf::from("/data/project/models/nuclei.evamodel")
+        );
+    }
+
+    #[test]
+    fn resolve_model_paths_leaves_an_already_absolute_path_untouched() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
+
+        // A project saved before this feature existed, or one whose model
+        // lives outside the project directory - must not be rewritten.
+        let mut pipelines = vec![pipeline_with(PipelineCommand::PixelClassifier(
+            PixelClassifierSettings {
+                model_path: PathBuf::from("/elsewhere/models/nuclei.evamodel"),
+                ..Default::default()
+            },
+        ))];
+
+        resolve_model_paths(&mut pipelines, Path::new("/data/project"));
+
+        assert_eq!(
+            pixel_classifier_model_path(&pipelines[0]),
+            &PathBuf::from("/elsewhere/models/nuclei.evamodel")
+        );
+    }
+
+    #[test]
+    fn relativize_then_resolve_model_paths_round_trips() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::CellposeSettings;
+
+        let original = PathBuf::from("/data/project/models/cyto.pt");
+        let mut pipelines = vec![pipeline_with(PipelineCommand::Cellpose(CellposeSettings {
+            model_path: original.clone(),
+            ..Default::default()
+        }))];
+        let project_dir = Path::new("/data/project");
+
+        relativize_model_paths(&mut pipelines, project_dir);
+        resolve_model_paths(&mut pipelines, project_dir);
+
+        let PipelineCommand::Cellpose(settings) = &pipelines[0].steps[0].command else {
+            panic!("expected a Cellpose command");
+        };
+        assert_eq!(settings.model_path, original);
     }
 
     // ---- get_file_size ----

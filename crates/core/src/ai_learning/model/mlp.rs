@@ -74,10 +74,9 @@ pub struct MlpArchitecture {
     pub n_out: usize,
 }
 
-/// TODO: the exact tensor -> Vec<usize> extraction (argmax + data readout)
-/// below is written from general burn API knowledge, not verified against
-/// 0.21.0 the way training/save/load were — worth a quick check against
-/// `Tensor::argmax`/`TensorData` conversion methods before relying on it.
+/// The tensor -> `Vec<usize>` extraction (argmax + data readout) is covered
+/// by `fit_mlp_separates_two_well_separated_clusters` below, which round-trips
+/// a real trained model through this function against burn 0.21.
 pub(crate) fn predict_mlp(
     architecture: &MlpArchitecture,
     weights: &[u8],
@@ -171,4 +170,61 @@ pub fn fit_mlp(
         },
         weights,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two well-separated clusters - see `model::random_forest`'s test
+    /// module doc comment for why this is a wiring smoke test, not a
+    /// generalization one. Also the first real exercise of `predict_mlp`'s
+    /// argmax/tensor-readout path against burn 0.21 - see its own doc
+    /// comment, which flagged that path as unverified.
+    fn two_cluster_dataset() -> (Vec<Vec<f32>>, Vec<usize>) {
+        let mut rows = Vec::new();
+        let mut labels = Vec::new();
+        for i in 0..15 {
+            let jitter = (i % 3) as f32 * 0.1;
+            rows.push(vec![0.0 + jitter, 0.0 + jitter]);
+            labels.push(0);
+            rows.push(vec![10.0 + jitter, 10.0 + jitter]);
+            labels.push(1);
+        }
+        (rows, labels)
+    }
+
+    #[test]
+    fn fit_mlp_separates_two_well_separated_clusters() {
+        let (rows, labels) = two_cluster_dataset();
+        let settings = MlpSettings {
+            hidden_layers: vec![4],
+            epochs: 300,
+            learning_rate: 0.05,
+            ..Default::default()
+        };
+
+        let classifier = fit_mlp(&rows, &labels, 2, &settings).unwrap();
+
+        let predictions = classifier
+            .predict(&[vec![0.05, 0.05], vec![10.05, 10.05]])
+            .unwrap();
+        assert_eq!(predictions, vec![0, 1]);
+    }
+
+    #[test]
+    fn fit_mlp_rejects_zero_samples() {
+        let err = fit_mlp(&[], &[], 2, &MlpSettings::default()).unwrap_err();
+        assert!(matches!(err, InternalErrors::Internal(_)));
+    }
+
+    #[test]
+    fn fit_mlp_rejects_zero_classes() {
+        let (rows, labels) = two_cluster_dataset();
+        let err = fit_mlp(&rows, &labels, 0, &MlpSettings::default()).unwrap_err();
+        let InternalErrors::Internal(msg) = err else {
+            panic!("expected Internal, got a different variant");
+        };
+        assert!(msg.contains("zero"));
+    }
 }

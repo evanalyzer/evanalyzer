@@ -473,6 +473,7 @@ impl From<ObjectMathSettings> for ObjectMath {
     }
 }
 
+#[cfg(feature = "ai")]
 impl From<PixelClassifierSettings> for PixelClassifier {
     fn from(_s: PixelClassifierSettings) -> Self {
         PixelClassifier {
@@ -514,6 +515,7 @@ impl From<SaveImageSettings> for SaveImage {
     }
 }
 
+#[cfg(feature = "ai")]
 impl From<SegmentationMappingSettings> for SegmentationMapping {
     fn from(_s: SegmentationMappingSettings) -> Self {
         SegmentationMapping {
@@ -699,9 +701,15 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::ObjectMath(settings) => {
             Ok(Box::new(crate::algos::ObjectMath::from(settings)))
         }
+        #[cfg(feature = "ai")]
         PipelineCommand::PixelClassifier(settings) => {
             Ok(Box::new(crate::algos::PixelClassifier::from(settings)))
         }
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::PixelClassifier(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; PixelClassifier is unavailable."
+                .into(),
+        )),
         PipelineCommand::RankFilter(settings) => {
             Ok(Box::new(crate::algos::RankFilter::from(settings)))
         }

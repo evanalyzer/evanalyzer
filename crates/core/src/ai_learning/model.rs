@@ -76,3 +76,81 @@ pub fn load_from_file(path: &Path) -> Result<SavedClassifier, InternalErrors> {
     serde_json::from_slice(&bytes)
         .map_err(|e| InternalErrors::Internal(format!("failed to deserialize classifier: {e}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
+    use evanalyzer_cfg::settings::ai_learning_settings::{
+        AiLearningBackendSettings, AiLearningClassifierSettings, RandomForestSettings,
+    };
+    use evanalyzer_cfg::settings::meta_data::MetaData;
+
+    fn sample_saved_classifier() -> SavedClassifier {
+        let rows = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![10.0, 10.0], vec![
+            11.0, 11.0,
+        ]];
+        let labels = [0usize, 0, 1, 1];
+        let classifier =
+            random_forest::fit_random_forest(&rows, &labels, &RandomForestSettings::default())
+                .unwrap();
+        SavedClassifier {
+            version: CURRENT_SAVED_CLASSIFIER_VERSION,
+            classifier,
+            settings: AiLearningSettings {
+                metadata: MetaData {
+                    name: "test-model".into(),
+                    ..Default::default()
+                },
+                backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
+                classifier: AiLearningClassifierSettings::Object {
+                    feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
+                    class_labels: vec![],
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn save_then_load_round_trips_metadata_and_predictions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("models").join("test.evamodel");
+        let saved = sample_saved_classifier();
+
+        save_to_file(&saved, &path).unwrap();
+        let loaded = load_from_file(&path).unwrap();
+
+        assert_eq!(loaded.version, CURRENT_SAVED_CLASSIFIER_VERSION);
+        assert_eq!(loaded.settings.metadata.name, "test-model");
+
+        let before = saved.classifier.predict(&[vec![0.5, 0.5]]).unwrap();
+        let after = loaded.classifier.predict(&[vec![0.5, 0.5]]).unwrap();
+        assert_eq!(before, after, "a round-tripped model must predict identically");
+    }
+
+    #[test]
+    fn save_to_file_creates_missing_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("models").join("test.evamodel");
+        assert!(!path.parent().unwrap().exists());
+
+        save_to_file(&sample_saved_classifier(), &path).unwrap();
+
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn load_from_file_errors_for_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist.evamodel");
+        assert!(load_from_file(&missing).is_err());
+    }
+
+    #[test]
+    fn load_from_file_errors_for_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.evamodel");
+        std::fs::write(&path, b"{ not valid json").unwrap();
+        assert!(load_from_file(&path).is_err());
+    }
+}

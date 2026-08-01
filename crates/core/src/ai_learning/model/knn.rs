@@ -36,3 +36,50 @@ pub fn fit_knn(
         .map_err(|e| InternalErrors::Internal(e.to_string()))?;
     Ok(Classifier::Knn(model))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two well-separated clusters - see `random_forest`'s test module doc
+    /// comment for why this is a wiring smoke test, not a generalization one.
+    fn two_cluster_dataset() -> (Vec<Vec<f32>>, Vec<usize>) {
+        let mut rows = Vec::new();
+        let mut labels = Vec::new();
+        for i in 0..15 {
+            let jitter = (i % 3) as f32 * 0.1;
+            rows.push(vec![0.0 + jitter, 0.0 + jitter]);
+            labels.push(0);
+            rows.push(vec![10.0 + jitter, 10.0 + jitter]);
+            labels.push(1);
+        }
+        (rows, labels)
+    }
+
+    #[test]
+    fn fit_knn_separates_two_well_separated_clusters() {
+        let (rows, labels) = two_cluster_dataset();
+        let settings = KnnSettings {
+            k: 3,
+            algorithm: CfgKNNAlgorithmName::CoverTree,
+            weight: CfgKNNWeightFunction::Uniform,
+        };
+
+        let classifier = fit_knn(&rows, &labels, &settings).unwrap();
+
+        let predictions = classifier
+            .predict(&[vec![0.05, 0.05], vec![10.05, 10.05]])
+            .unwrap();
+        assert_eq!(predictions, vec![0, 1]);
+    }
+
+    #[test]
+    fn fit_knn_rejects_zero_samples() {
+        let settings = KnnSettings {
+            k: 3,
+            ..Default::default()
+        };
+        let err = fit_knn(&[], &[], &settings).unwrap_err();
+        assert!(matches!(err, InternalErrors::Internal(_)));
+    }
+}

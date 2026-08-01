@@ -1728,15 +1728,15 @@
       ]
     },
     "PixelClassifierSettings": {
-      "description": "A filter that segments an image into discrete classes based on intensity.\n\n This supports \"Multi-Otsu\" style behavior by allowing a vector of\n [`ThresholdSettings`]. Each pixel is evaluated against the settings to\n determine which `object_class_id` it belongs to.",
+      "description": "A pixel classifier trained via the app's AI training dialog\n (an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),\n applied here as a pipeline segmentation step: every pixel is classified\n independently (reusing the same feature recipe used at training time),\n then remapped through `segmentation_mapping` into this project's own\n classes and written to the segmentation map - the same output shape\n `Threshold` produces, so downstream steps (extraction, classification)\n don't need to care which one ran.\n\n Predicted classes with no matching `segmentation_mapping` entry are\n written as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`\n leaves pixels outside every configured range as background - mapping\n only the classes you care about is a deliberate simplification, not an\n oversight.",
       "type": "object",
       "properties": {
         "modelPath": {
-          "description": "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).",
+          "description": "Path to a trained pixel classifier model, saved from the AI training dialog.",
           "type": "string"
         },
         "segmentationMapping": {
-          "description": "Segmentation mapping list.\n\n Maps the segmentation class from the pixel classifier output to a segmentation class of the project",
+          "description": "Maps the model's predicted classes to this project's segmentation classes.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/SegmentationMappingSettings"
@@ -1822,15 +1822,15 @@
       "minimum": 0
     },
     "SegmentationMappingSettings": {
-      "description": "Configuration for a single thresholding operation within a multi-threshold stack.",
+      "description": "Maps one class the model was trained to predict to a class ID meaningful\n in this project. Model class IDs are a snapshot taken at training time\n (see `evanalyzer_cfg::PixelClassLabel`'s doc comment) and aren't\n guaranteed to line up with this project's own `SegmentationClass` IDs -\n this is the bridge between the two.",
       "type": "object",
       "properties": {
         "objectClassId": {
-          "description": "The classification ID assigned to pixels falling the segmentation class from the model",
+          "description": "The project's own segmentation class pixels predicted as\n `segmentation_class` are written as.",
           "$ref": "#/$defs/SegmentationClass"
         },
         "segmentationClass": {
-          "description": "Segmentation class from the classifier model",
+          "description": "Segmentation class predicted by the classifier model.",
           "$ref": "#/$defs/SegmentationClass"
         }
       },
