@@ -680,7 +680,7 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         project
             .classification
-            .classes
+            .classes_mut()
             .push(class(1, "Nuclei", 0x112233));
         let mut object = ObjectMetricSettings::default();
         object.object_class.insert(ObjectClass::Valid(1));
@@ -711,8 +711,8 @@ mod tests {
     #[test]
     fn object_rust_to_object_slint_joins_multiple_class_names_with_a_comma() {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(class(1, "A", 0));
-        project.classification.classes.push(class(2, "B", 0));
+        project.classification.classes_mut().push(class(1, "A", 0));
+        project.classification.classes_mut().push(class(2, "B", 0));
         let mut object = ObjectMetricSettings::default();
         object.object_class.insert(ObjectClass::Valid(1));
         object.object_class.insert(ObjectClass::Valid(2));

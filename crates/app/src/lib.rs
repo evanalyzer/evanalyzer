@@ -1,3 +1,4 @@
+pub mod ai_learning;
 pub mod bioimageio;
 pub mod extensions;
 pub mod frontend;

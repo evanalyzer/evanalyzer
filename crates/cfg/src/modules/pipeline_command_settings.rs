@@ -994,6 +994,33 @@ impl Default for CellposeSettings {
     }
 }
 
+///  A filter that segments an image into discrete classes based on intensity.
+///
+///  This supports "Multi-Otsu" style behavior by allowing a vector of
+///  [`ThresholdSettings`]. Each pixel is evaluated against the settings to
+///  determine which `object_class_id` it belongs to.
+///
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PixelClassifierSettings {
+    ///  Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
+    pub model_path: PathBuf,
+    ///  Segmentation mapping list.
+    ///
+    ///  Maps the segmentation class from the pixel classifier output to a segmentation class of the project
+    pub segmentation_mapping: Vec<SegmentationMappingSettings>,
+}
+
+///  Configuration for a single thresholding operation within a multi-threshold stack.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentationMappingSettings {
+    ///  Segmentation class from the classifier model
+    pub segmentation_class: SegmentationClass,
+    ///  The classification ID assigned to pixels falling the segmentation class from the model
+    pub object_class_id: SegmentationClass,
+}
+
 ///  Instance segmentation using a pretrained StarDist model exported as TorchScript.
 ///
 ///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,

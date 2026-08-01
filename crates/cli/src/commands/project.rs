@@ -19,7 +19,7 @@ pub fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
         .collect();
     let class_names: Vec<&str> = project
         .classification
-        .classes
+        .classes()
         .iter()
         .map(|c| c.name.as_str())
         .collect();

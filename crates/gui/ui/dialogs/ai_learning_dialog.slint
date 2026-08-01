@@ -27,6 +27,8 @@ export struct FeatureRowSlint {
     // 0=Mean, 1=Median, 2=Min, 3=Max, 4=Outliers (Rank Filter only)
     rank_stat: int,
     rank_radius: float,
+    // Deviation-from-median threshold used when rank_stat == 4 (Outliers).
+    rank_threshold: float,
     // Prepends a Gaussian-blur step before this filter (Laplacian-/Hessian-of-Gaussian),
     // since Laplacian/Hessian themselves have no sigma of their own.
     pre_blur_enabled: bool,
@@ -74,6 +76,13 @@ export struct AiTrainingSettingsSlint {
     // Non-empty once an existing model has been loaded for retraining.
     loaded_model_path: string,
 
+    // Which image channel to read features from (pixel classifier only) -
+    // an index into `AiLearningState.channel_names`. Z-stack handling is not
+    // configured here - training reuses the project's own global z-stack
+    // setting (`GlobalImageSettings.z_stack`, the same one the viewport's
+    // channel controls set) rather than a separate picker.
+    pixel_channel: int,
+
     // -- Random Forest --
     rf_n_trees: int,
     rf_max_depth: int, // 0 = unlimited
@@ -115,6 +124,7 @@ export global AiLearningState {
         algorithm: 0,
         model_name: "",
         loaded_model_path: "",
+        pixel_channel: 0,
         rf_n_trees: 100,
         rf_max_depth: 0,
         rf_min_samples_split: 2,
@@ -147,6 +157,17 @@ export global AiLearningState {
     // Project's ObjectClass names, used as the label picker's options for
     // each training object row.
     in property <[string]> class_names: [];
+    // Project's image channel names, used as the pixel-classifier channel
+    // picker's options - index matches `settings.pixel_channel`.
+    in property <[string]> channel_names: [];
+
+    // Set by Rust when a pre-flight check fails (e.g. no model name, no
+    // labeled data) - shown as an inline banner instead of routing through
+    // the app-wide warning dialog, which would replace this dialog entirely
+    // and lose the user's in-progress settings. Empty = no error to show.
+    // Cleared on every `open_requested` so a stale error never lingers into
+    // the next session.
+    in-out property <string> training_error: "";
 
     // Fired by the toolbar button, before the dialog is shown, so Rust can
     // refresh class_names/object_metrics/training_images/training_objects
@@ -255,6 +276,15 @@ component FeatureRow inherits Rectangle {
             text: root.data.rank_radius;
             edited(v) => {
                 AiLearningState.feature_rows[root.row_index].rank_radius = v.to-float();
+            }
+        }
+
+        if root.data.filter_type == 6 && root.data.rank_stat == 4: LineEdit {
+            width: 70px;
+            placeholder-text: "Threshold";
+            text: root.data.rank_threshold;
+            edited(v) => {
+                AiLearningState.feature_rows[root.row_index].rank_threshold = v.to-float();
             }
         }
 
@@ -818,6 +848,17 @@ export component AiLearningDialog inherits Rectangle {
                                 }
                             }
 
+                            HorizontalLayout {
+                                spacing: 12px;
+                                FormLabel {
+                                    text: "Image Channel:";
+                                }
+                                ComboBox {
+                                    model: AiLearningState.channel_names;
+                                    current-index <=> AiLearningState.settings.pixel_channel;
+                                }
+                            }
+
                             Rectangle {
                                 height: 180px;
                                 border-width: 1px;
@@ -996,6 +1037,27 @@ export component AiLearningDialog inherits Rectangle {
                 }
             }
 
+            // ----- ERROR BANNER -----
+            // Shown instead of the app-wide warning dialog for pre-flight
+            // training errors, so the dialog (and the user's settings) stay
+            // in place while they fix the problem.
+            if AiLearningState.training_error != "": Rectangle {
+                background: Theme.bg;
+                border-width: 1px;
+                border-color: #c0392b;
+
+                HorizontalLayout {
+                    padding: 10px;
+                    Text {
+                        text: AiLearningState.training_error;
+                        color: #e74c3c;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                        horizontal-alignment: left;
+                    }
+                }
+            }
+
             // ----- FOOTER -----
             Rectangle {
                 height: 56px;
@@ -1019,8 +1081,11 @@ export component AiLearningDialog inherits Rectangle {
                         text: "Train";
                         primary: true;
                         clicked => {
+                            // Rust decides whether to close the dialog - a
+                            // pre-flight validation failure keeps it open
+                            // (see `training_error`) instead of always
+                            // closing immediately like this used to.
                             AiLearningState.trigger_train();
-                            GlobalAppState.active-dialog = DialogType.none;
                         }
                     }
                 }

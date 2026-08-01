@@ -1612,6 +1612,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "pixelClassifier"
+            }
+          },
+          "$ref": "#/$defs/PixelClassifierSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "rankFilter"
             }
           },
@@ -1789,6 +1802,27 @@
         "pipelineSteps"
       ]
     },
+    "PixelClassifierSettings": {
+      "description": "A filter that segments an image into discrete classes based on intensity.\n\n This supports \"Multi-Otsu\" style behavior by allowing a vector of\n [`ThresholdSettings`]. Each pixel is evaluated against the settings to\n determine which `object_class_id` it belongs to.",
+      "type": "object",
+      "properties": {
+        "modelPath": {
+          "description": "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).",
+          "type": "string"
+        },
+        "segmentationMapping": {
+          "description": "Segmentation mapping list.\n\n Maps the segmentation class from the pixel classifier output to a segmentation class of the project",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SegmentationMappingSettings"
+          }
+        }
+      },
+      "required": [
+        "modelPath",
+        "segmentationMapping"
+      ]
+    },
     "PixelUnits": {
       "type": "string",
       "enum": [
@@ -1904,6 +1938,24 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "SegmentationMappingSettings": {
+      "description": "Configuration for a single thresholding operation within a multi-threshold stack.",
+      "type": "object",
+      "properties": {
+        "objectClassId": {
+          "description": "The classification ID assigned to pixels falling the segmentation class from the model",
+          "$ref": "#/$defs/SegmentationClass"
+        },
+        "segmentationClass": {
+          "description": "Segmentation class from the classifier model",
+          "$ref": "#/$defs/SegmentationClass"
+        }
+      },
+      "required": [
+        "segmentationClass",
+        "objectClassId"
+      ]
     },
     "SegmentationThresholdThresholdMethodSettings": {
       "description": "The mathematical strategy used to determine the optimal global threshold.\n\n Most methods analyze the image histogram to find a \"cut-off\" point that\n best separates the foreground from the background.",

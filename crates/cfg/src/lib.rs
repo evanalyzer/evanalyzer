@@ -59,7 +59,7 @@ mod tests {
         assert_eq!(project.pipelines.len(), 2);
         assert_eq!(project.pipelines[0].steps.len(), 7);
         assert_eq!(project.pipelines[1].steps.len(), 5);
-        assert_eq!(project.classification.classes.len(), 3);
+        assert_eq!(project.classification.classes().len(), 3);
     }
 
     /// All shipped `.evapt`/`.evapipe` template files must deserialize into

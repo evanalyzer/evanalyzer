@@ -473,6 +473,19 @@ impl From<ObjectMathSettings> for ObjectMath {
     }
 }
 
+impl From<PixelClassifierSettings> for PixelClassifier {
+    fn from(_s: PixelClassifierSettings) -> Self {
+        PixelClassifier {
+            model_path: _s.model_path,
+            segmentation_mapping: _s
+                .segmentation_mapping
+                .into_iter()
+                .map(|v| v.into())
+                .collect(),
+        }
+    }
+}
+
 impl From<RankFilterSettings> for RankFilter {
     fn from(_s: RankFilterSettings) -> Self {
         RankFilter {
@@ -497,6 +510,15 @@ impl From<SaveImageSettings> for SaveImage {
         SaveImage {
             name: _s.name,
             source: ImageSource::from(_s.source),
+        }
+    }
+}
+
+impl From<SegmentationMappingSettings> for SegmentationMapping {
+    fn from(_s: SegmentationMappingSettings) -> Self {
+        SegmentationMapping {
+            segmentation_class: _s.segmentation_class,
+            object_class_id: _s.object_class_id,
         }
     }
 }
@@ -676,6 +698,9 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         }
         PipelineCommand::ObjectMath(settings) => {
             Ok(Box::new(crate::algos::ObjectMath::from(settings)))
+        }
+        PipelineCommand::PixelClassifier(settings) => {
+            Ok(Box::new(crate::algos::PixelClassifier::from(settings)))
         }
         PipelineCommand::RankFilter(settings) => {
             Ok(Box::new(crate::algos::RankFilter::from(settings)))
