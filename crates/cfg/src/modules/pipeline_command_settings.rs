@@ -9,6 +9,16 @@ use std::path::PathBuf;
 
 // ============ ENUM SETTINGS ============
 
+///  What to do with an object's class labels once the model has predicted (and
+///  `segmentation_mapping` has remapped) a class for it.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings {
+    #[default]
+    AddOutputClassIfMatch,
+    ReclassifyIfMatch,
+}
+
 ///  The geometric shape used to probe the image intensity surface.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -1328,6 +1338,75 @@ impl Default for ExtractObjectsSettings {
 }
 
 // ============ CLASSIFICATION ============
+
+///  An object classifier trained via the app's AI training dialog (an
+///  `.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),
+///  applied here as a pipeline classification step: every object already
+///  present in `PipelineCache::object_cache` matching `origin_segmentation`/
+///  `input_classes` is scored independently (reusing the same feature recipe
+///  used at training time), then remapped through `segmentation_mapping` into
+///  this project's own classes and applied via `match_handling` - the same
+///  input selection `ClassifyObjects` uses, but the output class comes from
+///  the model's prediction instead of a fixed rule.
+///
+///  Predicted classes with no matching `segmentation_mapping` entry leave the
+///  object untouched, mirroring how `PixelClassifier` leaves unmapped
+///  predictions as background - mapping only the classes you care about is a
+///  deliberate simplification, not an oversight.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct AiObjectClassifierSettings {
+    ///  Path to a trained object classifier model, saved from the AI training dialog.
+    pub model_path: PathBuf,
+    ///  Maps the model's predicted classes to this project's object classes.
+    pub segmentation_mapping: Vec<ClassificationMappingSettings>,
+    ///  Apply only to objects with this given segmentation class
+    ///
+    ///  The segmentation class value is assigned to each pixel in the image
+    ///  after a Threshold, Pixel classifier or AI classifier.
+    ///  If no seg class is selected the criteria are applied to all objects.
+    pub origin_segmentation: Vec<SegmentationClass>,
+    ///  Restrict classification to objects that already carry one of these classes
+    ///
+    ///  Only ROIs that have been assigned at least one of the listed classes by a prior
+    ///  pipeline step will be evaluated by the model. Leave empty to apply the model to
+    ///  every object regardless of its current class.
+    pub input_classes: Vec<ObjectClass>,
+    ///  What to do with object class labels after prediction
+    ///
+    ///  - **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.
+    ///  - **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.
+    pub match_handling: ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings,
+}
+
+impl Default for AiObjectClassifierSettings {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::default(),
+            segmentation_mapping: vec![],
+            origin_segmentation: vec![],
+            input_classes: vec![],
+            match_handling:
+                ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch,
+        }
+    }
+}
+
+///  Maps one class the model was trained to predict to a class ID meaningful
+///  in this project. Model class IDs are a snapshot taken at training time
+///  (see `evanalyzer_cfg::ObjectClassLabel`'s doc comment) and aren't
+///  guaranteed to line up with this project's own `ObjectClass` IDs - this is
+///  the bridge between the two.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassificationMappingSettings {
+    ///  Object class predicted by the classifier model.
+    pub object_class: ObjectClass,
+    ///  The project's own object class objects predicted as `object_class`
+    ///  are assigned.
+    pub output_class: ObjectClass,
+}
 
 ///  Classifies ROIs based on morphological and intensity features.
 ///

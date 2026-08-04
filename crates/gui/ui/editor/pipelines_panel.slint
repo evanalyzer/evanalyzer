@@ -63,11 +63,11 @@ export struct CommandParameter {
         max: float,
         step: float,
         group-items: [GroupItem],
-        // True only for a `PixelClassifier` step's `model_path` field, once a
-        // model is set - shows an info button that opens the model's saved
-        // metadata (name/description/classes). Computed in Rust rather than
-        // matched on `name`/`display-name` here, so this is the one place
-        // that knows "this is the PixelClassifier command".
+        // True only for a `PixelClassifier`/`AiObjectClassifier` step's
+        // `model_path` field, once a model is set - shows an info button that
+        // opens the model's saved metadata (name/description/classes).
+        // Computed in Rust rather than matched on `name`/`display-name` here,
+        // so this is the one place that knows which commands these are.
         has-model-info: bool,
     }
 

@@ -4,6 +4,18 @@ use evanalyzer_cfg::settings::pipeline_command_settings::*;
 
 // ============ ENUM FROM IMPLS ============
 
+#[cfg(feature = "ai")]
+impl From<ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings>
+    for AiClassifyMatchHandling
+{
+    fn from(_s: ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings) -> Self {
+        match _s {
+            ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch => AiClassifyMatchHandling::AddOutputClassIfMatch,
+            ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch => AiClassifyMatchHandling::ReclassifyIfMatch,
+        }
+    }
+}
+
 impl From<FiltersRollingBallBallTypeSettings> for BallType {
     fn from(_s: FiltersRollingBallBallTypeSettings) -> Self {
         match _s {
@@ -242,6 +254,27 @@ impl From<AiSegmentationUnetUNetOutputModeSettings> for UNetOutputMode {
 
 // ============ STRUCT FROM IMPLS ============
 
+#[cfg(feature = "ai")]
+impl From<AiObjectClassifierSettings> for AiObjectClassifier {
+    fn from(_s: AiObjectClassifierSettings) -> Self {
+        AiObjectClassifier {
+            model_path: _s.model_path,
+            segmentation_mapping: _s
+                .segmentation_mapping
+                .into_iter()
+                .map(|v| v.into())
+                .collect(),
+            origin_segmentation: _s
+                .origin_segmentation
+                .into_iter()
+                .map(|v| v.into())
+                .collect(),
+            input_classes: _s.input_classes.into_iter().map(|v| v.into()).collect(),
+            match_handling: AiClassifyMatchHandling::from(_s.match_handling),
+        }
+    }
+}
+
 impl From<BlurSettings> for Blur {
     fn from(_s: BlurSettings) -> Self {
         Blur {
@@ -260,6 +293,16 @@ impl From<CellposeSettings> for Cellpose {
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             flow_iterations: _s.flow_iterations,
             min_object_size: _s.min_object_size,
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<ClassificationMappingSettings> for ClassificationMapping {
+    fn from(_s: ClassificationMappingSettings) -> Self {
+        ClassificationMapping {
+            object_class: _s.object_class,
+            output_class: _s.output_class,
         }
     }
 }
@@ -642,6 +685,15 @@ use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 
 pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, InternalErrors> {
     match cmd {
+        #[cfg(feature = "ai")]
+        PipelineCommand::AiObjectClassifier(settings) => {
+            Ok(Box::new(crate::algos::AiObjectClassifier::from(settings)))
+        }
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::AiObjectClassifier(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; AiObjectClassifier is unavailable."
+                .into(),
+        )),
         PipelineCommand::Blur(settings) => Ok(Box::new(crate::algos::Blur::from(settings))),
         #[cfg(feature = "ai")]
         PipelineCommand::Cellpose(settings) => Ok(Box::new(crate::algos::Cellpose::from(settings))),
