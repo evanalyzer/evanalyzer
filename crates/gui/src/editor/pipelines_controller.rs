@@ -1870,43 +1870,49 @@ impl PipelinesController {
                         let is_pixel_classifier = d.name.as_str() == PIXEL_CLASSIFIER_COMMAND_NAME;
                         let is_ai_object_classifier =
                             d.name.as_str() == AI_OBJECT_CLASSIFIER_COMMAND_NAME;
-                        // Model class id -> the model's own display name, for
-                        // relabeling `segmentation_mapping`'s `segmentation_class`/
-                        // `object_class` leaves below (best-effort: empty if the
-                        // model hasn't been set or fails to load - those rows just
-                        // keep their raw numeric label in that case).
+                        // Model class id -> the model's own display name (in the
+                        // model's declared order), for relabeling
+                        // `segmentation_mapping`'s `segmentation_class`/`object_class`
+                        // leaves below (best-effort: empty if the model hasn't been
+                        // set or fails to load - those rows just keep their raw
+                        // numeric label in that case). Order matters here: it's what
+                        // the relabeled dropdown's full option list is built from
+                        // below, and a `HashMap`-only version would shuffle it.
+                        let model_class_name_list: Vec<(u32, String)> = if is_pixel_classifier {
+                            d.parameters
+                                .iter()
+                                .find(|p| p.name == "model_path")
+                                .and_then(|p| load_pixel_classifier_class_labels(Path::new(&p.value)))
+                                .map(|labels| {
+                                    labels
+                                        .into_iter()
+                                        .map(|l| (l.class.as_u32(), l.name))
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        } else if is_ai_object_classifier {
+                            d.parameters
+                                .iter()
+                                .find(|p| p.name == "model_path")
+                                .and_then(|p| {
+                                    load_ai_object_classifier_class_labels(Path::new(&p.value))
+                                })
+                                .map(|labels| {
+                                    labels
+                                        .into_iter()
+                                        .filter_map(|l| l.class.to_u32().map(|id| (id, l.name)))
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
                         let model_class_names: std::collections::HashMap<u32, String> =
-                            if is_pixel_classifier {
-                                d.parameters
-                                    .iter()
-                                    .find(|p| p.name == "model_path")
-                                    .and_then(|p| {
-                                        load_pixel_classifier_class_labels(Path::new(&p.value))
-                                    })
-                                    .map(|labels| {
-                                        labels
-                                            .into_iter()
-                                            .map(|l| (l.class.as_u32(), l.name))
-                                            .collect()
-                                    })
-                                    .unwrap_or_default()
-                            } else if is_ai_object_classifier {
-                                d.parameters
-                                    .iter()
-                                    .find(|p| p.name == "model_path")
-                                    .and_then(|p| {
-                                        load_ai_object_classifier_class_labels(Path::new(&p.value))
-                                    })
-                                    .map(|labels| {
-                                        labels
-                                            .into_iter()
-                                            .filter_map(|l| l.class.to_u32().map(|id| (id, l.name)))
-                                            .collect()
-                                    })
-                                    .unwrap_or_default()
-                            } else {
-                                std::collections::HashMap::new()
-                            };
+                            model_class_name_list.iter().cloned().collect();
+                        let model_class_name_options: Vec<String> = model_class_name_list
+                            .iter()
+                            .map(|(_, name)| name.clone())
+                            .collect();
 
                         let params: Vec<CommandParameter> = d
                             .parameters
@@ -1930,16 +1936,34 @@ impl PipelinesController {
                                                         .then(|| lp.value.parse::<u32>().ok())
                                                         .flatten()
                                                         .and_then(|id| model_class_names.get(&id));
-                                                    let (param_type, value) = match model_name {
-                                                        Some(name) => (
-                                                            ParamType::Label,
-                                                            format!("{name} (id {})", lp.value),
-                                                        ),
-                                                        None => (
-                                                            map_cfg_param_type(lp.param_type),
-                                                            lp.value.clone(),
-                                                        ),
-                                                    };
+                                                    // The model's predicted class is fixed by the
+                                                    // model file (one row per model class, see
+                                                    // `reconcile_*_mapping`), not something to
+                                                    // reassign by hand - `ParamType.obj-class` would
+                                                    // let the user pick, but its widget always
+                                                    // renders the *project's* class list regardless
+                                                    // of what label/value we set here.
+                                                    // `ParamType.dropdown` is the one fully generic
+                                                    // combo box (its options/value are just plain
+                                                    // strings we control), so route through that
+                                                    // instead: show every class the model declares
+                                                    // (for context - `apply_param_change` only
+                                                    // accepts a numeric id back, so picking a
+                                                    // different one is a harmless no-op), with this
+                                                    // row's own class preselected.
+                                                    let (param_type, value, options) =
+                                                        match model_name {
+                                                            Some(name) => (
+                                                                ParamType::Dropdown,
+                                                                name.clone(),
+                                                                model_class_name_options.clone(),
+                                                            ),
+                                                            None => (
+                                                                map_cfg_param_type(lp.param_type),
+                                                                lp.value.clone(),
+                                                                lp.options.clone(),
+                                                            ),
+                                                        };
                                                     LeafParam {
                                                         name: lp.name.into(),
                                                         display_name: lp.display_name.into(),
@@ -1947,7 +1971,7 @@ impl PipelinesController {
                                                         value: value.into(),
                                                         param_type,
                                                         options: ModelRc::new(VecModel::from(
-                                                            lp.options
+                                                            options
                                                                 .into_iter()
                                                                 .map(SharedString::from)
                                                                 .collect::<Vec<_>>(),
