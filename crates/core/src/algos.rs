@@ -22,6 +22,12 @@ pub use self::ai_segmentation::stardist::Stardist;
 pub use self::ai_segmentation::unet::UNet;
 #[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNetOutputMode;
+#[cfg(feature = "ai")]
+pub use self::classification::ai_object_classifier::AiClassifyMatchHandling;
+#[cfg(feature = "ai")]
+pub use self::classification::ai_object_classifier::AiObjectClassifier;
+#[cfg(feature = "ai")]
+pub use self::classification::ai_object_classifier::ClassificationMapping;
 pub use self::classification::classify_objects::ClassifyMatchHandling;
 pub use self::classification::classify_objects::ClassifyObjects;
 pub use self::classification::coloc_objects::Colocalization;

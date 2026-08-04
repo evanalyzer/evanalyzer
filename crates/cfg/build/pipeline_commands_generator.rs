@@ -17,7 +17,19 @@ pub fn generate_mappings() -> Result<(), Box<dyn std::error::Error>> {
             let feature = module_features.get(module_name).and_then(|f| f.clone());
 
             if path.is_dir() {
-                scan_directory(&path, &mut commands, &mut enums, feature.as_deref());
+                // A directory's own per-file `#[cfg(feature = "...")]` gates live on
+                // the `pub mod <child>;` declarations in its sibling mod-root file
+                // (e.g. `classification.rs` for `classification/`), not in `algos.rs` -
+                // parse those too so a submodule can be gated more specifically than
+                // (or independently of) the directory's inherited top-level feature.
+                let mod_root_overrides = parse_module_features(&path.with_extension("rs"));
+                scan_directory(
+                    &path,
+                    &mut commands,
+                    &mut enums,
+                    feature.as_deref(),
+                    &mod_root_overrides,
+                );
             } else if path.extension().map_or(false, |ext| ext == "rs") {
                 extract_command_structs(&path, &mut commands, &mut enums, feature.as_deref());
             }
@@ -612,16 +624,25 @@ fn scan_directory(
     commands: &mut Vec<CommandInfo>,
     enums: &mut Vec<EnumInfo>,
     feature: Option<&str>,
+    mod_root_overrides: &HashMap<String, Option<String>>,
 ) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                scan_directory(&path, commands, enums, feature);
+                scan_directory(&path, commands, enums, feature, mod_root_overrides);
             } else if path.extension().map_or(false, |ext| ext == "rs")
                 && path.file_name().map_or(false, |n| n != "mod.rs")
             {
-                extract_command_structs(&path, commands, enums, feature);
+                // A file-specific gate (from the mod-root file) takes precedence over
+                // the inherited directory-level `feature`; a declaration with no cfg
+                // attribute of its own (`Some(None)`) falls back to it instead.
+                let module_name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+                let effective_feature = mod_root_overrides
+                    .get(module_name)
+                    .and_then(|f| f.clone())
+                    .or_else(|| feature.map(|s| s.to_string()));
+                extract_command_structs(&path, commands, enums, effective_feature.as_deref());
             }
         }
     }

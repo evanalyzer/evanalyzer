@@ -20,6 +20,46 @@
     "pipelineSteps"
   ],
   "$defs": {
+    "AiObjectClassifierSettings": {
+      "description": "An object classifier trained via the app's AI training dialog (an\n `.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),\n applied here as a pipeline classification step: every object already\n present in `PipelineCache::object_cache` matching `origin_segmentation`/\n `input_classes` is scored independently (reusing the same feature recipe\n used at training time), then remapped through `segmentation_mapping` into\n this project's own classes and applied via `match_handling` - the same\n input selection `ClassifyObjects` uses, but the output class comes from\n the model's prediction instead of a fixed rule.\n\n Predicted classes with no matching `segmentation_mapping` entry leave the\n object untouched, mirroring how `PixelClassifier` leaves unmapped\n predictions as background - mapping only the classes you care about is a\n deliberate simplification, not an oversight.",
+      "type": "object",
+      "properties": {
+        "inputClasses": {
+          "description": "Restrict classification to objects that already carry one of these classes\n\n Only ROIs that have been assigned at least one of the listed classes by a prior\n pipeline step will be evaluated by the model. Leave empty to apply the model to\n every object regardless of its current class.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "matchHandling": {
+          "description": "What to do with object class labels after prediction\n\n - **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.\n - **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.",
+          "$ref": "#/$defs/ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings",
+          "default": "RECLASSIFY_IF_MATCH"
+        },
+        "modelPath": {
+          "description": "Path to a trained object classifier model, saved from the AI training dialog.",
+          "type": "string",
+          "default": ""
+        },
+        "originSegmentation": {
+          "description": "Apply only to objects with this given segmentation class\n\n The segmentation class value is assigned to each pixel in the image\n after a Threshold, Pixel classifier or AI classifier.\n If no seg class is selected the criteria are applied to all objects.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SegmentationClass"
+          }
+        },
+        "segmentationMapping": {
+          "description": "Maps the model's predicted classes to this project's object classes.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ClassificationMappingSettings"
+          }
+        }
+      }
+    },
     "AiSegmentationUnetUNetOutputModeSettings": {
       "description": "How a multi-channel U-Net output should be turned into a single foreground\n probability map. Ignored for single-channel outputs, which are always\n treated as already-activated foreground probabilities.",
       "oneOf": [
@@ -97,6 +137,14 @@
         }
       }
     },
+    "ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings": {
+      "description": "What to do with an object's class labels once the model has predicted (and\n `segmentation_mapping` has remapped) a class for it.",
+      "type": "string",
+      "enum": [
+        "ADD_OUTPUT_CLASS_IF_MATCH",
+        "RECLASSIFY_IF_MATCH"
+      ]
+    },
     "ClassificationClassifyObjectsClassifyMatchHandlingSettings": {
       "type": "string",
       "enum": [
@@ -110,6 +158,24 @@
         "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
         "RECLASSIFY_IF_MATCH",
         "RECLASSIFY_IF_NOT_MATCH"
+      ]
+    },
+    "ClassificationMappingSettings": {
+      "description": "Maps one class the model was trained to predict to a class ID meaningful\n in this project. Model class IDs are a snapshot taken at training time\n (see `evanalyzer_cfg::ObjectClassLabel`'s doc comment) and aren't\n guaranteed to line up with this project's own `ObjectClass` IDs - this is\n the bridge between the two.",
+      "type": "object",
+      "properties": {
+        "objectClass": {
+          "description": "Object class predicted by the classifier model.",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "outputClass": {
+          "description": "The project's own object class objects predicted as `object_class`\n are assigned.",
+          "$ref": "#/$defs/ObjectClass"
+        }
+      },
+      "required": [
+        "objectClass",
+        "outputClass"
       ]
     },
     "ClassificationObjectMathObjectSetOperationSettings": {
@@ -1292,6 +1358,19 @@
     },
     "PipelineCommand": {
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "aiObjectClassifier"
+            }
+          },
+          "$ref": "#/$defs/AiObjectClassifierSettings",
+          "required": [
+            "type"
+          ]
+        },
         {
           "type": "object",
           "properties": {

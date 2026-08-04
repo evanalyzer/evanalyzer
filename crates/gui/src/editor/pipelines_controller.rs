@@ -14,9 +14,12 @@ use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
 use evanalyzer_cfg::core_types::PipelineId;
+use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::core_types::SegmentationClass;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
-use evanalyzer_cfg::settings::ai_learning_settings::{AiLearningClassifierSettings, PixelClassLabel};
+use evanalyzer_cfg::settings::ai_learning_settings::{
+    AiLearningClassifierSettings, ObjectClassLabel, PixelClassLabel,
+};
 use evanalyzer_cfg::settings::images_settings::{ImageEntry, ImageSettings};
 use evanalyzer_cfg::settings::parameter_def::{ParamType as CfgParamType, ParameterDef};
 use evanalyzer_cfg::settings::pipeline_command::CommandMeta;
@@ -25,7 +28,8 @@ use evanalyzer_cfg::settings::pipeline_command::{
     CommandCategory, all_command_meta, default_command,
 };
 use evanalyzer_cfg::settings::pipeline_command_settings::{
-    PixelClassifierSettings, SegmentationMappingSettings,
+    AiObjectClassifierSettings, ClassificationMappingSettings, PixelClassifierSettings,
+    SegmentationMappingSettings,
 };
 use evanalyzer_cfg::settings::pipeline_settings::{PipelineSettings, PipelineStepSettings};
 use evanalyzer_cfg::settings::project_settings::ProjectSettings;
@@ -898,19 +902,26 @@ impl PipelinesController {
                         };
                         step.command.apply_param_change(&param_name, &value_str);
 
-                        // A PixelClassifier's `segmentation_mapping` row count is
-                        // driven by the loaded model's own class count, not
-                        // something the user adds/removes rows for - resize it
-                        // to match whenever the model changes. This changes the
-                        // group's row count (not just one value), so the single-
-                        // value patch below can't reflect it; fall back to a
-                        // full resync instead, same as a changed field set does.
+                        // A PixelClassifier/AiObjectClassifier's `segmentation_mapping`
+                        // row count is driven by the loaded model's own class count,
+                        // not something the user adds/removes rows for - resize it to
+                        // match whenever the model changes. This changes the group's
+                        // row count (not just one value), so the single-value patch
+                        // below can't reflect it; fall back to a full resync instead,
+                        // same as a changed field set does.
                         let mut needs_full_resync = false;
-                        if param_name == "model_path"
-                            && let PipelineCommand::PixelClassifier(settings) = &mut step.command
-                        {
-                            reconcile_pixel_classifier_mapping(settings);
-                            needs_full_resync = true;
+                        if param_name == "model_path" {
+                            match &mut step.command {
+                                PipelineCommand::PixelClassifier(settings) => {
+                                    reconcile_pixel_classifier_mapping(settings);
+                                    needs_full_resync = true;
+                                }
+                                PipelineCommand::AiObjectClassifier(settings) => {
+                                    reconcile_ai_object_classifier_mapping(settings);
+                                    needs_full_resync = true;
+                                }
+                                _ => {}
+                            }
                         }
 
                         (
@@ -1067,11 +1078,12 @@ impl PipelinesController {
                 },
             );
 
-            // Show a PixelClassifier step's loaded model info (metadata + classes)
+            // Show a PixelClassifier/AiObjectClassifier step's loaded model info
+            // (metadata + classes)
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_show_model_info(move |step_id| {
-                    manager.show_pixel_classifier_model_info(step_id as usize);
+                    manager.show_classifier_model_info(step_id as usize);
                 });
 
             // Browse for a file (e.g. a TorchScript model path) - opens a native
@@ -1395,11 +1407,11 @@ impl PipelinesController {
         }
     }
 
-    /// Loads the model currently set on a `PixelClassifier` step's
-    /// `model_path` and shows its metadata via the shared warning/info
+    /// Loads the model currently set on a `PixelClassifier`/`AiObjectClassifier`
+    /// step's `model_path` and shows its metadata via the shared warning/info
     /// dialog - see `pipelines_controller`'s module doc comment on why this
     /// reuses that dialog instead of a bespoke one.
-    fn show_pixel_classifier_model_info(self: &Arc<Self>, step_idx: usize) {
+    fn show_classifier_model_info(self: &Arc<Self>, step_idx: usize) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
@@ -1413,17 +1425,15 @@ impl PipelinesController {
             let Some(step) = pipeline.steps.get(step_idx) else {
                 return;
             };
-            let PipelineCommand::PixelClassifier(settings) = &step.command else {
-                return;
-            };
-            settings.model_path.clone()
+            match &step.command {
+                PipelineCommand::PixelClassifier(settings) => settings.model_path.clone(),
+                PipelineCommand::AiObjectClassifier(settings) => settings.model_path.clone(),
+                _ => return,
+            }
         };
 
         let (title, message) = match evanalyzer_core::load_classifier_from_file(&model_path) {
-            Ok(saved) => (
-                "Pixel Classifier Model".to_string(),
-                format_pixel_classifier_model_info(&saved),
-            ),
+            Ok(saved) => ("AI Classifier Model".to_string(), format_classifier_model_info(&saved)),
             Err(e) => (
                 "Could not load model".to_string(),
                 format!("Could not load '{}':\n\n{e}", model_path.display()),
@@ -1858,11 +1868,13 @@ impl PipelinesController {
                     .into_iter()
                     .map(|d| {
                         let is_pixel_classifier = d.name.as_str() == PIXEL_CLASSIFIER_COMMAND_NAME;
+                        let is_ai_object_classifier =
+                            d.name.as_str() == AI_OBJECT_CLASSIFIER_COMMAND_NAME;
                         // Model class id -> the model's own display name, for
-                        // relabeling `segmentation_mapping`'s `segmentation_class`
-                        // leaves below (best-effort: empty if the model hasn't
-                        // been set or fails to load - those rows just keep their
-                        // raw numeric label in that case).
+                        // relabeling `segmentation_mapping`'s `segmentation_class`/
+                        // `object_class` leaves below (best-effort: empty if the
+                        // model hasn't been set or fails to load - those rows just
+                        // keep their raw numeric label in that case).
                         let model_class_names: std::collections::HashMap<u32, String> =
                             if is_pixel_classifier {
                                 d.parameters
@@ -1875,6 +1887,20 @@ impl PipelinesController {
                                         labels
                                             .into_iter()
                                             .map(|l| (l.class.as_u32(), l.name))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
+                            } else if is_ai_object_classifier {
+                                d.parameters
+                                    .iter()
+                                    .find(|p| p.name == "model_path")
+                                    .and_then(|p| {
+                                        load_ai_object_classifier_class_labels(Path::new(&p.value))
+                                    })
+                                    .map(|labels| {
+                                        labels
+                                            .into_iter()
+                                            .filter_map(|l| l.class.to_u32().map(|id| (id, l.name)))
                                             .collect()
                                     })
                                     .unwrap_or_default()
@@ -1895,9 +1921,11 @@ impl PipelinesController {
                                             group
                                                 .into_iter()
                                                 .map(|lp| {
-                                                    let relabeled = is_pixel_classifier
-                                                        && p_name == "segmentation_mapping"
-                                                        && lp.name == "segmentation_class";
+                                                    let relabeled = p_name == "segmentation_mapping"
+                                                        && ((is_pixel_classifier
+                                                            && lp.name == "segmentation_class")
+                                                            || (is_ai_object_classifier
+                                                                && lp.name == "object_class"));
                                                     let model_name = relabeled
                                                         .then(|| lp.value.parse::<u32>().ok())
                                                         .flatten()
@@ -1933,8 +1961,10 @@ impl PipelinesController {
                                         )),
                                     })
                                     .collect();
-                                let has_model_info =
-                                    is_pixel_classifier && p_name == "model_path" && !p.value.is_empty();
+                                let has_model_info = (is_pixel_classifier
+                                    || is_ai_object_classifier)
+                                    && p_name == "model_path"
+                                    && !p.value.is_empty();
                                 CommandParameter {
                                     name: p.name.into(),
                                     display_name: p.display_name.into(),
@@ -2107,6 +2137,10 @@ fn map_cfg_param_type(t: CfgParamType) -> ParamType {
 /// otherwise fully generic, codegen-driven parameter rendering.
 const PIXEL_CLASSIFIER_COMMAND_NAME: &str = "AI Pixel Classifier";
 
+/// Display name `AiObjectClassifier` commands report via `CommandsMeta`'s
+/// `display_name` - the `AiObjectClassifier` analog of `PIXEL_CLASSIFIER_COMMAND_NAME`.
+const AI_OBJECT_CLASSIFIER_COMMAND_NAME: &str = "AI Object Classifier";
+
 /// Loads `model_path` and returns the classes it declares, or `None` if the
 /// path is empty, unreadable, or not a pixel classifier model. Swallowing
 /// the error here is deliberate: callers use this for best-effort UI
@@ -2154,9 +2188,55 @@ fn reconcile_pixel_classifier_mapping(settings: &mut PixelClassifierSettings) {
         .collect();
 }
 
+/// Loads `model_path` and returns the classes it declares, or `None` if the
+/// path is empty, unreadable, or not an object classifier model - the
+/// `AiObjectClassifier` analog of `load_pixel_classifier_class_labels`.
+fn load_ai_object_classifier_class_labels(model_path: &Path) -> Option<Vec<ObjectClassLabel>> {
+    if model_path.as_os_str().is_empty() {
+        return None;
+    }
+    let saved = evanalyzer_core::load_classifier_from_file(model_path).ok()?;
+    let AiLearningClassifierSettings::Object { class_labels, .. } = saved.settings.classifier
+    else {
+        return None;
+    };
+    Some(class_labels)
+}
+
+/// After `model_path` changes on an `AiObjectClassifier` step, resizes
+/// `segmentation_mapping` to exactly one entry per class the newly loaded
+/// model declares - the `AiObjectClassifier` analog of
+/// `reconcile_pixel_classifier_mapping`. Existing `output_class` choices are
+/// preserved wherever the same model class is still present; new entries (or
+/// a load failure) default to `ObjectClass::Unset` - unlike the pixel
+/// classifier's `SegmentationClass::BACKGROUND` default, `Unset` here is a
+/// deliberate "not mapped yet" that `AiObjectClassifier::execute` treats the
+/// same as no entry at all, rather than a value that gets written out.
+fn reconcile_ai_object_classifier_mapping(settings: &mut AiObjectClassifierSettings) {
+    let Some(class_labels) = load_ai_object_classifier_class_labels(&settings.model_path) else {
+        settings.segmentation_mapping.clear();
+        return;
+    };
+    let old = std::mem::take(&mut settings.segmentation_mapping);
+    settings.segmentation_mapping = class_labels
+        .iter()
+        .map(|label| {
+            let output_class = old
+                .iter()
+                .find(|m| m.object_class == label.class)
+                .map(|m| m.output_class)
+                .unwrap_or(ObjectClass::Unset);
+            ClassificationMappingSettings {
+                object_class: label.class,
+                output_class,
+            }
+        })
+        .collect();
+}
+
 /// Formats a `SavedClassifier`'s metadata + declared classes for the
-/// PixelClassifier step's info dialog.
-fn format_pixel_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> String {
+/// PixelClassifier/AiObjectClassifier step's info dialog.
+fn format_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> String {
     let meta = &saved.settings.metadata;
     let mut out = format!("{}\n", meta.name);
     if !meta.short_description.is_empty() {
@@ -2171,10 +2251,23 @@ fn format_pixel_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) 
     if !author.is_empty() {
         out.push_str(&format!("\nAuthor: {author}\n"));
     }
-    if let AiLearningClassifierSettings::Pixel { class_labels, .. } = &saved.settings.classifier {
-        out.push_str("\nClasses:\n");
-        for label in class_labels {
-            out.push_str(&format!("  - {} (id {})\n", label.name, label.class.as_u32()));
+    match &saved.settings.classifier {
+        AiLearningClassifierSettings::Pixel { class_labels, .. } => {
+            out.push_str("\nClasses:\n");
+            for label in class_labels {
+                out.push_str(&format!("  - {} (id {})\n", label.name, label.class.as_u32()));
+            }
+        }
+        AiLearningClassifierSettings::Object { class_labels, .. } => {
+            out.push_str("\nClasses:\n");
+            for label in class_labels {
+                let id = label
+                    .class
+                    .to_u32()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unset".to_string());
+                out.push_str(&format!("  - {} (id {id})\n", label.name));
+            }
         }
     }
     out
@@ -2328,10 +2421,10 @@ mod tests {
 
     #[test]
     fn template_to_command_def_takes_its_category_from_the_first_step() {
-        // id 5 is "ConnectedComponents" -> CommandCategory::Object.
+        // id 6 is "ConnectedComponents" -> CommandCategory::Object.
         let step = PipelineStepSettings {
             enabled: true,
-            command: default_command(5).unwrap(),
+            command: default_command(6).unwrap(),
         };
         let t = template("Multi", vec![step]);
         let def = template_to_command_def(0, &t);
