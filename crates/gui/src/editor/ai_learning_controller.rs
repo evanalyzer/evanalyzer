@@ -66,11 +66,19 @@ const INTENSITY_STATS: &[(&str, i32)] = &[
 pub struct AiLearningController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
+    /// The in-flight training job's cancel flag, if any - set right before
+    /// spawning the background thread in `train`, read by the Cancel
+    /// button's handler. Mirrors `PipelinesController::pipeline_cancel_flag`.
+    training_cancel_flag: std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 impl AiLearningController {
     pub fn new(ui: slint::Weak<AppWindow>, app_state: Arc<UiState>) -> Self {
-        Self { ui, app_state }
+        Self {
+            ui,
+            app_state,
+            training_cancel_flag: std::sync::Mutex::new(None),
+        }
     }
 
     pub fn attach_callbacks(self: &Arc<Self>) {
@@ -91,8 +99,14 @@ impl AiLearningController {
             manager.sync_class_selection_to_slint();
             if let Some(ui) = manager.ui.upgrade() {
                 let state = ui.global::<AiLearningState>();
-                state.set_training_status("".into());
-                state.set_training_status_is_error(false);
+                // Don't blank a still-live progress banner: the background
+                // job keeps running even if the dialog was closed and
+                // reopened mid-training (`training_in_progress` only ever
+                // flips back to false in `train`'s terminal-outcome handler).
+                if !state.get_training_in_progress() {
+                    state.set_training_status("".into());
+                    state.set_training_status_is_error(false);
+                }
                 ui.global::<GlobalAppState>()
                     .set_active_dialog(DialogType::AiLearning);
             }
@@ -139,6 +153,14 @@ impl AiLearningController {
         ui.global::<AiLearningState>()
             .on_browse_existing_model_clicked(move || {
                 manager.browse_existing_model();
+            });
+
+        let manager = self.clone();
+        ui.global::<AiLearningState>()
+            .on_cancel_training_clicked(move || {
+                if let Some(flag) = manager.training_cancel_flag.lock().unwrap().as_ref() {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
             });
 
         let manager = self.clone();
@@ -480,22 +502,44 @@ impl AiLearningController {
         // user can watch it finish and immediately retrain if they want to.
         info!("Starting classifier training ('{model_name}')");
         self.set_training_status("Training started...", false);
+        self.set_training_in_progress(true);
         let manager = self.clone();
         std::thread::spawn(move || {
-            let (handle, rx, _cancel) = job.run_async();
+            let (handle, rx, cancel) = job.run_async();
+            *manager.training_cancel_flag.lock().unwrap() = Some(cancel);
+
+            // Captured here (rather than re-derived after `handle.join()`,
+            // which only returns the `SavedClassifier`/error, not the
+            // backend stats) so the final banner below can report it - see
+            // `describe_training_progress`'s doc comment for why `Finished`
+            // doesn't update the live banner itself.
+            let mut stats: Option<evanalyzer_core::TrainingStats> = None;
             for event in rx {
-                log_training_progress(&event);
+                if let TrainingProgressEvent::Finished { stats: s } = event {
+                    stats = Some(s);
+                    continue;
+                }
+                if let Some(line) = describe_training_progress(&event) {
+                    manager.set_training_status(&line, false);
+                }
             }
 
             let result = match handle.join() {
                 Ok(result) => result,
-                Err(_) => Err(evanalyzer_cfg::core_types::InternalErrors::Internal(
-                    "Training worker crashed unexpectedly".to_string(),
-                )),
+                Err(panic_payload) => {
+                    let msg = crate::helper::worker_supervisor::panic_message(&panic_payload);
+                    Err(evanalyzer_cfg::core_types::InternalErrors::Internal(format!(
+                        "Training worker crashed: {msg}"
+                    )))
+                }
             };
 
-            match result {
+            let (message, is_error) = match result {
                 Ok(classifier) => {
+                    let stats_line = stats
+                        .as_ref()
+                        .map(format_training_stats)
+                        .unwrap_or_default();
                     match evanalyzer_app::ai_learning::save_trained_model(
                         &classifier,
                         &project_dir,
@@ -503,25 +547,34 @@ impl AiLearningController {
                     ) {
                         Ok(path) => {
                             info!("Classifier training completed: {}", path.display());
-                            manager.set_training_status(
-                                &format!("Training complete. Model saved to {}", path.display()),
+                            (
+                                format!(
+                                    "Training complete. {stats_line} Model saved to {}",
+                                    path.display()
+                                ),
                                 false,
-                            );
+                            )
                         }
                         Err(e) => {
                             warn!("Failed to save trained classifier: {e}");
-                            manager.set_training_status(
-                                &format!("Training completed, but saving failed: {e}"),
+                            (
+                                format!("Training completed ({stats_line}), but saving failed: {e}"),
                                 true,
-                            );
+                            )
                         }
                     }
                 }
+                Err(evanalyzer_cfg::core_types::InternalErrors::Cancelled) => {
+                    info!("Classifier training cancelled by user");
+                    ("Training cancelled.".to_string(), false)
+                }
                 Err(e) => {
                     warn!("Classifier training failed: {e}");
-                    manager.set_training_status(&format!("Training failed: {e}"), true);
+                    (format!("Training failed: {e}"), true)
                 }
-            }
+            };
+            manager.set_training_status(&message, is_error);
+            manager.set_training_in_progress(false);
         });
     }
 
@@ -547,6 +600,23 @@ impl AiLearningController {
             }
         }) {
             warn!("Failed to update training status: {e}");
+        }
+    }
+
+    /// Toggles the Train/Cancel button pair and the banner's in-progress
+    /// color (`AiLearningState.training_in_progress`) - set to `true` right
+    /// before spawning the background job in `train`, and back to `false` on
+    /// every terminal outcome (success, cancelled, or error) so a failure
+    /// never leaves the Train button stuck disabled.
+    fn set_training_in_progress(self: &Arc<Self>, in_progress: bool) {
+        let ui_weak = self.ui.clone();
+        if let Err(e) = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<AiLearningState>()
+                    .set_training_in_progress(in_progress);
+            }
+        }) {
+            warn!("Failed to update training_in_progress: {e}");
         }
     }
 
@@ -1160,29 +1230,124 @@ fn object_metric_row_to_metric(row: &ObjectMetricRowSlint) -> ObjectMetric {
     }
 }
 
-fn log_training_progress(event: &TrainingProgressEvent) {
+/// Logs `event` (same as the old `log_training_progress`) and, for every
+/// variant except `Finished` (see `train`'s doc comment on why that one's
+/// banner text is built separately, once the save outcome is also known),
+/// returns the line to live-update the dialog's `training_status` banner
+/// with.
+fn describe_training_progress(event: &TrainingProgressEvent) -> Option<String> {
     match event {
-        TrainingProgressEvent::Started { total } => info!("Training started: {total} item(s)"),
+        TrainingProgressEvent::Started { total } => {
+            info!("Training started: {total} item(s)");
+            Some(format!("Training started - {total} item(s) to process..."))
+        }
         TrainingProgressEvent::ImageTilesScheduled {
             image_index,
             total_tiles,
-        } => info!("Image {image_index}: {total_tiles} tile(s) scheduled"),
+        } => {
+            info!("Image {image_index}: {total_tiles} tile(s) scheduled");
+            Some(format!(
+                "Image {}: scanning {total_tiles} tile(s)...",
+                image_index + 1
+            ))
+        }
         TrainingProgressEvent::TileProcessed {
             image_index,
             tile_index,
             total_tiles,
-        } => info!("Image {image_index}: tile {tile_index}/{total_tiles} processed"),
+        } => {
+            info!("Image {image_index}: tile {tile_index}/{total_tiles} processed");
+            Some(format!(
+                "Image {}: tile {}/{total_tiles}",
+                image_index + 1,
+                tile_index + 1
+            ))
+        }
         TrainingProgressEvent::ItemCompleted { index, total } => {
-            info!("Training progress: {index}/{total}")
+            info!("Training progress: {index}/{total}");
+            Some(format!("Processed {index}/{total} item(s)..."))
         }
         TrainingProgressEvent::ImageFailed { path } => {
-            warn!("Training image failed to load: {}", path.display())
+            warn!("Training image failed to load: {}", path.display());
+            Some(format!("Warning: failed to read {}", path.display()))
         }
         TrainingProgressEvent::ObjectSkipped { index, reason } => {
-            warn!("Object {index} skipped: {reason}")
+            warn!("Object {index} skipped: {reason}");
+            Some(format!("Warning: object {index} skipped ({reason})"))
         }
-        TrainingProgressEvent::Training => info!("Fitting model..."),
-        TrainingProgressEvent::Finished => info!("Training finished"),
+        TrainingProgressEvent::Training => {
+            info!("Fitting model...");
+            Some("Fitting model...".to_string())
+        }
+        TrainingProgressEvent::Epoch {
+            epoch,
+            total_epochs,
+            train_loss,
+            val_loss,
+        } => {
+            let line = match val_loss {
+                Some(v) => format!(
+                    "Epoch {}/{total_epochs} - train loss {train_loss:.4}, validation loss {v:.4}",
+                    epoch + 1
+                ),
+                None => format!("Epoch {}/{total_epochs} - train loss {train_loss:.4}", epoch + 1),
+            };
+            info!("{line}");
+            Some(line)
+        }
+        TrainingProgressEvent::Finished { stats } => {
+            info!("Training finished: {stats:?}");
+            None
+        }
+    }
+}
+
+/// Formats `TrainingStats` for the dialog's post-training banner - one line
+/// per backend, since each carries different numbers.
+fn format_training_stats(stats: &evanalyzer_core::TrainingStats) -> String {
+    use evanalyzer_core::TrainingStats;
+    match stats {
+        TrainingStats::RandomForest { n_trees, n_samples } => {
+            format!("{n_trees} tree(s), trained on {n_samples} sample(s).")
+        }
+        TrainingStats::Knn { k, n_samples } => {
+            format!("k={k}, trained on {n_samples} sample(s).")
+        }
+        TrainingStats::Mlp {
+            epochs_run,
+            total_epochs,
+            final_train_loss,
+            final_val_loss,
+            best_val_loss,
+            best_val_epoch,
+        } => {
+            let mut line = format!("{epochs_run}/{total_epochs} epoch(s), final train loss {final_train_loss:.4}");
+            let (Some(final_val), Some(best_val), Some(best_epoch)) =
+                (final_val_loss, best_val_loss, best_val_epoch)
+            else {
+                line.push('.');
+                return line;
+            };
+            line.push_str(&format!(", validation loss {final_val:.4}"));
+            // A validation loss that ended up meaningfully worse than the
+            // best epoch seen, well before the end of training, is the
+            // classic overfitting signature - flag it rather than making
+            // the user compare the numbers themselves. 5%/20% are rough
+            // thresholds, not derived from anything - just "clearly worse"
+            // and "stopped improving with training to spare".
+            let epochs_since_best = epochs_run.saturating_sub(*best_epoch);
+            let regressed = *final_val > *best_val * 1.05;
+            let early = *epochs_run > 0 && epochs_since_best as f64 > *total_epochs as f64 * 0.2;
+            if regressed && early {
+                line.push_str(&format!(
+                    " - possible overfitting: best validation loss {best_val:.4} was at epoch {}, {epochs_since_best} epoch(s) before the end.",
+                    *best_epoch + 1
+                ));
+            } else {
+                line.push('.');
+            }
+            line
+        }
     }
 }
 

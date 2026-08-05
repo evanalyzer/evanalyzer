@@ -205,6 +205,12 @@ export global AiLearningState {
     // so a stale message never lingers into the next session.
     in-out property <string> training_status: "";
     in-out property <bool> training_status_is_error: false;
+    // True from the moment `train_clicked` is handled until the background
+    // job's `Finished`/cancelled/failed result comes back - drives disabling
+    // the Train button, showing the Cancel button, and the banner's
+    // in-progress color (see `training_status_is_error`'s sibling coloring
+    // below). Reset by Rust on every terminal outcome, not just success.
+    in-out property <bool> training_in_progress: false;
 
     // Fired by the toolbar button, before the dialog is shown, so Rust can
     // refresh class_names/object_metrics/training_images/training_objects
@@ -212,6 +218,11 @@ export global AiLearningState {
     // last time the dialog was open.
     callback open_requested();
     callback cancel_clicked();
+    // Distinct from `cancel_clicked` (fired by the Close button, which just
+    // hides the dialog) - this asks Rust to actually stop the in-flight
+    // training job via its `Arc<AtomicBool>` cancel flag, same mechanism the
+    // pipeline-run dialog's Cancel button uses.
+    callback cancel_training_clicked();
     callback browse_existing_model_clicked();
     callback add_feature_row_clicked();
     callback remove_feature_row_clicked(int);
@@ -1187,13 +1198,13 @@ export component AiLearningDialog inherits Rectangle {
             if AiLearningState.training_status != "": Rectangle {
                 background: Theme.bg;
                 border-width: 1px;
-                border-color: AiLearningState.training_status_is_error ? #c0392b : #27ae60;
+                border-color: AiLearningState.training_status_is_error ? #c0392b : AiLearningState.training_in_progress ? #2980b9 : #27ae60;
 
                 HorizontalLayout {
                     padding: 10px;
                     Text {
                         text: AiLearningState.training_status;
-                        color: AiLearningState.training_status_is_error ? #e74c3c : #2ecc71;
+                        color: AiLearningState.training_status_is_error ? #e74c3c : AiLearningState.training_in_progress ? #5dade2 : #2ecc71;
                         font-size: 11px;
                         wrap: word-wrap;
                         horizontal-alignment: left;
@@ -1220,9 +1231,18 @@ export component AiLearningDialog inherits Rectangle {
                         }
                     }
 
+                    if AiLearningState.training_in_progress: AppButton {
+                        text: "Cancel";
+                        danger: true;
+                        clicked => {
+                            AiLearningState.cancel_training_clicked();
+                        }
+                    }
+
                     AppButton {
                         text: "Train";
                         primary: true;
+                        enabled: !AiLearningState.training_in_progress;
                         clicked => {
                             // Rust decides whether to close the dialog - a
                             // pre-flight validation failure keeps it open
