@@ -136,8 +136,26 @@ fn print_training_progress(event: TrainingProgressEvent) {
         TrainingProgressEvent::Training => {
             println!("\nFitting model...");
         }
-        TrainingProgressEvent::Finished => {
-            println!();
+        TrainingProgressEvent::Epoch {
+            epoch,
+            total_epochs,
+            train_loss,
+            val_loss,
+        } => {
+            match val_loss {
+                Some(v) => print!(
+                    "\rEpoch {}/{total_epochs} - train loss {train_loss:.4}, val loss {v:.4}          ",
+                    epoch + 1
+                ),
+                None => print!(
+                    "\rEpoch {}/{total_epochs} - train loss {train_loss:.4}          ",
+                    epoch + 1
+                ),
+            }
+            std::io::stdout().flush().ok();
+        }
+        TrainingProgressEvent::Finished { stats } => {
+            println!("\n{stats:?}");
         }
     }
 }
@@ -315,8 +333,19 @@ mod tests {
             index: 2,
             reason: "ambiguous class".into(),
         });
+        print_training_progress(TrainingProgressEvent::Epoch {
+            epoch: 4,
+            total_epochs: 5,
+            train_loss: 0.1,
+            val_loss: Some(0.2),
+        });
         print_training_progress(TrainingProgressEvent::Training);
-        print_training_progress(TrainingProgressEvent::Finished);
+        print_training_progress(TrainingProgressEvent::Finished {
+            stats: evanalyzer_core::TrainingStats::RandomForest {
+                n_trees: 10,
+                n_samples: 100,
+            },
+        });
     }
 
     #[test]

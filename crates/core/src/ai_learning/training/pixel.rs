@@ -325,9 +325,15 @@ impl PixelTrainingJob {
 
         let _ = progress.send(TrainingProgressEvent::Training);
         let n_classes = class_labels.len();
-        let classifier =
-            training_job::fit_classifier(&self.settings.backend, &rows, &labels, n_classes)?;
-        let _ = progress.send(TrainingProgressEvent::Finished);
+        let (classifier, stats) = training_job::fit_classifier(
+            &self.settings.backend,
+            &rows,
+            &labels,
+            n_classes,
+            &progress,
+            &cancel,
+        )?;
+        let _ = progress.send(TrainingProgressEvent::Finished { stats });
 
         Ok(training_job::finish(self.settings.clone(), classifier))
     }
@@ -782,7 +788,11 @@ mod tests {
 
         let events: Vec<_> = rx.iter().collect();
         assert!(events.iter().any(|e| matches!(e, TrainingProgressEvent::Training)));
-        assert!(events.iter().any(|e| matches!(e, TrainingProgressEvent::Finished)));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::Finished { .. }))
+        );
         assert!(
             events
                 .iter()

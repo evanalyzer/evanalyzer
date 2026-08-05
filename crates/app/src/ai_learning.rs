@@ -227,6 +227,15 @@ pub fn used_object_classes(project: &ProjectSettings) -> std::collections::HashS
 /// same as on the object side - it's the dialog's default pre-check
 /// (`used_object_classes`), not this function, that steers users toward
 /// classes with existing data.
+///
+/// `ObjectClass::BACKGROUND` is always included regardless of `selected`,
+/// so `class_labels[0]` (the dense training-label index every `fit_*`
+/// backend resolves against, see `training/pixel.rs`/`training/object.rs`)
+/// is always Background - `classes()` already pins Background first in
+/// project order (`ClassificationSettings::new`/`move_up`/`move_down`
+/// enforce this), so forcing its inclusion here can't reorder anything
+/// else, only guarantee it's never silently dropped by an unchecked
+/// checklist entry.
 pub fn pixel_class_labels_from_project(
     project: &ProjectSettings,
     selected: &std::collections::HashSet<ObjectClass>,
@@ -235,7 +244,7 @@ pub fn pixel_class_labels_from_project(
         .classification
         .classes()
         .iter()
-        .filter(|class| selected.contains(&class.id))
+        .filter(|class| class.id == ObjectClass::BACKGROUND || selected.contains(&class.id))
         .filter_map(|class| {
             class.id.to_u32().map(|id| PixelClassLabel {
                 class: SegmentationClass(id),
@@ -251,6 +260,10 @@ pub fn pixel_class_labels_from_project(
 /// commonly trained to distinguish a deliberately curated subset of classes,
 /// so the choice is left to the user rather than auto-including everything
 /// with at least one example.
+///
+/// `ObjectClass::BACKGROUND` is always included regardless of `selected` -
+/// see `pixel_class_labels_from_project`'s doc comment for why this keeps
+/// `class_labels[0]` pinned to Background.
 pub fn object_class_labels_from_project(
     project: &ProjectSettings,
     selected: &std::collections::HashSet<ObjectClass>,
@@ -259,7 +272,7 @@ pub fn object_class_labels_from_project(
         .classification
         .classes()
         .iter()
-        .filter(|class| selected.contains(&class.id))
+        .filter(|class| class.id == ObjectClass::BACKGROUND || selected.contains(&class.id))
         .map(|class| ObjectClassLabel {
             class: class.id,
             name: class.name.clone(),
@@ -580,8 +593,12 @@ mod tests {
         let selected = HashSet::from([ObjectClass::Valid(1)]);
         let labels = pixel_class_labels_from_project(&project, &selected);
 
-        assert_eq!(labels.len(), 1);
-        assert_eq!(labels[0].name, "Cell");
+        // Background is always included ahead of the selection (see
+        // `pixel_class_labels_from_project_always_includes_background`), so
+        // it lands at index 0 regardless of `selected`.
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].name, "Background");
+        assert_eq!(labels[1].name, "Cell");
     }
 
     #[test]
@@ -599,8 +616,42 @@ mod tests {
         let selected = HashSet::from([ObjectClass::Valid(1)]);
         let labels = pixel_class_labels_from_project(&project, &selected);
 
-        assert_eq!(labels.len(), 1);
-        assert_eq!(labels[0].name, "Not Yet Painted");
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].name, "Background");
+        assert_eq!(labels[1].name, "Not Yet Painted");
+    }
+
+    #[test]
+    fn pixel_class_labels_from_project_always_includes_background_at_index_zero() {
+        // Background defaults to *unchecked* in the training dialog's class
+        // checklist (`used_object_classes` only pre-checks classes with
+        // existing labeled data, and users rarely explicitly paint
+        // "Background"), so `selected` alone must never be able to drop it -
+        // every `fit_*` backend resolves training labels as a dense index
+        // into this array (see `training/pixel.rs`), so index 0 needs to be
+        // a stable, always-present anchor rather than whatever the first
+        // *selected* class happens to be.
+        let mut project = ProjectSettings::default();
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(4),
+            name: "Cell".into(),
+            ..Default::default()
+        });
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(8),
+            name: "Nucleus".into(),
+            ..Default::default()
+        });
+
+        // Background deliberately absent from `selected`.
+        let selected = HashSet::from([ObjectClass::Valid(4), ObjectClass::Valid(8)]);
+        let labels = pixel_class_labels_from_project(&project, &selected);
+
+        assert_eq!(labels.len(), 3);
+        assert_eq!(labels[0].class, SegmentationClass(0));
+        assert_eq!(labels[0].name, "Background");
+        assert_eq!(labels[1].class, SegmentationClass(4));
+        assert_eq!(labels[2].class, SegmentationClass(8));
     }
 
     #[test]
@@ -642,8 +693,37 @@ mod tests {
         let selected = HashSet::from([ObjectClass::Valid(1)]);
         let labels = object_class_labels_from_project(&project, &selected);
 
-        assert_eq!(labels.len(), 1);
-        assert_eq!(labels[0].name, "Cell");
+        // Background is always included ahead of the selection (see
+        // `object_class_labels_from_project_always_includes_background`), so
+        // it lands at index 0 regardless of `selected`.
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].name, "Background");
+        assert_eq!(labels[1].name, "Cell");
+    }
+
+    #[test]
+    fn object_class_labels_from_project_always_includes_background_at_index_zero() {
+        let mut project = ProjectSettings::default();
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(4),
+            name: "Cell".into(),
+            ..Default::default()
+        });
+        project.classification.classes_mut().push(Class {
+            id: ObjectClass::Valid(8),
+            name: "Nucleus".into(),
+            ..Default::default()
+        });
+
+        // Background deliberately absent from `selected`.
+        let selected = HashSet::from([ObjectClass::Valid(4), ObjectClass::Valid(8)]);
+        let labels = object_class_labels_from_project(&project, &selected);
+
+        assert_eq!(labels.len(), 3);
+        assert_eq!(labels[0].class, ObjectClass::BACKGROUND);
+        assert_eq!(labels[0].name, "Background");
+        assert_eq!(labels[1].class, ObjectClass::Valid(4));
+        assert_eq!(labels[2].class, ObjectClass::Valid(8));
     }
 
     #[test]
