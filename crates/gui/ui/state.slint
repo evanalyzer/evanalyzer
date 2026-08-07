@@ -32,6 +32,16 @@ export global GlobalAppState {
         in-out property <DialogType> active_dialog: DialogType.none;
     }
 
+// One distinct license text used by one or more third-party crates (grouped
+// by exact text, not just SPDX id - copyright lines differ crate to crate,
+// so e.g. "MIT" covers many distinct `text_paragraphs` groups).
+export struct ThirdPartyLicense {
+    id: string,
+    name: string,
+    crates: string,          // pre-joined, sorted "name version, name version, ..."
+    text_paragraphs: [string],
+}
+
 //
 // Static/host info shown in the About dialog. Set once from Rust at
 // startup (version from CARGO_PKG_VERSION, the rest from
@@ -47,6 +57,8 @@ export global AppInfoState {
     // past a size limit in the software-rendering fallback and rendered
     // garbled/mis-scrolled content instead of an error.
     in-out property <[string]> license_paragraphs: [];
+    in-out property <[ThirdPartyLicense]> third_party_licenses: [];
+    in-out property <int> third_party_package_count: 0;
     }
 
 //

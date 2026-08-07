@@ -1,4 +1,4 @@
-FROM rust:1.95-trixie AS live
+FROM rust:1.96-trixie AS live
 
 
 # Install the Java Development Kit (JDK)
@@ -33,7 +33,11 @@ RUN apt-get update && apt-get install -y \
 
 RUN rustup component add rustfmt
 RUN cargo install cargo-llvm-cov
+RUN cargo install cargo-audit
+RUN cargo install cargo-auditable
+RUN cargo install cargo-about
 RUN cargo install cargo-cyclonedx
+RUN cargo install cargo-outdated
 RUN rustup component add llvm-tools-preview
 
 # Cross build

@@ -1,0 +1,23 @@
+date,commit,kind,crate,version,advisory_id,cve,cvss_vector,title
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,crossbeam-epoch,0.9.18,RUSTSEC-2026-0204,,,Invalid pointer dereference in `fmt::Pointer` impl for `Atomic` and `Shared` when the underlying pointer is invalid
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,quick-xml,0.37.5,RUSTSEC-2026-0194,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Quadratic run time when checking a start tag for duplicate attribute names
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,quick-xml,0.37.5,RUSTSEC-2026-0195,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,quick-xml,0.38.4,RUSTSEC-2026-0194,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Quadratic run time when checking a start tag for duplicate attribute names
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,quick-xml,0.38.4,RUSTSEC-2026-0195,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,quick-xml,0.39.2,RUSTSEC-2026-0194,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Quadratic run time when checking a start tag for duplicate attribute names
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,quick-xml,0.39.2,RUSTSEC-2026-0195,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,quinn-proto,0.11.14,RUSTSEC-2026-0185,CVE-2026-25800,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H, Remote memory exhaustion in quinn-proto from unbounded out-of-order stream reassembly
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,rkyv,0.7.46,RUSTSEC-2026-0235,,,Insufficient archive validation can cause out-of-bounds reads in archives containing Rc/Arc
+2026-08-07T13:23:09Z,3fd72ce2,vulnerability,rustls-webpki,0.103.12,RUSTSEC-2026-0104,,,Reachable panic in certificate revocation list parsing
+2026-08-07T13:23:09Z,3fd72ce2,unmaintained,bincode,2.0.1,RUSTSEC-2025-0141,,,Bincode is unmaintained
+2026-08-07T13:23:09Z,3fd72ce2,unmaintained,core2,0.4.0,RUSTSEC-2026-0105,,,"core2 is unmaintained, all versions yanked"
+2026-08-07T13:23:09Z,3fd72ce2,unmaintained,paste,1.0.15,RUSTSEC-2024-0436,,,paste - no longer maintained
+2026-08-07T13:23:09Z,3fd72ce2,unmaintained,rustybuzz,0.20.1,RUSTSEC-2026-0206,,,`rustybuzz` is unmaintained
+2026-08-07T13:23:09Z,3fd72ce2,unmaintained,ttf-parser,0.20.0,RUSTSEC-2026-0192,,,`ttf-parser` is unmaintained
+2026-08-07T13:23:09Z,3fd72ce2,unmaintained,ttf-parser,0.25.1,RUSTSEC-2026-0192,,,`ttf-parser` is unmaintained
+2026-08-07T13:23:09Z,3fd72ce2,unsound,anyhow,1.0.102,RUSTSEC-2026-0190,,,Unsoundness in `Error::downcast_mut()`
+2026-08-07T13:23:09Z,3fd72ce2,unsound,event-listener,5.4.1,RUSTSEC-2026-0221,,,`event-listener` allows `!Send` tags to cross thread boundaries via `StackSlot`
+2026-08-07T13:23:09Z,3fd72ce2,unsound,memmap2,0.9.10,RUSTSEC-2026-0186,,,Unchecked pointer offset in crate `memmap2`
+2026-08-07T13:23:09Z,3fd72ce2,unsound,rand,0.8.5,RUSTSEC-2026-0097,,,Rand is unsound with a custom logger using `rand::rng()`
+2026-08-07T13:23:09Z,3fd72ce2,unsound,rand,0.9.2,RUSTSEC-2026-0097,,,Rand is unsound with a custom logger using `rand::rng()`
+2026-08-07T13:23:09Z,3fd72ce2,yanked,core2,0.4.0,,,,core2 0.4.0 is yanked

@@ -85,12 +85,18 @@ export component AboutDialog inherits Rectangle {
     TouchArea { }
 
     property <int> current-tab: 0;
+    // Which license card is expanded, or -1 if none: -2 is EVAnalyzer's own
+    // license, 0.. indexes into AppInfoState.third_party_licenses. One
+    // shared index (rather than a separate bool for the own-license card)
+    // so opening one card closes whichever other was open. Local UI-only
+    // state - the underlying model never changes, only what's shown expanded.
+    property <int> expanded-third-party-index: -1;
 
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 460px;
-        height: 600px;
+        width: 700px;
+        height: 800px;
         background: Theme.panel;
         border-radius: 14px;
         border-width: 1px;
@@ -145,9 +151,18 @@ export component AboutDialog inherits Rectangle {
                 }
             }
 
-            Rectangle { height: 18px; }
-            Rectangle { height: 1px; background: Theme.border; }
-            Rectangle { height: 18px; }
+            Rectangle {
+                height: 18px;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            Rectangle {
+                height: 18px;
+            }
 
             // -- Tab strip -----------------------------------------------------
             HorizontalLayout {
@@ -159,24 +174,29 @@ export component AboutDialog inherits Rectangle {
                     active: root.current-tab == 0;
                     clicked => { root.current-tab = 0; }
                 }
+
                 TabButton {
                     text: "Contributors";
                     active: root.current-tab == 1;
                     clicked => { root.current-tab = 1; }
                 }
+
                 TabButton {
                     text: "System";
                     active: root.current-tab == 2;
                     clicked => { root.current-tab = 2; }
                 }
+
                 TabButton {
-                    text: "License";
+                    text: "Licenses";
                     active: root.current-tab == 3;
                     clicked => { root.current-tab = 3; }
                 }
             }
 
-            Rectangle { height: 16px; }
+            Rectangle {
+                height: 16px;
+            }
 
             // -- Tab content -----------------------------------------------------
             Rectangle {
@@ -233,29 +253,36 @@ export component AboutDialog inherits Rectangle {
                             person_name: "Joachim Danmayr";
                             role: "Creator, Programming, Documentation, Testing";
                         }
+
                         ContributorRow {
                             person_name: "Melanie Schuerz";
                             role: "Co-Creator, Conceptualization, Testing, AI-Training";
                         }
+
+                        Rectangle {
+                            border-width: 1px;
+                            border-color: #000;
+                            height: 1px;
+                        }
+
                         ContributorRow {
                             person_name: "Tanja Plank";
-                            role: "Logo design, Testing, AI-Training";
+                            role: "Testing";
                         }
+
                         ContributorRow {
                             person_name: "Maria Jaritsch";
-                            role: "Testing, AI-Training";
+                            role: "Testing";
                         }
+
                         ContributorRow {
                             person_name: "Patricia Hrasnova";
-                            role: "Testing, AI-Training";
+                            role: "Testing";
                         }
+
                         ContributorRow {
                             person_name: "Anna Dlugosch";
                             role: "Testing";
-                        }
-                        ContributorRow {
-                            person_name: "Heloisa Melo Benirschke";
-                            role: "AI-Training";
                         }
                     }
                 }
@@ -269,10 +296,12 @@ export component AboutDialog inherits Rectangle {
                         label: "CPU Cores";
                         value: "\{AppInfoState.cpu_cores}";
                     }
+
                     InfoStat {
                         label: "Available RAM";
                         value: AppInfoState.ram_total;
                     }
+
                     InfoStat {
                         label: "CUDA (GPU) Acceleration";
                         value: AppInfoState.cuda_available ? "Available" : "Not available";
@@ -280,7 +309,7 @@ export component AboutDialog inherits Rectangle {
                     }
                 }
 
-                // -- License -------------------------------------------------------
+                // -- Licenses --------------------------------------------------
                 if (root.current-tab == 3): ScrollView {
                     width: 100%;
                     height: 100%;
@@ -290,19 +319,156 @@ export component AboutDialog inherits Rectangle {
                         spacing: 8px;
                         alignment: start;
 
-                        for paragraph in AppInfoState.license_paragraphs: Text {
-                            text: paragraph;
-                            font-family: Theme.font-mono;
-                            font-size: 10px;
-                            color: Theme.text-dim;
-                            wrap: word-wrap;
+                        Text {
+                            text: "Tap a license to view its full text.";
+                            font-size: 11px;
+                            color: Theme.text-mute;
+                        }
+
+                        Rectangle {
+                            height: 4px;
+                        }
+
+                        // -- EVAnalyzer's own license - same card style as the
+                        // third-party entries below, just pinned first and
+                        // driven off its own sentinel (-2) rather than the
+                        // model index.
+                        Rectangle {
+                            background: Theme.raised;
+                            border-radius: 8px;
+                            clip: true;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+
+                                Rectangle {
+                                    height: own-header-col.preferred-height;
+
+                                    own-header-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.expanded-third-party-index = (root.expanded-third-party-index == -2) ? -1 : -2;
+                                        }
+                                    }
+
+                                    own-header-col := VerticalLayout {
+                                        spacing: 4px;
+
+                                        Text {
+                                            text: "EVAnalyzer  (AGPL-3.0)";
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                            color: own-header-ta.has-hover ? Theme.accent : Theme.text;
+                                        }
+
+                                        Text {
+                                            text: "This application's own license";
+                                            font-size: 11px;
+                                            color: Theme.text-dim;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+
+                                if (root.expanded-third-party-index == -2): VerticalLayout {
+                                    spacing: 6px;
+
+                                    Rectangle {
+                                        height: 1px;
+                                        background: Theme.border;
+                                    }
+
+                                    for paragraph in AppInfoState.license_paragraphs: Text {
+                                        text: paragraph;
+                                        font-family: Theme.font-mono;
+                                        font-size: 10px;
+                                        color: Theme.text-dim;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 10px;
+                        }
+
+                        Text {
+                            text: "Third-party open-source packages (" + AppInfoState.third_party_package_count + ")";
+                            font-size: 13px;
+                            font-weight: 700;
+                            color: Theme.text;
+                        }
+
+                        Rectangle {
+                            height: 4px;
+                        }
+
+                        for group[i] in AppInfoState.third_party_licenses: Rectangle {
+                            background: Theme.raised;
+                            border-radius: 8px;
+                            clip: true;
+
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 6px;
+
+                                Rectangle {
+                                    height: header-col.preferred-height;
+
+                                    header-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.expanded-third-party-index = (root.expanded-third-party-index == i) ? -1 : i;
+                                        }
+                                    }
+
+                                    header-col := VerticalLayout {
+                                        spacing: 4px;
+
+                                        Text {
+                                            text: group.name + "  (" + group.id + ")";
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                            color: header-ta.has-hover ? Theme.accent : Theme.text;
+                                        }
+
+                                        Text {
+                                            text: group.crates;
+                                            font-size: 11px;
+                                            color: Theme.text-dim;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+
+                                if (root.expanded-third-party-index == i): VerticalLayout {
+                                    spacing: 6px;
+
+                                    Rectangle {
+                                        height: 1px;
+                                        background: Theme.border;
+                                    }
+
+                                    for paragraph in group.text_paragraphs: Text {
+                                        text: paragraph;
+                                        font-family: Theme.font-mono;
+                                        font-size: 10px;
+                                        color: Theme.text-dim;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
             // -- Close button ------------------------------------------------
-            Rectangle { height: 20px; }
+            Rectangle {
+                height: 20px;
+            }
 
             AppButton {
                 text: "Close";
@@ -310,6 +476,7 @@ export component AboutDialog inherits Rectangle {
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                     root.current-tab = 0;
+                    root.expanded-third-party-index = -1;
                 }
             }
         }
