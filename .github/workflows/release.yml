@@ -13,7 +13,7 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.1.5
+      image: joda001/evanalyzer-toolchain:0.2.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -68,7 +68,7 @@ jobs:
   build-windows:
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.1.5
+      image: joda001/evanalyzer-toolchain:0.2.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -158,7 +158,7 @@ jobs:
   build-linux-cuda:
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.1.5
+      image: joda001/evanalyzer-toolchain:0.2.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -219,7 +219,7 @@ jobs:
   build-windows-cuda:
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.1.5
+      image: joda001/evanalyzer-toolchain:0.2.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -434,7 +434,7 @@ jobs:
     # duplicates.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.1.5
+      image: joda001/evanalyzer-toolchain:0.2.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
