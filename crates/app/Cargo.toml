@@ -12,32 +12,26 @@ evanalyzer_cfg = { path = "../cfg" }
 
 log = "0.4"
 env_logger = "0.11"
-indexmap = "2.13.0"
-bitvec = "1.0.1"
+indexmap = "2.14.0"
+bitvec = "1.1.1"
 pathdiff = "0.2.3"
 rayon = "1.12.0"
 human-sort = "0.2"
-serde = "1.0.228"
-serde_json = "1.0.149"
+serde = "1.0.229"
+serde_json = "1.0.151"
 serde_yaml = "0.9"
 regex = "1"
 csv = "1"
-rust_xlsxwriter = { version = "0", features = ["constant_memory"] }
+rust_xlsxwriter = { version = "0.97.1", features = ["constant_memory"] }
 dirs = "6"
 plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "point_series", "ttf"] }
-image = "0.24"
-
-
+image = "0.25.10"
 
 
 [dev-dependencies]
 tempfile = "3"
-# Test-only: builds a minimal results database directly via SQL (matching
-# the schema `evanalyzer_core::storage::duckdb` writes) to exercise
-# `ResultsExporter`/`ResultsLoader` end-to-end without needing a full
-# pipeline run.
 duckdb = { version = "1.1.3", features = ["bundled"] }
-calamine = "0.36.0"
+calamine = "0.36.1"
 
 [lib]
 name = "evanalyzer_app"
