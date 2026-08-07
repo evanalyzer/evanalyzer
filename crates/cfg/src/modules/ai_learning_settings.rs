@@ -2,8 +2,7 @@ use crate::{
     core_types::{ObjectClass, SegmentationClass},
     modules::{
         ai_learning_object_settings::AiLearningObjectFeatureSettings,
-        ai_learning_pixel_settings::AiLearningPixelFeatureSettings,
-        meta_data::MetaData,
+        ai_learning_pixel_settings::AiLearningPixelFeatureSettings, meta_data::MetaData,
     },
 };
 use schemars::JsonSchema;

@@ -2037,7 +2037,6 @@ mod tests {
             classification:
                 evanalyzer_cfg::settings::classification_settings::ClassificationSettings::new_from_existing(
                    vec![class(9, "Fresh")]),
-        
             plate: Default::default(),
             pipelines: vec![evanalyzer_cfg::settings::templates::PipelineTemplate {
                 meta: evanalyzer_cfg::settings::meta_data::MetaData {

@@ -366,12 +366,9 @@ mod tests {
     use kornia_tensor::CpuAllocator;
 
     fn gray_context(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            ImageSize { width, height },
-            values,
-            CpuAllocator,
-        )
-        .unwrap();
+        let img =
+            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, values, CpuAllocator)
+                .unwrap();
         PipelineContext::new_from_image_test(img).unwrap()
     }
 
@@ -672,7 +669,9 @@ mod tests {
             "an image with no labeled objects still counts as processed"
         );
         assert!(
-            !events.iter().any(|e| matches!(e, TrainingProgressEvent::ImageFailed { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::ImageFailed { .. })),
             "must be skipped before any file I/O is attempted, not reported as a failed read"
         );
     }
@@ -787,7 +786,11 @@ mod tests {
         assert_eq!(class_labels.len(), 2);
 
         let events: Vec<_> = rx.iter().collect();
-        assert!(events.iter().any(|e| matches!(e, TrainingProgressEvent::Training)));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TrainingProgressEvent::Training))
+        );
         assert!(
             events
                 .iter()
@@ -801,4 +804,3 @@ mod tests {
         );
     }
 }
-

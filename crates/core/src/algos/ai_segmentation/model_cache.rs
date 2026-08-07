@@ -6,7 +6,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use std::{cell::RefCell, collections::HashMap, path::Path, path::PathBuf, sync::Arc, time::SystemTime};
+use std::{
+    cell::RefCell, collections::HashMap, path::Path, path::PathBuf, sync::Arc, time::SystemTime,
+};
 use tch::CModule;
 
 use crate::ai_learning::model::SavedClassifier;
@@ -197,14 +199,19 @@ mod tests {
             Ok(99)
         })
         .unwrap();
-        assert_eq!(load_calls.get(), 1, "unchanged mtime must still hit the cache");
+        assert_eq!(
+            load_calls.get(),
+            1,
+            "unchanged mtime must still hit the cache"
+        );
         assert!(Arc::ptr_eq(&first, &still_cached));
 
         // Overwrite the file with a distinctly later mtime (filesystem mtime
         // resolution can be coarse, so bump it explicitly rather than
         // relying on wall-clock delay between writes).
         std::fs::write(&path, b"v2").unwrap();
-        let new_mtime = std::fs::metadata(&path).unwrap().modified().unwrap() + Duration::from_secs(5);
+        let new_mtime =
+            std::fs::metadata(&path).unwrap().modified().unwrap() + Duration::from_secs(5);
         let file = std::fs::File::open(&path).unwrap();
         file.set_modified(new_mtime).unwrap();
 

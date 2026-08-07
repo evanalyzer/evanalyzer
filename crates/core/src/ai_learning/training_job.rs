@@ -1,6 +1,10 @@
-use crate::ai_learning::model::{self, CURRENT_SAVED_CLASSIFIER_VERSION, Classifier, SavedClassifier};
+use crate::ai_learning::model::{
+    self, CURRENT_SAVED_CLASSIFIER_VERSION, Classifier, SavedClassifier,
+};
 use evanalyzer_cfg::core_types::InternalErrors;
-use evanalyzer_cfg::settings::ai_learning_settings::{AiLearningBackendSettings, AiLearningSettings};
+use evanalyzer_cfg::settings::ai_learning_settings::{
+    AiLearningBackendSettings, AiLearningSettings,
+};
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -168,7 +172,11 @@ pub(crate) fn finish(settings: AiLearningSettings, classifier: Classifier) -> Sa
 /// channel/flag/thread-spawn boilerplate between them.
 pub(crate) fn spawn_training_job<J>(
     job: J,
-    run: impl FnOnce(&J, Sender<TrainingProgressEvent>, Arc<AtomicBool>) -> Result<SavedClassifier, InternalErrors>
+    run: impl FnOnce(
+        &J,
+        Sender<TrainingProgressEvent>,
+        Arc<AtomicBool>,
+    ) -> Result<SavedClassifier, InternalErrors>
     + Send
     + 'static,
 ) -> (
@@ -189,10 +197,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
     use evanalyzer_cfg::settings::ai_learning_settings::{
         AiLearningClassifierSettings, KnnSettings, MlpSettings, RandomForestSettings,
     };
-    use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
 
     fn two_cluster_dataset() -> (Vec<Vec<f32>>, Vec<usize>) {
@@ -209,7 +217,10 @@ mod tests {
     }
 
     fn no_op_progress() -> (Sender<TrainingProgressEvent>, Arc<AtomicBool>) {
-        (std::sync::mpsc::channel().0, Arc::new(AtomicBool::new(false)))
+        (
+            std::sync::mpsc::channel().0,
+            Arc::new(AtomicBool::new(false)),
+        )
     }
 
     #[test]
@@ -220,7 +231,10 @@ mod tests {
         let (classifier, stats) =
             fit_classifier(&backend, &rows, &labels, 2, &progress, &cancel).unwrap();
         assert!(matches!(classifier, Classifier::RandomForest(_)));
-        assert!(matches!(stats, TrainingStats::RandomForest { n_samples: 30, .. }));
+        assert!(matches!(
+            stats,
+            TrainingStats::RandomForest { n_samples: 30, .. }
+        ));
     }
 
     #[test]
@@ -250,7 +264,13 @@ mod tests {
         let (classifier, stats) =
             fit_classifier(&backend, &rows, &labels, 2, &progress, &cancel).unwrap();
         assert!(matches!(classifier, Classifier::Mlp { .. }));
-        assert!(matches!(stats, TrainingStats::Mlp { total_epochs: 5, .. }));
+        assert!(matches!(
+            stats,
+            TrainingStats::Mlp {
+                total_epochs: 5,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -281,7 +301,9 @@ mod tests {
     #[test]
     fn spawn_training_job_runs_the_closure_and_streams_progress() {
         let (handle, rx, _cancel) = spawn_training_job(42u32, |job, progress, cancel| {
-            let _ = progress.send(TrainingProgressEvent::Started { total: *job as usize });
+            let _ = progress.send(TrainingProgressEvent::Started {
+                total: *job as usize,
+            });
             let (rows, labels) = ([vec![0.0], vec![1.0]], [0usize, 1]);
             let (classifier, stats) = fit_classifier(
                 &AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
@@ -308,7 +330,10 @@ mod tests {
         });
 
         let events: Vec<TrainingProgressEvent> = rx.iter().collect();
-        assert!(matches!(events[0], TrainingProgressEvent::Started { total: 42 }));
+        assert!(matches!(
+            events[0],
+            TrainingProgressEvent::Started { total: 42 }
+        ));
         assert!(matches!(
             events.last(),
             Some(TrainingProgressEvent::Finished { .. })

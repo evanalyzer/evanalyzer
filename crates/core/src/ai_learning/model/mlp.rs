@@ -340,7 +340,10 @@ mod tests {
     }
 
     fn no_op_progress() -> (Sender<TrainingProgressEvent>, Arc<AtomicBool>) {
-        (std::sync::mpsc::channel().0, Arc::new(AtomicBool::new(false)))
+        (
+            std::sync::mpsc::channel().0,
+            Arc::new(AtomicBool::new(false)),
+        )
     }
 
     #[test]
@@ -393,8 +396,15 @@ mod tests {
     fn fit_mlp_rejects_zero_classes() {
         let (rows, labels) = two_cluster_dataset();
         let (progress, cancel) = no_op_progress();
-        let err = fit_mlp(&rows, &labels, 0, &MlpSettings::default(), &progress, &cancel)
-            .unwrap_err();
+        let err = fit_mlp(
+            &rows,
+            &labels,
+            0,
+            &MlpSettings::default(),
+            &progress,
+            &cancel,
+        )
+        .unwrap_err();
         let InternalErrors::Internal(msg) = err else {
             panic!("expected Internal, got a different variant");
         };
@@ -461,9 +471,14 @@ mod tests {
         let events: Vec<_> = rx.try_iter().collect();
 
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, TrainingProgressEvent::Epoch { epoch: 9, total_epochs: 10, .. })),
+            events.iter().any(|e| matches!(
+                e,
+                TrainingProgressEvent::Epoch {
+                    epoch: 9,
+                    total_epochs: 10,
+                    ..
+                }
+            )),
             "the last epoch must always be reported even if it doesn't land on report_every"
         );
     }

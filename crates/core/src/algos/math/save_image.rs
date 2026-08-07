@@ -459,7 +459,8 @@ mod tests {
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
         ctx.output_path = Some(PathBuf::default());
         let mut cache = PipelineCache::default();
-        let test_path = PathBuf::from("images/test_output_instance_map_deleteme_x000000_y000000.png");
+        let test_path =
+            PathBuf::from("images/test_output_instance_map_deleteme_x000000_y000000.png");
 
         let saver = SaveImage {
             name: "test_output_instance_map_deleteme".into(),

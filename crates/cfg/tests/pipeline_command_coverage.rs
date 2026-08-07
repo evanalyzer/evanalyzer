@@ -559,8 +559,8 @@ fn apply_param_change_obj_class_fields_support_unset_and_valid_ids() {
 #[test]
 fn apply_param_change_multi_obj_class_fields_support_comma_lists_and_toggle() {
     let multi_obj_class_fields: &[(i32, &str)] = &[
-        (3, "input_classes"),          // ClassifyObjects
-        (4, "classes_to_coloc"),       // Colocalization
+        (3, "input_classes"),    // ClassifyObjects
+        (4, "classes_to_coloc"), // Colocalization
         // Colocalization.filter_classes is `#[cmdsmeta(visible = false)]`, so it
         // never reaches `to_parameters()` - not tested here.
         (4, "exclude_classes"),        // Colocalization
@@ -790,14 +790,23 @@ fn apply_param_change_rank_filter_switches_to_and_edits_a_tuple_variant() {
 
     cmd.apply_param_change("filter_type", "Outliers");
     assert_eq!(param_value(&cmd, "filter_type"), "Outliers");
-    assert_eq!(param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(), 0.0);
+    assert_eq!(
+        param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(),
+        0.0
+    );
 
     cmd.apply_param_change("filter_type.0", "2.5");
-    assert_eq!(param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(), 2.5);
+    assert_eq!(
+        param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(),
+        2.5
+    );
     // Switching to a plain unit variant and back must not resurrect the old payload.
     cmd.apply_param_change("filter_type", "Median");
     cmd.apply_param_change("filter_type", "Outliers");
-    assert_eq!(param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(), 0.0);
+    assert_eq!(
+        param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(),
+        0.0
+    );
 }
 
 #[test]

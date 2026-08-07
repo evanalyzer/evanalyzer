@@ -2,6 +2,7 @@ use crate::converters::LengthUnit;
 use crate::image::image_meta::{ChannelInfo, ImageInfo, ImageMeta, PyramidInfo};
 use crate::{ImageReader, ReadMode};
 use evanalyzer_cfg::core_types::InternalErrors;
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
@@ -52,10 +53,14 @@ impl ImageReader {
                                 match attr.key.local_name().as_ref() {
                                     b"ID" => {
                                         // Use unescape_value() in case the ID has special chars
-                                        image_id = attr.unescape_value()?.into_owned();
+                                        image_id = attr
+                                            .normalized_value(XmlVersion::Implicit1_0)?
+                                            .into_owned();
                                     }
                                     b"Name" => {
-                                        _image_name = attr.unescape_value()?.into_owned();
+                                        _image_name = attr
+                                            .normalized_value(XmlVersion::Implicit1_0)?
+                                            .into_owned();
                                     }
                                     _ => {}
                                 }
@@ -82,11 +87,14 @@ impl ImageReader {
                                 match attr.key.local_name().as_ref() {
                                     b"ID" => {}
                                     b"Manufacturer" => {
-                                        meta.objective.manufacturer =
-                                            attr.unescape_value()?.into_owned();
+                                        meta.objective.manufacturer = attr
+                                            .normalized_value(XmlVersion::Implicit1_0)?
+                                            .into_owned();
                                     }
                                     b"Model" => {
-                                        meta.objective.model = attr.unescape_value()?.into_owned();
+                                        meta.objective.model = attr
+                                            .normalized_value(XmlVersion::Implicit1_0)?
+                                            .into_owned();
                                     }
                                     b"LensNA" => {}
                                     b"NominalMagnification" => {
@@ -139,15 +147,21 @@ impl ImageReader {
                                                 self.parse_i32(attr.value.as_ref())?;
                                         }
                                         b"PhysicalSizeXUnit" => {
-                                            let unit_x_tmp = attr.unescape_value()?.into_owned();
+                                            let unit_x_tmp = attr
+                                                .normalized_value(XmlVersion::Implicit1_0)?
+                                                .into_owned();
                                             unit_x = LengthUnit::try_from(unit_x_tmp.as_str())?;
                                         }
                                         b"PhysicalSizeYUnit" => {
-                                            let unit_y_tmp = attr.unescape_value()?.into_owned();
+                                            let unit_y_tmp = attr
+                                                .normalized_value(XmlVersion::Implicit1_0)?
+                                                .into_owned();
                                             unit_y = LengthUnit::try_from(unit_y_tmp.as_str())?;
                                         }
                                         b"PhysicalSizeZUnit" => {
-                                            let unit_z_tmp = attr.unescape_value()?.into_owned();
+                                            let unit_z_tmp = attr
+                                                .normalized_value(XmlVersion::Implicit1_0)?
+                                                .into_owned();
                                             unit_z = LengthUnit::try_from(unit_z_tmp.as_str())?;
                                         }
                                         _ => {}
@@ -174,19 +188,26 @@ impl ImageReader {
                                                 self.parse_f32(attr.value.as_ref())?;
                                         }
                                         b"EmissionWavelengthUnit" => {
-                                            let unit_x_tmp = attr.unescape_value()?.into_owned();
+                                            let unit_x_tmp = attr
+                                                .normalized_value(XmlVersion::Implicit1_0)?
+                                                .into_owned();
                                             emission_wave_length_unit =
                                                 LengthUnit::try_from(unit_x_tmp.as_str())?;
                                         }
                                         b"ID" => {
-                                            channel.id = attr.unescape_value()?.into_owned();
+                                            channel.id = attr
+                                                .normalized_value(XmlVersion::Implicit1_0)?
+                                                .into_owned();
                                         }
                                         b"Name" => {
-                                            channel.name = attr.unescape_value()?.into_owned();
+                                            channel.name = attr
+                                                .normalized_value(XmlVersion::Implicit1_0)?
+                                                .into_owned();
                                         }
                                         b"ContrastMethod" => {
-                                            channel.contrast_method =
-                                                attr.unescape_value()?.into_owned();
+                                            channel.contrast_method = attr
+                                                .normalized_value(XmlVersion::Implicit1_0)?
+                                                .into_owned();
                                         }
                                         _ => {}
                                     }

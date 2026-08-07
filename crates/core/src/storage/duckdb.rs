@@ -1575,9 +1575,7 @@ mod tests {
             ..Default::default()
         };
         let object = make_filled_object(1, [0, 0, 9, 9]);
-        with_objects
-            .object_cache
-            .insert(object.id.clone(), object);
+        with_objects.object_cache.insert(object.id.clone(), object);
         exporter.export(&with_objects).expect("export failed");
         exporter
             .finalize_image(Path::new("has_objects.tif"))
@@ -1602,7 +1600,10 @@ mod tests {
             .map(|i| i.image_rel_path)
             .collect();
         names.sort();
-        assert_eq!(names, vec!["empty.tif".to_string(), "has_objects.tif".to_string()]);
+        assert_eq!(
+            names,
+            vec!["empty.tif".to_string(), "has_objects.tif".to_string()]
+        );
     }
 
     #[test]
@@ -1616,8 +1617,7 @@ mod tests {
         // Class 5 is registered but never actually assigned to any object.
         class_names.insert(ObjectClass::Valid(5), "Unused".to_string());
 
-        let exporter =
-            DuckDbExporter::new(&path, class_names).expect("exporter init failed");
+        let exporter = DuckDbExporter::new(&path, class_names).expect("exporter init failed");
         let mut cache = PipelineCache {
             image_rel_path: "img.tif".into(),
             ..Default::default()

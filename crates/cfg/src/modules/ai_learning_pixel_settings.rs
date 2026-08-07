@@ -82,7 +82,11 @@ mod tests {
 
         assert_eq!(channels.len(), 3);
         for (channel, expected_sigma) in channels.iter().zip([1.0, 2.0, 4.0]) {
-            assert_eq!(channel.len(), 1, "each channel is a single GaussianBlur step");
+            assert_eq!(
+                channel.len(),
+                1,
+                "each channel is a single GaussianBlur step"
+            );
             let PreprocessingSteps::GaussianBlur(settings) = &channel[0] else {
                 panic!("expected a GaussianBlur step, got {:?}", channel[0]);
             };

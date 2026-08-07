@@ -87,9 +87,12 @@ mod tests {
     use evanalyzer_cfg::settings::meta_data::MetaData;
 
     fn sample_saved_classifier() -> SavedClassifier {
-        let rows = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![10.0, 10.0], vec![
-            11.0, 11.0,
-        ]];
+        let rows = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+            vec![10.0, 10.0],
+            vec![11.0, 11.0],
+        ];
         let labels = [0usize, 0, 1, 1];
         let classifier =
             random_forest::fit_random_forest(&rows, &labels, &RandomForestSettings::default())
@@ -125,13 +128,20 @@ mod tests {
 
         let before = saved.classifier.predict(&[vec![0.5, 0.5]]).unwrap();
         let after = loaded.classifier.predict(&[vec![0.5, 0.5]]).unwrap();
-        assert_eq!(before, after, "a round-tripped model must predict identically");
+        assert_eq!(
+            before, after,
+            "a round-tripped model must predict identically"
+        );
     }
 
     #[test]
     fn save_to_file_creates_missing_parent_directories() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested").join("models").join("test.evamodel");
+        let path = dir
+            .path()
+            .join("nested")
+            .join("models")
+            .join("test.evamodel");
         assert!(!path.parent().unwrap().exists());
 
         save_to_file(&sample_saved_classifier(), &path).unwrap();

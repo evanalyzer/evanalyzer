@@ -23,7 +23,7 @@ image = "0.24"
 log = "0.4"        
 jni = {version = "0.21", features = ["invocation"]}
 libloading = "0.8"
-quick-xml = "0.39"
+quick-xml = "0.41"
 ndarray = "0.17.2"
 rayon = "1.10"
 serde = {version = "1.0.228", features = ["derive","rc"]}
