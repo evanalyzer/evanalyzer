@@ -1,6 +1,6 @@
 use evanalyzer_cfg::core_types::InternalErrors;
-pub use evanalyzer_core::ObjectRow;
 use evanalyzer_core::{AggregateSpec, DuckDbReader, GroupKeyMode, ObjectFilter};
+pub use evanalyzer_core::{ClassRow, ImageRow, ObjectRow};
 pub use evanalyzer_core::{coloc_filter_label_any, coloc_filter_label_no, coloc_filter_label_with};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -813,12 +813,25 @@ pub(crate) fn group_key(
     group_by: GroupBy,
     regex: Option<&regex::Regex>,
 ) -> Option<String> {
+    group_key_for(&object.image_name, &object.image_rel_path, group_by, regex)
+}
+
+/// The image-identity half of [`group_key`], usable without a full
+/// `ObjectRow` — e.g. for an [`evanalyzer_core::ImageRow`] that has no
+/// objects to build one from. `group_key` is defined in terms of this so the
+/// two can never disagree on what group an image belongs to.
+pub(crate) fn group_key_for(
+    image_name: &str,
+    image_rel_path: &str,
+    group_by: GroupBy,
+    regex: Option<&regex::Regex>,
+) -> Option<String> {
     match group_by {
-        GroupBy::None | GroupBy::Image => Some(object.image_name.clone()),
-        GroupBy::Folder => Some(folder_of(&object.image_rel_path)),
+        GroupBy::None | GroupBy::Image => Some(image_name.to_string()),
+        GroupBy::Folder => Some(folder_of(image_rel_path)),
         GroupBy::Regex => {
             let re = regex?;
-            let caps = re.captures(&object.image_name)?;
+            let caps = re.captures(image_name)?;
             // Prefer the first capture group; fall back to the whole match.
             let key = caps
                 .get(1)
@@ -1314,8 +1327,23 @@ impl ResultsLoader {
         DuckDbReader::open(&self.path)?.get_image_names()
     }
 
+    /// Every processed image, including ones that produced zero objects.
+    /// Used by the Matrix view to render a well/field-of-view slot as
+    /// occupied even when it has no objects to aggregate.
+    pub fn get_images(&self) -> Result<Vec<ImageRow>, InternalErrors> {
+        DuckDbReader::open(&self.path)?.get_images()
+    }
+
     pub fn get_class_names(&self) -> Result<Vec<String>, InternalErrors> {
         DuckDbReader::open(&self.path)?.get_class_names()
+    }
+
+    /// Every registered class (id + name) as of when this file was written -
+    /// see `evanalyzer_core::storage::duckdb`'s `classes` table. The
+    /// authoritative source for the results view's class names/filter,
+    /// independent of the live project's current classification settings.
+    pub fn get_classes(&self) -> Result<Vec<ClassRow>, InternalErrors> {
+        DuckDbReader::open(&self.path)?.get_classes()
     }
 
     /// `(min, max)` of `t_stack` present in the file, or `None` when there's
@@ -1487,6 +1515,22 @@ mod tests {
         let mut classes = loader.get_class_names().unwrap();
         classes.sort();
         assert_eq!(classes, vec!["ClassA".to_string(), "ClassB".to_string()]);
+    }
+
+    #[test]
+    fn results_loader_get_classes_reads_the_registry_table_not_the_objects_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("results.duckdb");
+        seed_results_db(&db_path);
+
+        let loader = ResultsLoader::new(&db_path);
+        let mut classes = loader.get_classes().unwrap();
+        classes.sort_by_key(|c| c.class_id);
+        let pairs: Vec<(i32, String)> = classes.into_iter().map(|c| (c.class_id, c.name)).collect();
+        assert_eq!(
+            pairs,
+            vec![(1, "ClassA".to_string()), (2, "ClassB".to_string())]
+        );
     }
 
     // ---- helpers ----

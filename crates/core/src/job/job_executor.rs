@@ -614,7 +614,15 @@ impl<'a> JobExecutor {
         let duration = start_image.elapsed();
         info!("Executed image pipeline in {:?}", duration);
 
-        tile_result.and(writer_result)
+        // Record the image was processed even if it produced zero objects -
+        // run regardless of tile/writer errors so a partially-failed image
+        // still shows up rather than vanishing entirely.
+        let finalize_result = exporter
+            .lock()
+            .expect("Poisoned")
+            .finalize_image(image_rel_path);
+
+        tile_result.and(writer_result).and(finalize_result)
     }
 
     /// Like [`analyze_image`] but processes tiles in parallel.
@@ -952,7 +960,14 @@ impl<'a> JobExecutor {
 
         let writer_result = writer_handle.join().expect("DB writer thread panicked");
 
-        pass_result.and(writer_result)
+        // Record the image was processed even if it produced zero objects -
+        // see the equivalent call in `analyze_image`.
+        let finalize_result = exporter
+            .lock()
+            .expect("Poisoned")
+            .finalize_image(image_rel_path);
+
+        pass_result.and(writer_result).and(finalize_result)
     }
 
     /// Generates an iterator over image tiles for processing large images.

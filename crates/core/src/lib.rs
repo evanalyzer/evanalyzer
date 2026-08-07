@@ -66,6 +66,8 @@ pub use crate::job::job_generator::generate_preview_job_from_project_settings;
 pub use crate::storage::PipelineResultExporter;
 pub use crate::storage::duckdb::DuckDbExporter;
 pub use crate::storage::duckdb::DuckDbReader;
+pub use crate::storage::duckdb::ClassRow;
+pub use crate::storage::duckdb::ImageRow;
 pub use crate::storage::duckdb::ObjectFilter;
 pub use crate::storage::duckdb::ObjectRow;
 pub use crate::storage::duckdb::{AggregateSpec, AggregatedRow, GroupKeyMode};

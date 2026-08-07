@@ -114,13 +114,22 @@ export enum ResultsMatrixKind { plate, well }
 
 export struct ResultsMatrixCell {
     // Well id (plate view, e.g. "A14") or image name (well view). "" for an
-    // empty/unoccupied cell.
+    // unoccupied cell (no well/image landed there at all).
     label: string,
-    // Pre-formatted display value, "" if the cell has no data.
+    // Pre-formatted display value, "" if the cell has no metric value to color by.
     value: string,
+    // Pre-formatted "<n> obj" / "<n> obj · <m> coloc" summary, "" when unoccupied.
+    count_line: string,
     color: color,
-    // False for an empty cell — used to grey it out and disable drill-down.
+    // True only when `value` is a real, colored metric — drives the colored
+    // background. A well/image that exists but has no (matching) objects is
+    // `occupied` with `has_value: false`: shown with its label/count_line but
+    // an uncolored background.
     has_value: bool,
+    // True whenever a well/image actually landed here (real data or a
+    // zero-object placeholder) — used to grey out and disable drill-down only
+    // for a truly empty, unoccupied slot.
+    occupied: bool,
 }
 
 export global ResultsState {

@@ -234,10 +234,12 @@ mod tests {
             name: None,
             image_source: ImageAddress::Channel(0),
             enabled: true,
-            steps: vec![evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings {
-                enabled: true,
-                command,
-            }],
+            steps: vec![
+                evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings {
+                    enabled: true,
+                    command,
+                },
+            ],
         }
     }
 
@@ -284,7 +286,9 @@ mod tests {
     fn relativize_file_paths_ignores_commands_without_a_file_path_field() {
         use evanalyzer_cfg::settings::pipeline_command_settings::BlurSettings;
 
-        let mut pipelines = vec![pipeline_with(PipelineCommand::Blur(BlurSettings::default()))];
+        let mut pipelines = vec![pipeline_with(
+            PipelineCommand::Blur(BlurSettings::default()),
+        )];
 
         // Must not panic on a command variant with no `ParamType::FilePath` field.
         relativize_file_paths(&mut pipelines, Path::new("/data/project"));
