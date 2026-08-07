@@ -42,6 +42,22 @@ impl From<ClassificationClassifyObjectsClassifyMatchHandlingSettings> for Classi
     }
 }
 
+impl From<ClassificationColocObjectsColocMultiplicitySettings> for ColocMultiplicity {
+    fn from(_s: ClassificationColocObjectsColocMultiplicitySettings) -> Self {
+        match _s {
+            ClassificationColocObjectsColocMultiplicitySettings::OneToOne => {
+                ColocMultiplicity::OneToOne
+            }
+            ClassificationColocObjectsColocMultiplicitySettings::ManyToMany => {
+                ColocMultiplicity::ManyToMany
+            }
+            ClassificationColocObjectsColocMultiplicitySettings::MultiFor(v) => {
+                ColocMultiplicity::MultiFor(v)
+            }
+        }
+    }
+}
+
 impl From<FiltersHessianHessianModeSettings> for HessianMode {
     fn from(_s: FiltersHessianHessianModeSettings) -> Self {
         match _s {
@@ -344,10 +360,10 @@ impl From<ColocalizationSettings> for Colocalization {
             classes_to_coloc: _s.classes_to_coloc.into_iter().map(|v| v.into()).collect(),
             filter_classes: _s.filter_classes.into_iter().map(|v| v.into()).collect(),
             class_for_overlapping_areas: _s.class_for_overlapping_areas,
-            exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
-            allow_multi_object_coloc: _s.allow_multi_object_coloc,
+            multiplicity: ColocMultiplicity::from(_s.multiplicity),
             size_unit: _s.size_unit,
             min_coloc_area: _s.min_coloc_area,
+            exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
         }
     }
 }

@@ -561,7 +561,8 @@ fn apply_param_change_multi_obj_class_fields_support_comma_lists_and_toggle() {
     let multi_obj_class_fields: &[(i32, &str)] = &[
         (3, "input_classes"),          // ClassifyObjects
         (4, "classes_to_coloc"),       // Colocalization
-        (4, "filter_classes"),         // Colocalization
+        // Colocalization.filter_classes is `#[cmdsmeta(visible = false)]`, so it
+        // never reaches `to_parameters()` - not tested here.
         (4, "exclude_classes"),        // Colocalization
         (20, "other_filter_classes"),  // ObjectMath
         (30, "center_filter_classes"), // Voronoi
@@ -777,17 +778,57 @@ fn apply_param_change_threshold_entry_ignores_malformed_or_out_of_range_paths() 
 }
 
 #[test]
-fn apply_param_change_rank_filter_ignores_unknown_filter_type_value() {
-    // "Outliers" carries data (`Outliers(f32)`) that can't be reconstructed
-    // from a bare string, so `apply_param_change` intentionally doesn't
-    // recognize it as a target value - the field is left unchanged rather
-    // than panicking. This documents that (deliberate) gap rather than
-    // treating it as a bug.
+fn apply_param_change_rank_filter_switches_to_and_edits_a_tuple_variant() {
+    // "Outliers" carries data (`Outliers(f32)`): switching to it constructs
+    // the variant with its payload type's own default (`f32::default()`),
+    // and the payload itself is then editable via the synthetic
+    // "filter_type.0" field - the tuple-variant counterpart to a rich enum's
+    // own named sibling fields.
     let mut cmd = default_command(22).unwrap(); // RankFilter
     cmd.apply_param_change("filter_type", "Median");
     assert_eq!(param_value(&cmd, "filter_type"), "Median");
+
     cmd.apply_param_change("filter_type", "Outliers");
-    assert_eq!(param_value(&cmd, "filter_type"), "Median");
+    assert_eq!(param_value(&cmd, "filter_type"), "Outliers");
+    assert_eq!(param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(), 0.0);
+
+    cmd.apply_param_change("filter_type.0", "2.5");
+    assert_eq!(param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(), 2.5);
+    // Switching to a plain unit variant and back must not resurrect the old payload.
+    cmd.apply_param_change("filter_type", "Median");
+    cmd.apply_param_change("filter_type", "Outliers");
+    assert_eq!(param_value(&cmd, "filter_type.0").parse::<f32>().unwrap(), 0.0);
+}
+
+#[test]
+fn apply_param_change_colocalization_multiplicity_switches_to_and_edits_multi_for() {
+    // "Multi coloc only for selected" carries data
+    // (`MultiFor(Vec<ObjectClass>)`): switching to it constructs the variant
+    // with an empty class list (same mechanism as the RankFilter test above,
+    // just for a `Vec<ObjectClass>` payload instead of a bare `f32`), and the
+    // list is then editable via the synthetic "multiplicity.0" MultiObjClass
+    // field, using the same comma-list/toggle: syntax every other
+    // MultiObjClass field supports.
+    let mut cmd = default_command(4).unwrap(); // Colocalization
+    assert_eq!(param_value(&cmd, "multiplicity"), "No multi coloc (1:1)");
+
+    cmd.apply_param_change("multiplicity", "Multi coloc only for selected");
+    assert_eq!(
+        param_value(&cmd, "multiplicity"),
+        "Multi coloc only for selected"
+    );
+    assert_eq!(param_value(&cmd, "multiplicity.0"), "");
+
+    cmd.apply_param_change("multiplicity.0", "1,2");
+    assert_eq!(param_value(&cmd, "multiplicity.0"), "1,2");
+
+    cmd.apply_param_change("multiplicity.0", "toggle:1");
+    assert_eq!(param_value(&cmd, "multiplicity.0"), "2");
+
+    // Switching away and back must not resurrect the old class list.
+    cmd.apply_param_change("multiplicity", "Allow multi coloc");
+    cmd.apply_param_change("multiplicity", "Multi coloc only for selected");
+    assert_eq!(param_value(&cmd, "multiplicity.0"), "");
 }
 
 #[test]
