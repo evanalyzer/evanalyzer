@@ -826,7 +826,7 @@ fn extract_command_structs(
                 let trait_name = item_impl
                     .trait_
                     .as_ref()
-                    .and_then(|(_, path, _)| path.segments.last())
+                    .and_then(|(path, _)| path.segments.last())
                     .map(|s| s.ident.to_string())
                     .unwrap_or_default();
                 if trait_name == "ImageAlgorithm" {

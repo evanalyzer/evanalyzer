@@ -16,16 +16,15 @@ rfd = "0.17"
 copypasta = "0.10"
 log = "0.4"
 env_logger = "0.11"
-rayon = "1.10"
+rayon = "1.12"
 kornia-image = { version = "0.1.14"}
 kornia-imgproc = { version = "0.1.14"}
-bitflags = "2.11.0"
-enumset = "1.1.10"
+bitflags = "2.13.1"
+enumset = "1.1.14"
 clru = "0.6.3"
-indexmap = "2.13.0"
-use = "0.0.1-pre.0"
-bitvec = "1.0.1"
-chrono = "0.4.44"
+indexmap = "2.14.0"
+bitvec = "1.1.1"
+chrono = "0.4.45"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
@@ -33,12 +32,12 @@ serde_json = "1.0"
 
 # For Linux/macOS: Use Skia
 [target.'cfg(not(target_os = "windows"))'.dependencies.slint]
-version = "1.15"
+version = "1.17"
 features = ["renderer-skia"]
 
 # For Windows: Use Software Renderer (No Skia/VC++ requirement)
 [target.'cfg(target_os = "windows")'.dependencies.slint]
-version = "1.15"
+version = "1.17"
 default-features = false
 features = [
     "std",
@@ -49,8 +48,6 @@ features = [
 
 [dev-dependencies]
 kornia-apriltag = {version = "0.1.10"}
-# Must track the exact `slint` version resolved workspace-wide (1.17.1, per
-# Cargo.lock) - this crate doesn't follow semver.
 i-slint-backend-testing = "=1.17.1"
 
 
