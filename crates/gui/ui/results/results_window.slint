@@ -1356,6 +1356,7 @@ component ResultsToolbar inherits Rectangle {
                             clicked => {
                                 ResultsState.view_mode = ResultsViewMode.chart;
                                 ResultsState.chart_kind = ResultsChartKind.histogram;
+                                ResultsState.chart_render_requested();
                                 view-popup.close();
                             }
 
@@ -1412,6 +1413,7 @@ component ResultsToolbar inherits Rectangle {
                             clicked => {
                                 ResultsState.view_mode = ResultsViewMode.chart;
                                 ResultsState.chart_kind = ResultsChartKind.scatter;
+                                ResultsState.chart_render_requested();
                                 view-popup.close();
                             }
 
@@ -1468,6 +1470,7 @@ component ResultsToolbar inherits Rectangle {
                             clicked => {
                                 ResultsState.view_mode = ResultsViewMode.chart;
                                 ResultsState.chart_kind = ResultsChartKind.heatmap;
+                                ResultsState.chart_render_requested();
                                 view-popup.close();
                             }
 
