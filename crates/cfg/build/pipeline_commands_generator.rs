@@ -750,6 +750,19 @@ impl EnumInfo {
         self.variants.iter().any(|v| v.is_rich())
     }
 
+    /// True if the GUI needs a discriminant dropdown *plus* extra sibling
+    /// `ParameterDef`s for the currently active variant's own data - either a
+    /// named-field ("rich") variant, or a single-unnamed-field tuple variant
+    /// like `Outliers(f32)` or `MultiFor(Vec<ObjectClass>)`. Broader than
+    /// [`Self::is_rich`], which is only about the *serialization* shape
+    /// (internal vs external tagging) - a plain tuple variant keeps external
+    /// tagging but still needs its payload exposed as an editable field.
+    fn has_variant_payload(&self) -> bool {
+        self.variants
+            .iter()
+            .any(|v| v.is_rich() || v.data_type.is_some())
+    }
+
     fn settings_name(&self) -> String {
         format!(
             "{}{}Settings",
@@ -1632,12 +1645,14 @@ fn leaf_param_def_literal(
     ))
 }
 
-/// Builds the additional ParameterDefs contributed by a rich enum field's *currently active*
+/// Builds the additional ParameterDefs contributed by an enum field's *currently active*
 /// variant — i.e. the part of "conditional fields" that actually varies the field list, not
 /// just the value of a fixed one. Returns a single `match &{access} { ... }` expression of type
 /// `Vec<ParameterDef>`, one arm per variant, so switching the discriminant naturally switches
-/// which sibling fields exist.
-fn rich_enum_variant_param_defs(
+/// which sibling fields exist. Handles both a rich (named-field) variant, e.g.
+/// `Scale { factor: f32 }`, and a plain tuple variant with one unnamed field, e.g.
+/// `Outliers(f32)` / `MultiFor(Vec<ObjectClass>)`.
+fn enum_variant_param_defs(
     enum_info: &EnumInfo,
     access: &str,
     routing_prefix: &str,
@@ -1648,48 +1663,107 @@ fn rich_enum_variant_param_defs(
         .variants
         .iter()
         .map(|v| {
-            if !v.is_rich() {
-                let pattern = if v.data_type.is_some() {
-                    format!("{settings_name}::{}(_)", v.name)
-                } else {
-                    format!("{settings_name}::{}", v.name)
-                };
-                return format!("{pattern} => vec![]");
+            if v.is_rich() {
+                let field_names: Vec<&str> =
+                    v.named_fields.iter().map(|f| f.name.as_str()).collect();
+                let pattern = format!(
+                    "{settings_name}::{} {{ {} }}",
+                    v.name,
+                    field_names.join(", ")
+                );
+                let field_literals: Vec<String> = v
+                    .named_fields
+                    .iter()
+                    .filter(|f| f.metadata.visible)
+                    .filter_map(|f| {
+                        let routing_name = format!("{routing_prefix}.{}", f.name);
+                        let display_label = f
+                            .metadata
+                            .display_name
+                            .as_deref()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| snake_to_title_case(&f.name));
+                        let description = escape_doc_comments(&f.doc_comments);
+                        leaf_param_def_literal(
+                            &f.ty,
+                            &f.metadata,
+                            &f.name,
+                            &routing_name,
+                            &display_label,
+                            &description,
+                            enums,
+                        )
+                    })
+                    .collect();
+                return format!("{pattern} => vec![{}]", field_literals.join(", "));
             }
-            let field_names: Vec<&str> = v.named_fields.iter().map(|f| f.name.as_str()).collect();
-            let pattern = format!(
-                "{settings_name}::{} {{ {} }}",
-                v.name,
-                field_names.join(", ")
-            );
-            let field_literals: Vec<String> = v
-                .named_fields
-                .iter()
-                .filter(|f| f.metadata.visible)
-                .filter_map(|f| {
-                    let routing_name = format!("{routing_prefix}.{}", f.name);
-                    let display_label = f
-                        .metadata
-                        .display_name
-                        .as_deref()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| snake_to_title_case(&f.name));
-                    let description = escape_doc_comments(&f.doc_comments);
-                    leaf_param_def_literal(
-                        &f.ty,
-                        &f.metadata,
-                        &f.name,
-                        &routing_name,
-                        &display_label,
-                        &description,
-                        enums,
-                    )
-                })
-                .collect();
-            format!("{pattern} => vec![{}]", field_literals.join(", "))
+            if let Some(data_ty) = &v.data_type {
+                let pattern = format!("{settings_name}::{}(__inner)", v.name);
+                let routing_name = format!("{routing_prefix}.0");
+                let display_label = v
+                    .display_name
+                    .as_deref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| pascal_to_title_case(&v.name));
+                let description = escape_doc_comments(&v.doc_comments);
+                let literal = tuple_variant_param_def_literal(
+                    data_ty,
+                    "__inner",
+                    &routing_name,
+                    &display_label,
+                    &description,
+                    enums,
+                );
+                let field_literals = literal.into_iter().collect::<Vec<_>>().join(", ");
+                return format!("{pattern} => vec![{field_literals}]");
+            }
+            format!("{settings_name}::{} => vec![]", v.name)
         })
         .collect();
     format!("match &{access} {{ {} }}", arms.join(", "))
+}
+
+/// Builds the single `ParameterDef` literal for a tuple variant's lone, unnamed
+/// payload field (e.g. `Outliers(f32)`'s `f32`, or `MultiFor(Vec<ObjectClass>)`'s
+/// `Vec<ObjectClass>`) - the tuple-variant counterpart to a rich variant's named
+/// fields, which have no field name to route a display label/metadata through, so
+/// this always uses the variant's own display name/doc comment and default metadata.
+fn tuple_variant_param_def_literal(
+    ty: &str,
+    access: &str,
+    routing_name: &str,
+    display_label: &str,
+    description: &str,
+    enums: &[EnumInfo],
+) -> Option<String> {
+    // Vec<ObjectClass> / Vec<SegmentationClass> → multi-select class picker, mirroring
+    // the struct-field handling in `field_to_param_def` (a tuple variant's payload has
+    // no field name to flatten a nested user struct through, so only these two
+    // special-cased Vec forms and `leaf_param_def_literal`'s leaf types are supported).
+    if ty == "Vec<ObjectClass>" {
+        let value_expr = format!(
+            "{access}.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(\",\")"
+        );
+        let flags_expr = format!(
+            "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
+        );
+        return Some(format!(
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiObjClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+        ));
+    }
+    if ty == "Vec<SegmentationClass>" {
+        let value_expr = format!(
+            "{access}.iter().map(|c| c.as_u32().to_string()).collect::<Vec<_>>().join(\",\")"
+        );
+        let flags_expr = format!(
+            "(0u32..33u32).map(|__idx| if {access}.iter().any(|c| c.as_u32() == __idx) {{ \"1\".to_string() }} else {{ \"0\".to_string() }}).collect::<Vec<_>>()"
+        );
+        return Some(format!(
+            "ParameterDef {{ name: \"{routing_name}\".to_string(), display_name: \"{display_label}\".to_string(), description: \"{description}\".to_string(), value: {value_expr}, param_type: ParamType::MultiSegClass, options: {flags_expr}, min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }}"
+        ));
+    }
+    let meta = FieldMetadata::default();
+    leaf_param_def_literal(ty, &meta, access, routing_name, display_label, description, enums)
 }
 
 /// Returns a list of `Vec<ParameterDef>`-typed expressions contributing this field's
@@ -1784,11 +1858,13 @@ fn field_to_param_def(
             .collect();
     }
 
-    // Rich enum (e.g. `Scale { factor: f32 }`) → discriminant dropdown, PLUS a second
-    // expression that switches in the active variant's own fields. This is what makes the
-    // *set* of visible parameters change with the dropdown, not just one field's value.
+    // Enum with a data-carrying variant (e.g. a rich `Scale { factor: f32 }`, or a
+    // plain tuple `Outliers(f32)` / `MultiFor(Vec<ObjectClass>)`) → discriminant
+    // dropdown, PLUS a second expression that switches in the active variant's own
+    // field(s). This is what makes the *set* of visible parameters change with the
+    // dropdown, not just one field's value.
     if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty.as_str()) {
-        if enum_info.is_rich() {
+        if enum_info.has_variant_payload() {
             let dropdown = leaf_param_def_literal(
                 ty,
                 meta,
@@ -1798,9 +1874,9 @@ fn field_to_param_def(
                 &description,
                 enums,
             )
-            .expect("rich enum dropdown literal is always Some");
+            .expect("enum dropdown literal is always Some");
             let variant_fields =
-                rich_enum_variant_param_defs(enum_info, &access, &routing_name, enums);
+                enum_variant_param_defs(enum_info, &access, &routing_name, enums);
             return vec![format!("vec![{dropdown}]"), variant_fields];
         }
     }
@@ -2012,13 +2088,13 @@ fn field_to_apply_change(
         return results;
     }
 
-    // Rich enum (e.g. `Scale { factor: f32 }`) → setting the field itself picks a variant
-    // (constructed with its own field defaults); setting "{field}.{inner}" mutates one field
-    // of whichever variant currently happens to be active.
+    // Enum with a data-carrying variant → setting the field itself picks a variant
+    // (constructed with its own field/payload defaults); setting "{field}.{inner}"
+    // mutates the active variant's field(s) without disturbing which one is active.
     if let Some(enum_info) = enums.iter().find(|e| e.enum_name.as_str() == ty.as_str()) {
-        if enum_info.is_rich() {
+        if enum_info.has_variant_payload() {
             let access = format!("{var}.{name}");
-            return vec![rich_enum_apply_change(
+            return vec![enum_variant_apply_change(
                 enum_info,
                 &access,
                 &display_name,
@@ -2074,8 +2150,9 @@ fn leaf_apply_change_branch(
                 let settings_name = enum_info.settings_name();
                 // Only plain unit variants can be picked by label here; data-carrying
                 // variants (tuple or rich) need their own fields supplied, which a flat
-                // `param_name == condition` set can't do — see `rich_enum_apply_change` for
-                // the rich case.
+                // `param_name == condition` set can't do — see `enum_variant_apply_change`,
+                // which `field_to_apply_change` routes to instead whenever the enum has any
+                // data-carrying variant, so this branch never actually sees one in practice.
                 let arms: String = enum_info
                     .variants
                     .iter()
@@ -2102,7 +2179,7 @@ fn leaf_apply_change_branch(
 /// variant (constructing it with its own `#[cmdsmeta(default = ...)]` field values), and one
 /// per variant to mutate a single inner field — keyed by `"{field}.{inner_field}"` — without
 /// disturbing which variant is active.
-fn rich_enum_apply_change(
+fn enum_variant_apply_change(
     enum_info: &EnumInfo,
     access: &str,
     display_name: &str,
@@ -2127,10 +2204,24 @@ fn rich_enum_apply_change(
                     .map(|f| format!("{}: {}, ", f.name, field_default_expr(f, enums, commands)))
                     .collect();
                 format!("{settings_name}::{} {{ {fields} }}", v.name)
-            } else if v.data_type.is_some() {
-                // Switching onto a tuple variant from the discriminant alone has no value to
-                // supply; keep whatever was already there rather than picking an arbitrary one.
-                format!("{access}.clone()")
+            } else if let Some(data_ty) = &v.data_type {
+                // Construct the tuple variant's own payload from its type's default
+                // (e.g. `vec![]` for `Vec<ObjectClass>`), the same way a rich variant's
+                // fields are defaulted - so switching the dropdown actually switches the
+                // active variant instead of silently keeping the previous one (which,
+                // being a *different* variant, would otherwise never match this arm and
+                // the switch would appear to do nothing).
+                let synthetic = FieldInfo {
+                    name: "0".to_string(),
+                    ty: data_ty.clone(),
+                    doc_comments: vec![],
+                    metadata: FieldMetadata::default(),
+                };
+                format!(
+                    "{settings_name}::{}({})",
+                    v.name,
+                    field_default_expr(&synthetic, enums, commands)
+                )
             } else {
                 format!("{settings_name}::{}", v.name)
             };
@@ -2143,35 +2234,97 @@ fn rich_enum_apply_change(
 
     let mut nested_branches = String::new();
     for v in &enum_info.variants {
-        if !v.is_rich() {
+        if v.is_rich() {
+            let bindings: String = v
+                .named_fields
+                .iter()
+                .map(|f| format!("ref mut {}, ", f.name))
+                .collect();
+            let inner: Vec<String> = v
+                .named_fields
+                .iter()
+                .filter(|f| f.metadata.visible)
+                .filter_map(|f| {
+                    let condition = format!("{display_name}.{}", f.name);
+                    let assign = format!("*{}", f.name);
+                    leaf_apply_change_branch(&f.ty, &assign, &condition, enums)
+                })
+                .collect();
+            if inner.is_empty() {
+                continue;
+            }
+            nested_branches.push_str(&format!(
+                "if let {settings_name}::{} {{ {bindings} }} = {access} {{ {} }} ",
+                v.name,
+                inner.join(" ")
+            ));
             continue;
         }
-        let bindings: String = v
-            .named_fields
-            .iter()
-            .map(|f| format!("ref mut {}, ", f.name))
-            .collect();
-        let inner: Vec<String> = v
-            .named_fields
-            .iter()
-            .filter(|f| f.metadata.visible)
-            .filter_map(|f| {
-                let condition = format!("{display_name}.{}", f.name);
-                let assign = format!("*{}", f.name);
-                leaf_apply_change_branch(&f.ty, &assign, &condition, enums)
-            })
-            .collect();
-        if inner.is_empty() {
-            continue;
+        if let Some(data_ty) = &v.data_type {
+            let condition = format!("{display_name}.0");
+            if let Some(branch) = tuple_variant_apply_change_branch(data_ty, "__inner", &condition, enums)
+            {
+                nested_branches.push_str(&format!(
+                    "if let {settings_name}::{}(ref mut __inner) = {access} {{ {branch} }} ",
+                    v.name
+                ));
+            }
         }
-        nested_branches.push_str(&format!(
-            "if let {settings_name}::{} {{ {bindings} }} = {access} {{ {} }} ",
-            v.name,
-            inner.join(" ")
-        ));
     }
 
     format!("{switch_branch} {nested_branches}")
+}
+
+/// Builds the single `apply_param_change` branch for a tuple variant's lone
+/// payload, bound as `ref mut __inner` inside the variant's own `if let` match
+/// arm (see [`enum_variant_apply_change`]). Mirrors the `Vec<ObjectClass>`/
+/// `Vec<SegmentationClass>` toggle-or-replace handling in `field_to_apply_change`,
+/// since a tuple variant's payload skips that function entirely (it has no field
+/// name / struct access path to route through), plus `leaf_apply_change_branch`
+/// for any other leaf type (e.g. `Outliers(f32)`'s `f32`).
+fn tuple_variant_apply_change_branch(
+    ty: &str,
+    assign: &str,
+    condition: &str,
+    enums: &[EnumInfo],
+) -> Option<String> {
+    if ty == "Vec<ObjectClass>" {
+        return Some(format!(
+            "if param_name == \"{condition}\" {{ \
+                if let Some(id) = value.strip_prefix(\"toggle:\").and_then(|x| x.trim().parse::<u32>().ok()) {{ \
+                    if {assign}.iter().any(|c| c.to_u32().map_or(false, |v| v == id)) {{ \
+                        {assign}.retain(|c| c.to_u32().map_or(true, |v| v != id)); \
+                    }} else {{ \
+                        {assign}.push(ObjectClass::Valid(id)); \
+                    }} \
+                }} else {{ \
+                    *{assign} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(ObjectClass::Valid).collect(); \
+                }} \
+            }}"
+        ));
+    }
+    if ty == "Vec<SegmentationClass>" {
+        return Some(format!(
+            "if param_name == \"{condition}\" {{ \
+                if let Some(id) = value.strip_prefix(\"toggle:\").and_then(|x| x.trim().parse::<u32>().ok()) {{ \
+                    if {assign}.iter().any(|c| c.as_u32() == id) {{ \
+                        {assign}.retain(|c| c.as_u32() != id); \
+                    }} else {{ \
+                        {assign}.push(SegmentationClass(id)); \
+                    }} \
+                }} else {{ \
+                    *{assign} = value.split(',').filter(|x| !x.is_empty()).filter_map(|x| x.trim().parse::<u32>().ok()).map(SegmentationClass).collect(); \
+                }} \
+            }}"
+        ));
+    }
+    // `leaf_apply_change_branch`'s bodies assign directly into `{assign}` (e.g.
+    // `{assign} = v`), so - matching the convention `enum_variant_apply_change` already
+    // uses for a rich variant's own `ref mut`-bound scalar fields - the access needs its
+    // own deref baked in up front, since `assign` here is a bare `ref mut` binding
+    // (`&mut T`), not an already-dereferenced l-value.
+    let deref_assign = format!("*{assign}");
+    leaf_apply_change_branch(ty, &deref_assign, condition, enums)
 }
 
 /// The name shown to the user for a command: the `#[cmdsmeta(display_name = "...")]`

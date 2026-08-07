@@ -27,6 +27,28 @@ use log::{debug, info, warn};
 use macros::CommandsMeta;
 use std::sync::Arc;
 
+/// How many partners an object may coloc with at once.
+#[derive(CommandsMeta, Debug, PartialEq)]
+pub enum ColocMultiplicity {
+    /// Every object keeps only its single best-overlap match per other class -
+    /// e.g. a small object sitting on the border of two larger ones picks
+    /// exactly one (the larger overlap; ties go to the lower `ObjectId`).
+    #[cmdsmeta(display_name = "No multi coloc (1:1)")]
+    OneToOne,
+
+    /// Every object may coloc with every overlapping partner meeting `min_coloc_area`.
+    #[cmdsmeta(display_name = "Allow multi coloc")]
+    ManyToMany,
+
+    /// Only objects of these classes may coloc with more than one partner;
+    /// every other class in `classes_to_coloc` is capped to its single
+    /// best-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and
+    /// `MultiFor([Cell])`, a cell can coloc with any number of spots, but
+    /// each spot colocs with exactly one cell (the one it overlaps most).
+    #[cmdsmeta(display_name = "Multi coloc only for selected")]
+    MultiFor(Vec<ObjectClass>),
+}
+
 /// Calculates spatial colocalization and intersections between specified object classes.
 ///
 /// This command scans the object cache, groups objects by their designated classes,
@@ -42,6 +64,7 @@ pub struct Colocalization {
     /// Optional additional label filters.
     ///
     /// Only classes which matches all of these filters are used for coloc calculation
+    #[cmdsmeta(visible = false)]
     pub filter_classes: Vec<ObjectClass>,
 
     /// Class of the overlapping area if needed
@@ -49,26 +72,29 @@ pub struct Colocalization {
     /// If defined the overlapping coloc area is added as new object and labeled with this class
     pub class_for_overlapping_areas: ObjectClass,
 
-    /// Classes an object must NOT overlap to be considered colocalized.
-    ///
-    /// An object that otherwise satisfies `classes_to_coloc` is excluded entirely
-    /// (no relation recorded, no intersection object created) if it also overlaps any
-    /// object from one of these classes with at least `min_coloc_area`. Leave empty
-    /// (the default) to disable this filter - exclusion is opt-in.
-    ///
-    /// Example: to find objects colocalizing with class 1 and 2 but *not* 3, set
-    /// `classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.
-    #[cmdsmeta(optional = true)]
-    pub exclude_classes: Vec<ObjectClass>,
+    /// How many partners an object may coloc with at once.
+    #[cmdsmeta(default = ColocMultiplicity::OneToOne)]
+    pub multiplicity: ColocMultiplicity,
 
-    /// If set one object is allowed to coloc with more than one other object
-    pub allow_multi_object_coloc: bool,
-
-    // Size unit for the minimum coloc area size
+    /// Size unit for the minimum coloc area size
+    #[cmdsmeta(default = SizeUnits::Pixels)]
     pub size_unit: SizeUnits,
 
     /// Minimum overlapping area size to count objects as coloc
+    #[cmdsmeta(default = 0.0)]
     pub min_coloc_area: f32,
+
+    /// Classes an object must NOT overlap to be considered colocalized.
+    ///
+    /// Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
+    /// Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).
+    /// Without exclude_classes, any object satisfying that gets recorded as colocalized.
+    /// With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.
+    /// So it's a "match A and B, but not C" filter
+    ///
+    /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
+    #[cmdsmeta(optional = true)]
+    pub exclude_classes: Vec<ObjectClass>,
 }
 
 impl ImageAlgorithm for Colocalization {
@@ -183,12 +209,18 @@ impl ImageAlgorithm for Colocalization {
                         })
                         .collect();
 
-                    if !self.allow_multi_object_coloc {
-                        // Keep only the single best match (largest overlap area) per class.
+                    if !self.allows_multi(anchor_class) {
+                        // Keep only the single best match (largest overlap area) per
+                        // class - ties (equal overlap area, e.g. an object sitting
+                        // exactly on the border between two equally-overlapping
+                        // partners) go to the lower ObjectId, so the pick is
+                        // deterministic rather than depending on cache iteration order.
                         if let Some(best_idx) = candidates
                             .iter()
                             .enumerate()
-                            .max_by_key(|(_, (_, area))| *area)
+                            .max_by(|(_, (id_a, area_a)), (_, (id_b, area_b))| {
+                                area_a.cmp(area_b).then_with(|| id_b.cmp(id_a))
+                            })
                             .map(|(idx, _)| idx)
                         {
                             let best = candidates.swap_remove(best_idx);
@@ -313,6 +345,19 @@ impl ImageAlgorithm for Colocalization {
     }
 }
 
+impl Colocalization {
+    /// Whether an anchor object of `anchor_class` may keep more than one
+    /// overlapping partner per other class, or must be capped to its single
+    /// best-overlap match (see [`ColocMultiplicity`]).
+    fn allows_multi(&self, anchor_class: &ObjectClass) -> bool {
+        match &self.multiplicity {
+            ColocMultiplicity::OneToOne => false,
+            ColocMultiplicity::ManyToMany => true,
+            ColocMultiplicity::MultiFor(classes) => classes.contains(anchor_class),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -412,7 +457,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -437,7 +482,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -472,7 +517,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -502,7 +547,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -535,7 +580,7 @@ mod tests {
             filter_classes: vec![CLASS_C], // only ROIs also carrying CLASS_C participate
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -566,7 +611,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -659,7 +704,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -692,7 +737,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -752,7 +797,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -794,7 +839,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -841,7 +886,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -891,7 +936,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -945,7 +990,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![CLASS_C],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -977,7 +1022,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![CLASS_C],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -1007,7 +1052,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -1021,5 +1066,103 @@ mod tests {
 
         let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(a.colocalized_with.contains_key(&CLASS_B));
+    }
+
+    // --- ColocMultiplicity::MultiFor ---
+
+    #[test]
+    fn multi_for_lets_listed_class_coloc_multiple_while_capping_the_other_to_its_single_best_match()
+    {
+        // Cells (CLASS_A, listed in MultiFor) may coloc with any number of
+        // spots; spots (CLASS_B, not listed) must each pick exactly one cell -
+        // the "count spots per cell" use case, where a spot sitting on the
+        // border between two cells must not be double-counted under both.
+        let coloc = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            filter_classes: vec![],
+            exclude_classes: vec![],
+            class_for_overlapping_areas: ObjectClass::Unset,
+            multiplicity: ColocMultiplicity::MultiFor(vec![CLASS_A]),
+            min_coloc_area: 0.0,
+            size_unit: SizeUnits::Pixels,
+        };
+        let mut cache = PipelineCache::default();
+
+        const ID_CELL_A: u128 = 900_001; // lower id - wins area ties
+        const ID_CELL_B: u128 = 900_002;
+        const ID_SPOT_BORDER: u128 = 900_003; // straddles both cells, equal overlap area
+        const ID_SPOT_IN_A: u128 = 900_004;
+        const ID_SPOT_IN_B: u128 = 900_005;
+
+        // Cell A: [0,9]x[0,9]; Cell B: [10,19]x[0,9] - adjacent, non-overlapping.
+        let cell_a = make_filled_object(ID_CELL_A, [0, 0, 9, 9], ImagePlane::default(), CLASS_A);
+        let cell_b = make_filled_object(ID_CELL_B, [10, 0, 19, 9], ImagePlane::default(), CLASS_A);
+        // Border spot [8,11]x[4,5]: overlaps A in x=[8,9] (2 cols) and B in
+        // x=[10,11] (2 cols), same y=[4,5] range both times -> 2x2=4 px each,
+        // an exact tie.
+        let spot_border = make_filled_object(
+            ID_SPOT_BORDER,
+            [8, 4, 11, 5],
+            ImagePlane::default(),
+            CLASS_B,
+        );
+        let spot_in_a =
+            make_filled_object(ID_SPOT_IN_A, [2, 2, 3, 3], ImagePlane::default(), CLASS_B);
+        let spot_in_b =
+            make_filled_object(ID_SPOT_IN_B, [15, 2, 16, 3], ImagePlane::default(), CLASS_B);
+
+        cache.object_cache.insert(cell_a.id.clone(), cell_a);
+        cache.object_cache.insert(cell_b.id.clone(), cell_b);
+        cache
+            .object_cache
+            .insert(spot_border.id.clone(), spot_border);
+        cache.object_cache.insert(spot_in_a.id.clone(), spot_in_a);
+        cache.object_cache.insert(spot_in_b.id.clone(), spot_in_b);
+
+        run(&coloc, &mut cache);
+
+        // Cell A (listed in MultiFor) sees every spot that overlaps it.
+        let cell_a = cache.object_cache.get(&ObjectId(ID_CELL_A)).unwrap();
+        let mut a_spots = cell_a.colocalized_with[&CLASS_B].clone();
+        a_spots.sort();
+        let mut expected_a = vec![ObjectId(ID_SPOT_BORDER), ObjectId(ID_SPOT_IN_A)];
+        expected_a.sort();
+        assert_eq!(
+            a_spots, expected_a,
+            "Cell A must list every overlapping spot"
+        );
+
+        // Cell B (also listed) sees every spot that overlaps it too.
+        let cell_b = cache.object_cache.get(&ObjectId(ID_CELL_B)).unwrap();
+        let mut b_spots = cell_b.colocalized_with[&CLASS_B].clone();
+        b_spots.sort();
+        let mut expected_b = vec![ObjectId(ID_SPOT_BORDER), ObjectId(ID_SPOT_IN_B)];
+        expected_b.sort();
+        assert_eq!(
+            b_spots, expected_b,
+            "Cell B must list every overlapping spot"
+        );
+
+        // The border spot overlaps both cells by the exact same area, so it
+        // picks exactly one partner - not both - breaking the tie toward the
+        // lower ObjectId (Cell A).
+        let spot_border = cache.object_cache.get(&ObjectId(ID_SPOT_BORDER)).unwrap();
+        assert_eq!(
+            spot_border.colocalized_with[&CLASS_A],
+            vec![ObjectId(ID_CELL_A)],
+            "an equal-overlap tie must resolve to the lower ObjectId, not both cells"
+        );
+
+        // Spots overlapping only one cell are unaffected by the cap.
+        let spot_in_a = cache.object_cache.get(&ObjectId(ID_SPOT_IN_A)).unwrap();
+        assert_eq!(
+            spot_in_a.colocalized_with[&CLASS_A],
+            vec![ObjectId(ID_CELL_A)]
+        );
+        let spot_in_b = cache.object_cache.get(&ObjectId(ID_SPOT_IN_B)).unwrap();
+        assert_eq!(
+            spot_in_b.colocalized_with[&CLASS_A],
+            vec![ObjectId(ID_CELL_B)]
+        );
     }
 }

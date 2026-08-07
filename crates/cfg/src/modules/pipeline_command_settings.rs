@@ -52,6 +52,25 @@ pub enum ClassificationClassifyObjectsClassifyMatchHandlingSettings {
     ReclassifyIfNotMatch,
 }
 
+///  How many partners an object may coloc with at once.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ClassificationColocObjectsColocMultiplicitySettings {
+    /// Every object keeps only its single best-overlap match per other class -
+    /// e.g. a small object sitting on the border of two larger ones picks
+    /// exactly one (the larger overlap; ties go to the lower `ObjectId`).
+    #[default]
+    OneToOne,
+    /// Every object may coloc with every overlapping partner meeting `min_coloc_area`.
+    ManyToMany,
+    /// Only objects of these classes may coloc with more than one partner;
+    /// every other class in `classes_to_coloc` is capped to its single
+    /// best-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and
+    /// `MultiFor([Cell])`, a cell can coloc with any number of spots, but
+    /// each spot colocs with exactly one cell (the one it overlaps most).
+    MultiFor(Vec<ObjectClass>),
+}
+
 ///  Specifies the feature extraction method for the Hessian matrix.
 ///
 ///  The Hessian matrix describes the local second-order structure of an image,
@@ -1590,7 +1609,8 @@ fn _serde_default_colocalization_exclude_classes() -> Vec<ObjectClass> {
 ///  and performs spatial overlap analysis. It records colocalization relationships
 ///  between intersecting entities and can optionally generate new child ROIs representing
 ///  the precise intersection regions.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColocalizationSettings {
     ///  Theses are the classes the coloclization should be calculated for
@@ -1603,22 +1623,37 @@ pub struct ColocalizationSettings {
     ///
     ///  If defined the overlapping coloc area is added as new object and labeled with this class
     pub class_for_overlapping_areas: ObjectClass,
-    ///  Classes an object must NOT overlap to be considered colocalized.
-    ///
-    ///  An object that otherwise satisfies `classes_to_coloc` is excluded entirely
-    ///  (no relation recorded, no intersection object created) if it also overlaps any
-    ///  object from one of these classes with at least `min_coloc_area`. Leave empty
-    ///  (the default) to disable this filter - exclusion is opt-in.
-    ///
-    ///  Example: to find objects colocalizing with class 1 and 2 but *not* 3, set
-    ///  `classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.
-    #[serde(default = "_serde_default_colocalization_exclude_classes")]
-    pub exclude_classes: Vec<ObjectClass>,
-    ///  If set one object is allowed to coloc with more than one other object
-    pub allow_multi_object_coloc: bool,
+    ///  How many partners an object may coloc with at once.
+    pub multiplicity: ClassificationColocObjectsColocMultiplicitySettings,
+    ///  Size unit for the minimum coloc area size
     pub size_unit: SizeUnits,
     ///  Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
+    ///  Classes an object must NOT overlap to be considered colocalized.
+    ///
+    ///  Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
+    ///  Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).
+    ///  Without exclude_classes, any object satisfying that gets recorded as colocalized.
+    ///  With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.
+    ///  So it's a "match A and B, but not C" filter
+    ///
+    ///  Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
+    #[serde(default = "_serde_default_colocalization_exclude_classes")]
+    pub exclude_classes: Vec<ObjectClass>,
+}
+
+impl Default for ColocalizationSettings {
+    fn default() -> Self {
+        Self {
+            classes_to_coloc: vec![],
+            filter_classes: vec![],
+            class_for_overlapping_areas: ObjectClass::default(),
+            multiplicity: ClassificationColocObjectsColocMultiplicitySettings::OneToOne,
+            size_unit: SizeUnits::Pixels,
+            min_coloc_area: 0.0f32,
+            exclude_classes: vec![],
+        }
+    }
 }
 
 ///  Computes a boolean set operation between two object classes, object pair by

@@ -30,6 +30,7 @@ pub use self::classification::ai_object_classifier::AiObjectClassifier;
 pub use self::classification::ai_object_classifier::ClassificationMapping;
 pub use self::classification::classify_objects::ClassifyMatchHandling;
 pub use self::classification::classify_objects::ClassifyObjects;
+pub use self::classification::coloc_objects::ColocMultiplicity;
 pub use self::classification::coloc_objects::Colocalization;
 pub use self::classification::extract_objects::ExtractObjects;
 pub use self::classification::object_math::ObjectMath;
