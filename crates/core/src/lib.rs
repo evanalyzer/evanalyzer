@@ -64,9 +64,9 @@ pub use crate::job::job_executor::ProgressEvent;
 pub use crate::job::job_generator::generate_analyze_job_from_project_settings;
 pub use crate::job::job_generator::generate_preview_job_from_project_settings;
 pub use crate::storage::PipelineResultExporter;
+pub use crate::storage::duckdb::ClassRow;
 pub use crate::storage::duckdb::DuckDbExporter;
 pub use crate::storage::duckdb::DuckDbReader;
-pub use crate::storage::duckdb::ClassRow;
 pub use crate::storage::duckdb::ImageRow;
 pub use crate::storage::duckdb::ObjectFilter;
 pub use crate::storage::duckdb::ObjectRow;
@@ -81,7 +81,9 @@ pub use crate::storage::memory::MemoryExporter;
 #[cfg(feature = "ai")]
 pub use crate::ai_learning::model::SavedClassifier;
 #[cfg(feature = "ai")]
-pub use crate::ai_learning::model::{load_from_file as load_classifier_from_file, save_to_file as save_classifier_to_file};
+pub use crate::ai_learning::model::{
+    load_from_file as load_classifier_from_file, save_to_file as save_classifier_to_file,
+};
 #[cfg(feature = "ai")]
 pub use crate::ai_learning::training::object::ObjectTrainingJob;
 #[cfg(feature = "ai")]

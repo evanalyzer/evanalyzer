@@ -186,10 +186,10 @@ mod tests {
     use crate::ai_learning::model::Classifier;
     use crate::object::{Intensity, ObjectInit};
     use evanalyzer_cfg::core_types::ObjectId;
+    use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
     use evanalyzer_cfg::settings::ai_learning_settings::{
         AiLearningBackendSettings, AiLearningSettings, KnnSettings, PixelClassLabel,
     };
-    use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
     use indexmap::IndexMap;
 

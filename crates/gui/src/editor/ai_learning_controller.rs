@@ -325,7 +325,10 @@ impl AiLearningController {
     /// require re-entering the whole configuration by hand.
     fn browse_existing_model(self: &Arc<Self>) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("AI Classifier Model", &[evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS])
+            .add_filter(
+                "AI Classifier Model",
+                &[evanalyzer_cfg::EVANALYZER_TRAINED_AI_MODELS],
+            )
             .pick_file()
         else {
             return;
@@ -377,7 +380,9 @@ impl AiLearningController {
                 let mut metric_rows: Vec<ObjectMetricRowSlint> =
                     state.get_object_metrics().iter().collect();
                 for row in &mut metric_rows {
-                    row.selected = feature_spec.metrics.contains(&object_metric_row_to_metric(row));
+                    row.selected = feature_spec
+                        .metrics
+                        .contains(&object_metric_row_to_metric(row));
                 }
                 state.set_object_metrics(ModelRc::new(VecModel::from(metric_rows)));
 
@@ -396,7 +401,10 @@ impl AiLearningController {
         }
 
         state.set_settings(settings);
-        self.set_training_status(&format!("Loaded settings from '{}'.", path.display()), false);
+        self.set_training_status(
+            &format!("Loaded settings from '{}'.", path.display()),
+            false,
+        );
     }
 
     // -- Training entry point ------------------------------------------------
@@ -528,9 +536,9 @@ impl AiLearningController {
                 Ok(result) => result,
                 Err(panic_payload) => {
                     let msg = crate::helper::worker_supervisor::panic_message(&panic_payload);
-                    Err(evanalyzer_cfg::core_types::InternalErrors::Internal(format!(
-                        "Training worker crashed: {msg}"
-                    )))
+                    Err(evanalyzer_cfg::core_types::InternalErrors::Internal(
+                        format!("Training worker crashed: {msg}"),
+                    ))
                 }
             };
 
@@ -558,7 +566,9 @@ impl AiLearningController {
                         Err(e) => {
                             warn!("Failed to save trained classifier: {e}");
                             (
-                                format!("Training completed ({stats_line}), but saving failed: {e}"),
+                                format!(
+                                    "Training completed ({stats_line}), but saving failed: {e}"
+                                ),
                                 true,
                             )
                         }
@@ -1089,15 +1099,16 @@ fn preprocessing_steps_to_feature_row(steps: &[PreprocessingSteps]) -> FeatureRo
             pre_blur_enabled: false,
             ..default_feature_row()
         },
-        [PreprocessingSteps::GaussianBlur(blur), PreprocessingSteps::Laplacian(s)] => {
-            FeatureRowSlint {
-                filter_type: 3,
-                kernel_size: s.kernel_size as i32,
-                pre_blur_enabled: true,
-                pre_blur_sigma: blur.sigma,
-                ..default_feature_row()
-            }
-        }
+        [
+            PreprocessingSteps::GaussianBlur(blur),
+            PreprocessingSteps::Laplacian(s),
+        ] => FeatureRowSlint {
+            filter_type: 3,
+            kernel_size: s.kernel_size as i32,
+            pre_blur_enabled: true,
+            pre_blur_sigma: blur.sigma,
+            ..default_feature_row()
+        },
         [PreprocessingSteps::StructureTensor(s)] => FeatureRowSlint {
             filter_type: 4,
             kernel_size: s.kernel_size as i32,
@@ -1115,22 +1126,31 @@ fn preprocessing_steps_to_feature_row(steps: &[PreprocessingSteps]) -> FeatureRo
             hessian_mode: hessian_mode_to_row(&s.mode),
             ..default_feature_row()
         },
-        [PreprocessingSteps::GaussianBlur(blur), PreprocessingSteps::Hessian(s)] => {
-            FeatureRowSlint {
-                filter_type: 5,
-                pre_blur_enabled: true,
-                pre_blur_sigma: blur.sigma,
-                hessian_mode: hessian_mode_to_row(&s.mode),
-                ..default_feature_row()
-            }
-        }
+        [
+            PreprocessingSteps::GaussianBlur(blur),
+            PreprocessingSteps::Hessian(s),
+        ] => FeatureRowSlint {
+            filter_type: 5,
+            pre_blur_enabled: true,
+            pre_blur_sigma: blur.sigma,
+            hessian_mode: hessian_mode_to_row(&s.mode),
+            ..default_feature_row()
+        },
         [PreprocessingSteps::RankFilter(s)] => {
             let (rank_stat, rank_threshold) = match &s.filter_type {
-                FiltersRankFilterRankFilterTypeSettings::Median => (1, default_feature_row().rank_threshold),
-                FiltersRankFilterRankFilterTypeSettings::Min => (2, default_feature_row().rank_threshold),
-                FiltersRankFilterRankFilterTypeSettings::Max => (3, default_feature_row().rank_threshold),
+                FiltersRankFilterRankFilterTypeSettings::Median => {
+                    (1, default_feature_row().rank_threshold)
+                }
+                FiltersRankFilterRankFilterTypeSettings::Min => {
+                    (2, default_feature_row().rank_threshold)
+                }
+                FiltersRankFilterRankFilterTypeSettings::Max => {
+                    (3, default_feature_row().rank_threshold)
+                }
                 FiltersRankFilterRankFilterTypeSettings::Outliers(t) => (4, *t),
-                FiltersRankFilterRankFilterTypeSettings::Mean => (0, default_feature_row().rank_threshold),
+                FiltersRankFilterRankFilterTypeSettings::Mean => {
+                    (0, default_feature_row().rank_threshold)
+                }
             };
             FeatureRowSlint {
                 filter_type: 6,
@@ -1150,7 +1170,10 @@ fn preprocessing_steps_to_feature_row(steps: &[PreprocessingSteps]) -> FeatureRo
 /// Copies a loaded model's backend hyperparameters onto the dialog's
 /// settings, including which algorithm/mode is selected. See
 /// `browse_existing_model`.
-fn apply_loaded_backend_settings(settings: &mut AiTrainingSettingsSlint, backend: &AiLearningBackendSettings) {
+fn apply_loaded_backend_settings(
+    settings: &mut AiTrainingSettingsSlint,
+    backend: &AiLearningBackendSettings,
+) {
     match backend {
         AiLearningBackendSettings::RandomForest(s) => {
             settings.algorithm = 0;
@@ -1290,7 +1313,10 @@ fn describe_training_progress(event: &TrainingProgressEvent) -> Option<String> {
                     "Epoch {}/{total_epochs} - train loss {train_loss:.4}, validation loss {v:.4}",
                     epoch + 1
                 ),
-                None => format!("Epoch {}/{total_epochs} - train loss {train_loss:.4}", epoch + 1),
+                None => format!(
+                    "Epoch {}/{total_epochs} - train loss {train_loss:.4}",
+                    epoch + 1
+                ),
             };
             info!("{line}");
             Some(line)
@@ -1321,7 +1347,9 @@ fn format_training_stats(stats: &evanalyzer_core::TrainingStats) -> String {
             best_val_loss,
             best_val_epoch,
         } => {
-            let mut line = format!("{epochs_run}/{total_epochs} epoch(s), final train loss {final_train_loss:.4}");
+            let mut line = format!(
+                "{epochs_run}/{total_epochs} epoch(s), final train loss {final_train_loss:.4}"
+            );
             let (Some(final_val), Some(best_val), Some(best_epoch)) =
                 (final_val_loss, best_val_loss, best_val_epoch)
             else {
@@ -1395,7 +1423,10 @@ mod tests {
         r.sigma = 2.5;
 
         let steps = feature_row_to_preprocessing_steps(&r);
-        assert!(matches!(steps.as_slice(), [PreprocessingSteps::GaussianBlur(_)]));
+        assert!(matches!(
+            steps.as_slice(),
+            [PreprocessingSteps::GaussianBlur(_)]
+        ));
 
         let back = preprocessing_steps_to_feature_row(&steps);
         assert_eq!(back.filter_type, 1);
@@ -1421,7 +1452,10 @@ mod tests {
         r.pre_blur_enabled = false;
 
         let steps = feature_row_to_preprocessing_steps(&r);
-        assert!(matches!(steps.as_slice(), [PreprocessingSteps::Laplacian(_)]));
+        assert!(matches!(
+            steps.as_slice(),
+            [PreprocessingSteps::Laplacian(_)]
+        ));
 
         let back = preprocessing_steps_to_feature_row(&steps);
         assert_eq!(back.filter_type, 3);
@@ -1439,7 +1473,10 @@ mod tests {
         let steps = feature_row_to_preprocessing_steps(&r);
         assert!(matches!(
             steps.as_slice(),
-            [PreprocessingSteps::GaussianBlur(_), PreprocessingSteps::Laplacian(_)]
+            [
+                PreprocessingSteps::GaussianBlur(_),
+                PreprocessingSteps::Laplacian(_)
+            ]
         ));
 
         let back = preprocessing_steps_to_feature_row(&steps);
@@ -1494,7 +1531,10 @@ mod tests {
         let steps = feature_row_to_preprocessing_steps(&r);
         assert!(matches!(
             steps.as_slice(),
-            [PreprocessingSteps::GaussianBlur(_), PreprocessingSteps::Hessian(_)]
+            [
+                PreprocessingSteps::GaussianBlur(_),
+                PreprocessingSteps::Hessian(_)
+            ]
         ));
 
         let back = preprocessing_steps_to_feature_row(&steps);
@@ -1513,7 +1553,10 @@ mod tests {
             r.rank_threshold = threshold;
 
             let steps = feature_row_to_preprocessing_steps(&r);
-            assert!(matches!(steps.as_slice(), [PreprocessingSteps::RankFilter(_)]));
+            assert!(matches!(
+                steps.as_slice(),
+                [PreprocessingSteps::RankFilter(_)]
+            ));
 
             let back = preprocessing_steps_to_feature_row(&steps);
             assert_eq!(back.filter_type, 6, "stat {stat}");
@@ -1549,7 +1592,10 @@ mod tests {
 
     #[test]
     fn object_metric_row_to_metric_maps_non_intensity_ids() {
-        assert_eq!(object_metric_row_to_metric(&metric_row(0, -1)), ObjectMetric::Area);
+        assert_eq!(
+            object_metric_row_to_metric(&metric_row(0, -1)),
+            ObjectMetric::Area
+        );
         assert_eq!(
             object_metric_row_to_metric(&metric_row(12, -1)),
             ObjectMetric::Eccentricity
@@ -1668,7 +1714,9 @@ mod tests {
     // wired callback - see `crate::editor::test_support::test_ui_windows`'s
     // doc comment for why this headless harness doesn't need a real display.
 
-    use crate::editor::test_support::{project_with_one_image, test_ui_state_with_project, test_ui_windows};
+    use crate::editor::test_support::{
+        project_with_one_image, test_ui_state_with_project, test_ui_windows,
+    };
     use evanalyzer_app::extensions::project_ext::ProjectExt;
     use evanalyzer_cfg::core_types::ObjectId;
     use evanalyzer_cfg::settings::classification_settings::Class;
@@ -1683,13 +1731,18 @@ mod tests {
     #[test]
     fn attach_callbacks_add_feature_row_appends_a_default_row() {
         let (ui, _results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        let controller =
+            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
 
         ui.global::<AiLearningState>()
             .invoke_add_feature_row_clicked();
 
-        let rows: Vec<FeatureRowSlint> = ui.global::<AiLearningState>().get_feature_rows().iter().collect();
+        let rows: Vec<FeatureRowSlint> = ui
+            .global::<AiLearningState>()
+            .get_feature_rows()
+            .iter()
+            .collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].filter_type, 1); // Gaussian Blur, per default_feature_row
     }
@@ -1697,12 +1750,19 @@ mod tests {
     #[test]
     fn attach_callbacks_remove_feature_row_drops_the_given_index() {
         let (ui, _results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        let controller =
+            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
         let state = ui.global::<AiLearningState>();
         state.set_feature_rows(ModelRc::new(VecModel::from(vec![
-            FeatureRowSlint { filter_type: 0, ..default_feature_row() },
-            FeatureRowSlint { filter_type: 2, ..default_feature_row() },
+            FeatureRowSlint {
+                filter_type: 0,
+                ..default_feature_row()
+            },
+            FeatureRowSlint {
+                filter_type: 2,
+                ..default_feature_row()
+            },
         ])));
 
         state.invoke_remove_feature_row_clicked(0);
@@ -1715,7 +1775,8 @@ mod tests {
     #[test]
     fn attach_callbacks_remove_feature_row_out_of_range_is_a_no_op() {
         let (ui, _results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        let controller =
+            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
         let state = ui.global::<AiLearningState>();
         state.set_feature_rows(ModelRc::new(VecModel::from(vec![default_feature_row()])));
@@ -1728,27 +1789,46 @@ mod tests {
     #[test]
     fn attach_callbacks_add_gaussian_scales_parses_a_csv_list_and_skips_unparsable_entries() {
         let (ui, _results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        let controller =
+            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
 
         ui.global::<AiLearningState>()
             .invoke_add_gaussian_scales_clicked("1, x, 2.5, , 4".into());
 
-        let rows: Vec<FeatureRowSlint> = ui.global::<AiLearningState>().get_feature_rows().iter().collect();
+        let rows: Vec<FeatureRowSlint> = ui
+            .global::<AiLearningState>()
+            .get_feature_rows()
+            .iter()
+            .collect();
         let sigmas: Vec<f32> = rows.iter().map(|r| r.sigma).collect();
         assert_eq!(sigmas, vec![1.0, 2.5, 4.0]);
-        assert!(rows.iter().all(|r| r.filter_type == 1), "each scale is a GaussianBlur row");
+        assert!(
+            rows.iter().all(|r| r.filter_type == 1),
+            "each scale is a GaussianBlur row"
+        );
     }
 
     #[test]
     fn attach_callbacks_toggle_image_selected_flips_only_the_given_row() {
         let (ui, _results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
+        let controller =
+            make_controller_with_ui(ui.as_weak(), crate::editor::test_support::test_ui_state());
         controller.attach_callbacks();
         let state = ui.global::<AiLearningState>();
         state.set_training_images(ModelRc::new(VecModel::from(vec![
-            TrainingImageRowSlint { name: "a".into(), path: "a.tif".into(), selected: false, annotated_object_count: 0 },
-            TrainingImageRowSlint { name: "b".into(), path: "b.tif".into(), selected: false, annotated_object_count: 0 },
+            TrainingImageRowSlint {
+                name: "a".into(),
+                path: "a.tif".into(),
+                selected: false,
+                annotated_object_count: 0,
+            },
+            TrainingImageRowSlint {
+                name: "b".into(),
+                path: "b.tif".into(),
+                selected: false,
+                annotated_object_count: 0,
+            },
         ])));
 
         state.invoke_toggle_image_selected(1);
@@ -1789,7 +1869,10 @@ mod tests {
 
         let project = ui_state.get_project();
         let obj = &project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0];
-        assert!(obj.object_class.contains(&evanalyzer_cfg::core_types::ObjectClass::Valid(1)));
+        assert!(
+            obj.object_class
+                .contains(&evanalyzer_cfg::core_types::ObjectClass::Valid(1))
+        );
         drop(project);
 
         let rows: Vec<TrainingObjectRowSlint> = state.get_training_objects().iter().collect();
@@ -1830,7 +1913,10 @@ mod tests {
         // Toggling again flips it back.
         state.invoke_toggle_object_excluded(0);
         let project = ui_state.get_project();
-        assert!(!project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0].exclude_from_training);
+        assert!(
+            !project.images.list[std::path::Path::new("img.tif")].series[&0].objects[0]
+                .exclude_from_training
+        );
     }
 
     #[test]
@@ -1841,7 +1927,9 @@ mod tests {
         controller.attach_callbacks();
 
         // No panic with an empty training_objects list.
-        ui.global::<AiLearningState>().invoke_assign_object_class(0, 0);
-        ui.global::<AiLearningState>().invoke_toggle_object_excluded(0);
+        ui.global::<AiLearningState>()
+            .invoke_assign_object_class(0, 0);
+        ui.global::<AiLearningState>()
+            .invoke_toggle_object_excluded(0);
     }
 }

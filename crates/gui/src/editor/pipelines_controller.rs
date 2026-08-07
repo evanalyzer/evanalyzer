@@ -13,8 +13,8 @@ use crate::{PipelineDeleteConfirmState, PipelineEditState, PipelineRunningState}
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::templates::load_pipeline_templates;
 use evanalyzer_cfg::core_types::MemorySlot;
-use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_cfg::core_types::PipelineId;
 use evanalyzer_cfg::core_types::SegmentationClass;
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use evanalyzer_cfg::settings::ai_learning_settings::{
@@ -1433,7 +1433,10 @@ impl PipelinesController {
         };
 
         let (title, message) = match evanalyzer_core::load_classifier_from_file(&model_path) {
-            Ok(saved) => ("AI Classifier Model".to_string(), format_classifier_model_info(&saved)),
+            Ok(saved) => (
+                "AI Classifier Model".to_string(),
+                format_classifier_model_info(&saved),
+            ),
             Err(e) => (
                 "Could not load model".to_string(),
                 format!("Could not load '{}':\n\n{e}", model_path.display()),
@@ -1882,7 +1885,9 @@ impl PipelinesController {
                             d.parameters
                                 .iter()
                                 .find(|p| p.name == "model_path")
-                                .and_then(|p| load_pixel_classifier_class_labels(Path::new(&p.value)))
+                                .and_then(|p| {
+                                    load_pixel_classifier_class_labels(Path::new(&p.value))
+                                })
                                 .map(|labels| {
                                     labels
                                         .into_iter()
@@ -1927,7 +1932,8 @@ impl PipelinesController {
                                             group
                                                 .into_iter()
                                                 .map(|lp| {
-                                                    let relabeled = p_name == "segmentation_mapping"
+                                                    let relabeled = p_name
+                                                        == "segmentation_mapping"
                                                         && ((is_pixel_classifier
                                                             && lp.name == "segmentation_class")
                                                             || (is_ai_object_classifier
@@ -2175,8 +2181,7 @@ fn load_pixel_classifier_class_labels(model_path: &Path) -> Option<Vec<PixelClas
         return None;
     }
     let saved = evanalyzer_core::load_classifier_from_file(model_path).ok()?;
-    let AiLearningClassifierSettings::Pixel { class_labels, .. } = saved.settings.classifier
-    else {
+    let AiLearningClassifierSettings::Pixel { class_labels, .. } = saved.settings.classifier else {
         return None;
     };
     Some(class_labels)
@@ -2279,7 +2284,11 @@ fn format_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> Str
         AiLearningClassifierSettings::Pixel { class_labels, .. } => {
             out.push_str("\nClasses:\n");
             for label in class_labels {
-                out.push_str(&format!("  - {} (id {})\n", label.name, label.class.as_u32()));
+                out.push_str(&format!(
+                    "  - {} (id {})\n",
+                    label.name,
+                    label.class.as_u32()
+                ));
             }
         }
         AiLearningClassifierSettings::Object { class_labels, .. } => {

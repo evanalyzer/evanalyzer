@@ -1763,7 +1763,15 @@ fn tuple_variant_param_def_literal(
         ));
     }
     let meta = FieldMetadata::default();
-    leaf_param_def_literal(ty, &meta, access, routing_name, display_label, description, enums)
+    leaf_param_def_literal(
+        ty,
+        &meta,
+        access,
+        routing_name,
+        display_label,
+        description,
+        enums,
+    )
 }
 
 /// Returns a list of `Vec<ParameterDef>`-typed expressions contributing this field's
@@ -1875,8 +1883,7 @@ fn field_to_param_def(
                 enums,
             )
             .expect("enum dropdown literal is always Some");
-            let variant_fields =
-                enum_variant_param_defs(enum_info, &access, &routing_name, enums);
+            let variant_fields = enum_variant_param_defs(enum_info, &access, &routing_name, enums);
             return vec![format!("vec![{dropdown}]"), variant_fields];
         }
     }
@@ -2262,7 +2269,8 @@ fn enum_variant_apply_change(
         }
         if let Some(data_ty) = &v.data_type {
             let condition = format!("{display_name}.0");
-            if let Some(branch) = tuple_variant_apply_change_branch(data_ty, "__inner", &condition, enums)
+            if let Some(branch) =
+                tuple_variant_apply_change_branch(data_ty, "__inner", &condition, enums)
             {
                 nested_branches.push_str(&format!(
                     "if let {settings_name}::{}(ref mut __inner) = {access} {{ {branch} }} ",

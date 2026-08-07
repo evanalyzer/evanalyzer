@@ -185,7 +185,9 @@ impl AiObjectClassifier {
 mod tests {
     use super::*;
     use crate::ai_learning::model::random_forest::fit_random_forest;
-    use crate::ai_learning::model::{CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier, save_to_file};
+    use crate::ai_learning::model::{
+        CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier, save_to_file,
+    };
     use crate::object::ObjectInit;
     use crate::{ImageContainer, ImagePlane, ManagedImage};
     use bitvec::prelude::*;
@@ -241,9 +243,12 @@ mod tests {
     }
 
     fn saved_pixel_classifier() -> SavedClassifier {
-        let classifier =
-            fit_random_forest(&[vec![0.0], vec![1.0]], &[0, 1], &RandomForestSettings::default())
-                .unwrap();
+        let classifier = fit_random_forest(
+            &[vec![0.0], vec![1.0]],
+            &[0, 1],
+            &RandomForestSettings::default(),
+        )
+        .unwrap();
         SavedClassifier {
             version: CURRENT_SAVED_CLASSIFIER_VERSION,
             classifier,

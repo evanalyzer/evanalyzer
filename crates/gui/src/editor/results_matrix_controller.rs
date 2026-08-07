@@ -416,7 +416,9 @@ impl ResultsMatrixController {
                 result
                     .cells
                     .iter()
-                    .filter_map(|c| cell_value(!c.label.is_empty(), is_object_count, c.count, c.value))
+                    .filter_map(|c| {
+                        cell_value(!c.label.is_empty(), is_object_count, c.count, c.value)
+                    })
                     .collect()
             };
 
@@ -672,7 +674,12 @@ fn color_scheme_labels() -> Vec<SharedString> {
 /// zero-object placeholder - rather than its (nonexistent) aggregated metric
 /// value. For a real metric, unchanged: whatever `compute_plate_matrix`/
 /// `compute_well_matrix` already computed.
-fn cell_value(occupied: bool, is_object_count: bool, count: usize, value: Option<f64>) -> Option<f64> {
+fn cell_value(
+    occupied: bool,
+    is_object_count: bool,
+    count: usize,
+    value: Option<f64>,
+) -> Option<f64> {
     if is_object_count {
         occupied.then_some(count as f64)
     } else {
@@ -783,7 +790,10 @@ mod tests {
 
         assert_eq!(
             labels,
-            vec![OBJECT_COUNT_METRIC_LABEL.to_string(), "Area (px)".to_string()]
+            vec![
+                OBJECT_COUNT_METRIC_LABEL.to_string(),
+                "Area (px)".to_string()
+            ]
         );
     }
 

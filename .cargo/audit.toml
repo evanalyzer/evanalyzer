@@ -1,0 +1,21 @@
+# Config for `cargo audit` (see .github/workflows/ci.yml's `audit` job and
+# README.md's "Dependency Audit" section). Read automatically from this path
+# - no `-c` flag needed.
+[advisories]
+ignore = [
+    # rkyv 0.7.46, pulled in by rust_decimal (a duckdb dependency) via its
+    # optional "rkyv" feature. That feature is NOT enabled anywhere in this
+    # workspace - `cargo tree -e features -i rust_decimal` shows only
+    # default/serde/std active, and there is no `rkyv` build artifact under
+    # target/ after a full `cargo check --workspace`. Cargo.lock still lists
+    # rkyv as an edge because its `dependencies` array records every
+    # possible optional dependency of a resolved package version, not just
+    # the ones actually feature-activated - so cargo-audit flags a crate
+    # that is never actually compiled into evanalyzer.
+    #
+    # Re-verify this (`cargo tree -e features -i rust_decimal`, check
+    # target/ for rkyv artifacts) before removing the ignore, and drop it
+    # immediately if duckdb or rust_decimal ever start requesting the
+    # "rkyv" feature.
+    "RUSTSEC-2026-0235",
+]

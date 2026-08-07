@@ -1,5 +1,7 @@
 use crate::args::{TrainClassifierArgs, ZStackHandlingArg};
-use evanalyzer_app::ai_learning::{PixelTrainingParams, TrainingJob, build_training_job, save_trained_model};
+use evanalyzer_app::ai_learning::{
+    PixelTrainingParams, TrainingJob, build_training_job, save_trained_model,
+};
 use evanalyzer_app::extensions::project_ext::load_project;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
@@ -266,7 +268,11 @@ mod tests {
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
-        assert!(result.is_ok(), "expected training to succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "expected training to succeed: {:?}",
+            result.err()
+        );
         let model_path = file
             .path
             .parent()
@@ -296,7 +302,11 @@ mod tests {
             z_stack_handling: ZStackHandlingArg::SingleStack,
         });
 
-        assert!(result.is_ok(), "expected training to succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "expected training to succeed: {:?}",
+            result.err()
+        );
         let model_path = file
             .path
             .parent()

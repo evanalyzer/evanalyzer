@@ -134,7 +134,9 @@ fn write_predictions(
 mod tests {
     use super::*;
     use crate::ai_learning::model::random_forest::fit_random_forest;
-    use crate::ai_learning::model::{CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier, save_to_file};
+    use crate::ai_learning::model::{
+        CURRENT_SAVED_CLASSIFIER_VERSION, SavedClassifier, save_to_file,
+    };
     use evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings;
     use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
     use evanalyzer_cfg::settings::ai_learning_settings::{
@@ -198,9 +200,12 @@ mod tests {
     }
 
     fn saved_object_classifier() -> SavedClassifier {
-        let classifier =
-            fit_random_forest(&[vec![0.0], vec![1.0]], &[0, 1], &RandomForestSettings::default())
-                .unwrap();
+        let classifier = fit_random_forest(
+            &[vec![0.0], vec![1.0]],
+            &[0, 1],
+            &RandomForestSettings::default(),
+        )
+        .unwrap();
         SavedClassifier {
             version: CURRENT_SAVED_CLASSIFIER_VERSION,
             classifier,
