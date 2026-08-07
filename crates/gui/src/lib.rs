@@ -29,6 +29,7 @@ mod editor;
 mod helper;
 mod license_text;
 mod prelude;
+mod third_party_licenses;
 
 // ----------------------------------------------------------------
 // UiState - shared across all GUI controllers
@@ -407,6 +408,26 @@ fn load_about_dialog_information(ui: &AppWindow) {
         .map(|p| p.into())
         .collect();
     info.set_license_paragraphs(slint::ModelRc::new(slint::VecModel::from(paragraphs)));
+
+    let (third_party_groups, third_party_package_count) = third_party_licenses::load();
+    info.set_third_party_package_count(third_party_package_count as i32);
+    let third_party_groups: Vec<ThirdPartyLicense> = third_party_groups
+        .into_iter()
+        .map(|g| ThirdPartyLicense {
+            id: g.id.into(),
+            name: g.name.into(),
+            crates: g.crates.into(),
+            text_paragraphs: slint::ModelRc::new(slint::VecModel::from(
+                g.text_paragraphs
+                    .into_iter()
+                    .map(slint::SharedString::from)
+                    .collect::<Vec<_>>(),
+            )),
+        })
+        .collect();
+    info.set_third_party_licenses(slint::ModelRc::new(slint::VecModel::from(
+        third_party_groups,
+    )));
 
     let ui_weak = ui.as_weak();
     std::thread::spawn(move || {

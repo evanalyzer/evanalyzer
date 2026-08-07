@@ -425,8 +425,53 @@ jobs:
           name: evanalyzer-macos-arm64
           path: evanalyzer-macos-arm64.tar.gz
 
+  sbom:
+    # SBOM for the shipped `evanalyzer` binary (crates/bin), covering its full
+    # dependency graph - workspace crates and third-party alike, ~800
+    # components. One SBOM for the whole release: Cargo.lock (and so the
+    # dependency graph cargo-cyclonedx reads) doesn't vary by target platform
+    # or the CPU/CUDA feature split, so per-platform SBOMs would be
+    # duplicates.
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.1.5
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: sbom
+
+      - name: Set version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Generate SBOM
+        run: |
+          cargo cyclonedx --format json --manifest-path crates/bin/Cargo.toml
+          mv crates/bin/evanalyzer_bin.cdx.json evanalyzer-${VERSION}-sbom.cdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evanalyzer-sbom
+          path: evanalyzer-*-sbom.cdx.json
+
   release:
-    needs: [build-linux, build-windows, build-linux-cuda, build-windows-cuda, build-macos]
+    needs: [build-linux, build-windows, build-linux-cuda, build-windows-cuda, build-macos, sbom]
     runs-on: ubuntu-latest
     # Only publish a GitHub release when triggered by a version tag (with or
     # without a "v" prefix - see the tag filters at the top of this file).
@@ -449,3 +494,4 @@ jobs:
             artifacts/evanalyzer-macos-arm64/evanalyzer-macos-arm64.tar.gz
             artifacts/evanalyzer-linux-x86_64-cuda/evanalyzer-linux-x86_64-cuda.7z.*
             artifacts/evanalyzer-windows-x86_64-cuda/evanalyzer-windows-x86_64-cuda.7z.*
+            artifacts/evanalyzer-sbom/evanalyzer-*-sbom.cdx.json

@@ -1,0 +1,18 @@
+{{! Template for `cargo about generate about.hbs -o crates/gui/src/generated/third_party_licenses.json`. }}
+{{! Emits a compact JSON array of distinct license texts, each with the }}
+{{! crates that use it - much smaller than `--format json`, which repeats }}
+{{! the full dependency graph for every crate. See docs/third-party-licenses.md. }}
+[
+{{#each licenses}}
+  {
+    "id": {{json this.id}},
+    "name": {{json this.name}},
+    "text": {{json this.text}},
+    "crates": [
+      {{#each this.used_by}}
+        { "name": {{json this.crate.name}}, "version": {{json this.crate.version}} }{{#unless @last}},{{/unless}}
+      {{/each}}
+    ]
+  }{{#unless @last}},{{/unless}}
+{{/each}}
+]

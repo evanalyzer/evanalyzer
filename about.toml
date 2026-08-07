@@ -1,0 +1,24 @@
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",
+    "Unlicense",
+    "CDLA-Permissive-2.0",
+    "GPL-3.0-only",
+    "IJG",
+    "NCSA",
+]
+
+# evanalyzer's own workspace crates are all `publish = false` (see the
+# `[workspace.package]` entry in the root Cargo.toml) - they're internal
+# application crates, not published anywhere. This listing is meant to cover
+# third-party dependencies only, so keep our own AGPL-3.0 crates out of it.
+[private]
+ignore = true

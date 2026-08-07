@@ -2627,6 +2627,7 @@ dependencies = [
  "log",
  "rayon",
  "rfd",
+ "serde",
  "serde_json",
  "slint",
  "use",

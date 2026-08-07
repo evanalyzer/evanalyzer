@@ -11,6 +11,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Joachim Danmayr"]
 license = "AGPL-3.0"
+publish = false
 
 
 [workspace.dependencies]

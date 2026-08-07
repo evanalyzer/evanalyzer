@@ -1,6 +1,6 @@
 {
 "name": "evanalyzer",
-    "image": "joda001/evanalyzer-toolchain:0.1.5",
+    "image": "joda001/evanalyzer-toolchain:0.2.0",
     "runArgs": [
         "--privileged",
         "--network=host",
@@ -11,6 +11,7 @@
         "SLINT_BACKEND": "software",
         "QT_X11_NO_MITSHM": "1"
     },
+    "postStartCommand": "mkdir -p ${containerWorkspaceFolder}/.claude/memory && mkdir -p ~/.claude/projects/-workspaces-evanalyzer && rm -rf ~/.claude/projects/-workspaces-evanalyzer/memory && ln -sfn ${containerWorkspaceFolder}/.claude/memory ~/.claude/projects/-workspaces-evanalyzer/memory",
     "customizations": {
         "settings": {
             "terminal.integrated.shell.linux": "/bin/bash"
