@@ -1812,7 +1812,10 @@ mod tests {
         let path = dir.path().join("full.evaproj");
 
         let mut project = project_with_one_image();
-        project.classification.classes_mut().push(class(1, "Nucleus"));
+        project
+            .classification
+            .classes_mut()
+            .push(class(1, "Nucleus"));
         project.add_object(&ObjectMetricSettings {
             id: ObjectId(1),
             area: 1234,
@@ -1860,7 +1863,8 @@ mod tests {
         // valid if the folder is moved or copied elsewhere.
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(
-            written.contains("models/nuclei.evamodel") && !written.contains(&*absolute_model_path.to_string_lossy()),
+            written.contains("models/nuclei.evamodel")
+                && !written.contains(&*absolute_model_path.to_string_lossy()),
             "expected a relative model path on disk, got: {written}"
         );
 
@@ -2675,7 +2679,10 @@ mod tests {
         // A fresh project always has exactly the auto-prepended Background
         // class and nothing else.
         assert_eq!(fresh.classification.classes().len(), 1);
-        assert_eq!(fresh.classification.classes()[0].id, ObjectClass::BACKGROUND);
+        assert_eq!(
+            fresh.classification.classes()[0].id,
+            ObjectClass::BACKGROUND
+        );
         assert!(fresh.images.list.is_empty());
     }
 

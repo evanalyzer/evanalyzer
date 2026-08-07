@@ -257,8 +257,16 @@ impl ResultsExporter {
             page_size: 0,
             ..filter
         })?;
+        let all_images = self.results_loader.get_images()?;
         Ok(compute_plate_matrix(
-            &objects, group_by, regex, agg, metric, plate_rows, plate_cols,
+            &objects,
+            &all_images,
+            group_by,
+            regex,
+            agg,
+            metric,
+            plate_rows,
+            plate_cols,
         ))
     }
 
@@ -287,8 +295,16 @@ impl ResultsExporter {
             page_size: 0,
             ..filter
         })?;
+        let all_images = self.results_loader.get_images()?;
         let plate = compute_plate_matrix(
-            &objects, group_by, regex, agg, metric, plate_rows, plate_cols,
+            &objects,
+            &all_images,
+            group_by,
+            regex,
+            agg,
+            metric,
+            plate_rows,
+            plate_cols,
         );
         Ok(plate
             .cells
@@ -297,6 +313,7 @@ impl ResultsExporter {
             .filter_map(|c| {
                 compute_well_matrix(
                     &objects,
+                    &all_images,
                     regex,
                     &c.label,
                     agg,

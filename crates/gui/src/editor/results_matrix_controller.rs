@@ -5,13 +5,22 @@ use crate::{
     ResultsViewMode, ResultsWindow, UiState,
 };
 use evanalyzer_app::result::{
-    AggFunc, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, HeatmapColorScheme, ResultsLoader,
-    compute_plate_matrix, compute_well_matrix, plottable_columns, resolve_range, suggest_regex,
+    AggFunc, ColumnSpec, DatabaseFilter, GroupBy, GroupConfig, HeatmapColorScheme,
+    PlateMatrixResult, ResultsLoader, compute_plate_matrix, compute_well_matrix, plottable_columns,
+    resolve_range, suggest_regex,
 };
 use evanalyzer_cfg::settings::plate_settings::GroupingMode;
 use log::warn;
 use slint::{ComponentHandle, SharedString};
 use std::sync::Arc;
+
+/// Synthetic "Value:" option meaning "color by how many objects landed in
+/// this well/image", not a real per-object column - unlike every other
+/// entry (`plottable_columns`), it has no `ColumnSpec` of its own; `count`
+/// is already computed by `aggregate_rows` for every group regardless of
+/// which real metric is chosen, so `bg_compute_matrix` special-cases this
+/// label to read that instead of an aggregated metric value.
+const OBJECT_COUNT_METRIC_LABEL: &str = "Number of Objects";
 
 /// Drives the Results window's Matrix (Plate/Well) view: which images belong
 /// to which well/cell is always controlled by Matrix's own
@@ -276,7 +285,18 @@ impl ResultsMatrixController {
 
         let plate = this.app_state.get_project().plate.clone();
 
-        let Some(metric_spec) = specs.iter().find(|c| c.label == metric_label).cloned() else {
+        let is_object_count = metric_label == OBJECT_COUNT_METRIC_LABEL;
+        let metric_spec = if is_object_count {
+            // "Number of Objects" isn't a real per-object column - it's the
+            // group's own size, which `aggregate_rows` computes for every
+            // group regardless of which metric it's asked to aggregate. Any
+            // visible numeric column works as that required-but-unused
+            // grouping vehicle.
+            plottable_columns(&specs).into_iter().next().cloned()
+        } else {
+            specs.iter().find(|c| c.label == metric_label).cloned()
+        };
+        let Some(metric_spec) = metric_spec else {
             report_status("Pick a value to color the matrix by.".into());
             return;
         };
@@ -318,7 +338,17 @@ impl ResultsMatrixController {
                 return;
             }
         };
-        if objects.is_empty() {
+        // Every processed image, regardless of object count or the current
+        // class/coloc filter - lets a well/image with nothing matching still
+        // render as an occupied-but-empty cell instead of vanishing outright.
+        let all_images = match loader.get_images() {
+            Ok(images) => images,
+            Err(e) => {
+                warn!("bg_compute_matrix failed to load the image list: {:?}", e);
+                Vec::new()
+            }
+        };
+        if objects.is_empty() && all_images.is_empty() {
             report_status("No ROIs match the current filters.".into());
             return;
         }
@@ -331,6 +361,7 @@ impl ResultsMatrixController {
             let well_cols = (plate.well_cols.max(1)) as usize;
             match compute_well_matrix(
                 &objects,
+                &all_images,
                 &regex,
                 &well_label,
                 agg,
@@ -340,12 +371,26 @@ impl ResultsMatrixController {
                 &plate.well_image_order,
             ) {
                 Some(result) => {
-                    let values: Vec<f64> = result.cells.iter().filter_map(|c| c.value).collect();
-                    let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
-                    let cells: Vec<ResultsMatrixCell> = result
+                    let plotted: Vec<(String, Option<f64>, usize, usize)> = result
                         .cells
                         .iter()
-                        .map(|c| matrix_cell(c.image_name.clone(), c.value, lo, hi, scheme))
+                        .map(|c| {
+                            let occupied = !c.image_name.is_empty();
+                            (
+                                c.image_name.clone(),
+                                cell_value(occupied, is_object_count, c.count, c.value),
+                                c.count,
+                                c.coloc_count,
+                            )
+                        })
+                        .collect();
+                    let values: Vec<f64> = plotted.iter().filter_map(|(_, v, ..)| *v).collect();
+                    let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
+                    let cells: Vec<ResultsMatrixCell> = plotted
+                        .into_iter()
+                        .map(|(label, value, count, coloc_count)| {
+                            matrix_cell(label, value, count, coloc_count, lo, hi, scheme)
+                        })
                         .collect();
                     Self::push_grid(
                         &this,
@@ -367,8 +412,17 @@ impl ResultsMatrixController {
         } else {
             let mut plate_rows = plate_rows;
             let mut plate_cols = plate_cols;
+            let plate_values = |result: &PlateMatrixResult| -> Vec<f64> {
+                result
+                    .cells
+                    .iter()
+                    .filter_map(|c| cell_value(!c.label.is_empty(), is_object_count, c.count, c.value))
+                    .collect()
+            };
+
             let mut result = compute_plate_matrix(
                 &objects,
+                &all_images,
                 GroupBy::Regex,
                 &regex,
                 agg,
@@ -376,7 +430,7 @@ impl ResultsMatrixController {
                 plate_rows,
                 plate_cols,
             );
-            let mut values: Vec<f64> = result.cells.iter().filter_map(|c| c.value).collect();
+            let mut values: Vec<f64> = plate_values(&result);
 
             // Every well-shaped label decoded fine, but none of them fit the
             // configured plate size (e.g. still at the "1 Well" default) -
@@ -399,6 +453,7 @@ impl ResultsMatrixController {
 
                 result = compute_plate_matrix(
                     &objects,
+                    &all_images,
                     GroupBy::Regex,
                     &regex,
                     agg,
@@ -406,7 +461,7 @@ impl ResultsMatrixController {
                     plate_rows,
                     plate_cols,
                 );
-                values = result.cells.iter().filter_map(|c| c.value).collect();
+                values = plate_values(&result);
             }
 
             let status = if values.is_empty() {
@@ -432,7 +487,18 @@ impl ResultsMatrixController {
             let cells: Vec<ResultsMatrixCell> = result
                 .cells
                 .iter()
-                .map(|c| matrix_cell(c.label.clone(), c.value, lo, hi, scheme))
+                .map(|c| {
+                    let occupied = !c.label.is_empty();
+                    matrix_cell(
+                        c.label.clone(),
+                        cell_value(occupied, is_object_count, c.count, c.value),
+                        c.count,
+                        c.coloc_count,
+                        lo,
+                        hi,
+                        scheme,
+                    )
+                })
                 .collect();
             Self::push_grid(
                 &this,
@@ -584,10 +650,13 @@ pub(crate) fn agg_from_label(label: &str) -> AggFunc {
 }
 
 fn plottable_labels(specs: &[ColumnSpec]) -> Vec<SharedString> {
-    plottable_columns(specs)
-        .iter()
-        .map(|c| SharedString::from(c.label.as_str()))
-        .collect()
+    let mut labels: Vec<SharedString> = vec![SharedString::from(OBJECT_COUNT_METRIC_LABEL)];
+    labels.extend(
+        plottable_columns(specs)
+            .iter()
+            .map(|c| SharedString::from(c.label.as_str())),
+    );
+    labels
 }
 
 fn color_scheme_labels() -> Vec<SharedString> {
@@ -597,13 +666,50 @@ fn color_scheme_labels() -> Vec<SharedString> {
         .collect()
 }
 
+/// The value a cell should be colored/positioned by: for the
+/// [`OBJECT_COUNT_METRIC_LABEL`] pseudo-metric, that's the cell's own object
+/// count - well-defined (including zero) for any occupied cell, real or a
+/// zero-object placeholder - rather than its (nonexistent) aggregated metric
+/// value. For a real metric, unchanged: whatever `compute_plate_matrix`/
+/// `compute_well_matrix` already computed.
+fn cell_value(occupied: bool, is_object_count: bool, count: usize, value: Option<f64>) -> Option<f64> {
+    if is_object_count {
+        occupied.then_some(count as f64)
+    } else {
+        value
+    }
+}
+
+/// Formats a cell's object/coloc-object count summary, e.g. `"12 obj"` or
+/// `"12 obj · 3 coloc"` — the coloc half is only shown when there's something
+/// to show, since most datasets never colocalize anything.
+fn count_line(count: usize, coloc_count: usize) -> String {
+    if coloc_count > 0 {
+        format!("{count} obj \u{b7} {coloc_count} coloc")
+    } else {
+        format!("{count} obj")
+    }
+}
+
 fn matrix_cell(
     label: String,
     value: Option<f64>,
+    count: usize,
+    coloc_count: usize,
     range_lo: f64,
     range_hi: f64,
     scheme: HeatmapColorScheme,
 ) -> ResultsMatrixCell {
+    // A non-empty label means a well/image landed here — either with a real
+    // metric value, or as a zero-object placeholder (see `all_images` on
+    // `compute_plate_matrix`/`compute_well_matrix`) — as opposed to a
+    // genuinely unoccupied slot, which arrives with an empty label.
+    let occupied = !label.is_empty();
+    let count_line: SharedString = if occupied {
+        count_line(count, coloc_count).into()
+    } else {
+        SharedString::new()
+    };
     match value {
         Some(v) => {
             let t = ((v - range_lo) / (range_hi - range_lo)).clamp(0.0, 1.0);
@@ -611,15 +717,19 @@ fn matrix_cell(
             ResultsMatrixCell {
                 label: label.into(),
                 value: format!("{v:.1}").into(),
+                count_line,
                 color: slint::Color::from_rgb_u8(r, g, b),
                 has_value: true,
+                occupied: true,
             }
         }
         None => ResultsMatrixCell {
-            label: SharedString::new(),
+            label: label.into(),
             value: SharedString::new(),
+            count_line,
             color: slint::Color::from_rgb_u8(0, 0, 0),
             has_value: false,
+            occupied,
         },
     }
 }
@@ -671,7 +781,10 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
 
-        assert_eq!(labels, vec!["Area (px)".to_string()]);
+        assert_eq!(
+            labels,
+            vec![OBJECT_COUNT_METRIC_LABEL.to_string(), "Area (px)".to_string()]
+        );
     }
 
     // -- color_scheme_labels --------------------------------------------------------
@@ -694,6 +807,25 @@ mod tests {
         );
     }
 
+    // -- cell_value -------------------------------------------------------------------
+
+    #[test]
+    fn cell_value_for_a_real_metric_passes_the_aggregated_value_through_unchanged() {
+        assert_eq!(cell_value(true, false, 5, Some(0.75)), Some(0.75));
+        assert_eq!(cell_value(true, false, 5, None), None);
+        assert_eq!(cell_value(false, false, 0, None), None);
+    }
+
+    #[test]
+    fn cell_value_for_object_count_uses_count_for_any_occupied_cell_including_zero() {
+        // A real well/image with objects.
+        assert_eq!(cell_value(true, true, 5, Some(0.75)), Some(5.0));
+        // A zero-object placeholder - still occupied, count is a real 0, not blank.
+        assert_eq!(cell_value(true, true, 0, None), Some(0.0));
+        // A genuinely unoccupied grid slot stays blank regardless of metric.
+        assert_eq!(cell_value(false, true, 0, None), None);
+    }
+
     // -- matrix_cell ----------------------------------------------------------------
 
     #[test]
@@ -701,6 +833,8 @@ mod tests {
         let cell = matrix_cell(
             "A1".to_string(),
             Some(42.567),
+            12,
+            3,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -708,7 +842,23 @@ mod tests {
 
         assert_eq!(cell.label.as_str(), "A1");
         assert_eq!(cell.value.as_str(), "42.6");
+        assert_eq!(cell.count_line.as_str(), "12 obj \u{b7} 3 coloc");
         assert!(cell.has_value);
+        assert!(cell.occupied);
+    }
+
+    #[test]
+    fn matrix_cell_count_line_omits_coloc_half_when_zero() {
+        let cell = matrix_cell(
+            "A1".to_string(),
+            Some(1.0),
+            12,
+            0,
+            0.0,
+            100.0,
+            HeatmapColorScheme::Grayscale,
+        );
+        assert_eq!(cell.count_line.as_str(), "12 obj");
     }
 
     #[test]
@@ -729,6 +879,8 @@ mod tests {
         let cell = matrix_cell(
             "A1".to_string(),
             Some(0.853),
+            1,
+            0,
             0.0,
             1.0,
             HeatmapColorScheme::Grayscale,
@@ -773,6 +925,8 @@ mod tests {
             let cell = matrix_cell(
                 "A1".to_string(),
                 Some(source),
+                1,
+                0,
                 source.min(0.0),
                 source.max(1.0),
                 HeatmapColorScheme::Viridis,
@@ -790,10 +944,15 @@ mod tests {
     }
 
     #[test]
-    fn matrix_cell_without_a_value_is_blank_and_unmarked() {
+    fn matrix_cell_with_an_empty_label_is_a_genuinely_unoccupied_placeholder() {
+        // An empty label only ever comes from `empty_plate_cell`/`empty_well_cell`
+        // (no well/image landed in that grid slot at all) - unlike the
+        // zero-object case below, this cell must stay fully blank and disabled.
         let cell = matrix_cell(
-            "B2".to_string(),
+            String::new(),
             None,
+            0,
+            0,
             0.0,
             100.0,
             HeatmapColorScheme::Viridis,
@@ -801,7 +960,32 @@ mod tests {
 
         assert_eq!(cell.label.as_str(), "");
         assert_eq!(cell.value.as_str(), "");
+        assert_eq!(cell.count_line.as_str(), "");
         assert!(!cell.has_value);
+        assert!(!cell.occupied);
+        assert_eq!(cell.color, slint::Color::from_rgb_u8(0, 0, 0));
+    }
+
+    #[test]
+    fn matrix_cell_with_a_label_but_no_value_is_occupied_but_uncolored() {
+        // A real well/image that produced zero (matching) objects: `label` is
+        // set (from `all_images`) but `value` is `None` - the cell must keep
+        // its label/count_line and stay clickable, just without a heatmap color.
+        let cell = matrix_cell(
+            "A15".to_string(),
+            None,
+            0,
+            0,
+            0.0,
+            100.0,
+            HeatmapColorScheme::Viridis,
+        );
+
+        assert_eq!(cell.label.as_str(), "A15");
+        assert_eq!(cell.value.as_str(), "");
+        assert_eq!(cell.count_line.as_str(), "0 obj");
+        assert!(!cell.has_value);
+        assert!(cell.occupied);
         assert_eq!(cell.color, slint::Color::from_rgb_u8(0, 0, 0));
     }
 
@@ -810,6 +994,8 @@ mod tests {
         let below = matrix_cell(
             "x".to_string(),
             Some(-50.0),
+            1,
+            0,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -817,6 +1003,8 @@ mod tests {
         let at_min = matrix_cell(
             "x".to_string(),
             Some(0.0),
+            1,
+            0,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -829,6 +1017,8 @@ mod tests {
         let above = matrix_cell(
             "x".to_string(),
             Some(500.0),
+            1,
+            0,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -836,6 +1026,8 @@ mod tests {
         let at_max = matrix_cell(
             "x".to_string(),
             Some(100.0),
+            1,
+            0,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
