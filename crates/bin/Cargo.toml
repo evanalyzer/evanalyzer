@@ -7,7 +7,6 @@ license = { workspace = true }
 publish = { workspace = true }
 
 [dependencies]
-evanalyzer_core = { workspace = true }
 evanalyzer_cfg = { path = "../cfg" }
 evanalyzer_gui    = { path = "../gui" }
 evanalyzer_cli    = { path = "../cli" }
