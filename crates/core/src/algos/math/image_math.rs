@@ -141,14 +141,14 @@ impl ImageAlgorithm for ImageMath {
                 ImageContainer::F32Gray(in_b),
                 ImageContainer::F32Gray(out),
             ) => {
-                self.apply_binary_math(in_a.as_slice(), in_b.as_slice(), out.as_slice_mut());
+                self.apply_binary_math(in_a.as_slice(), in_b.as_slice(), out.as_slice_mut())?;
             }
             (
                 ImageContainer::F32Rgb(in_a),
                 ImageContainer::F32Rgb(in_b),
                 ImageContainer::F32Rgb(out),
             ) => {
-                self.apply_binary_math(in_a.as_slice(), in_b.as_slice(), out.as_slice_mut());
+                self.apply_binary_math(in_a.as_slice(), in_b.as_slice(), out.as_slice_mut())?;
             }
             _ => {
                 return Err(InternalErrors::FormatMismatch {
@@ -175,7 +175,33 @@ impl ImageMath {
     }
 
     /// Binary operations (Requires two images)
-    fn apply_binary_math(&self, pipeline_data: &[f32], cache_data: &[f32], output: &mut [f32]) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InternalErrors::FormatMismatch`] if `pipeline_data` and
+    /// `cache_data` don't have the same pixel count (e.g. `second_image_address`
+    /// points at a checkpoint cached from a different-sized processing stage).
+    /// `.zip()`ing slices of different lengths silently stops at the shorter
+    /// one, which would otherwise leave the tail of `output` untouched -
+    /// wrong pixel values with no error, not just a truncated write, since
+    /// `output` is the scratch pad and may still hold stale data from a
+    /// previous use.
+    fn apply_binary_math(
+        &self,
+        pipeline_data: &[f32],
+        cache_data: &[f32],
+        output: &mut [f32],
+    ) -> Result<(), InternalErrors> {
+        if pipeline_data.len() != cache_data.len() || pipeline_data.len() != output.len() {
+            return Err(InternalErrors::FormatMismatch {
+                expected: format!(
+                    "{} pixels (matching the current image)",
+                    pipeline_data.len()
+                ),
+                found: format!("{} pixels in the secondary image", cache_data.len()),
+            });
+        }
+
         pipeline_data
             .iter()
             .zip(cache_data.iter())
@@ -204,6 +230,7 @@ impl ImageMath {
                     _ => a,
                 };
             });
+        Ok(())
     }
 }
 
@@ -348,6 +375,73 @@ mod tests {
         // Case 2: Swap Enabled (Cache / Pipeline) -> 2.0 / 10.0 = 0.2
         let result_swapped = run_math_test(Operand::Divide, 10.0, 2.0, true);
         assert!((result_swapped - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn binary_math_errors_on_mismatched_secondary_image_size_instead_of_silently_truncating() {
+        // Regression test: `apply_binary_math` used to `.zip()` the primary,
+        // secondary, and output slices together - which silently stops at
+        // the shortest of the three instead of erroring, leaving the tail of
+        // `output` (the scratch pad, possibly still holding stale data from
+        // a previous use) untouched. A cached checkpoint from a
+        // different-sized processing stage must now be a clean error
+        // instead of wrong pixel values with no signal anything went wrong.
+        let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
+            PipelineImageMeta {
+                image_tile_info: crate::ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: 2,
+                    height: 2,
+                },
+                full_image_width: ImageSize {
+                    width: 2,
+                    height: 2,
+                },
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: PixelSizes {
+                    px_size_x: 1.0,
+                    px_size_y: 1.0,
+                    px_size_z: 1.0,
+                },
+            },
+            create_test_gray(0.5).into(),
+        )
+        .unwrap();
+        let mut cache = PipelineCache::default();
+
+        // Secondary image cached at a different pixel count than the
+        // current (2x2) pipeline image.
+        let smaller_second = ImageContainer::new_f32_gray_from_image_test(
+            Image::new(
+                ImageSize {
+                    width: 1,
+                    height: 1,
+                },
+                vec![0.2],
+                CpuAllocator,
+            )
+            .unwrap(),
+        );
+        let second_image_address = ImageAddress::Memory(MemoryId::PipelineContext(1));
+        cache
+            .image_cache
+            .images
+            .insert(second_image_address.clone(), Arc::new(smaller_second));
+
+        let cmd = ImageMath {
+            operand: Operand::Add,
+            second_image_address,
+            swap_operands: false,
+        };
+
+        let result = cmd.execute(&mut ctx, &mut cache);
+        assert!(
+            matches!(result, Err(InternalErrors::FormatMismatch { .. })),
+            "expected a FormatMismatch error for mismatched pixel counts, got {result:?}"
+        );
     }
 
     #[test]

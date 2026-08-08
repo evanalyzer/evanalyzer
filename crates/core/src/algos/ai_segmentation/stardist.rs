@@ -244,7 +244,11 @@ impl Stardist {
             for gx in 0..grid_w {
                 let idx = gy * grid_w + gx;
                 let score = prob_flat[idx];
-                if score < self.probability_threshold {
+                // NaN fails every `<` comparison, so a NaN score would
+                // otherwise sail past the threshold check below (`NaN <
+                // threshold` is always false) and later reach the score sort
+                // in `non_max_suppress`, which can't order it.
+                if !score.is_finite() || score < self.probability_threshold {
                     continue;
                 }
 
@@ -274,6 +278,20 @@ impl Stardist {
         width: usize,
         height: usize,
     ) -> Option<Candidate> {
+        // A single degenerate ray distance (model output NaN/inf for one grid
+        // cell, e.g. from a blank/degenerate input tile) poisons this whole
+        // star-convex polygon. `f32::min`/`max` below silently ignore NaN
+        // operands (so the bbox wouldn't catch it), but the raw polygon is
+        // also fed to `rasterize_polygon`'s scanline sort, which can't order
+        // a NaN crossing - reject the candidate outright instead of letting
+        // a corrupted shape (or a panic) through.
+        if polygon
+            .iter()
+            .any(|(x, y)| !x.is_finite() || !y.is_finite())
+        {
+            return None;
+        }
+
         let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for &(x, y) in polygon {
             min_x = min_x.min(x);
@@ -327,7 +345,11 @@ impl Stardist {
                     crossings.push(x0 + t * (x1 - x0));
                 }
             }
-            crossings.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            // `build_candidate` already rejects any polygon with a non-finite
+            // vertex, so `crossings` shouldn't contain NaN here - `unwrap_or`
+            // is defense in depth against a future caller of this function
+            // skipping that check, not the primary fix.
+            crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
             for pair in crossings.chunks_exact(2) {
                 let x_start = (pair[0].round() as i64 - min_x).clamp(0, local_w as i64 - 1);
@@ -381,11 +403,15 @@ impl Stardist {
     /// by descending score (highest-scoring objects are painted first).
     fn non_max_suppress(candidates: Vec<Candidate>, nms_threshold: f32) -> Vec<Candidate> {
         let mut order: Vec<usize> = (0..candidates.len()).collect();
+        // `build_candidates` already skips non-finite scores before a
+        // `Candidate` is ever built, so `unwrap_or` here is defense in depth
+        // against a future caller constructing candidates some other way,
+        // not the primary fix.
         order.sort_by(|&a, &b| {
             candidates[b]
                 .score
                 .partial_cmp(&candidates[a].score)
-                .unwrap()
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let mut suppressed = vec![false; candidates.len()];
@@ -703,27 +729,55 @@ mod tests {
         }
     }
 
-    // ---- known-bug regression tests: NaN model output panics ----
+    // ---- NaN model output no longer panics ----
     //
-    // Tracked in BETA_REVIEW.md ("StarDist panics on NaN model output"): a
-    // degenerate/blank tile or an incompatible model export can make the
-    // TorchScript model emit NaN, and both sort call sites below use
-    // `partial_cmp(...).unwrap()`, which panics for NaN (`partial_cmp`
-    // returns `None`). These tests pin the *current* (buggy) behaviour so
-    // the fix - tracked separately, not applied here - has a clear
-    // before/after signal; update or remove them once it lands.
+    // A degenerate/blank tile or an incompatible model export can make the
+    // TorchScript model emit NaN. Fixed at three points: `build_candidates`
+    // skips non-finite scores before a `Candidate` is even built,
+    // `build_candidate` rejects any polygon with a non-finite vertex, and
+    // both `partial_cmp(...).unwrap()` sort call sites were changed to
+    // `unwrap_or(Ordering::Equal)` as defense in depth for callers that
+    // bypass the two filters above (as these tests deliberately do, to
+    // exercise that fallback directly).
 
     #[test]
-    #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
-    fn rasterize_polygon_panics_on_a_nan_vertex_known_bug() {
+    fn rasterize_polygon_does_not_panic_on_a_nan_vertex() {
         let polygon = [(0.0, 0.0), (f32::NAN, 4.0), (4.0, 4.0)];
+        // No assertion on the resulting mask's shape - a NaN vertex makes the
+        // polygon meaningless, but `rasterize_polygon` (unlike
+        // `build_candidate`, which rejects this polygon outright) is a
+        // low-level primitive that must at least not crash.
         let _ = Stardist::rasterize_polygon(&polygon, [0, 0, 3, 3]);
     }
 
     #[test]
-    #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
-    fn non_max_suppress_panics_when_a_candidate_score_is_nan_known_bug() {
+    fn non_max_suppress_does_not_panic_when_a_candidate_score_is_nan() {
         let candidates = vec![square(0, 0, 2, f32::NAN), square(10, 10, 2, 0.5)];
-        let _ = Stardist::non_max_suppress(candidates, 0.3);
+        let kept = Stardist::non_max_suppress(candidates, 0.3);
+        assert_eq!(kept.len(), 2, "non-overlapping candidates are both kept");
+    }
+
+    #[test]
+    fn build_candidates_skips_a_nan_score_grid_cell() {
+        let algo = stardist(0.5, 0.3);
+        // 1x2 grid: cell 0 has a NaN score (e.g. degenerate model output),
+        // cell 1 clears the threshold normally.
+        let prob_flat = [f32::NAN, 0.9];
+        let dist_flat = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        let candidates = algo.build_candidates(&prob_flat, &dist_flat, 1, 2, 4, 20, 10);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].score, 0.9);
+    }
+
+    #[test]
+    fn build_candidate_returns_none_for_a_polygon_with_a_nan_vertex() {
+        let polygon = [(1.0, 1.0), (f32::NAN, 5.0), (5.0, 5.0), (1.0, 5.0)];
+        assert!(Stardist::build_candidate(0.9, &polygon, 10, 10).is_none());
+    }
+
+    #[test]
+    fn build_candidate_returns_none_for_a_polygon_with_an_infinite_vertex() {
+        let polygon = [(1.0, 1.0), (f32::INFINITY, 5.0), (5.0, 5.0), (1.0, 5.0)];
+        assert!(Stardist::build_candidate(0.9, &polygon, 10, 10).is_none());
     }
 }

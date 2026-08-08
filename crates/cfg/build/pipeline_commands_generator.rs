@@ -74,8 +74,14 @@ fn write_if_changed(path: &Path, content: &str) {
 fn format_code(content: &str) -> Option<String> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
+    // Must match `workspace.package.edition` in the root Cargo.toml: rustfmt's
+    // formatting heuristics (not just its parser) differ by edition - e.g.
+    // struct-literal wrapping differs between the 2021 and 2024 "style
+    // editions" - so formatting here with a stale edition produces output
+    // that `cargo fmt --check` (which reads the real edition from Cargo.toml)
+    // disagrees with, even though this function's own rustfmt call succeeds.
     let mut child = Command::new("rustfmt")
-        .args(["--edition=2021", "--emit=stdout"])
+        .args(["--edition=2024", "--emit=stdout"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
