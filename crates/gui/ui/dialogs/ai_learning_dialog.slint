@@ -113,7 +113,8 @@ export struct AiTrainingSettingsSlint {
 
     // -- K-Nearest Neighbors --
     knn_k: int,
-    knn_distance: int, // 0 = Euclidean, 1 = Manhattan, 2 = Minkowski
+    knn_distance: int, // 0 = Euclidean, 1 = Manhattan, 2 = Minkowski, 3 = Cosine, 4 = Hamming
+    knn_minkowski_p: int, // order of the Minkowski norm - only shown/used when knn_distance == 2
     knn_search_algorithm: int, // 0 = Linear Search, 1 = Cover Tree
     knn_weight: int, // 0 = Uniform, 1 = Distance-weighted
 
@@ -162,6 +163,7 @@ export global AiLearningState {
         // neighborhood gives steadier decision boundaries than k=3 uniform.
         knn_k: 5,
         knn_distance: 0,
+        knn_minkowski_p: 3,
         knn_search_algorithm: 1,
         knn_weight: 1,
         mlp_hidden_layers: "64, 32",
@@ -813,9 +815,24 @@ export component AiLearningDialog inherits Rectangle {
                                         text: "Distance Metric:";
                                     }
 
-                                    ComboBox {
-                                        model: ["Euclidean", "Manhattan", "Minkowski"];
+                                    distance-combo := ComboBox {
+                                        model: ["Euclidean", "Manhattan", "Minkowski", "Cosine", "Hamming"];
                                         current-index <=> AiLearningState.settings.knn_distance;
+                                    }
+                                }
+
+                                // Only Minkowski takes an order parameter - the other
+                                // four metrics are parameterless.
+                                if distance-combo.current-index == 2: HorizontalLayout {
+                                    spacing: 12px;
+                                    FormLabel {
+                                        text: "Minkowski Order (p):";
+                                    }
+
+                                    SpinBox {
+                                        minimum: 1;
+                                        maximum: 100;
+                                        value <=> AiLearningState.settings.knn_minkowski_p;
                                     }
                                 }
 

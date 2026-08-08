@@ -15,8 +15,8 @@ use evanalyzer_cfg::settings::ai_learning_pixel_settings::{
 };
 use evanalyzer_cfg::settings::ai_learning_settings::{
     AiLearningBackendSettings, AiLearningClassifierSettings, AiLearningSettings, KNNAlgorithmName,
-    KNNWeightFunction, KnnSettings, MlpActivation, MlpSettings, RandomForestSettings,
-    SplitCriterion,
+    KNNDistanceMetric, KNNWeightFunction, KnnSettings, MlpActivation, MlpSettings,
+    RandomForestSettings, SplitCriterion,
 };
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_cfg::settings::meta_data::MetaData;
@@ -931,6 +931,15 @@ fn build_ai_learning_settings(
                 _ => KNNWeightFunction::Uniform,
             },
             k: settings.knn_k.max(1) as usize,
+            distance: match settings.knn_distance {
+                1 => KNNDistanceMetric::Manhattan,
+                2 => KNNDistanceMetric::Minkowski {
+                    p: settings.knn_minkowski_p.max(1) as u16,
+                },
+                3 => KNNDistanceMetric::Cosine,
+                4 => KNNDistanceMetric::Hamming,
+                _ => KNNDistanceMetric::Euclidean,
+            },
         }),
         _ => AiLearningBackendSettings::Mlp(MlpSettings {
             hidden_layers: parse_hidden_layers(&settings.mlp_hidden_layers),
@@ -943,6 +952,12 @@ fn build_ai_learning_settings(
             learning_rate: settings.mlp_learning_rate as f64,
             batch_size: settings.mlp_batch_size.max(1) as usize,
             seed: settings.mlp_seed.max(0) as u64,
+            // A cleared/invalid (<= 0) field falls back to burn's own
+            // AdamConfig default rather than reintroducing the division by
+            // zero `MlpSettings::default()`'s own doc comment warns about.
+            epsilon: (settings.mlp_epsilon > 0.0)
+                .then_some(settings.mlp_epsilon as f64)
+                .unwrap_or(1e-5),
         }),
     };
 
@@ -1200,6 +1215,21 @@ fn apply_loaded_backend_settings(
                 KNNWeightFunction::Distance => 1,
                 KNNWeightFunction::Uniform => 0,
             };
+            settings.knn_distance = match s.distance {
+                KNNDistanceMetric::Manhattan => 1,
+                KNNDistanceMetric::Minkowski { .. } => 2,
+                KNNDistanceMetric::Cosine => 3,
+                KNNDistanceMetric::Hamming => 4,
+                KNNDistanceMetric::Euclidean => 0,
+            };
+            // Only meaningful for Minkowski, but always set (rather than left
+            // stale from a previous load) so a Euclidean/Manhattan/etc. model
+            // doesn't inherit whatever `p` a previously loaded Minkowski model
+            // left behind.
+            settings.knn_minkowski_p = match s.distance {
+                KNNDistanceMetric::Minkowski { p } => p as i32,
+                _ => 3,
+            };
         }
         AiLearningBackendSettings::Mlp(s) => {
             settings.algorithm = 2;
@@ -1219,6 +1249,7 @@ fn apply_loaded_backend_settings(
             settings.mlp_learning_rate = s.learning_rate as f32;
             settings.mlp_batch_size = s.batch_size as i32;
             settings.mlp_seed = s.seed as i32;
+            settings.mlp_epsilon = s.epsilon as f32;
         }
     }
 }
@@ -1673,6 +1704,7 @@ mod tests {
                 algorithm: KNNAlgorithmName::CoverTree,
                 weight: KNNWeightFunction::Distance,
                 k: 9,
+                distance: KNNDistanceMetric::Manhattan,
             }),
         );
 
@@ -1680,6 +1712,89 @@ mod tests {
         assert_eq!(settings.knn_k, 9);
         assert_eq!(settings.knn_search_algorithm, 1);
         assert_eq!(settings.knn_weight, 1);
+        assert_eq!(settings.knn_distance, 1);
+    }
+
+    #[test]
+    fn apply_loaded_backend_settings_maps_every_knn_distance_metric_to_its_dropdown_index() {
+        let cases = [
+            (KNNDistanceMetric::Euclidean, 0),
+            (KNNDistanceMetric::Manhattan, 1),
+            (KNNDistanceMetric::Minkowski { p: 7 }, 2),
+            (KNNDistanceMetric::Cosine, 3),
+            (KNNDistanceMetric::Hamming, 4),
+        ];
+        for (distance, expected_index) in cases {
+            let mut settings = default_settings();
+            apply_loaded_backend_settings(
+                &mut settings,
+                &AiLearningBackendSettings::Knn(KnnSettings {
+                    distance: distance.clone(),
+                    ..Default::default()
+                }),
+            );
+            assert_eq!(
+                settings.knn_distance, expected_index,
+                "{distance:?} should map to dropdown index {expected_index}"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_loaded_backend_settings_populates_the_minkowski_order_only_for_minkowski() {
+        let mut settings = default_settings();
+        apply_loaded_backend_settings(
+            &mut settings,
+            &AiLearningBackendSettings::Knn(KnnSettings {
+                distance: KNNDistanceMetric::Minkowski { p: 7 },
+                ..Default::default()
+            }),
+        );
+        assert_eq!(settings.knn_minkowski_p, 7);
+
+        // Loading a non-Minkowski model afterwards must reset it (not leave
+        // the previous model's `p` behind for the now-hidden control).
+        apply_loaded_backend_settings(
+            &mut settings,
+            &AiLearningBackendSettings::Knn(KnnSettings {
+                distance: KNNDistanceMetric::Euclidean,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(settings.knn_minkowski_p, 3);
+    }
+
+    #[test]
+    fn build_ai_learning_settings_maps_every_knn_dropdown_index_to_its_distance_metric() {
+        let cases = [
+            (0, KNNDistanceMetric::Euclidean),
+            (1, KNNDistanceMetric::Manhattan),
+            (2, KNNDistanceMetric::Minkowski { p: 7 }),
+            (3, KNNDistanceMetric::Cosine),
+            (4, KNNDistanceMetric::Hamming),
+        ];
+        for (dropdown_index, expected_distance) in cases {
+            let settings = AiTrainingSettingsSlint {
+                algorithm: 1,
+                knn_distance: dropdown_index,
+                knn_minkowski_p: 7,
+                ..default_settings()
+            };
+            let ai_settings = build_ai_learning_settings(
+                &settings,
+                &[],
+                &[],
+                &std::collections::HashSet::new(),
+                &ProjectSettings::default(),
+            );
+            let AiLearningBackendSettings::Knn(knn) = &ai_settings.backend else {
+                panic!("expected a Knn backend for dropdown index {dropdown_index}");
+            };
+            assert_eq!(
+                knn.distance, expected_distance,
+                "dropdown index {dropdown_index} should map to {expected_distance:?}"
+            );
+        }
     }
 
     #[test]
@@ -1694,6 +1809,7 @@ mod tests {
                 learning_rate: 0.01,
                 batch_size: 16,
                 seed: 3,
+                epsilon: 0.0002,
             }),
         );
 
@@ -1704,6 +1820,7 @@ mod tests {
         assert_eq!(settings.mlp_learning_rate, 0.01);
         assert_eq!(settings.mlp_batch_size, 16);
         assert_eq!(settings.mlp_seed, 3);
+        assert_eq!(settings.mlp_epsilon, 0.0002f32);
     }
 
     // -- Callback-driven Slint state mutations ------------------------------
