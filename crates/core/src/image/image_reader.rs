@@ -2,7 +2,9 @@ use crate::converters::wavelength_to_rgb_float;
 use crate::image::image_meta::{ImageMeta, ImagePlane, ImageTile};
 use crate::image::java::{JAVA_WRAPPER, ensure_java_wrapper};
 use evanalyzer_cfg::core_types::InternalErrors;
-use jni::objects::{GlobalRef, JMethodID, JValue};
+use jni::errors::Error as JniError;
+use jni::objects::{JMethodID, JObject, JValue};
+use jni::refs::Global;
 use jni::signature::{Primitive, ReturnType};
 use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
@@ -222,7 +224,7 @@ pub struct ImageReader {
     // image_ome_parser's tests, which construct a JVM-free `ImageReader` via
     // struct literal to unit-test `parse_ome_xml` in isolation - can build
     // one without going through `new()`'s JNI call.
-    pub(crate) wrapper_instance: Option<GlobalRef>,
+    pub(crate) wrapper_instance: Option<Global<JObject<'static>>>,
     pub(crate) read_mode: ReadMode,
     pub image_meta: Arc<ImageMeta>,
     pub(crate) current_path: PathBuf,
@@ -280,49 +282,47 @@ impl ImageReader {
             .ok_or("Class not loaded")?;
         let constructor_raw = wrapper.m_constructor.ok_or("Constructor ID not cached")?;
 
-        // Attach thread and prepare arguments
-        let mut env = jvm
-            .attach_current_thread_permanently()
-            .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
-        let path_arg = env
-            .new_string(image_path)
-            .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
+        // Attach the thread (permanently) and create the Java object.
+        // jni 0.22's `attach_current_thread` only ever hands out an `Env`
+        // reference within a closure (never an owned guard), so every JNI
+        // call that needs it happens inside this closure.
+        let global_instance = jvm
+            .attach_current_thread(|env| -> jni::errors::Result<_> {
+                let path_arg = env.new_string(image_path)?;
 
-        // Create the Java Object instance
-        let instance = unsafe {
-            let method_id = JMethodID::from_raw(constructor_raw);
+                // Create the Java Object instance
+                let instance = unsafe {
+                    let method_id = JMethodID::from_raw(constructor_raw);
 
-            // It's safer to use the 'env' to create the object
-            let obj = env
-                .new_object_unchecked(
-                    class,
-                    method_id,
-                    &[
-                        jni::objects::JValue::from(&path_arg).as_jni(),
-                        jni::objects::JValue::from(split_rgb_channel).as_jni(),
-                    ],
-                )
-                .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
+                    // It's safer to use the 'env' to create the object
+                    let obj = env.new_object_unchecked(
+                        class,
+                        method_id,
+                        &[
+                            jni::objects::JValue::from(&path_arg).as_jni(),
+                            jni::objects::JValue::from(split_rgb_channel).as_jni(),
+                        ],
+                    )?;
 
-            // Check if the constructor threw an exception (e.g., IOException)
-            if env
-                .exception_check()
-                .map_err(|e| InternalErrors::JvmError(e.to_string()))?
-            {
-                env.exception_describe()
-                    .map_err(|e| InternalErrors::JvmError(e.to_string()))?; // Prints the stack trace to stderr
-                env.exception_clear()
-                    .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
-                return Err("Java constructor threw an exception".into());
-            }
-            obj
-        };
+                    // Check if the constructor threw an exception (e.g., IOException)
+                    if env.exception_check() {
+                        env.exception_describe(); // Prints the stack trace to stderr
+                        env.exception_clear();
+                        return Err(JniError::JavaException);
+                    }
+                    obj
+                };
 
-        // Wrap the local reference into a GlobalRef
-        // This ensures the Java object stays alive even after 'env' is dropped
-        let global_instance = env
-            .new_global_ref(instance)
-            .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
+                // Wrap the local reference into a Global ref - this ensures
+                // the Java object stays alive even after this closure exits.
+                env.new_global_ref(instance)
+            })
+            .map_err(|e| match e {
+                JniError::JavaException => {
+                    InternalErrors::JvmError("Java constructor threw an exception".to_string())
+                }
+                e => InternalErrors::JvmError(e.to_string()),
+            })?;
 
         // Return the fully constructed struct
         let mut reader = Self {
@@ -437,25 +437,21 @@ impl ImageReader {
             .wrapper_instance
             .as_ref()
             .ok_or("Reader instance is null")?;
-        let mut env = jvm
-            .attach_current_thread_permanently()
-            .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
         let method_id_raw = wrapper.m_get_image_properties.ok_or("Method ID missing")?;
-        let method_id = unsafe { JMethodID::from_raw(method_id_raw) };
 
-        unsafe {
-            let result = env
-                .call_method_unchecked(instance, method_id, ReturnType::Object, &[])
-                .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
-            let jstring_obj = result
-                .l()
-                .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
-            let rust_string: String = env
-                .get_string(&jstring_obj.into())
-                .map_err(|e| InternalErrors::JvmError(e.to_string()))?
-                .into();
-            return Ok(self.parse_ome_xml(rust_string.as_str())?);
-        }
+        let rust_string = jvm
+            .attach_current_thread(|env| -> jni::errors::Result<String> {
+                let method_id = unsafe { JMethodID::from_raw(method_id_raw) };
+                let result =
+                    unsafe { env.call_method_unchecked(instance, method_id, ReturnType::Object, &[])? };
+                let jstring_obj = result.l()?;
+                let jstring = env.cast_local::<jni::objects::JString>(jstring_obj)?;
+                let s = jstring.try_to_string(env)?;
+                Ok(s)
+            })
+            .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
+
+        self.parse_ome_xml(rust_string.as_str())
     }
 
     /// Reads a tile from the image directly into a Rust buffer.
@@ -478,9 +474,6 @@ impl ImageReader {
             .wrapper_instance
             .as_ref()
             .ok_or("Reader instance is null")?;
-        let mut env = jvm
-            .attach_current_thread_permanently()
-            .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
 
         // 1. Get the series or return error
         let series_info = self.image_meta.series.get(&series).ok_or_else(|| {
@@ -550,50 +543,55 @@ impl ImageReader {
         }
         let buffer = byte_scratch;
 
-        // Create Direct View (Zero-Copy)
-        // IMPORTANT: 'buffer' must not be dropped while 'direct_buffer' is in use by Java.
-        let direct_buffer = unsafe {
-            env.new_direct_byte_buffer(buffer.as_mut_ptr(), buffer_size)
-                .map_err(|e| InternalErrors::JvmError(e.to_string()))?
-        };
-
         // Resolve Method ID
         let method_id_raw = wrapper.m_read_image_tile.ok_or("Method ID missing")?;
-        let method_id = unsafe { JMethodID::from_raw(method_id_raw) };
 
-        // Invoke Call on INSTANCE (not class)
-        unsafe {
-            env.call_method_unchecked(
-                instance,
-                method_id,
-                ReturnType::Primitive(Primitive::Void),
-                &[
-                    JValue::from(&direct_buffer).as_jni(),
-                    JValue::from(series).as_jni(),
-                    JValue::from(resolution_idx).as_jni(),
-                    JValue::from(image_plane.z).as_jni(),
-                    JValue::from(image_plane.c).as_jni(),
-                    JValue::from(image_plane.t).as_jni(),
-                    JValue::from(image_tile.offset_x as i32).as_jni(),
-                    JValue::from(image_tile.offset_y as i32).as_jni(),
-                    JValue::from(width as i32).as_jni(),
-                    JValue::from(height as i32).as_jni(),
-                ],
-            )
-            .map_err(|e| InternalErrors::JvmError(e.to_string()))?;
-        }
+        // Create Direct View (Zero-Copy), invoke the Java call on INSTANCE
+        // (not class) and check for exceptions - all inside the attach
+        // closure, since jni 0.22 only ever hands out an `Env` reference
+        // within one.
+        // IMPORTANT: 'buffer' must not be dropped while 'direct_buffer' is in use by Java.
+        jvm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            let direct_buffer =
+                unsafe { env.new_direct_byte_buffer(buffer.as_mut_ptr(), buffer_size)? };
 
-        // Check for Java Exceptions (Crucial for JNI debugging)
-        if env
-            .exception_check()
-            .map_err(|e| InternalErrors::JvmError(e.to_string()))?
-        {
-            env.exception_describe().ok(); // Prints stack trace to stderr
-            env.exception_clear().ok();
-            return Err(InternalErrors::ImageReadError(
-                "Java exception during tile read".to_string(),
-            ));
-        }
+            let method_id = unsafe { JMethodID::from_raw(method_id_raw) };
+
+            unsafe {
+                env.call_method_unchecked(
+                    instance,
+                    method_id,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[
+                        JValue::from(&direct_buffer).as_jni(),
+                        JValue::from(series).as_jni(),
+                        JValue::from(resolution_idx).as_jni(),
+                        JValue::from(image_plane.z).as_jni(),
+                        JValue::from(image_plane.c).as_jni(),
+                        JValue::from(image_plane.t).as_jni(),
+                        JValue::from(image_tile.offset_x as i32).as_jni(),
+                        JValue::from(image_tile.offset_y as i32).as_jni(),
+                        JValue::from(width as i32).as_jni(),
+                        JValue::from(height as i32).as_jni(),
+                    ],
+                )?;
+            }
+
+            // Check for Java Exceptions (Crucial for JNI debugging)
+            if env.exception_check() {
+                env.exception_describe(); // Prints stack trace to stderr
+                env.exception_clear();
+                return Err(JniError::JavaException);
+            }
+            Ok(())
+        })
+        .map_err(|e| match e {
+            JniError::JavaException => {
+                InternalErrors::ImageReadError("Java exception during tile read".to_string())
+            }
+            e => InternalErrors::JvmError(e.to_string()),
+        })?;
+
         decode_image(
             buffer.as_slice(),
             pyramid_info.is_interleaved,
@@ -1136,25 +1134,24 @@ impl Drop for ImageReader {
         let wrapper = JAVA_WRAPPER
             .get()
             .expect("Java Runtime not initialized, call init_java_wrapper");
-        let instance = Some(instance);
-        if let Some(jvm) = &wrapper.jvm {
-            if let Ok(mut env) = jvm.attach_current_thread() {
-                if let (Some(obj), Some(close_raw)) = (&instance, wrapper.m_close) {
-                    let method_id = unsafe { JMethodID::from_raw(close_raw) };
-                    unsafe {
-                        let _ = env.call_method_unchecked(
-                            obj,
-                            method_id,
-                            ReturnType::Primitive(Primitive::Void), // Equivalent to 'Void' in CallVoidMethod
-                            &[],                                    // No arguments)
-                        );
-                    }
-                }
-                // Explicitly drop the GlobalRef while the thread is attached
-                drop(instance);
-                return;
+        let (Some(jvm), Some(close_raw)) = (&wrapper.jvm, wrapper.m_close) else {
+            return;
+        };
+        let _ = jvm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            let method_id = unsafe { JMethodID::from_raw(close_raw) };
+            unsafe {
+                let _ = env.call_method_unchecked(
+                    &instance,
+                    method_id,
+                    ReturnType::Primitive(Primitive::Void), // Equivalent to 'Void' in CallVoidMethod
+                    &[],                                    // No arguments)
+                );
             }
-        }
+            Ok(())
+        });
+        // `instance` (a `Global<JObject<'static>>`) drops here; jni 0.22's
+        // `Global` attaches the thread internally as needed for
+        // `DeleteGlobalRef`, so no explicit attachment is required for that.
     }
 }
 
@@ -1163,7 +1160,11 @@ mod tests {
     use super::*;
     use crate::init_java_wrapper;
     use approx::relative_eq;
+    use jni::objects::Reference;
+    use jni::{jni_sig, jni_str};
     use std::fs;
+    use std::thread;
+    use sysinfo::{ProcessesToUpdate, System, get_current_pid};
 
     #[test]
     fn checked_tile_buffer_size_computes_the_plain_product_for_ordinary_dimensions() {
@@ -1884,4 +1885,245 @@ mod tests {
             }
         }
     }*/
+
+    /// Resident set size of this process, in bytes, or `None` if it can't be
+    /// determined on this platform.
+    fn current_process_rss_bytes() -> Option<u64> {
+        let pid = get_current_pid().ok()?;
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        sys.process(pid).map(|p| p.memory())
+    }
+
+    /// Precise regression test for the jni 0.21 -> 0.22 port: `wrapper_instance`
+    /// is now a `Global<JObject<'static>>` (renamed/generic from `GlobalRef`),
+    /// whose `Drop` impl is responsible for calling `DeleteGlobalRef` (see
+    /// `ImageReader`'s own `Drop` impl). If a future change ever left it
+    /// un-dropped (e.g. captured into a cycle, or the delete call silently
+    /// skipped), the underlying BioFormats Java object would stay pinned
+    /// forever, even after the `ImageReader` itself is gone.
+    ///
+    /// This wraps the reader's Java object in a `java.lang.ref.WeakReference`
+    /// *before* dropping the reader, then proves the opposite: after the
+    /// reader drops and a full GC runs, the weak reference clears - meaning
+    /// nothing on the Rust side still holds a strong reference to it.
+    ///
+    /// Note: an OS-level RSS measurement was tried first and rejected - a
+    /// baseline loop against the pre-port (jni 0.21) code showed the JVM's
+    /// own heap high-water mark alone grows by ~300MB over 200 open/read/close
+    /// cycles on this fixture, and `System.gc()` does not shrink it back
+    /// (committed heap pages aren't returned to the OS). That's normal,
+    /// pre-existing JVM/BioFormats behavior unrelated to the Rust binding,
+    /// but it makes RSS growth useless as a leak signal here - a genuine
+    /// per-object leak would be lost in that noise. Reachability, checked via
+    /// `WeakReference`, is unaffected by that noise and directly targets the
+    /// exact mechanism the migration touched.
+    #[test]
+    fn dropping_a_reader_releases_its_global_reference_for_gc() {
+        init_java_wrapper(1_000_000_000).unwrap();
+        let path: PathBuf = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        )
+        .into();
+
+        let reader = ImageReader::new(&path, ReadMode::Default).unwrap();
+        let wrapper = ensure_java_wrapper().unwrap();
+        let jvm = wrapper.jvm.as_ref().unwrap();
+
+        // Grab the raw pointer (a plain `Copy` value, not borrowed from
+        // `reader`) up front so building the `WeakReference` below doesn't
+        // need to hold a borrow of `reader` across the later `drop(reader)`.
+        let target_raw = reader
+            .wrapper_instance
+            .as_ref()
+            .expect("reader must have a live Java instance")
+            .as_raw();
+
+        // Wrap the reader's underlying Java object in a `WeakReference`, held
+        // via our own separate `Global` so it survives independently of
+        // `reader`.
+        let weak_ref: Global<JObject<'static>> = jvm
+            .attach_current_thread(|env| -> jni::errors::Result<_> {
+                // Safety: `target_raw` is still valid here - the reader (and
+                // its global ref) hasn't been dropped yet.
+                let target = unsafe { JObject::from_raw(env, target_raw) };
+                let local_weak = env.new_object(
+                    jni_str!("java/lang/ref/WeakReference"),
+                    jni_sig!("(Ljava/lang/Object;)V"),
+                    &[JValue::from(&target)],
+                )?;
+                env.new_global_ref(local_weak)
+            })
+            .unwrap();
+
+        // Drop the reader - must release its `Global<JObject>` (and call the
+        // Java-side `close()`), leaving nothing else holding a strong
+        // reference to the wrapped Java object.
+        drop(reader);
+
+        // A `WeakReference` only clears once the JVM actually runs a
+        // collection, so force a few, giving the collector a moment each
+        // time in case reference processing lags behind the GC itself.
+        let is_cleared = jvm
+            .attach_current_thread(|env| -> jni::errors::Result<bool> {
+                for _ in 0..5 {
+                    env.call_static_method(
+                        jni_str!("java/lang/System"),
+                        jni_str!("gc"),
+                        jni_sig!("()V"),
+                        &[],
+                    )?;
+                    thread::sleep(std::time::Duration::from_millis(50));
+                    let referent = env
+                        .call_method(&weak_ref, jni_str!("get"), jni_sig!("()Ljava/lang/Object;"), &[])?
+                        .l()?;
+                    if referent.is_null() {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+            .unwrap();
+
+        assert!(
+            is_cleared,
+            "WeakReference to the BioFormats instance was not cleared after dropping the \
+             ImageReader and forcing GC - something is still holding a strong reference to it \
+             (possible Global-ref leak in the jni 0.22 port)"
+        );
+    }
+
+    /// Companion sanity check to the precise leak test above: repeatedly
+    /// opening, reading from, and dropping readers must keep working over
+    /// many cycles without erroring (e.g. a real global-ref leak would
+    /// eventually make the JVM log "JNI ERROR: global reference table
+    /// overflow" and abort). Growth itself isn't asserted tightly here (see
+    /// the note on the test above for why RSS is noisy for this workload) -
+    /// only that the process stays well clear of runaway growth.
+    #[test]
+    fn repeated_open_read_close_does_not_error_or_blow_up_memory() {
+        init_java_wrapper(1_000_000_000).unwrap();
+        let path: PathBuf = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        )
+        .into();
+        let tile = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 0,
+            height: 0,
+        };
+
+        let open_read_drop = || {
+            let reader = ImageReader::new(&path, ReadMode::Default).unwrap();
+            let _ = reader
+                .read_image_tile_combined(0, 0, ZProjection::None, &None, 0, Some(&vec![0]), &tile)
+                .unwrap();
+            // `reader` (and its `wrapper_instance` global ref) drops here.
+        };
+
+        for _ in 0..10 {
+            open_read_drop();
+        }
+
+        let baseline_bytes = current_process_rss_bytes();
+
+        const ITERATIONS: usize = 200;
+        for _ in 0..ITERATIONS {
+            open_read_drop();
+        }
+
+        let (Some(baseline_bytes), Some(after_bytes)) = (baseline_bytes, current_process_rss_bytes())
+        else {
+            eprintln!("skipping RSS sanity check: process memory unavailable on this platform");
+            return;
+        };
+        let growth_mb = after_bytes.saturating_sub(baseline_bytes) as f64 / 1_000_000.0;
+
+        // Wide bound: a *leak-free* run of this loop was observed to grow
+        // ~200-300MB (JVM heap high-water mark, not returned to the OS -
+        // see the note on the test above). This only guards against a
+        // qualitatively different failure mode (e.g. leaking a whole tile
+        // buffer's worth of memory per iteration).
+        assert!(
+            growth_mb < 1500.0,
+            "process RSS grew by {growth_mb:.1} MB over {ITERATIONS} open/read/close cycles \
+             (baseline {baseline_bytes} bytes, after {after_bytes} bytes) - well beyond normal \
+             JVM heap high-water-mark growth for this workload"
+        );
+    }
+
+    /// Confirms the ported `attach_current_thread` closures (see
+    /// `ImageReader::new`, `read_image_meta`, `read_image_tile` in
+    /// image_reader.rs, and `JavaWrapper::init` in java.rs) are safe to
+    /// enter concurrently from several genuinely independent OS threads at
+    /// once - e.g. a GUI thread and a background worker thread each opening
+    /// their own reader - rather than only from rayon's own worker pool
+    /// (already covered by `pooled_parallel_read_matches_sequential_read`).
+    /// Every thread opens an independent reader on the same file and all
+    /// must see identical channel data.
+    #[test]
+    fn concurrent_readers_on_independent_threads_produce_consistent_results() {
+        init_java_wrapper(1_000_000_000).unwrap();
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        );
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.to_string();
+                thread::spawn(move || {
+                    let reader = ImageReader::new(&path.into(), ReadMode::Default).unwrap();
+                    reader
+                        .read_image_tile_combined(
+                            0,
+                            0,
+                            ZProjection::None,
+                            &None,
+                            0,
+                            Some(&vec![0]),
+                            &ImageTile {
+                                offset_x: 0,
+                                offset_y: 0,
+                                width: 0,
+                                height: 0,
+                            },
+                        )
+                        .unwrap()
+                })
+            })
+            .collect();
+
+        let results: Vec<Vec<ImageChannel>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("reader thread panicked"))
+            .collect();
+
+        assert!(
+            results.iter().all(|r| !r.is_empty()),
+            "every thread must read at least one channel"
+        );
+
+        let first = &results[0];
+        for other in &results[1..] {
+            assert_eq!(other.len(), first.len(), "channel counts must match across threads");
+            for (a, b) in first.iter().zip(other.iter()) {
+                assert_eq!(a.c_stack, b.c_stack);
+                match (&*a.image, &*b.image) {
+                    (ImageContainer::F32Gray(x), ImageContainer::F32Gray(y)) => {
+                        assert_eq!(
+                            x.as_slice(),
+                            y.as_slice(),
+                            "channel {} pixels differ between independent threads",
+                            a.c_stack
+                        );
+                    }
+                    other => panic!("unexpected variant combination: {other:?}"),
+                }
+            }
+        }
+    }
 }

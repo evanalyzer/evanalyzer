@@ -21,7 +21,8 @@
                 "rust-lang.rust-analyzer",
                 "tamasfe.even-better-toml",
                 "ChrisBeard.rustdocstring",
-                "slint.slint"
+                "slint.slint",
+                "fill-labs.dependi"
             ]
         }
     }
