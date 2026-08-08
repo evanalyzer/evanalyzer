@@ -62,6 +62,33 @@ pub enum KNNWeightFunction {
     Distance,
 }
 
+/// The distance function used to measure similarity between feature vectors
+/// when finding a point's k nearest neighbors.
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum KNNDistanceMetric {
+    /// Straight-line ("as the crow flies") distance. The standard choice for
+    /// continuous, comparably-scaled features.
+    #[default]
+    Euclidean,
+    /// Sum of absolute differences per feature ("taxicab" distance) - less
+    /// sensitive to outliers in a single feature than Euclidean.
+    Manhattan,
+    /// 1 minus the cosine similarity between two vectors - measures the
+    /// angle between them, ignoring magnitude. Useful when the direction of
+    /// a feature vector matters more than its scale.
+    Cosine,
+    /// Number of positions at which two vectors differ. Intended for
+    /// discrete/categorical-valued features, not continuous ones.
+    Hamming,
+    /// Generalization of Euclidean (`p = 2`) and Manhattan (`p = 1`) distance
+    /// to an arbitrary order `p`.
+    Minkowski {
+        /// The order of the norm. Must be at least 1.
+        p: u16,
+    },
+}
+
 #[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase", default)]
 pub struct KnnSettings {
@@ -71,10 +98,12 @@ pub struct KnnSettings {
     pub weight: KNNWeightFunction,
     /// number of training samples to consider when estimating class for new point. Default value is 3.
     pub k: usize,
+    /// distance function used to find a point's nearest neighbors. Default is `KNNDistanceMetric::Euclidean`.
+    pub distance: KNNDistanceMetric,
 }
 
 /// The activation function applied between hidden layers.
-#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MlpActivation {
     #[default]
@@ -83,7 +112,7 @@ pub enum MlpActivation {
     Tanh,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, JsonSchema, Clone)]
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MlpSettings {
     /// Number of nodes in each hidden layer, in order (e.g. `[64, 32]` is two
@@ -100,6 +129,31 @@ pub struct MlpSettings {
     pub batch_size: usize,
     /// Seed for weight initialization, for reproducible training runs.
     pub seed: u64,
+    /// Adam optimizer epsilon - a small value added to the denominator of the
+    /// parameter update for numerical stability. Rarely needs tuning; the
+    /// default (`1e-5`, via `Default` below) matches burn's own `AdamConfig`
+    /// default.
+    pub epsilon: f64,
+}
+
+/// `#[derive(Default)]` would give `epsilon` (and every other numeric field)
+/// a bare `0.0`/`0` - fine for most of these (a project always overwrites
+/// them before training), but `epsilon: 0.0` is a real correctness hazard
+/// specifically: burn's Adam divides by `sqrt(v_hat) + epsilon`, and early in
+/// training `v_hat` can legitimately be exactly 0, so an unset epsilon can
+/// produce a division by zero instead of just "a slightly worse default."
+impl Default for MlpSettings {
+    fn default() -> Self {
+        Self {
+            hidden_layers: Vec::new(),
+            activation: MlpActivation::default(),
+            epochs: 0,
+            learning_rate: 0.0,
+            batch_size: 0,
+            seed: 0,
+            epsilon: 1e-5,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

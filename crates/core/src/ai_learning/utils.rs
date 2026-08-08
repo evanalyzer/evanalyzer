@@ -1,5 +1,5 @@
 use crate::ZProjection;
-use crate::ai_learning::model::{Classifier, mlp::predict_mlp};
+use crate::ai_learning::model::{Classifier, KnnModel, mlp::predict_mlp};
 use crate::image::ImageTile;
 use crate::object::Object;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -59,9 +59,14 @@ impl Classifier {
             }
             Classifier::Knn(model) => {
                 let x = to_dense_matrix(features)?;
-                model
-                    .predict(&x)
-                    .map_err(|e| InternalErrors::Internal(e.to_string()))
+                match model {
+                    KnnModel::Euclidean(model) => model.predict(&x),
+                    KnnModel::Manhattan(model) => model.predict(&x),
+                    KnnModel::Cosine(model) => model.predict(&x),
+                    KnnModel::Hamming(model) => model.predict(&x),
+                    KnnModel::Minkowski(model) => model.predict(&x),
+                }
+                .map_err(|e| InternalErrors::Internal(e.to_string()))
             }
             Classifier::Mlp {
                 architecture,

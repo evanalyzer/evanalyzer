@@ -8,11 +8,35 @@ use evanalyzer_cfg::settings::ai_learning_settings::AiLearningSettings;
 use serde::{Deserialize, Serialize};
 use smartcore::ensemble::random_forest_classifier::RandomForestClassifier;
 use smartcore::linalg::basic::matrix::DenseMatrix;
+use smartcore::metrics::distance::cosine::Cosine;
 use smartcore::metrics::distance::euclidian::Euclidian;
+use smartcore::metrics::distance::hamming::Hamming;
+use smartcore::metrics::distance::manhattan::Manhattan;
+use smartcore::metrics::distance::minkowski::Minkowski;
 use smartcore::neighbors::knn_classifier::KNNClassifier;
 use std::path::Path;
 
 pub const CURRENT_SAVED_CLASSIFIER_VERSION: u32 = 1;
+
+/// A fitted KNN model, one variant per [`KNNDistanceMetric`](evanalyzer_cfg::settings::ai_learning_settings::KNNDistanceMetric).
+///
+/// smartcore's `KNNClassifier<TX, TY, X, Y, D>` is generic over its distance
+/// type `D` - a compile-time choice, unlike `algorithm`/`weight`/`k`, which
+/// are runtime fields of `KNNClassifierParameters` regardless of `D`. Since
+/// the distance metric is a runtime setting here (`KnnSettings::distance`),
+/// this enum is what makes that possible: each variant fixes one concrete
+/// `D`, and `fit_knn`/`Classifier::predict` match on it the same way
+/// `Classifier` itself dispatches across backends.
+///
+/// SERIALIZATION-CRITICAL: stored inside every saved classifier model.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum KnnModel {
+    Euclidean(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Euclidian<f32>>),
+    Manhattan(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Manhattan<f32>>),
+    Cosine(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Cosine<f32>>),
+    Hamming(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Hamming<f32>>),
+    Minkowski(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Minkowski<f32>>),
+}
 
 /// The trained model, one variant per backend. This — plus `predict` below —
 /// is the single interface the rest of the app (pixel/object training,
@@ -23,7 +47,7 @@ pub const CURRENT_SAVED_CLASSIFIER_VERSION: u32 = 1;
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Classifier {
     RandomForest(RandomForestClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>>),
-    Knn(KNNClassifier<f32, usize, DenseMatrix<f32>, Vec<usize>, Euclidian<f32>>),
+    Knn(KnnModel),
     Mlp {
         architecture: MlpArchitecture,
         /// Weights recorded via `BinBytesRecorder<FullPrecisionSettings>` —

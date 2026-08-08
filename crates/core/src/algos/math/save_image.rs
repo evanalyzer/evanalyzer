@@ -247,18 +247,27 @@ mod tests {
         )
         .expect("Failed to create test image");
 
-        // 2. Setup PipelineContext
+        // 2. Setup PipelineContext - each test gets its own directory (not a
+        // fixed `images/` folder relative to the process CWD) so concurrently
+        // running tests in this module can never race on it: a previous
+        // version shared one `images/` folder across tests, and one test's
+        // cleanup (`remove_dir` after its own file was gone) could delete the
+        // directory out from under another test between its `create_dir_all`
+        // and `.save()` calls - intermittent "No such file or directory",
+        // more reliably hit under CI's parallel test execution.
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        // Write into the current directory so the relative `test_path` below matches.
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
 
         let mut cache = PipelineCache::default();
 
-        // 3. Define a temporary path - control images are written under
-        // `images/<image_rel_path>/<name>_x<off>_y<off>.png`; the default (empty)
-        // `image_rel_path` used here maps to `images/` directly, and the test
-        // context's tile offset defaults to (0, 0).
-        let test_path = PathBuf::from("images/test_output_deleteme_x000000_y000000.png");
+        // 3. Control images are written under
+        // `<output_path>/images/<image_rel_path>/<name>_x<off>_y<off>.png`; the
+        // default (empty) `image_rel_path` used here maps to `images/`
+        // directly, and the test context's tile offset defaults to (0, 0).
+        let test_path = dir
+            .path()
+            .join("images/test_output_deleteme_x000000_y000000.png");
 
         // 4. Run the command
         let saver = SaveImage {
@@ -275,9 +284,7 @@ mod tests {
         let metadata = fs::metadata(&test_path).unwrap();
         assert!(metadata.len() > 0, "Saved file is empty");
 
-        // Cleanup: remove the file (and the now-empty `images/` dir) after test
-        let _ = fs::remove_file(&test_path);
-        let _ = fs::remove_dir(test_path.parent().unwrap());
+        // `dir` cleans itself up on drop - no manual cleanup needed.
     }
     #[test]
     fn test_save_rgb_command_execution() {
@@ -300,10 +307,13 @@ mod tests {
         )
         .expect("Failed to create test RGB image");
 
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
-        let test_path = PathBuf::from("images/test_output_rgb_deleteme_x000000_y000000.png");
+        let test_path = dir
+            .path()
+            .join("images/test_output_rgb_deleteme_x000000_y000000.png");
 
         // 2. Run the command
         let saver = SaveImage {
@@ -316,9 +326,7 @@ mod tests {
         assert!(result.is_ok());
         assert!(test_path.exists());
 
-        // Cleanup
-        let _ = fs::remove_file(&test_path);
-        let _ = fs::remove_dir(test_path.parent().unwrap());
+        // `dir` cleans itself up on drop - no manual cleanup needed.
     }
 
     #[test]
@@ -333,8 +341,9 @@ mod tests {
             Image::<u32, 1, _>::from_size_slice(size, &data, CpuAllocator).unwrap();
 
         // 2. Setup context
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_u32_image_test(unsupported_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
         let saver = SaveImage {
             name: "fail".into(),
@@ -389,8 +398,9 @@ mod tests {
         // data[center_idx + 2] = 0.0; // Blue (already 0)
 
         let input_img = Image::new(size, data, CpuAllocator).unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
 
         // Try saving to an illegal path (e.g., a directory that doesn't exist)
@@ -456,11 +466,13 @@ mod tests {
             CpuAllocator,
         )
         .unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
-        let test_path =
-            PathBuf::from("images/test_output_instance_map_deleteme_x000000_y000000.png");
+        let test_path = dir
+            .path()
+            .join("images/test_output_instance_map_deleteme_x000000_y000000.png");
 
         let saver = SaveImage {
             name: "test_output_instance_map_deleteme".into(),
@@ -470,8 +482,7 @@ mod tests {
 
         assert!(result.is_ok(), "Save command failed: {:?}", result.err());
         assert!(test_path.exists(), "File was not actually created on disk");
-        let _ = fs::remove_file(&test_path);
-        let _ = fs::remove_dir(test_path.parent().unwrap());
+        // `dir` cleans itself up on drop - no manual cleanup needed.
     }
 
     #[test]
@@ -485,10 +496,13 @@ mod tests {
             CpuAllocator,
         )
         .unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
-        let test_path = PathBuf::from("images/test_output_seg_mask_deleteme_x000000_y000000.png");
+        let test_path = dir
+            .path()
+            .join("images/test_output_seg_mask_deleteme_x000000_y000000.png");
 
         let saver = SaveImage {
             name: "test_output_seg_mask_deleteme".into(),
@@ -498,8 +512,7 @@ mod tests {
 
         assert!(result.is_ok(), "Save command failed: {:?}", result.err());
         assert!(test_path.exists(), "File was not actually created on disk");
-        let _ = fs::remove_file(&test_path);
-        let _ = fs::remove_dir(test_path.parent().unwrap());
+        // `dir` cleans itself up on drop - no manual cleanup needed.
     }
 
     #[test]
