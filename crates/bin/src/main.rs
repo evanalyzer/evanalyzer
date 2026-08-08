@@ -7,6 +7,11 @@ use evanalyzer_cfg::core_types::InternalErrors;
 use log::LevelFilter;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // As early as possible, before any other setup: a packaged build has no
+    // attached console, so without this a panic anywhere in the process
+    // just makes the window disappear with nothing to diagnose it from.
+    evanalyzer_app::crash_log::install_panic_hook();
+
     let mut builder = Builder::new();
     builder.filter_level(LevelFilter::Debug);
     builder

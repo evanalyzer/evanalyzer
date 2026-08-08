@@ -11,7 +11,7 @@ evanalyzer_core = { workspace = true }
 evanalyzer_cfg = { path = "../cfg" }
 
 log = "0.4"
-env_logger = "0.11"
+chrono = "0.4.45"
 indexmap = "2.14.0"
 bitvec = "1.1.1"
 pathdiff = "0.2.3"

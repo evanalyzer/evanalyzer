@@ -1,5 +1,6 @@
 pub mod ai_learning;
 pub mod bioimageio;
+pub mod crash_log;
 pub mod extensions;
 pub mod frontend;
 mod project_owner;
