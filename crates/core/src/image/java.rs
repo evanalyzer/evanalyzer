@@ -232,7 +232,13 @@ impl JavaWrapper {
 
                 let global_cls = env.new_global_ref(local_cls)?;
 
-                Ok((global_cls, constructor, close, get_image_properties, read_image_tile))
+                Ok((
+                    global_cls,
+                    constructor,
+                    close,
+                    get_image_properties,
+                    read_image_tile,
+                ))
             })?;
 
         self.m_bioformats_class = Some(global_cls);

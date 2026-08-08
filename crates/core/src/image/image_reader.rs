@@ -442,8 +442,9 @@ impl ImageReader {
         let rust_string = jvm
             .attach_current_thread(|env| -> jni::errors::Result<String> {
                 let method_id = unsafe { JMethodID::from_raw(method_id_raw) };
-                let result =
-                    unsafe { env.call_method_unchecked(instance, method_id, ReturnType::Object, &[])? };
+                let result = unsafe {
+                    env.call_method_unchecked(instance, method_id, ReturnType::Object, &[])?
+                };
                 let jstring_obj = result.l()?;
                 let jstring = env.cast_local::<jni::objects::JString>(jstring_obj)?;
                 let s = jstring.try_to_string(env)?;
@@ -512,6 +513,16 @@ impl ImageReader {
         if width == 0 || height == 0 {
             width = pyramid_info.width as usize;
             height = pyramid_info.height as usize;
+        }
+
+        // Bail before doing any buffer allocation or JNI call at all if the
+        // metadata never declared a bit depth (see the matching guard in
+        // `decode_image`, which this also protects against reaching).
+        if pyramid_info.nr_bits == 0 {
+            return Err(InternalErrors::ImageReadError(format!(
+                "Series {series}, resolution {resolution_idx} reports a bit depth of 0 \
+                 (missing BitsPerPixel metadata) - cannot read tile"
+            )));
         }
 
         // Prepare Buffer - Use Boxed Slice for more stable heap allocation
@@ -913,6 +924,20 @@ fn decode_image(
     image_tile: ImageTile,
     plane: ImagePlane,
 ) -> Result<ImageContainer, InternalErrors> {
+    // `nr_bits == 0` means the source metadata never declared a bit depth
+    // (e.g. a pyramid sub-resolution omitting `BitsPerPixel` - plausible for
+    // real-world files, not just corrupt ones). Every decode path below
+    // divides by or chunks on a byte-per-sample count derived from `nr_bits`,
+    // which is zero in that case: `par_chunks_exact(0)` panics unconditionally
+    // and `buffer.len() / (bytes_per_sample * source_planes)` divides by zero.
+    // Fail cleanly here instead of reaching either.
+    if nr_bits == 0 {
+        return Err(InternalErrors::ImageReadError(
+            "Image reports a bit depth of 0 (missing BitsPerPixel metadata) - cannot decode"
+                .to_string(),
+        ));
+    }
+
     let max_val = (1u64 << nr_bits) - 1;
     let inv_divisor = 1.0 / (max_val as f32);
 
@@ -1744,6 +1769,31 @@ mod tests {
     }
 
     #[test]
+    fn decode_image_zero_bit_depth_returns_error_instead_of_panicking() {
+        // Regression test: metadata that omits `BitsPerPixel` (plausible for
+        // pyramid sub-resolutions in real, non-corrupt files - see
+        // image_ome_parser.rs) surfaces as `nr_bits == 0`. Before this guard,
+        // the grayscale/RGB-interleaved path panicked unconditionally on
+        // `buffer.par_chunks_exact(0)` and the planar path divided by zero -
+        // both a hard crash on opening a legitimate file.
+        let buffer: Vec<u8> = vec![0, 0, 0, 0];
+        let result = decode_image(
+            &buffer,
+            true,
+            true,
+            ImageSize {
+                width: 2,
+                height: 1,
+            },
+            0, // nr_bits
+            1,
+            ImageTile::default(),
+            ImagePlane { z: 0, c: 0, t: 0 },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn decode_samples_parallel_generic_bit_depth_matches_16bit_semantics() {
         // nr_bits = 12 falls through to the generic (non-8/16) branch, which
         // reads via read_le/read_be into a u64 instead of u16::from_le_bytes -
@@ -1976,7 +2026,12 @@ mod tests {
                     )?;
                     thread::sleep(std::time::Duration::from_millis(50));
                     let referent = env
-                        .call_method(&weak_ref, jni_str!("get"), jni_sig!("()Ljava/lang/Object;"), &[])?
+                        .call_method(
+                            &weak_ref,
+                            jni_str!("get"),
+                            jni_sig!("()Ljava/lang/Object;"),
+                            &[],
+                        )?
                         .l()?;
                     if referent.is_null() {
                         return Ok(true);
@@ -2035,7 +2090,8 @@ mod tests {
             open_read_drop();
         }
 
-        let (Some(baseline_bytes), Some(after_bytes)) = (baseline_bytes, current_process_rss_bytes())
+        let (Some(baseline_bytes), Some(after_bytes)) =
+            (baseline_bytes, current_process_rss_bytes())
         else {
             eprintln!("skipping RSS sanity check: process memory unavailable on this platform");
             return;
@@ -2109,7 +2165,11 @@ mod tests {
 
         let first = &results[0];
         for other in &results[1..] {
-            assert_eq!(other.len(), first.len(), "channel counts must match across threads");
+            assert_eq!(
+                other.len(),
+                first.len(),
+                "channel counts must match across threads"
+            );
             for (a, b) in first.iter().zip(other.iter()) {
                 assert_eq!(a.c_stack, b.c_stack);
                 match (&*a.image, &*b.image) {

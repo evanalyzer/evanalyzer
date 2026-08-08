@@ -122,6 +122,44 @@ jobs:
             echo "Coverage unchanged - nothing to commit."
           fi
 
+  fmt:
+    # Checks that source is `cargo fmt`-clean, including the files
+    # `evanalyzer_cfg`'s build.rs (re-)generates - see
+    # crates/cfg/build/pipeline_commands_generator.rs - which writes
+    # crates/cfg/src/modules/pipeline_command*.rs and
+    # crates/core/src/job/algos_from_config.rs, running each through
+    # `rustfmt` itself as part of generation.
+    #
+    # A plain checkout isn't enough to check those files correctly: the
+    # committed copies could be stale relative to the algo structs they're
+    # derived from, so this builds `evanalyzer_cfg` first to regenerate
+    # them before running `cargo fmt --check` against the result.
+    # `evanalyzer_cfg` has no native dependencies (it doesn't depend on
+    # evanalyzer_core), so this is cheap and doesn't need the libtorch/JRE
+    # downloads the `test` job pays for.
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.2.0
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64-fmt
+
+      - name: Regenerate build-script-generated source
+        run: cargo check -p evanalyzer_cfg
+
+      - name: Check formatting
+        run: cargo fmt --check
+
   audit:
     # Dependency/license audit via cargo-audit (RUSTSEC advisory DB). Only
     # needs Cargo.lock, not a full build, so it's a separate lightweight job
