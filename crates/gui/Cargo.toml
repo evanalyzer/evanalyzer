@@ -8,22 +8,22 @@ publish = { workspace = true }
 
 [dependencies]
 evanalyzer_core = { workspace = true }
-evanalyzer_app = { path = "../app" }
-evanalyzer_cfg = { path = "../cfg" }
+evanalyzer_app = { workspace = true }
+evanalyzer_cfg = { workspace = true }
 evanalyzer_gui_slint = { path = "ui" }
 
 rfd = "0.17"
 copypasta = "0.10"
-log = "0.4"
-rayon = "1.12"
-kornia-image = { version = "0.1.14"}
-kornia-imgproc = { version = "0.1.14"}
+log = { workspace = true }
+rayon = { workspace = true }
+kornia-image = { workspace = true }
+kornia-imgproc = { workspace = true }
 clru = "0.6.3"
-indexmap = "2.14.0"
-bitvec = "1.1.1"
-chrono = "0.4.45"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+indexmap = { workspace = true }
+bitvec = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 
 
@@ -44,7 +44,7 @@ features = [
 ]
 
 [dev-dependencies]
-kornia-apriltag = {version = "0.1.10"}
+kornia-apriltag = { workspace = true }
 i-slint-backend-testing = "=1.17.1"
 
 
