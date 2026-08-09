@@ -47,7 +47,8 @@ fn create_schema(conn: &duckdb::Connection) {
             n_colocalized UBIGINT, avg_targets_per_object DOUBLE, total_source_objects UBIGINT
         );
         CREATE TABLE images (
-            image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY
+            image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
+            status VARCHAR NOT NULL DEFAULT 'ok', error_message VARCHAR
         );
         CREATE TABLE classes (
             class_id INTEGER NOT NULL PRIMARY KEY, name VARCHAR NOT NULL
