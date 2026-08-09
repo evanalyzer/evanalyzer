@@ -17,7 +17,7 @@ pub fn generate_pipeline(prompt: &str) -> Result<PipelineTemplate, InternalError
     // println!("Generated JSON Schema for Local LLM:\n{}", schema_string);
 
     let dir = models_dir();
-    let model_path = dir.join("qwen2.5-0.5b-instruct-q6_k.gguf");
+    let model_path = dir.join("qwen2.5-0.5b-instruct-q4_k_m.gguf");
     let tokenizer_path = dir.join("tokenizer.json");
     if !model_path.exists() || !tokenizer_path.exists() {
         return Err(InternalErrors::Generic(format!(
