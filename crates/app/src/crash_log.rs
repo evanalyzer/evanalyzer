@@ -97,14 +97,25 @@ mod tests {
     /// Runs `f` inside `catch_unwind` with a temporary hook that captures
     /// the formatted crash log entry instead of printing to stderr, then
     /// restores whatever hook was installed before this test ran.
+    ///
+    /// `set_hook`/`take_hook` are process-global, so this hook can also fire
+    /// for panics on *other* threads running unrelated tests in parallel
+    /// (e.g. `project_owner`'s poisoned-lock test, which panics on purpose)
+    /// - `hook_test_lock` only serializes this module's own tests against
+    /// each other, not against those. Filtering by thread id here keeps
+    /// such cross-thread panics from clobbering `captured` with the wrong
+    /// message.
     fn capture_crash_log_entry(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
         let _guard = hook_test_lock().lock().unwrap();
 
+        let this_thread = std::thread::current().id();
         let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let captured_for_hook = Arc::clone(&captured);
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            *captured_for_hook.lock().unwrap() = Some(format_crash_log_entry(info));
+            if std::thread::current().id() == this_thread {
+                *captured_for_hook.lock().unwrap() = Some(format_crash_log_entry(info));
+            }
         }));
 
         let result = std::panic::catch_unwind(f);
