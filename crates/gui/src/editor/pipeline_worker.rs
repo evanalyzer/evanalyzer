@@ -230,7 +230,7 @@ impl PipelineWorker {
                             path.display()
                         );
                         let secs_per_image = pipeline_start
-                            .map(|t| t.elapsed().as_secs_f64() / index as f64)
+                            .map(|t| secs_per_image(t.elapsed(), index))
                             .unwrap_or(0.0);
                         let eta_str = format!("{:.2}", secs_per_image);
                         let is_last = index == total;
@@ -358,6 +358,14 @@ impl PipelineWorker {
     }
 }
 
+/// Seconds elapsed per completed image, for the ETA display. `index` is
+/// always >= 1 for a real `ImageCompleted` event (see job_executor.rs's
+/// `completed.fetch_add(1, ..) + 1`), but `.max(1)` keeps this from ever
+/// displaying "inf" if that invariant is ever violated.
+fn secs_per_image(elapsed: std::time::Duration, index: usize) -> f64 {
+    elapsed.as_secs_f64() / (index.max(1) as f64)
+}
+
 /// Waits for a pipeline task to become available, blocking until one is posted.
 fn wait_for_task(task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>) -> PipelineTask {
     let (lock, cvar) = &*task_request;
@@ -371,6 +379,14 @@ fn wait_for_task(task_request: Arc<(Mutex<Option<PipelineTask>>, Condvar)>) -> P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secs_per_image_treats_index_zero_as_one_instead_of_displaying_inf() {
+        let elapsed = std::time::Duration::from_secs(10);
+        assert_eq!(secs_per_image(elapsed, 0), 10.0);
+        assert_eq!(secs_per_image(elapsed, 10), 1.0);
+        assert_eq!(secs_per_image(elapsed, 1), 10.0);
+    }
 
     #[test]
     fn wait_for_task_returns_immediately_if_a_task_is_already_posted() {

@@ -14,11 +14,22 @@ use evanalyzer_app::extensions::object_ext::ObjectExt;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_core::{ImageContainer, Object};
 use kornia_image::ImageSize;
+use log::warn;
 use slint::ComponentHandle;
 use slint::Model;
 use slint::ModelRc;
 use slint::VecModel;
 use std::sync::Arc;
+
+/// Reads the two corner points a rectangle/oval-drag gesture is expected to
+/// provide, without panicking if fewer were ever supplied. Currently the
+/// Slint side always seeds both slots before the paint-finished callback
+/// fires (`viewport.slint`), but that's a UI-side contract with no
+/// corresponding guarantee here - a future change to how drag interactions
+/// are handled (e.g. an interrupted drag) could violate it.
+fn rect_corners(points: &ModelRc<PointSlint>) -> Option<(PointSlint, PointSlint)> {
+    Some((points.row_data(0)?, points.row_data(1)?))
+}
 
 pub struct ViewPortObjectController {
     pub(crate) ui: slint::Weak<AppWindow>,
@@ -249,6 +260,13 @@ impl ViewPortObjectController {
     }
 
     pub fn add_object_from_rect(&self, points: &ModelRc<PointSlint>) {
+        let Some((p0, p1)) = rect_corners(points) else {
+            warn!(
+                "add_object_from_rect: expected 2 points, got {}",
+                points.row_count()
+            );
+            return;
+        };
         let view_port_state = self
             .viewport_controller
             .viewport_state
@@ -256,14 +274,10 @@ impl ViewPortObjectController {
             .expect("Poisoned")
             .clone();
 
-        let x1 =
-            (points.row_data(0).unwrap().x - view_port_state.offset_x) / (view_port_state.zoom);
-        let y1 =
-            (points.row_data(0).unwrap().y - view_port_state.offset_y) / (view_port_state.zoom);
-        let x2 =
-            (points.row_data(1).unwrap().x - view_port_state.offset_x) / (view_port_state.zoom);
-        let y2 =
-            (points.row_data(1).unwrap().y - view_port_state.offset_y) / (view_port_state.zoom);
+        let x1 = (p0.x - view_port_state.offset_x) / (view_port_state.zoom);
+        let y1 = (p0.y - view_port_state.offset_y) / (view_port_state.zoom);
+        let x2 = (p1.x - view_port_state.offset_x) / (view_port_state.zoom);
+        let y2 = (p1.y - view_port_state.offset_y) / (view_port_state.zoom);
 
         // Create mask
         let min_x = x1.min(x2) as u32;
@@ -283,6 +297,13 @@ impl ViewPortObjectController {
     }
 
     pub fn add_oval_from_rect(&self, points: &ModelRc<PointSlint>) {
+        let Some((p0, p1)) = rect_corners(points) else {
+            warn!(
+                "add_oval_from_rect: expected 2 points, got {}",
+                points.row_count()
+            );
+            return;
+        };
         let view_port_state = self
             .viewport_controller
             .viewport_state
@@ -290,14 +311,10 @@ impl ViewPortObjectController {
             .expect("Poisoned")
             .clone();
 
-        let x1 =
-            (points.row_data(0).unwrap().x - view_port_state.offset_x) / (view_port_state.zoom);
-        let y1 =
-            (points.row_data(0).unwrap().y - view_port_state.offset_y) / (view_port_state.zoom);
-        let x2 =
-            (points.row_data(1).unwrap().x - view_port_state.offset_x) / (view_port_state.zoom);
-        let y2 =
-            (points.row_data(1).unwrap().y - view_port_state.offset_y) / (view_port_state.zoom);
+        let x1 = (p0.x - view_port_state.offset_x) / (view_port_state.zoom);
+        let y1 = (p0.y - view_port_state.offset_y) / (view_port_state.zoom);
+        let x2 = (p1.x - view_port_state.offset_x) / (view_port_state.zoom);
+        let y2 = (p1.y - view_port_state.offset_y) / (view_port_state.zoom);
 
         let min_x = x1.min(x2) as u32;
         let max_x = x1.max(x2) as u32;
@@ -628,6 +645,18 @@ mod tests {
         assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
     }
 
+    #[test]
+    fn add_object_from_rect_with_fewer_than_two_points_is_a_no_op_not_a_panic() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        controller.add_object_from_rect(&points(&[]));
+        controller.add_object_from_rect(&points(&[(2.0, 2.0)]));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
+    }
+
     // -- add_oval_from_rect / add_polygon_from_rect (no cached data) --------------
 
     #[test]
@@ -635,6 +664,18 @@ mod tests {
         let (ui_state, controller, _) = make_controller();
 
         controller.add_oval_from_rect(&points(&[(2.0, 2.0), (8.0, 8.0)]));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
+    }
+
+    #[test]
+    fn add_oval_from_rect_with_fewer_than_two_points_is_a_no_op_not_a_panic() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        controller.add_oval_from_rect(&points(&[]));
+        controller.add_oval_from_rect(&points(&[(2.0, 2.0)]));
 
         let project = ui_state.get_project();
         assert_eq!(project.get_objects().map(|o| o.len()), Some(0));

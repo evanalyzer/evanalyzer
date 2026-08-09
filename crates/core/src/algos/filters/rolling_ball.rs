@@ -73,6 +73,19 @@ impl ImageAlgorithm for RollingBall {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
+        // `radius` is only validated as `min = 1` at the UI/schema layer
+        // (`#[cmdsmeta(...)]` above) - a hand-edited or API-produced pipeline
+        // file could still smuggle 0/negative/NaN through to here, where
+        // `build_ball`/`sliding_paraboloid_background` divide by it (e.g.
+        // `0.5 / self.radius`), silently producing Inf/NaN baseline values
+        // instead of a clean error.
+        if !(self.radius > 0.0) {
+            return Err(InternalErrors::Generic(format!(
+                "RollingBall requires a positive radius, got {}",
+                self.radius
+            )));
+        }
+
         let meta = &ctx.image_meta;
         // Dynamically compute the maximum value scale based on the original bit depth
         // (e.g., 255.0 for 8-bit, 65535.0 for 16-bit).
@@ -917,6 +930,30 @@ mod tests {
     use crate::{ImageContainer, image::PixelSizes, pipeline::pipeline::PipelineImageMeta};
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
+
+    #[test]
+    fn zero_or_negative_or_nan_radius_returns_error_instead_of_dividing_by_it() {
+        let size = ImageSize {
+            width: 5,
+            height: 5,
+        };
+        for radius in [0.0, -1.0, f64::NAN] {
+            let img =
+                Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
+            let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+            let mut cache = PipelineCache::default();
+            let cmd = RollingBall {
+                radius,
+                ball_type: BallType::Ball,
+                pre_smooth: false,
+            };
+            let result = cmd.execute(&mut ctx, &mut cache);
+            assert!(
+                result.is_err(),
+                "radius={radius} should be rejected, not divided by"
+            );
+        }
+    }
 
     /// RollingBall is the one filter that mutates `ctx.image` in place (via
     /// `get_f32_gray_image_mut`) instead of the scratch+swap pattern every

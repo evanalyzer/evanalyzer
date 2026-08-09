@@ -432,8 +432,10 @@ impl ImagesListController {
                 path: entry.rel_path.to_string_lossy().to_string().into(),
                 image_dimension: "".into(),
                 image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
-                // TODO: /*!entry.objects.lock().expect("poisoned").is_empty(),*/
-                has_annotations: false,
+                has_annotations: entry
+                    .series
+                    .values()
+                    .any(|series| !series.objects.is_empty()),
             })
             .collect();
 
@@ -593,6 +595,9 @@ mod tests {
     // -- attach_callbacks (live AppWindow) -----------------------------------------
 
     use crate::editor::test_support::test_ui_windows;
+    use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+    use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+    use std::collections::BTreeMap;
 
     fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> ImagesListController {
         let ui_state = test_ui_state();
@@ -666,5 +671,58 @@ mod tests {
                 .get_current_image_path_cloned()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn sync_image_list_to_slint_reports_has_annotations_only_for_images_with_objects() {
+        // Regression test: `has_annotations` used to be hardcoded `false`
+        // for every image (the real check was commented out as a TODO),
+        // permanently disabling this indicator.
+        let (ui, _results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak());
+
+        {
+            let mut project = controller.app_state.get_project_write();
+
+            let mut series_with_objects = BTreeMap::new();
+            series_with_objects.insert(
+                0,
+                SeriesSettings {
+                    objects: vec![ObjectMetricSettings::default()],
+                    ..Default::default()
+                },
+            );
+            project.images.list.insert(
+                PathBuf::from("with_objects.tif"),
+                ImageEntry {
+                    rel_path: PathBuf::from("with_objects.tif"),
+                    file_size: 0,
+                    selected_series: 0,
+                    series: series_with_objects,
+                },
+            );
+
+            project.images.list.insert(
+                PathBuf::from("empty.tif"),
+                ImageEntry {
+                    rel_path: PathBuf::from("empty.tif"),
+                    file_size: 0,
+                    selected_series: 0,
+                    series: BTreeMap::from([(0, SeriesSettings::default())]),
+                },
+            );
+        }
+
+        controller.sync_image_list_to_slint();
+
+        let images_list = ui.global::<ImagesListState>().get_images_list();
+        let mut has_annotations_by_path = std::collections::HashMap::new();
+        for i in 0..images_list.row_count() {
+            let item = images_list.row_data(i).unwrap();
+            has_annotations_by_path.insert(item.path.to_string(), item.has_annotations);
+        }
+
+        assert_eq!(has_annotations_by_path.get("with_objects.tif"), Some(&true));
+        assert_eq!(has_annotations_by_path.get("empty.tif"), Some(&false));
     }
 }

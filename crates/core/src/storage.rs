@@ -14,7 +14,18 @@ pub trait PipelineResultExporter: Send + Sync {
     /// there are no objects). Default no-op: only exporters that keep a
     /// separate per-image summary (e.g. `DuckDbExporter`'s `images` table)
     /// need to override this.
-    fn finalize_image(&self, _image_rel_path: &std::path::Path) -> Result<(), InternalErrors> {
+    ///
+    /// `error`: `None` if every tile/plane for this image exported
+    /// successfully, `Some(message)` otherwise. Implementations that record
+    /// per-image status (again, `DuckDbExporter`) must persist this rather
+    /// than recording every image as successful regardless of `error` -
+    /// otherwise a partially-failed image is indistinguishable from a
+    /// genuinely complete one once it's in storage.
+    fn finalize_image(
+        &self,
+        _image_rel_path: &std::path::Path,
+        _error: Option<&str>,
+    ) -> Result<(), InternalErrors> {
         Ok(())
     }
 }

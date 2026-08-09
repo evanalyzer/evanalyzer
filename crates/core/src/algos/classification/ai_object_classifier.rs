@@ -137,6 +137,7 @@ impl ImageAlgorithm for AiObjectClassifier {
         }
 
         let predicted = saved.classifier.predict(&rows)?;
+        check_prediction_count_matches(ids.len(), predicted.len())?;
 
         for (id, class_idx) in ids.into_iter().zip(predicted) {
             let Some(model_class) = class_labels.get(class_idx).map(|label| label.class) else {
@@ -165,6 +166,23 @@ impl ImageAlgorithm for AiObjectClassifier {
     fn name(&self) -> &'static str {
         "AiObjectClassifier"
     }
+}
+
+/// Guards against `zip`ing `ids` with a `predicted` vector of a different
+/// length - the same "wrong output, no error" shape as the mismatched-buffer
+/// bug already fixed in `ImageMath`, if `Classifier::predict` ever returns
+/// something other than exactly one prediction per input row, in order.
+fn check_prediction_count_matches(
+    ids_len: usize,
+    predicted_len: usize,
+) -> Result<(), InternalErrors> {
+    if predicted_len != ids_len {
+        return Err(InternalErrors::Generic(format!(
+            "classifier returned {predicted_len} predictions for {ids_len} objects - refusing \
+             to guess which prediction belongs to which object"
+        )));
+    }
+    Ok(())
 }
 
 impl AiObjectClassifier {
@@ -552,5 +570,20 @@ mod tests {
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
         };
         assert_eq!(cmd.name(), "AiObjectClassifier");
+    }
+
+    #[test]
+    fn check_prediction_count_matches_accepts_equal_lengths() {
+        assert!(check_prediction_count_matches(3, 3).is_ok());
+        assert!(check_prediction_count_matches(0, 0).is_ok());
+    }
+
+    #[test]
+    fn check_prediction_count_matches_rejects_a_shorter_or_longer_prediction_vector() {
+        // This is the exact bug: `zip` silently truncates/misaligns instead
+        // of erroring when `predict()` returns the wrong number of
+        // predictions - the guard must catch both directions.
+        assert!(check_prediction_count_matches(3, 2).is_err());
+        assert!(check_prediction_count_matches(3, 4).is_err());
     }
 }
