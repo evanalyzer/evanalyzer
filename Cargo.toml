@@ -6,6 +6,21 @@ members = [
     "crates/gui/ui",
 ]
 
+# `crates/llm` (local-LLM pipeline generation via candle) is opt-in only - it's
+# too slow on CPU for a shipped desktop feature right now, and pulls in a heavy
+# dependency tree (candle, llguidance, tokenizers). Excluding it from
+# default-members keeps plain `cargo build`/`test`/`check` (no `-p`, no
+# `--workspace`) from building it; `-p evanalyzer_llm` or `--workspace` still can.
+default-members = [
+    "crates/app",
+    "crates/bin",
+    "crates/cfg",
+    "crates/cli",
+    "crates/core",
+    "crates/gui",
+    "crates/gui/ui",
+]
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
@@ -19,6 +34,7 @@ publish = false
 evanalyzer_core = { path = "crates/core", features = ["ai"] }
 evanalyzer_cfg = { path = "crates/cfg" }
 evanalyzer_app = { path = "crates/app" }
+evanalyzer_llm = { path = "crates/llm" }
 bitvec = "1.1.1"
 chrono = "0.4.45"
 clap = "4"
