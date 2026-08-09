@@ -409,35 +409,7 @@ impl ImagesListController {
             .to_lowercase();
 
         let images_guard = &state.get_project().images.list;
-
-        let slint_items: Vec<ImageItemData> = images_guard
-            .values()
-            .filter(|entry| {
-                if filter_text.is_empty() {
-                    return true;
-                }
-                entry
-                    .rel_path
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains(&filter_text)
-            })
-            .map(|entry| ImageItemData {
-                name: entry
-                    .rel_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-                    .into(),
-                path: entry.rel_path.to_string_lossy().to_string().into(),
-                image_dimension: "".into(),
-                image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
-                has_annotations: entry
-                    .series
-                    .values()
-                    .any(|series| !series.objects.is_empty()),
-            })
-            .collect();
+        let slint_items = build_image_list_items(images_guard, &filter_text);
 
         // The final assignment goes into the event loop
         slint::invoke_from_event_loop(move || {
@@ -488,6 +460,47 @@ impl ImagesListController {
             })
             .ok();
     }
+}
+
+/// Builds the Slint-facing row list for `sync_image_list_to_slint`: applies
+/// the (already-lowercased) filter text against `rel_path`, then maps each
+/// surviving entry to an `ImageItemData`. Pulled out as a pure function so
+/// it can be tested directly - unlike the rest of `sync_image_list_to_slint`,
+/// this doesn't touch Slint's event loop, which the headless
+/// `init_no_event_loop()` testing platform (see `test_ui_windows`) never
+/// actually drains.
+fn build_image_list_items(
+    images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
+    filter_text_lowercase: &str,
+) -> Vec<ImageItemData> {
+    images
+        .values()
+        .filter(|entry| {
+            if filter_text_lowercase.is_empty() {
+                return true;
+            }
+            entry
+                .rel_path
+                .to_string_lossy()
+                .to_lowercase()
+                .contains(filter_text_lowercase)
+        })
+        .map(|entry| ImageItemData {
+            name: entry
+                .rel_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .into(),
+            path: entry.rel_path.to_string_lossy().to_string().into(),
+            image_dimension: "".into(),
+            image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
+            has_annotations: entry
+                .series
+                .values()
+                .any(|series| !series.objects.is_empty()),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -677,9 +690,15 @@ mod tests {
     fn sync_image_list_to_slint_reports_has_annotations_only_for_images_with_objects() {
         // Regression test: `has_annotations` used to be hardcoded `false`
         // for every image (the real check was commented out as a TODO),
-        // permanently disabling this indicator.
-        let (ui, _results_ui) = test_ui_windows();
-        let controller = make_controller_with_ui(ui.as_weak());
+        // permanently disabling this indicator. Exercises `sync_image_list_to_slint`'s
+        // item-building logic through `build_image_list_items` directly rather than
+        // reading it back off the live Slint model: the headless test platform (see
+        // `test_ui_windows`) uses `init_no_event_loop()`, under which
+        // `slint::invoke_from_event_loop` - the mechanism `sync_image_list_to_slint`
+        // uses for its actual UI write - has no event loop to run on and always
+        // returns `Err(NoEventLoopProvider)` without invoking the closure, so nothing
+        // would ever land in `images_list` to read back.
+        let controller = make_controller_with_ui(slint::Weak::default());
 
         {
             let mut project = controller.app_state.get_project_write();
@@ -713,12 +732,11 @@ mod tests {
             );
         }
 
-        controller.sync_image_list_to_slint();
+        let images_list =
+            build_image_list_items(&controller.app_state.get_project().images.list, "");
 
-        let images_list = ui.global::<ImagesListState>().get_images_list();
         let mut has_annotations_by_path = std::collections::HashMap::new();
-        for i in 0..images_list.row_count() {
-            let item = images_list.row_data(i).unwrap();
+        for item in &images_list {
             has_annotations_by_path.insert(item.path.to_string(), item.has_annotations);
         }
 
