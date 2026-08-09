@@ -593,6 +593,8 @@ mod tests {
         ImageRow {
             image_name: image_name.into(),
             image_rel_path: image_rel_path.into(),
+            status: "ok".into(),
+            error_message: None,
         }
     }
 

@@ -262,49 +262,68 @@ impl<'a> JobExecutor {
                     }
                 }
             } else {
-                // Multiple images: parallelize over images
-                self.images
-                    .par_iter()
-                    .try_for_each(|(rel_path, image_info)| {
-                        if cancel.load(Ordering::Relaxed) {
-                            return Err(InternalErrors::Cancelled);
+                // Multiple images: parallelize over images. Every image is
+                // always attempted, regardless of whether an earlier one
+                // failed - a single malformed file must not silently stop
+                // the rest of a large batch from being processed (unlike
+                // `try_for_each`, which aborts remaining work on the first
+                // `Err`). `cancel` is still checked per-item so an explicit
+                // cancel request stops new work from starting, same as before.
+                let failures: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+                self.images.par_iter().for_each(|(rel_path, image_info)| {
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let abs_path = self.image_base_path.join(rel_path);
+                    match self.analyze_image(
+                        rel_path,
+                        &abs_path,
+                        image_info,
+                        &order,
+                        self.result_storage.clone(),
+                        cancel.clone(),
+                    ) {
+                        Ok(()) => {
+                            let index = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            progress
+                                .send(ProgressEvent::ImageCompleted {
+                                    index,
+                                    total,
+                                    path: rel_path.clone(),
+                                })
+                                .ok();
                         }
-                        let abs_path = self.image_base_path.join(rel_path);
-                        match self.analyze_image(
-                            &rel_path,
-                            &abs_path,
-                            image_info,
-                            &order,
-                            self.result_storage.clone(),
-                            cancel.clone(),
-                        ) {
-                            Ok(()) => {
-                                let index = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                                progress
-                                    .send(ProgressEvent::ImageCompleted {
-                                        index,
-                                        total,
-                                        path: rel_path.clone(),
-                                    })
-                                    .ok();
-                                Ok(())
-                            }
-                            Err(e) => {
-                                progress
-                                    .send(ProgressEvent::ImageFailed {
-                                        path: rel_path.clone(),
-                                    })
-                                    .ok();
-                                // See the single-image branch above: name the
-                                // failing image so the caller's error message
-                                // doesn't just say *something* broke.
-                                Err(InternalErrors::Internal(format!(
-                                    "{}: {e}",
-                                    rel_path.display()
-                                )))
-                            }
+                        Err(e) => {
+                            progress
+                                .send(ProgressEvent::ImageFailed {
+                                    path: rel_path.clone(),
+                                })
+                                .ok();
+                            warn!("{}: {e}", rel_path.display());
+                            failures
+                                .lock()
+                                .expect("failures mutex poisoned")
+                                .push(rel_path.clone());
                         }
-                    })
+                    }
+                });
+
+                let failures = failures.into_inner().expect("failures mutex poisoned");
+                if cancel.load(Ordering::Relaxed) {
+                    Err(InternalErrors::Cancelled)
+                } else if failures.is_empty() {
+                    Ok(())
+                } else {
+                    Err(InternalErrors::Internal(format!(
+                        "{} of {total} image(s) failed: {}",
+                        failures.len(),
+                        failures
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )))
+                }
             }
         });
 
@@ -529,7 +548,14 @@ impl<'a> JobExecutor {
             std::thread::spawn(move || -> Result<(), InternalErrors> {
                 for cache in cache_rx {
                     let t0 = Instant::now();
-                    exporter.lock().expect("Poisoned").export(&cache)?;
+                    // Recover from poison rather than propagating the panic: this
+                    // mutex is shared across every concurrently-running image's
+                    // writer thread, so one image's writer panicking must not
+                    // crash every other image's export too.
+                    exporter
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .export(&cache)?;
                     info!("DB write: {:.1?}", t0.elapsed());
                 }
                 Ok(())
@@ -616,11 +642,18 @@ impl<'a> JobExecutor {
 
         // Record the image was processed even if it produced zero objects -
         // run regardless of tile/writer errors so a partially-failed image
-        // still shows up rather than vanishing entirely.
+        // still shows up rather than vanishing entirely. The error (if any)
+        // is passed through so it's recorded as failed rather than looking
+        // identical to a genuinely complete image.
+        let combined_error = tile_result
+            .as_ref()
+            .and(writer_result.as_ref())
+            .err()
+            .map(|e| e.to_string());
         let finalize_result = exporter
             .lock()
-            .expect("Poisoned")
-            .finalize_image(image_rel_path);
+            .unwrap_or_else(|e| e.into_inner())
+            .finalize_image(image_rel_path, combined_error.as_deref());
 
         tile_result.and(writer_result).and(finalize_result)
     }
@@ -792,7 +825,14 @@ impl<'a> JobExecutor {
             std::thread::spawn(move || -> Result<(), InternalErrors> {
                 for cache in cache_rx {
                     let t0 = Instant::now();
-                    exporter.lock().expect("Poisoned").export(&cache)?;
+                    // Recover from poison rather than propagating the panic: this
+                    // mutex is shared across every concurrently-running image's
+                    // writer thread, so one image's writer panicking must not
+                    // crash every other image's export too.
+                    exporter
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .export(&cache)?;
                     info!("DB write: {:.1?}", t0.elapsed());
                 }
                 Ok(())
@@ -962,10 +1002,15 @@ impl<'a> JobExecutor {
 
         // Record the image was processed even if it produced zero objects -
         // see the equivalent call in `analyze_image`.
+        let combined_error = pass_result
+            .as_ref()
+            .and(writer_result.as_ref())
+            .err()
+            .map(|e| e.to_string());
         let finalize_result = exporter
             .lock()
-            .expect("Poisoned")
-            .finalize_image(image_rel_path);
+            .unwrap_or_else(|e| e.into_inner())
+            .finalize_image(image_rel_path, combined_error.as_deref());
 
         pass_result.and(writer_result).and(finalize_result)
     }
@@ -2142,6 +2187,79 @@ mod full_run_integration_tests {
         );
     }
 
+    fn make_multi_image_job(
+        out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>>,
+        rel_paths: Vec<PathBuf>,
+    ) -> JobExecutor {
+        let mut series = BTreeMap::new();
+        series.insert(0, SeriesSettings::default());
+        let mut images = IndexMap::new();
+        for rel_path in rel_paths {
+            images.insert(
+                rel_path.clone(),
+                ImageEntry {
+                    rel_path,
+                    file_size: 0,
+                    selected_series: 0,
+                    series: series.clone(),
+                },
+            );
+        }
+
+        let mut job = JobExecutor::new(
+            PathBuf::new(),
+            std::env::temp_dir(),
+            images,
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter { out_objects })),
+            None,
+        );
+        job.add_pipeline(threshold_connected_components_extract_pipeline());
+        job
+    }
+
+    #[test]
+    fn run_still_processes_the_rest_of_the_batch_after_one_image_fails() {
+        init_java_wrapper(1_000_000_000).unwrap();
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let valid = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let invalid = PathBuf::from("does-not-exist.ome.tif");
+        let job = make_multi_image_job(out_objects.clone(), vec![valid.clone(), invalid.clone()]);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Single-threaded so the valid image can't just happen to finish
+        // before the invalid one is even scheduled - this forces both to be
+        // attempted regardless of order.
+        let result = job.run(1, tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        let err = result.expect_err("expected an error since one of the two images failed");
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("does-not-exist.ome.tif"),
+            "error should name the failing image, got: {err_msg}"
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageCompleted { path, .. } if path == &valid)),
+            "the valid image must still complete even though another image in the batch failed"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageFailed { path } if path == &invalid)),
+            "the invalid image must be reported as failed"
+        );
+        assert!(
+            !out_objects.lock().unwrap().is_empty(),
+            "the valid image's objects should still have been exported, not dropped because \
+             another image in the batch failed"
+        );
+    }
+
     #[test]
     fn count_preview_visible_tiles_matches_the_real_fixture_images_single_tile_grid() {
         init_java_wrapper(1_000_000_000).unwrap();
@@ -2152,6 +2270,42 @@ mod full_run_integration_tests {
         // exactly one tile.
         let count = job.count_preview_visible_tiles().unwrap();
         assert_eq!(count, 1);
+    }
+}
+
+#[cfg(test)]
+mod exporter_poison_tests {
+    use crate::storage::PipelineResultExporter;
+    use crate::storage::memory::MemoryExporter;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn locking_the_shared_exporter_recovers_from_poison_instead_of_panicking() {
+        // `exporter` (`Arc<Mutex<dyn PipelineResultExporter>>`) is shared
+        // across every concurrently-running image's writer thread - see
+        // `analyze_image`/`analyze_image_tiles_parallel`. One image's writer
+        // panicking while holding this lock must not crash every other
+        // image's export/finalize_image call too.
+        let exporter: Arc<Mutex<dyn PipelineResultExporter>> =
+            Arc::new(Mutex::new(MemoryExporter {
+                out_objects: Arc::new(Mutex::new(Vec::new())),
+            }));
+
+        let exporter_for_panic = exporter.clone();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = exporter_for_panic.lock().unwrap();
+            panic!("simulated writer-thread panic while holding the exporter lock");
+        }));
+        assert!(panicked.is_err(), "the panic should have propagated");
+
+        // Same recovery pattern used at every real call site in this module.
+        let recovered = exporter.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            recovered
+                .finalize_image(std::path::Path::new("after-poison.tif"), None)
+                .is_ok(),
+            "the exporter must still be usable after recovering from poison"
+        );
     }
 }
 

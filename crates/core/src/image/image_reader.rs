@@ -516,12 +516,17 @@ impl ImageReader {
         }
 
         // Bail before doing any buffer allocation or JNI call at all if the
-        // metadata never declared a bit depth (see the matching guard in
-        // `decode_image`, which this also protects against reaching).
-        if pyramid_info.nr_bits == 0 {
+        // metadata declares an implausible bit depth (see the matching guard
+        // in `decode_image`, which this also protects against reaching).
+        // `0` means BitsPerPixel was never set; anything above 32 is outside
+        // every real scientific image format and would make
+        // `(1u64 << nr_bits) - 1` (in `decode_image`) a shift-by-too-large,
+        // silently wrong in a release build rather than an error.
+        if !(1..=32).contains(&pyramid_info.nr_bits) {
             return Err(InternalErrors::ImageReadError(format!(
-                "Series {series}, resolution {resolution_idx} reports a bit depth of 0 \
-                 (missing BitsPerPixel metadata) - cannot read tile"
+                "Series {series}, resolution {resolution_idx} reports an implausible bit depth \
+                 of {} (expected 1-32, missing or corrupt BitsPerPixel metadata) - cannot read tile",
+                pyramid_info.nr_bits
             )));
         }
 
@@ -764,6 +769,8 @@ impl ImageReader {
                 0..=(series_info.nr_z_stacks.saturating_sub(1) as i32)
             }
         };
+        // Only used by `ZProjection::TakeTheMiddle`, computed once up front.
+        let z_stack_mid = z_stack_range.start() + (z_stack_range.end() - z_stack_range.start()) / 2;
 
         let selected_channels: Vec<&i32> = c_stacks
             .iter()
@@ -838,7 +845,12 @@ impl ImageReader {
                                     ZProjection::AvgIntensity | ZProjection::SumIntensity => {
                                         sum_proj(dst, src)
                                     }
-                                    _ => {}
+                                    ZProjection::TakeTheMiddle => {
+                                        if z == z_stack_mid {
+                                            dst.copy_from_slice(src);
+                                        }
+                                    }
+                                    ZProjection::None => {}
                                 }
                             }
                         }
@@ -930,12 +942,18 @@ fn decode_image(
     // divides by or chunks on a byte-per-sample count derived from `nr_bits`,
     // which is zero in that case: `par_chunks_exact(0)` panics unconditionally
     // and `buffer.len() / (bytes_per_sample * source_planes)` divides by zero.
-    // Fail cleanly here instead of reaching either.
-    if nr_bits == 0 {
-        return Err(InternalErrors::ImageReadError(
-            "Image reports a bit depth of 0 (missing BitsPerPixel metadata) - cannot decode"
-                .to_string(),
-        ));
+    // The upper bound matters too: `(1u64 << nr_bits) - 1` below is a
+    // shift-by-too-large for anything beyond 63 (undefined in principle, and
+    // in a release build - no `overflow-checks` - silently wrong rather than
+    // a panic), and `read_le`/`read_be` panic outright once
+    // `bytes_per_sample = (nr_bits + 7) / 8` exceeds 8. No real image format
+    // needs more than 32 bits per sample, so reject anything past that here
+    // rather than let a corrupt/implausible value reach either failure mode.
+    if !(1..=32).contains(&nr_bits) {
+        return Err(InternalErrors::ImageReadError(format!(
+            "Image reports an implausible bit depth of {nr_bits} (expected 1-32, missing or \
+             corrupt BitsPerPixel metadata) - cannot decode"
+        )));
     }
 
     let max_val = (1u64 << nr_bits) - 1;
@@ -1403,6 +1421,100 @@ mod tests {
     }
 
     #[test]
+    fn take_the_middle_projection_returns_the_middle_slice_not_the_first() {
+        init_java_wrapper(1000000000).unwrap();
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        );
+        let tile = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 0,
+            height: 0,
+        };
+
+        let reader = ImageReader::new(&path.into(), ReadMode::Default).unwrap();
+
+        let nr_z_stacks = reader.get_image_meta().series[&0].nr_z_stacks;
+        assert!(
+            nr_z_stacks > 2,
+            "test fixture needs more than 2 Z-slices to distinguish 'first' from 'middle'"
+        );
+        let z_mid = (nr_z_stacks - 1) / 2;
+
+        // Under test: the full-range TakeTheMiddle projection.
+        let projected = reader
+            .read_image_tile_combined(
+                0,
+                0,
+                ZProjection::TakeTheMiddle,
+                &None,
+                0,
+                Some(&vec![0]),
+                &tile,
+            )
+            .unwrap();
+
+        // Ground truth: the single slice at the exact middle Z-index, read
+        // directly with no projection at all.
+        let expected_mid = reader
+            .read_image_tile_combined(
+                0,
+                0,
+                ZProjection::None,
+                &Some(z_mid..=z_mid),
+                0,
+                Some(&vec![0]),
+                &tile,
+            )
+            .unwrap();
+
+        // The first slice - to prove the fixture actually varies across Z,
+        // otherwise "returns slice 0" (the bug) and "returns the middle
+        // slice" (the fix) would be indistinguishable by this test.
+        let first_slice = reader
+            .read_image_tile_combined(
+                0,
+                0,
+                ZProjection::None,
+                &Some(0..=0),
+                0,
+                Some(&vec![0]),
+                &tile,
+            )
+            .unwrap();
+
+        for ((proj_ch, mid_ch), first_ch) in projected
+            .iter()
+            .zip(expected_mid.iter())
+            .zip(first_slice.iter())
+        {
+            match (&*proj_ch.image, &*mid_ch.image, &*first_ch.image) {
+                (
+                    ImageContainer::F32Gray(proj),
+                    ImageContainer::F32Gray(mid),
+                    ImageContainer::F32Gray(first),
+                ) => {
+                    assert_eq!(
+                        proj.as_slice(),
+                        mid.as_slice(),
+                        "TakeTheMiddle should return exactly the middle Z-slice's pixels"
+                    );
+                    assert_ne!(
+                        mid.as_slice(),
+                        first.as_slice(),
+                        "test fixture's middle and first Z-slices are identical - this test can't \
+                         distinguish the fix from the bug it targets"
+                    );
+                }
+                other => panic!("unexpected variant combination: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn pooled_parallel_read_matches_sequential_read() {
         init_java_wrapper(1000000000).unwrap();
 
@@ -1791,6 +1903,37 @@ mod tests {
             ImagePlane { z: 0, c: 0, t: 0 },
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_image_implausible_bit_depth_returns_error_instead_of_silently_wrong_output() {
+        // Regression test: a corrupt/implausible `BitsPerPixel` (e.g. 200,
+        // parsed straight from XML with no range check) previously made
+        // `(1u64 << nr_bits) - 1` a shift-by-too-large - undefined in
+        // principle, and silently wrong (not an error) in a release build
+        // since this crate doesn't enable `overflow-checks`. Values above 64
+        // additionally panic outright in `read_le`/`read_be`. Both must now
+        // be rejected up front instead.
+        let buffer: Vec<u8> = vec![0, 0, 0, 0];
+        for nr_bits in [64, 200, 255] {
+            let result = decode_image(
+                &buffer,
+                true,
+                true,
+                ImageSize {
+                    width: 2,
+                    height: 1,
+                },
+                nr_bits,
+                1,
+                ImageTile::default(),
+                ImagePlane { z: 0, c: 0, t: 0 },
+            );
+            assert!(
+                result.is_err(),
+                "nr_bits={nr_bits} should be rejected, not silently produce wrong output"
+            );
+        }
     }
 
     #[test]

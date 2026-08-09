@@ -14,6 +14,25 @@ use std::sync::Mutex;
 struct CsvWriterState {
     writer: csv::Writer<File>,
     header_written: bool,
+    /// The exact channel ids / colocalization classes this exporter's rows
+    /// are shaped around - established once, by the first `export()` call,
+    /// and reused for every row after, so the column count can never drift.
+    /// Previously each `export()` call recomputed its own channel/class set
+    /// from just that call's objects and sized its row to match - different
+    /// tiles/images can have different channels/classes present, so a later
+    /// call's row could end up with more or fewer columns than the header
+    /// declared, silently misaligning every column after the first
+    /// divergence. A call whose objects introduce a genuinely new
+    /// channel/class after this is established has that data dropped from
+    /// the row instead - there's no column for it to go in.
+    ///
+    /// `None` until established - kept separate from `header_written`
+    /// because when appending to an already-existing file, `header_written`
+    /// starts `true` but this process still has no way to know what columns
+    /// that existing header actually has (it isn't re-parsed); this still
+    /// gives every row *this process* writes a single consistent shape, even
+    /// though it can't recover a previous process's exact column set.
+    columns: Option<(Vec<i32>, Vec<ObjectClass>)>,
 }
 
 pub struct CsvExporter {
@@ -45,6 +64,7 @@ impl CsvExporter {
             state: Mutex::new(CsvWriterState {
                 writer: csv::Writer::from_writer(file),
                 header_written,
+                columns: None,
             }),
             class_names,
         })
@@ -77,23 +97,32 @@ impl PipelineResultExporter for CsvExporter {
 
         let px = &cache.image_cache.image_meta.pixel_sizes;
 
-        // --- Phase 1: Dynamic Channel Extraction ---
-        let mut channel_ids: Vec<i32> = cache
-            .object_cache
-            .values()
-            .flat_map(|object| object.intensities.keys().cloned())
-            .collect();
-        channel_ids.sort();
-        channel_ids.dedup();
+        // --- Phase 1/2: establish (once) the channel/coloc-class set every
+        // row this exporter writes will be shaped around - see the
+        // `columns` field doc comment for why this only happens once.
+        let (channel_ids, coloc_classes) = match &state.columns {
+            Some(columns) => columns.clone(),
+            None => {
+                let mut channel_ids: Vec<i32> = cache
+                    .object_cache
+                    .values()
+                    .flat_map(|object| object.intensities.keys().cloned())
+                    .collect();
+                channel_ids.sort();
+                channel_ids.dedup();
 
-        // --- Phase 2: Dynamic Colocalization Class Extraction ---
-        let mut coloc_classes: Vec<ObjectClass> = cache
-            .object_cache
-            .values()
-            .flat_map(|object| object.colocalized_with.keys().cloned())
-            .collect();
-        coloc_classes.sort_by_key(|c| format!("{:?}", c));
-        coloc_classes.dedup();
+                let mut coloc_classes: Vec<ObjectClass> = cache
+                    .object_cache
+                    .values()
+                    .flat_map(|object| object.colocalized_with.keys().cloned())
+                    .collect();
+                coloc_classes.sort_by_key(|c| format!("{:?}", c));
+                coloc_classes.dedup();
+
+                state.columns = Some((channel_ids.clone(), coloc_classes.clone()));
+                (channel_ids, coloc_classes)
+            }
+        };
 
         // --- Phase 3: Header Assembly ---
         if !state.header_written {
@@ -184,6 +213,16 @@ impl PipelineResultExporter for CsvExporter {
         // --- Phase 4: Data Row Serialization ---
         let px_len = (px.px_size_x * px.px_size_y).sqrt();
         let nr_of_bits = cache.image_cache.image_meta.nr_of_bits;
+        // Same implausible-bit-depth guard as image_reader.rs's read path -
+        // unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
+        // shift-by-too-large, silently producing a wrong scale factor
+        // instead of an error.
+        if !(1..=32).contains(&nr_of_bits) {
+            return Err(InternalErrors::Generic(format!(
+                "cannot export {}: implausible bit depth {nr_of_bits} (expected 1-32)",
+                cache.image_rel_path.display()
+            )));
+        }
         // Max pixel value for the bit depth (e.g. 65535 for 16-bit)
         let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
 
@@ -457,6 +496,74 @@ mod tests {
             1,
             "the header row must be written exactly once across multiple export() calls"
         );
+    }
+
+    #[test]
+    fn test_csv_export_keeps_every_row_aligned_with_the_header_even_when_later_calls_have_a_different_channel_set()
+     {
+        // Regression test: the header (and its channel/coloc-class columns)
+        // used to be fixed from the first export() call, but every row's
+        // *column count* was independently recomputed per call from just
+        // that call's objects - a later call with a different channel set
+        // than the first would silently misalign every column after the
+        // channel columns.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("test_ragged_columns.csv");
+
+        let exporter =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+
+        // First call: an object with intensities on channels 0 AND 1 -
+        // establishes the header with both channels' columns.
+        let mut cache_a = PipelineCache::default();
+        cache_a.image_rel_path = PathBuf::from("image_a.tif");
+        let mut object_a = crate::object::Object::new(crate::object::ObjectInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            ..Default::default()
+        });
+        object_a.intensities.insert(0, Intensity::default());
+        object_a.intensities.insert(1, Intensity::default());
+        cache_a.object_cache.insert(object_a.id.clone(), object_a);
+
+        // Second call: an object with intensities on channel 0 only - if
+        // this were (incorrectly) used to size the row instead of the
+        // header's established channel set, this row would be 8 columns
+        // short.
+        let mut cache_b = PipelineCache::default();
+        cache_b.image_rel_path = PathBuf::from("image_b.tif");
+        let mut object_b = crate::object::Object::new(crate::object::ObjectInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            area: 20,
+            bbox: [1, 1, 4, 4],
+            ..Default::default()
+        });
+        object_b.intensities.insert(0, Intensity::default());
+        cache_b.object_cache.insert(object_b.id.clone(), object_b);
+
+        exporter
+            .export(&cache_a)
+            .expect("first export should succeed");
+        exporter
+            .export(&cache_b)
+            .expect("second export should succeed");
+
+        let mut reader = csv::Reader::from_path(&output_path).expect("failed to open CSV");
+        let header_len = reader.headers().expect("failed to read header").len();
+
+        let mut row_count = 0;
+        for record in reader.records() {
+            let record = record.expect("failed to read row");
+            row_count += 1;
+            assert_eq!(
+                record.len(),
+                header_len,
+                "row {row_count} has {} columns, header has {header_len} - columns are misaligned",
+                record.len()
+            );
+        }
+        assert_eq!(row_count, 2, "expected exactly one row per export() call");
     }
 
     #[test]

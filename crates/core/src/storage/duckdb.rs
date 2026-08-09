@@ -182,9 +182,16 @@ CREATE TABLE IF NOT EXISTS coloc_stats (
 -- something scoped to a class or a coloc partner (\"how many ClassA
 -- objects\", \"how many colocalize with ClassB\"), which this table can't
 -- express and callers should instead derive live from `objects`.
+--
+-- `status`/`error_message`: an image is always finalized here even when a
+-- tile or plane failed to export (so it still shows up rather than
+-- vanishing), but that means `status` is the only way to tell a genuinely
+-- complete image from one that has silently incomplete/missing object data.
 CREATE TABLE IF NOT EXISTS images (
     image_name      VARCHAR NOT NULL,
-    image_rel_path  VARCHAR NOT NULL PRIMARY KEY
+    image_rel_path  VARCHAR NOT NULL PRIMARY KEY,
+    status          VARCHAR NOT NULL DEFAULT 'ok',
+    error_message   VARCHAR
 );
 
 -- Snapshot of the project's object-classification registry at the moment
@@ -323,9 +330,34 @@ fn compute_coloc_stats(
 impl PipelineResultExporter for DuckDbExporter {
     fn export(&self, cache: &PipelineCache) -> Result<(), InternalErrors> {
         let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
+        // Objects and their colocalization stats must land together or not at
+        // all - without a transaction, a failure partway through (disk full,
+        // a DuckDB error) could leave one written with no matching rows in
+        // the other. `unchecked_transaction` (rather than `transaction`,
+        // which needs `&mut Connection`) is safe here because `conn` is
+        // already the only handle to this connection, serialized by the
+        // exporter's own Mutex - nothing else can be mid-transaction on it
+        // concurrently. Uncommitted (the `?` early-returns below) rolls back
+        // on drop.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
         let px = &cache.image_cache.image_meta.pixel_sizes;
         let nr_of_bits = cache.image_cache.image_meta.nr_of_bits;
+        // Same implausible-bit-depth guard as image_reader.rs's read path -
+        // `nr_of_bits` should already have been rejected there before a
+        // cache carrying it could exist, but this shouldn't trust that
+        // blindly: unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
+        // shift-by-too-large, silently producing a wrong (not NaN/Inf, since
+        // this is only ever used as a multiplier below) scale factor instead
+        // of an error.
+        if !(1..=32).contains(&nr_of_bits) {
+            return Err(InternalErrors::Generic(format!(
+                "cannot export {}: implausible bit depth {nr_of_bits} (expected 1-32)",
+                cache.image_rel_path.display()
+            )));
+        }
         let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
         let px_len = (px.px_size_x * px.px_size_y).sqrt() as f64;
         let pxx = px.px_size_x as f64;
@@ -343,7 +375,7 @@ impl PipelineResultExporter for DuckDbExporter {
         // The Appender flushes its buffer to disk when it is dropped, giving
         // constant memory usage regardless of how many images are processed.
         {
-            let mut app = conn
+            let mut app = tx
                 .appender("objects")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
@@ -470,7 +502,7 @@ impl PipelineResultExporter for DuckDbExporter {
         // --- Colocalization statistics ---
         {
             let stats = compute_coloc_stats(cache, &label);
-            let mut app = conn
+            let mut app = tx
                 .appender("coloc_stats")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
@@ -487,20 +519,29 @@ impl PipelineResultExporter for DuckDbExporter {
             }
         }
 
+        tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
     }
 
     /// Records that this image was processed, regardless of whether it
-    /// produced any objects. Called once per image, after every `export()`
-    /// call for it has returned.
-    fn finalize_image(&self, image_rel_path: &Path) -> Result<(), InternalErrors> {
+    /// produced any objects - and regardless of whether `error` is set, so a
+    /// partially-failed image still shows up rather than vanishing entirely.
+    /// `error` is persisted into `status`/`error_message` so that partial
+    /// failure is still visible instead of looking identical to success.
+    /// Called once per image, after every `export()` call for it has returned.
+    fn finalize_image(
+        &self,
+        image_rel_path: &Path,
+        error: Option<&str>,
+    ) -> Result<(), InternalErrors> {
         let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
         let image_rel = image_rel_path.display().to_string();
         let image_name = image_display_name(image_rel_path);
+        let status = if error.is_some() { "error" } else { "ok" };
 
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path) VALUES (?, ?)",
-            params![image_name, image_rel],
+            "INSERT INTO images (image_name, image_rel_path, status, error_message) VALUES (?, ?, ?, ?)",
+            params![image_name, image_rel, status, error],
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
@@ -517,6 +558,12 @@ impl PipelineResultExporter for DuckDbExporter {
 pub struct ImageRow {
     pub image_name: String,
     pub image_rel_path: String,
+    /// `"ok"` if every tile/plane for this image exported successfully,
+    /// `"error"` if it was finalized despite a failure partway through -
+    /// see `error_message` for details, and `DuckDbExporter::finalize_image`
+    /// for why a failed image still gets a row here rather than none at all.
+    pub status: String,
+    pub error_message: Option<String>,
 }
 
 /// Flat DTO for a row in the `classes` table: one per registered class in
@@ -1350,12 +1397,16 @@ impl DuckDbReader {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut stmt = self
             .conn
-            .prepare("SELECT image_name, image_rel_path FROM images ORDER BY image_rel_path")
+            .prepare(
+                "SELECT image_name, image_rel_path, status, error_message FROM images ORDER BY image_rel_path",
+            )
             .map_err(err)?;
         stmt.query_map([], |row| {
             Ok(ImageRow {
                 image_name: row.get(0)?,
                 image_rel_path: row.get(1)?,
+                status: row.get(2)?,
+                error_message: row.get(3)?,
             })
         })
         .map_err(err)?
@@ -1538,7 +1589,7 @@ mod tests {
         };
         exporter.export(&cache).expect("export failed");
         exporter
-            .finalize_image(Path::new("empty.tif"))
+            .finalize_image(Path::new("empty.tif"), None)
             .expect("finalize_image failed");
         drop(exporter);
 
@@ -1547,6 +1598,8 @@ mod tests {
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].image_name, "empty.tif");
         assert_eq!(images[0].image_rel_path, "empty.tif");
+        assert_eq!(images[0].status, "ok");
+        assert_eq!(images[0].error_message, None);
 
         // The Table view's image filter must also see it, not just get_images().
         assert_eq!(
@@ -1560,6 +1613,70 @@ mod tests {
                 .get_objects(&ObjectFilter::default())
                 .expect("get_objects failed")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn finalize_image_with_an_error_is_still_recorded_but_marked_failed() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+        // A partially-failed image must still show up (see the finalize_image
+        // doc comment) - but as "error", not indistinguishable from success.
+        exporter
+            .finalize_image(Path::new("broken.tif"), Some("tile 3: decode failed"))
+            .expect("finalize_image failed");
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let images = reader.get_images().expect("get_images failed");
+        assert_eq!(images.len(), 1, "the failed image must still be recorded");
+        assert_eq!(images[0].status, "error");
+        assert_eq!(
+            images[0].error_message.as_deref(),
+            Some("tile 3: decode failed")
+        );
+    }
+
+    #[test]
+    fn export_rolls_back_object_rows_when_the_coloc_stats_write_fails() {
+        // Regression test for wrapping objects + coloc_stats in one
+        // transaction: force the second write (coloc_stats) to fail after
+        // the first (objects) would already have appended a row, and verify
+        // the object row doesn't end up partially committed on its own.
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+
+        {
+            let conn = exporter.conn.lock().expect("connection mutex poisoned");
+            conn.execute_batch("DROP TABLE coloc_stats;")
+                .expect("failed to drop coloc_stats for the test");
+        }
+
+        let mut cache = PipelineCache {
+            image_rel_path: "broken.tif".into(),
+            ..Default::default()
+        };
+        let object = make_filled_object(1, [0, 0, 9, 9]);
+        cache.object_cache.insert(object.id.clone(), object);
+
+        let result = exporter.export(&cache);
+        assert!(
+            result.is_err(),
+            "expected export to fail once coloc_stats is missing"
+        );
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let objects = reader
+            .get_objects(&ObjectFilter::default())
+            .expect("get_objects failed");
+        assert!(
+            objects.is_empty(),
+            "the object row must have been rolled back with the failed coloc_stats write, \
+             not partially committed on its own"
         );
     }
 
@@ -1578,7 +1695,7 @@ mod tests {
         with_objects.object_cache.insert(object.id.clone(), object);
         exporter.export(&with_objects).expect("export failed");
         exporter
-            .finalize_image(Path::new("has_objects.tif"))
+            .finalize_image(Path::new("has_objects.tif"), None)
             .expect("finalize_image failed");
 
         let empty = PipelineCache {
@@ -1587,7 +1704,7 @@ mod tests {
         };
         exporter.export(&empty).expect("export failed");
         exporter
-            .finalize_image(Path::new("empty.tif"))
+            .finalize_image(Path::new("empty.tif"), None)
             .expect("finalize_image failed");
 
         drop(exporter);

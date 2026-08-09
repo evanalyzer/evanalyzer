@@ -426,6 +426,27 @@ mod tests {
     }
 
     #[test]
+    fn zero_kernel_size_returns_error_instead_of_dividing_by_it() {
+        // `kernel_size` is only validated as `min = 3` at the UI/schema layer
+        // - a hand-edited or API-produced pipeline file could smuggle 0
+        // through to `box_blur_edge_replicate`'s `pad = kernel_size / 2`.
+        // Already covered structurally (0 is even, and the odd-kernel-size
+        // check above rejects it), but pin it down explicitly rather than
+        // relying on that being a coincidence of the current implementation.
+        let size = ImageSize {
+            width: 5,
+            height: 5,
+        };
+        let img = Image::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        let blur_cmd = Blur { kernel_size: 0 };
+        let mut cache = PipelineCache::default();
+
+        let result = blur_cmd.execute(&mut ctx, &mut cache);
+        assert!(result.is_err(), "kernel_size=0 should be rejected");
+    }
+
+    #[test]
     fn test_blur_kernel_error_path() {
         let size = ImageSize {
             width: 5,

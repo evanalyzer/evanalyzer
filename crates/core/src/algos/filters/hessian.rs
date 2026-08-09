@@ -109,30 +109,51 @@ fn process_f32_gray(
     mode: HessianMode,
 ) -> Result<Image<f32, 1, CpuAllocator>, InternalErrors> {
     let size = img.size();
+    // `spatial_gradient_float` panics inside kornia itself (chunks_mut(0))
+    // for a zero-width image, before it ever gets a chance to return the
+    // `Result` this function's signature implies degenerate input is
+    // handled through - guard explicitly rather than let that happen.
+    if size.width == 0 || size.height == 0 {
+        return Err(InternalErrors::Generic(format!(
+            "Hessian requires a non-empty image, got {}x{}",
+            size.width, size.height
+        )));
+    }
 
     // Calculate first order gradients
-    let mut dx = Image::from_size_val(size, 0.0, CpuAllocator).unwrap();
-    let mut dy = Image::from_size_val(size, 0.0, CpuAllocator).unwrap();
+    let mut dx =
+        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    let mut dy =
+        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
 
     // kornia's spatial_gradient usually provides first order
-    kornia_imgproc::filter::spatial_gradient_float(img, &mut dx, &mut dy).unwrap();
+    kornia_imgproc::filter::spatial_gradient_float(img, &mut dx, &mut dy)
+        .map_err(InternalErrors::from_kornia)?;
 
     // Calculate second order gradients (Hessian Matrix components)
     // Ixx = d/dx of dx
-    let mut dxx = Image::from_size_val(size, 0.0, CpuAllocator).unwrap();
-    let mut dummy = Image::from_size_val(size, 0.0, CpuAllocator).unwrap();
-    kornia_imgproc::filter::spatial_gradient_float(&dx, &mut dxx, &mut dummy).unwrap();
+    let mut dxx =
+        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    let mut dummy =
+        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    kornia_imgproc::filter::spatial_gradient_float(&dx, &mut dxx, &mut dummy)
+        .map_err(InternalErrors::from_kornia)?;
 
     // Iyy = d/dy of dy
-    let mut dyy = Image::from_size_val(size, 0.0, CpuAllocator).unwrap();
-    kornia_imgproc::filter::spatial_gradient_float(&dy, &mut dummy, &mut dyy).unwrap();
+    let mut dyy =
+        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    kornia_imgproc::filter::spatial_gradient_float(&dy, &mut dummy, &mut dyy)
+        .map_err(InternalErrors::from_kornia)?;
 
     // Ixy = d/dy of dx (Mixed partial derivative)
-    let mut dxy = Image::from_size_val(size, 0.0, CpuAllocator).unwrap();
-    kornia_imgproc::filter::spatial_gradient_float(&dx, &mut dummy, &mut dxy).unwrap();
+    let mut dxy =
+        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
+    kornia_imgproc::filter::spatial_gradient_float(&dx, &mut dummy, &mut dxy)
+        .map_err(InternalErrors::from_kornia)?;
 
     // Compute Feature Maps
-    let mut output = Image::from_size_val(size, 0.0, CpuAllocator).unwrap();
+    let mut output =
+        Image::from_size_val(size, 0.0, CpuAllocator).map_err(InternalErrors::from_kornia)?;
     let out_slice = output.as_slice_mut();
     let s_xx = dxx.as_slice();
     let s_yy = dyy.as_slice();
@@ -320,6 +341,31 @@ mod tests {
         assert!(
             val_y.abs() < 0.1,
             "EigenvaluesY should be near 0 for a straight line"
+        );
+    }
+
+    #[test]
+    fn zero_width_image_returns_error_instead_of_panicking() {
+        let img = Image::<f32, 1, CpuAllocator>::new(
+            kornia_image::ImageSize {
+                width: 0,
+                height: 5,
+            },
+            vec![],
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        let mut cache = PipelineCache::default();
+
+        let detector = Hessian {
+            mode: HessianMode::Determinant,
+        };
+
+        let result = detector.execute(&mut ctx, &mut cache);
+        assert!(
+            result.is_err(),
+            "expected an error for a zero-width image, got Ok"
         );
     }
 

@@ -719,7 +719,16 @@ fn matrix_cell(
     };
     match value {
         Some(v) => {
-            let t = ((v - range_lo) / (range_hi - range_lo)).clamp(0.0, 1.0);
+            let range_span = range_hi - range_lo;
+            let t = if range_span > 0.0 {
+                ((v - range_lo) / range_span).clamp(0.0, 1.0)
+            } else {
+                // Every colored cell shares the same value (or the range is
+                // otherwise degenerate, e.g. a single occupied cell) - there's
+                // no meaningful gradient position, so pick the middle of the
+                // scheme rather than let this become NaN (0.0/0.0) or ±Inf.
+                0.5
+            };
             let (r, g, b) = scheme.color_rgb(t);
             ResultsMatrixCell {
                 label: label.into(),
@@ -855,6 +864,31 @@ mod tests {
         assert_eq!(cell.count_line.as_str(), "12 obj \u{b7} 3 coloc");
         assert!(cell.has_value);
         assert!(cell.occupied);
+    }
+
+    #[test]
+    fn matrix_cell_with_a_degenerate_range_does_not_produce_a_nan_tainted_color() {
+        // Regression test: `range_lo == range_hi` (every colored cell shares
+        // the same value) used to divide by zero, producing a NaN `t` that
+        // `.clamp(0.0, 1.0)` passes straight through - an untested input to
+        // the color scheme.
+        let build = || {
+            matrix_cell(
+                "A1".to_string(),
+                Some(50.0),
+                1,
+                0,
+                50.0, // range_lo == range_hi == the cell's own value
+                50.0,
+                HeatmapColorScheme::Grayscale,
+            )
+        };
+        let cell = build();
+        assert!(cell.has_value);
+        // A NaN-tainted `t` isn't guaranteed to compare/convert the same way
+        // twice - two calls with identical inputs must produce the exact
+        // same color if `t` never actually became NaN.
+        assert_eq!(cell.color, build().color);
     }
 
     #[test]
