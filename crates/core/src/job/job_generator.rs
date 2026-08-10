@@ -6,14 +6,14 @@ use crate::{
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
-use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
+use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION};
 use evanalyzer_cfg::{
     core_types::InternalErrors,
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
 };
-use log::{error, info};
+use log::{error, info, warn};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -44,8 +44,13 @@ pub fn generate_preview_job_from_project_settings(
 /// characters) as both the results-subdirectory suffix and the `.evadb`
 /// filename. Pass `None` (or an empty/whitespace-only string) to fall back to
 /// a randomly generated two-word name, as before this parameter existed.
+///
+/// Also writes a full copy of `config` (the exact settings this run used,
+/// images included) next to the `.evadb` file as `<job_name>.evaproj`, so a
+/// user can reopen it later to see - or restore - exactly what produced
+/// these results.
 pub fn generate_analyze_job_from_project_settings(
-    config: ProjectSettings,
+    mut config: ProjectSettings,
     project_path: PathBuf,
     job_name: Option<String>,
 ) -> Result<JobExecutor, InternalErrors> {
@@ -91,7 +96,30 @@ pub fn generate_analyze_job_from_project_settings(
         }
     };
 
+    config.metadata.app_version = env!("CARGO_PKG_VERSION").to_string();
+    write_project_snapshot(&config, &output_path, &job_name);
+
     generate_job_from_project_settings_intenal(config, project_path, output_path, database_storage)
+}
+
+/// Writes a full copy of `config` as `<job_name>.evaproj` next to the run's
+/// `.evadb` file. Best-effort: a snapshot failure is logged, not propagated -
+/// it must never fail an otherwise-successful analysis run.
+fn write_project_snapshot(config: &ProjectSettings, output_path: &Path, job_name: &str) {
+    let snapshot_path = output_path.join(format!("{job_name}.{PROJECT_FILE_EXTENSIONS}"));
+    let json = match serde_json::to_string_pretty(config) {
+        Ok(json) => json,
+        Err(e) => {
+            warn!("Failed to serialize project snapshot: {e}");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&snapshot_path, json) {
+        warn!(
+            "Failed to write project snapshot {}: {e}",
+            snapshot_path.display()
+        );
+    }
 }
 
 /// Replaces filesystem-illegal characters with `_` and trims whitespace, so a
@@ -364,6 +392,36 @@ mod tests {
             })
             .collect();
         assert_eq!(db_files.len(), 1, "exactly one .evadb file must be created");
+    }
+
+    #[test]
+    fn analyze_job_writes_a_project_snapshot_beside_the_database_stamped_with_the_app_version() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let image_root = tempfile::tempdir().unwrap();
+        let project = project_with(
+            Some(image_root.path().to_path_buf()),
+            vec![pipeline(1, true, vec![blur_step(true)])],
+        );
+
+        let job = generate_analyze_job_from_project_settings(
+            project,
+            project_dir.path().to_path_buf(),
+            Some("snapshot_run".to_string()),
+        )
+        .unwrap();
+
+        let snapshot_path = job.output_path.join("snapshot_run.evaproj");
+        let content = std::fs::read_to_string(&snapshot_path)
+            .unwrap_or_else(|e| panic!("expected a snapshot at {snapshot_path:?}: {e}"));
+        let restored: ProjectSettings = serde_json::from_str(&content)
+            .expect("the snapshot must deserialize back into ProjectSettings");
+
+        assert_eq!(restored.metadata.app_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            restored.pipelines.len(),
+            1,
+            "the snapshot must carry the pipelines this run actually used"
+        );
     }
 
     #[test]

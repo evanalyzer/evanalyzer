@@ -125,6 +125,9 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         creation_time,
         category: String::new(),
         tags: Vec::new(),
+        // Stamped for real by `save_project_as` once the imported project is
+        // actually saved - this legacy file predates the field entirely.
+        app_version: String::new(),
     }
 }
 

@@ -1072,6 +1072,7 @@ impl ProjectExt for ProjectWithRuntime {
         // whether it was ever loaded from disk at all - e.g. a brand-new
         // project still has `schema_version: 0` from `Default`).
         self.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
+        self.settings.metadata.app_version = env!("CARGO_PKG_VERSION").to_string();
 
         // Every command's file-path field (AI model paths today - see
         // `relativize_file_paths`'s doc comment for why this isn't limited to
@@ -1100,9 +1101,10 @@ impl ProjectExt for ProjectWithRuntime {
     /// Stores the actual project as template project
     fn save_project_as_template(
         &mut self,
-        meta: MetaData,
+        mut meta: MetaData,
         path: &PathBuf,
     ) -> Result<(), InternalErrors> {
+        meta.app_version = env!("CARGO_PKG_VERSION").to_string();
         let template = ProjectTemplate {
             meta,
             classification: self.classification.clone(),
@@ -1135,7 +1137,7 @@ impl ProjectExt for ProjectWithRuntime {
     /// Stores the selected pipeline as template
     fn save_pipeline_as_template(
         &mut self,
-        meta: MetaData,
+        mut meta: MetaData,
         pipeline_id: PipelineId,
         path: &PathBuf,
     ) -> Result<(), InternalErrors> {
@@ -1145,6 +1147,7 @@ impl ProjectExt for ProjectWithRuntime {
             .find(|p| p.id == pipeline_id)
             .ok_or_else(|| InternalErrors::Internal("Pipeline not found".into()))?;
 
+        meta.app_version = env!("CARGO_PKG_VERSION").to_string();
         let template = PipelineTemplate {
             meta,
             pipeline_steps: pipeline.steps.clone(),
@@ -1359,21 +1362,9 @@ fn is_supported_image_path(path: &Path) -> bool {
 
 pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors> {
     let data = fs::read_to_string(path.clone())?;
-    let mut inner: ProjectSettings =
+    let raw: serde_json::Value =
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
-
-    // A file from a *newer* build may rely on fields/variants this build
-    // doesn't know about yet - serde would have silently dropped them rather
-    // than erroring, so proceeding could quietly discard part of the user's
-    // project on the next save. Refuse instead of guessing.
-    if inner.schema_version > evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION {
-        return Err(InternalErrors::ParseError(format!(
-            "this project was saved by a newer version of EVAnalyzer (format version {}, this build supports up to version {}) - update EVAnalyzer to open it",
-            inner.schema_version,
-            evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION
-        )));
-    }
-    inner.migrate();
+    let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
 
     // Reverse of the relativization `save_project_as` does on write - resolve
     // AI command `model_path`s back to absolute now, using this project

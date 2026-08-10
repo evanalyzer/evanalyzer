@@ -81,22 +81,8 @@ pub struct ThresholdEntry {
 /// This supports "Multi-Otsu" style behavior by allowing a vector of
 /// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
 /// determine which `object_class_id` it belongs to.
-///
-/// # Examples
-///
-/// ```
-/// use imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};
-/// let binary = Threshold {
-///     thresholds: vec![ThresholdSettings {
-///         method: ThresholdMethod::Otsu,
-///         min_threshold: 0.0,
-///         max_threshold: 1.0,
-///         object_class_id: ObjectLabel::Foreground,
-///     }]
-/// };
-/// ```
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment")]
+#[cmdsmeta(category = "segment", next = "object")]
 pub struct Threshold {
     /// A list of thresholding layers. Overlapping ranges are resolved
     /// by the order of the vector (last-in priority).

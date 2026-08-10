@@ -255,6 +255,7 @@ mod tests {
             version: CURRENT_SAVED_CLASSIFIER_VERSION,
             classifier,
             settings: AiLearningSettings {
+                schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
                 metadata: MetaData::default(),
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Object {

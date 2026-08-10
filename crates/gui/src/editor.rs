@@ -119,6 +119,7 @@ impl Editor {
             results_ui.clone(),
             app_state.clone(),
             image_list_controller.clone(),
+            project_settings_controller.clone(),
         ));
         let results_list_controller = Arc::new(ResultsListController::new(
             ui.clone(),

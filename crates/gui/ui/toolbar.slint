@@ -89,11 +89,20 @@ export component Toolbar inherits Rectangle {
         VerticalDivider { }
 
         ToolToggleButton {
+            icon: @image-url("icons/regular-white/eye.svg");
+            clicked => {
+                PipelinesPanelState.dry-run();
+            }
+        }
+
+        ToolToggleButton {
             icon: @image-url("icons/regular-black/person-simple-run.svg");
             clicked => {
                 PipelinesPanelState.run-all();
             }
         }
+
+        VerticalDivider { }
 
         ToolToggleButton {
             icon: @image-url("icons/regular-black/brain.svg");

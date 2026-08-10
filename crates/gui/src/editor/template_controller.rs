@@ -147,6 +147,10 @@ impl TemplateController {
             creation_time: chrono::Utc::now(),
             category: meta_slint.category.to_string(),
             tags,
+            // Stamped for real by `save_project_as_template`/
+            // `save_pipeline_as_template` right before writing - left empty
+            // here since this value never reaches disk as-is.
+            app_version: String::new(),
         };
 
         let templates_folder = get_user_templates_folder();

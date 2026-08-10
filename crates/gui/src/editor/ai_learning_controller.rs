@@ -991,6 +991,7 @@ fn build_ai_learning_settings(
     };
 
     AiLearningSettings {
+        schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
         metadata: MetaData {
             name: settings.model_name.to_string(),
             ..Default::default()

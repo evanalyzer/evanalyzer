@@ -281,6 +281,7 @@ mod tests {
         let (classifier, _stats) =
             fit_classifier(&backend, &rows, &labels, 2, &progress, &cancel).unwrap();
         let settings = AiLearningSettings {
+            schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
             metadata: MetaData {
                 name: "test".into(),
                 ..Default::default()
@@ -316,6 +317,7 @@ mod tests {
             let _ = progress.send(TrainingProgressEvent::Finished { stats });
             Ok(finish(
                 AiLearningSettings {
+                    schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
                     metadata: MetaData::default(),
                     backend: AiLearningBackendSettings::RandomForest(
                         RandomForestSettings::default(),

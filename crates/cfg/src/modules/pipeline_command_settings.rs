@@ -1116,20 +1116,6 @@ impl Default for StardistSettings {
 ///  This supports "Multi-Otsu" style behavior by allowing a vector of
 ///  [`ThresholdSettings`]. Each pixel is evaluated against the settings to
 ///  determine which `object_class_id` it belongs to.
-///
-///  # Examples
-///
-///  ```
-///  use imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};
-///  let binary = Threshold {
-///      thresholds: vec![ThresholdSettings {
-///          method: ThresholdMethod::Otsu,
-///          min_threshold: 0.0,
-///          max_threshold: 1.0,
-///          object_class_id: ObjectLabel::Foreground,
-///      }]
-///  };
-///  ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdSettings {
@@ -1275,6 +1261,38 @@ impl Default for ConnectedComponentsSettings {
         Self { min_size: 0i32 }
     }
 }
+
+///  Fills enclosed background holes in the segmentation map.
+///
+///  A direct port of ImageJ's `Process > Binary > Fill Holes` command
+///  (`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel
+///  Landini): a background pixel counts as a "hole" - and is turned into
+///  foreground - exactly when it cannot be reached from the image border by a
+///  path of background pixels using 4-connectivity.
+///
+///  Like ImageJ's own command, this treats the image as strictly binary: every
+///  non-background pixel is "foreground" regardless of its actual label/class
+///  value, and a filled hole is stamped with a single fixed value rather than
+///  inheriting whatever label happens to surround it. If the segmentation map
+///  carries several distinct label values, holes are not attributed back to
+///  the object that encloses them - only ImageJ's original background/
+///  foreground distinction is reproduced here.
+///
+///  # Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)
+///  1. Scan every pixel on the image border; for each one that is background
+///     (`0`), flood-fill outward from it using 4-connectivity (up/down/left/
+///     right only - diagonal neighbors are **not** considered connected),
+///     marking every background pixel reached this way as "outside".
+///  2. Any background pixel never marked "outside" is enclosed and becomes
+///     foreground. Every non-background pixel is copied through unchanged.
+///
+///  The 4-connectivity in step 1 is load-bearing, not an implementation
+///  detail: a boundary that only touches itself diagonally (8-connected) does
+///  **not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,
+///  whose own docs specify a 4-connected fill.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FillHolesSettings {}
 
 ///  A morphological segmentation algorithm that splits touching objects using distance topography.
 ///

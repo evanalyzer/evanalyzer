@@ -3,8 +3,10 @@ mod legacy_schema;
 mod modules;
 mod types;
 mod utils;
+mod versioning;
 
 pub use legacy_import::{LegacyImportError, LegacyImportOutcome, import_legacy_project};
+pub use versioning::{load_ai_learning_settings, load_project_settings};
 
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
@@ -22,6 +24,15 @@ pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 /// app - e.g. a renamed field/enum variant that isn't just an additive
 /// `#[serde(default)]` field.
 pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 1;
+
+/// Current on-disk format version for
+/// [`settings::ai_learning_settings::AiLearningSettings`] - both the
+/// standalone `--settings` file `train-classifier` reads and the copy
+/// embedded in every saved `.evamodel` classifier. Bump alongside a new
+/// migration step in `versioning::AI_LEARNING_SETTINGS_MIGRATIONS` whenever a
+/// change to `AiLearningSettings` would break deserialization of a file
+/// written by an older version of the app.
+pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 1;
 
 // Project Settings structs
 pub mod settings {

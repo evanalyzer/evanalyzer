@@ -1,4 +1,5 @@
 use crate::editor::images_list_controller::ImagesListController;
+use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_matrix_controller::agg_from_label;
 use crate::{
     ExportBatchItem, FilterItem, ResultsChartKind, ResultsColumnDef, ResultsGroupBy,
@@ -12,9 +13,10 @@ use evanalyzer_app::result::{
     coloc_filter_label_no, coloc_filter_label_with, coloc_partner_ids, compute_heatmap,
     compute_histogram, compute_scatter, discover_channels, discover_coloc_detail_columns,
     flatten_coloc_rows, plottable_columns, render_heatmap, render_histogram, render_scatter,
-    save_rendered_chart_png, sort_display_rows, to_display_row,
+    save_rendered_chart_png, sort_display_rows, suggest_regex, to_display_row,
 };
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::settings::plate_settings::GroupingMode;
 use log::warn;
 use slint::{ComponentHandle, Model, SharedString};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -127,6 +129,11 @@ pub struct ResultsTableController {
     /// the export loop can stop after its current file instead of a hard
     /// abort mid-write. `None` when no export is in flight.
     pub(crate) export_cancel_flag: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    /// Reused so the export dialog's regex auto-detect persists to the
+    /// project and stays in sync with the Project Settings dialog, same as
+    /// Matrix's own auto-detect does (see `ResultsMatrixController`'s
+    /// struct-level doc comment).
+    pub(crate) project_settings_controller: Arc<ProjectSettingsController>,
 }
 
 impl ResultsTableController {
@@ -134,11 +141,13 @@ impl ResultsTableController {
         ui: slint::Weak<ResultsWindow>,
         app_state: Arc<UiState>,
         image_list_controller: Arc<ImagesListController>,
+        project_settings_controller: Arc<ProjectSettingsController>,
     ) -> Self {
         Self {
             ui,
             app_state,
             image_list_controller,
+            project_settings_controller,
             path: Arc::new(Mutex::new(None)),
             displayed_objects: Arc::new(Mutex::new(RowWindow::new(DEFAULT_WINDOW_PAGES))),
             channels: Arc::new(Mutex::new(Vec::new())),
@@ -650,6 +659,9 @@ impl ResultsTableController {
                         .get_settings()
                         .custom_regex,
                 );
+                // Stale feedback from a previous session's auto-detect
+                // shouldn't linger next to a freshly-seeded regex.
+                state.set_export_regex_hint(SharedString::new());
                 state.set_export_matrix_kind("plate".into());
 
                 state.set_export_combo_name(SharedString::new());
@@ -677,6 +689,15 @@ impl ResultsTableController {
                 window
                     .global::<ResultsState>()
                     .set_export_dialog_active(false);
+            });
+        }
+
+        // --- export_autodetect_regex_requested -----------------------------------
+        {
+            let this = Arc::clone(self);
+            state.on_export_autodetect_regex_requested(move || {
+                let this = Arc::clone(&this);
+                std::thread::spawn(move || Self::bg_autodetect_export_regex(this));
             });
         }
 
@@ -3476,6 +3497,75 @@ impl ResultsTableController {
             }
         }
     }
+
+    /// Suggests a regex from the loaded results file's image names and, on
+    /// success:
+    /// - fills `export_group_regex` so it takes effect immediately, and
+    /// - persists it to the project's `PlateSettings` and re-syncs the
+    ///   Project Settings dialog - mirroring Matrix's own
+    ///   `matrix_autodetect_regex_requested` exactly. In practice a project
+    ///   uses one grouping regex throughout (Project Settings, Matrix, and
+    ///   export are just different places to set the same value), so
+    ///   detecting it here should stick the same way it does everywhere else.
+    fn bg_autodetect_export_regex(this: Arc<Self>) {
+        let ui = this.ui.clone();
+        let report_hint = move |hint: String| {
+            let ui = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(window) = ui.upgrade() else { return };
+                window
+                    .global::<ResultsState>()
+                    .set_export_regex_hint(hint.into());
+            });
+        };
+
+        let Some(path) = this.path.lock().unwrap().clone() else {
+            report_hint("No results file loaded.".to_string());
+            return;
+        };
+        let loader = ResultsLoader::new(&path);
+        let names = match loader.get_image_names() {
+            Ok(names) => names,
+            Err(e) => {
+                warn!(
+                    "export regex autodetect failed to load image names: {:?}",
+                    e
+                );
+                report_hint("Failed to load image names.".to_string());
+                return;
+            }
+        };
+
+        match suggest_regex(&names) {
+            Some(suggestion) => {
+                let hint = format!(
+                    "Matched {}/{} filenames",
+                    suggestion.matched, suggestion.total
+                );
+                let pattern = suggestion.pattern;
+
+                {
+                    let mut project = this.app_state.get_project_write();
+                    project.plate.grouping_mode = GroupingMode::FileName;
+                    project.plate.grouping_regex = pattern.clone();
+                }
+                this.app_state.mark_dirty();
+                this.project_settings_controller
+                    .sync_project_settings_to_slint();
+
+                let ui = this.ui.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(window) = ui.upgrade() else { return };
+                    let state = window.global::<ResultsState>();
+                    state.set_export_group_regex(pattern.into());
+                    state.set_export_regex_hint(hint.into());
+                });
+            }
+            None => {
+                report_hint("No consistent pattern found — enter a regex manually.".to_string());
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5164,10 +5254,16 @@ mod tests {
             )),
             object_list_controller,
         ));
+        let project_settings_controller = Arc::new(ProjectSettingsController::new(
+            slint::Weak::default(),
+            slint::Weak::default(),
+            ui_state.clone(),
+        ));
         let controller = Arc::new(ResultsTableController::new(
             results_ui,
             ui_state.clone(),
             image_list_controller,
+            project_settings_controller,
         ));
         (ui_state, controller)
     }
@@ -5325,5 +5421,73 @@ mod tests {
                 .copied(),
             Some(120.0)
         );
+    }
+
+    #[test]
+    fn bg_autodetect_export_regex_reports_no_results_file_when_path_is_unset() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(results_ui.as_weak());
+
+        // `bg_autodetect_export_regex`'s hint/regex feedback is only set
+        // inside a `slint::invoke_from_event_loop` closure, which the
+        // headless test platform (`i_slint_backend_testing::init_no_event_loop`)
+        // never actually runs - there is no event loop pumping it, so that
+        // side effect isn't observable here (confirmed empirically: the
+        // property stays at its default). What *is* synchronously
+        // observable, and worth guarding against regressions, is that the
+        // early-return path never touches the project.
+        ResultsTableController::bg_autodetect_export_regex(controller.clone());
+
+        assert_eq!(ui_state.get_project().plate.grouping_regex, "");
+        assert_ne!(
+            ui_state.get_project().plate.grouping_mode,
+            GroupingMode::FileName
+        );
+    }
+
+    #[test]
+    fn bg_autodetect_export_regex_leaves_the_project_untouched_when_image_names_fail_to_load() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(results_ui.as_weak());
+        *controller.path.lock().unwrap() = Some(PathBuf::from("/nonexistent/results.evadb"));
+
+        // Must not panic, and - same reasoning as the "no path" case above -
+        // a failed image-name load must leave the project's saved grouping
+        // alone rather than persisting nothing/garbage.
+        ResultsTableController::bg_autodetect_export_regex(controller.clone());
+
+        assert_eq!(ui_state.get_project().plate.grouping_regex, "");
+        assert_ne!(
+            ui_state.get_project().plate.grouping_mode,
+            GroupingMode::FileName
+        );
+    }
+
+    #[test]
+    fn attach_callbacks_export_dialog_open_clears_a_stale_regex_hint() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        state.set_export_regex_hint("stale hint from a previous session".into());
+
+        state.invoke_export_dialog_open();
+
+        assert_eq!(state.get_export_regex_hint().as_str(), "");
+    }
+
+    #[test]
+    fn attach_callbacks_export_autodetect_regex_requested_is_wired_and_does_not_panic() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+
+        // Spawns a background thread and returns immediately - this only
+        // exercises that the callback is registered and doesn't panic on
+        // invocation; see the `bg_autodetect_export_regex` tests above for
+        // coverage of its actual logic.
+        results_ui
+            .global::<ResultsState>()
+            .invoke_export_autodetect_regex_requested();
     }
 }

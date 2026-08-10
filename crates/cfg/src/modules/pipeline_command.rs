@@ -70,6 +70,7 @@ pub enum PipelineCommand {
     EdgeDetectionSobel(EdgeDetectionSobelSettings),
     EnhanceContrast(EnhanceContrastSettings),
     ExtractObjects(ExtractObjectsSettings),
+    FillHoles(FillHolesSettings),
     GaussianBlur(GaussianBlurSettings),
     Hessian(HessianSettings),
     ImageCache(ImageCacheSettings),
@@ -191,146 +192,153 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 12,
+            name: "FillHoles",
+            category: CommandCategory::Object,
+            summary: "Fills enclosed background holes in the segmentation map.",
+            description: "A direct port of ImageJ's `Process > Binary > Fill Holes` command\n(`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\nLandini): a background pixel counts as a \"hole\" - and is turned into\nforeground - exactly when it cannot be reached from the image border by a\npath of background pixels using 4-connectivity.\n\nLike ImageJ's own command, this treats the image as strictly binary: every\nnon-background pixel is \"foreground\" regardless of its actual label/class\nvalue, and a filled hole is stamped with a single fixed value rather than\ninheriting whatever label happens to surround it. If the segmentation map\ncarries several distinct label values, holes are not attributed back to\nthe object that encloses them - only ImageJ's original background/\nforeground distinction is reproduced here.\n\n# Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)\n1. Scan every pixel on the image border; for each one that is background\n(`0`), flood-fill outward from it using 4-connectivity (up/down/left/\nright only - diagonal neighbors are **not** considered connected),\nmarking every background pixel reached this way as \"outside\".\n2. Any background pixel never marked \"outside\" is enclosed and becomes\nforeground. Every non-background pixel is copied through unchanged.\n\nThe 4-connectivity in step 1 is load-bearing, not an implementation\ndetail: a boundary that only touches itself diagonally (8-connected) does\n**not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,\nwhose own docs specify a 4-connected fill.",
+        },
+        CommandMeta {
+            id: 13,
             name: "GaussianBlur",
             category: CommandCategory::Preprocess,
             summary: "Smooths an image and reduces background noise using a Gaussian kernel.",
             description: "This algorithm applies a localized, bell-curve weighted blur that suppresses\nhigh-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\nor dust) while preserving structural features. It is commonly used as a\npreprocessing step to optimize thresholding and edge detection tasks.\n\n# Examples\n\n```\nuse imagec::backend::algos::GaussianBlur;\n\nlet settings = GaussianBlur {\nkernel_size: 5,\nsigma: 2.0\n};\n```",
         },
         CommandMeta {
-            id: 13,
+            id: 14,
             name: "Hessian",
             category: CommandCategory::Preprocess,
             summary: "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.",
             description: "This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.\n\n# Examples\n\n```\n# use imagec::backend::algos::{Hessian, HessianMode};\nlet detector = Hessian {\nmode: HessianMode::Determinant,\n};\n```",
         },
         CommandMeta {
-            id: 14,
+            id: 15,
             name: "ImageCache",
             category: CommandCategory::Preprocess,
             summary: "A filter that acts as a synchronization point between the pipeline and a storage backend.",
             description: "`ImageCache` allows the pipeline to branch or \"undo\" operations by saving\nstates to a named address and reloading them as needed.\n\n# Examples\n\n```\nuse imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};\nlet checkpoint = ImageCache {\nmode: ImageCacheMode::Store,\naddress: ImageAddress::from(\"pre_processed_state\"),\n};\n```",
         },
         CommandMeta {
-            id: 15,
+            id: 16,
             name: "ImageMath",
             category: CommandCategory::Preprocess,
             summary: "A filter that performs pixel-wise mathematical operations between the current",
             description: "pipeline image and a secondary image stored in the cache.\n\nThis command allows for complex image blending, masking, and comparison.\n\n# Examples\n\n```\nuse imagec::backend::algos::{ImageMath, Operand};\nlet subtract_bg = ImageMath {\noperand: Operand::Subtract,\nsecond_image_address: ImageAddress::from(\"background\"),\nswap_operands: false,\n};\n```",
         },
         CommandMeta {
-            id: 16,
+            id: 17,
             name: "IntensityTransformation",
             category: CommandCategory::Preprocess,
             summary: "Configuration for adjusting image contrast and brightness.",
             description: "This transformation applies a linear mapping to pixel values.\nIn [`Mode::Manual`], the output is typically calculated as:\n`output = input * contrast + brightness`.",
         },
         CommandMeta {
-            id: 17,
+            id: 18,
             name: "Laplacian",
             category: CommandCategory::Preprocess,
             summary: "Configuration for the Laplacian edge detection filter.",
             description: "The Laplacian is a second-order derivative operator used to find regions of\nrapid intensity change. It is particularly effective for detecting edges\nand fine details, though it is highly sensitive to noise.\n\n# Examples\n\n```\n# use imagec::backend::algos::Laplacian;\nlet filter = Laplacian { kernel_size: 3 };\n```",
         },
         CommandMeta {
-            id: 18,
+            id: 19,
             name: "MedianSubtract",
             category: CommandCategory::Preprocess,
             summary: "A background subtraction filter that uses a median rank operator.",
             description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.\n\n# Examples\n\n```\nuse imagec::backend::algos::MedianSubtract;\nlet filter = MedianSubtract { radius: 10.0 };\n```",
         },
         CommandMeta {
-            id: 19,
+            id: 20,
             name: "MorphologicalCommand",
             category: CommandCategory::Preprocess,
             summary: "A filter that applies mathematical morphology to an image.",
             description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.\n\n# Examples\n\n```\nuse imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};\nlet clean_noise = MorphologicalCommand {\nop: MorphOps::Open,\nkernel_size: 3,\nkernel_shape: KernelShapes::Ellipse,\n};\n```",
         },
         CommandMeta {
-            id: 20,
+            id: 21,
             name: "ObjectMath",
             category: CommandCategory::Classify,
             summary: "Computes a boolean set operation between two object classes, object pair by",
             description: "object pair.\n\nWhen more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
         CommandMeta {
-            id: 21,
+            id: 22,
             name: "AI Pixel Classifier",
             category: CommandCategory::Segment,
             summary: "A pixel classifier trained via the app's AI training dialog",
             description: "(an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),\napplied here as a pipeline segmentation step: every pixel is classified\nindependently (reusing the same feature recipe used at training time),\nthen remapped through `segmentation_mapping` into this project's own\nclasses and written to the segmentation map - the same output shape\n`Threshold` produces, so downstream steps (extraction, classification)\ndon't need to care which one ran.\n\nPredicted classes with no matching `segmentation_mapping` entry are\nwritten as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`\nleaves pixels outside every configured range as background - mapping\nonly the classes you care about is a deliberate simplification, not an\noversight.",
         },
         CommandMeta {
-            id: 22,
+            id: 23,
             name: "RankFilter",
             category: CommandCategory::Preprocess,
             summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
             description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
         },
         CommandMeta {
-            id: 23,
+            id: 24,
             name: "RollingBall",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
         },
         CommandMeta {
-            id: 24,
+            id: 25,
             name: "SaveImage",
             category: CommandCategory::Preprocess,
             summary: "A command that exports the current image to a persistent file on disk.",
             description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```",
         },
         CommandMeta {
-            id: 25,
+            id: 26,
             name: "AI Stardist Segmentation",
             category: CommandCategory::Segment,
             summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
         },
         CommandMeta {
-            id: 26,
+            id: 27,
             name: "StructureTensor",
             category: CommandCategory::Preprocess,
             summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
             description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```",
         },
         CommandMeta {
-            id: 27,
+            id: 28,
             name: "Threshold",
             category: CommandCategory::Segment,
             summary: "A filter that segments an image into discrete classes based on intensity.",
-            description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.\n\n# Examples\n\n```\nuse imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\nlet binary = Threshold {\nthresholds: vec![ThresholdSettings {\nmethod: ThresholdMethod::Otsu,\nmin_threshold: 0.0,\nmax_threshold: 1.0,\nobject_class_id: ObjectLabel::Foreground,\n}]\n};\n```",
+            description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.",
         },
         CommandMeta {
-            id: 28,
+            id: 29,
             name: "TransformObjects",
             category: CommandCategory::Classify,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
         },
         CommandMeta {
-            id: 29,
+            id: 30,
             name: "AI UNet Segmentation",
             category: CommandCategory::Segment,
             summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
             description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.",
         },
         CommandMeta {
-            id: 30,
+            id: 31,
             name: "Voronoi",
             category: CommandCategory::Classify,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
-            id: 31,
+            id: 32,
             name: "Watershed",
             category: CommandCategory::Object,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "This is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
         CommandMeta {
-            id: 32,
+            id: 33,
             name: "WeightedDeviation",
             category: CommandCategory::Preprocess,
             summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
@@ -374,41 +382,42 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
         11 => Some(PipelineCommand::ExtractObjects(
             ExtractObjectsSettings::default(),
         )),
-        12 => Some(PipelineCommand::GaussianBlur(
+        12 => Some(PipelineCommand::FillHoles(FillHolesSettings::default())),
+        13 => Some(PipelineCommand::GaussianBlur(
             GaussianBlurSettings::default(),
         )),
-        13 => Some(PipelineCommand::Hessian(HessianSettings::default())),
-        14 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
-        15 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
-        16 => Some(PipelineCommand::IntensityTransformation(
+        14 => Some(PipelineCommand::Hessian(HessianSettings::default())),
+        15 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
+        16 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
+        17 => Some(PipelineCommand::IntensityTransformation(
             IntensityTransformationSettings::default(),
         )),
-        17 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
-        18 => Some(PipelineCommand::MedianSubtract(
+        18 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
+        19 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        19 => Some(PipelineCommand::MorphologicalCommand(
+        20 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        20 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        21 => Some(PipelineCommand::PixelClassifier(
+        21 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        22 => Some(PipelineCommand::PixelClassifier(
             PixelClassifierSettings::default(),
         )),
-        22 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        23 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        24 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        25 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        26 => Some(PipelineCommand::StructureTensor(
+        23 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        24 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        25 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        26 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        27 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        27 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        28 => Some(PipelineCommand::TransformObjects(
+        28 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        29 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        29 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        30 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        31 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        32 => Some(PipelineCommand::WeightedDeviation(
+        30 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        31 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        32 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        33 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
         _ => None,
@@ -431,6 +440,7 @@ impl PipelineCommand {
             Self::EdgeDetectionSobel(_) => "EdgeDetectionSobel",
             Self::EnhanceContrast(_) => "EnhanceContrast",
             Self::ExtractObjects(_) => "ExtractObjects",
+            Self::FillHoles(_) => "FillHoles",
             Self::GaussianBlur(_) => "GaussianBlur",
             Self::Hessian(_) => "Hessian",
             Self::ImageCache(_) => "ImageCache",
@@ -469,6 +479,7 @@ impl PipelineCommand {
             Self::EdgeDetectionSobel(_) => &CommandCategory::Preprocess,
             Self::EnhanceContrast(_) => &CommandCategory::Preprocess,
             Self::ExtractObjects(_) => &CommandCategory::Measure,
+            Self::FillHoles(_) => &CommandCategory::Object,
             Self::GaussianBlur(_) => &CommandCategory::Preprocess,
             Self::Hessian(_) => &CommandCategory::Preprocess,
             Self::ImageCache(_) => &CommandCategory::Preprocess,
@@ -508,6 +519,7 @@ impl PipelineCommand {
             Self::EdgeDetectionSobel(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EnhanceContrast(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::ExtractObjects(_) => &[CommandCategory::Classify],
+            Self::FillHoles(_) => &[CommandCategory::Object],
             Self::GaussianBlur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Hessian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::ImageCache(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
@@ -550,6 +562,7 @@ impl PipelineCommand {
             Self::EdgeDetectionSobel(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the Sobel operator window.\n\nTypically 3. Larger values (5, 7) provide a more smoothed\ngradient but result in \"thicker\" edges. Must be an odd number.".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
             Self::EnhanceContrast(_s) => [vec![ParameterDef { name: "saturated_pixels".to_string(), display_name: "Saturated Pixels".to_string(), description: "Percentage of pixels to \"clip\" from the top and bottom of the histogram.\n\nRange: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels\nthat would otherwise prevent effective contrast stretching.".to_string(), value: format!("{}", _s.saturated_pixels), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "normalize".to_string(), display_name: "Normalize".to_string(), description: "Whether to linearly stretch the remaining pixel intensities to fill\nthe full [0.0, 1.0] range.".to_string(), value: format!("{}", _s.normalize), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "equalize_histogram".to_string(), display_name: "Equalize Histogram".to_string(), description: "Whether to apply Histogram Equalization.\n\nThis redistributes pixel intensities to achieve a uniform distribution,\nwhich is highly effective for images with low contrast but high noise.".to_string(), value: format!("{}", _s.equalize_histogram), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ExtractObjects(_s) => vec![ParameterDef { name: "max_objects_before_fail".to_string(), display_name: "Max Objects Before Fail".to_string(), description: "Maximum allowed ROIs to extract.\n\nIf this limit is exceeded the pipeline fails.\nThis is a protection against memory overload.".to_string(), value: format!("{}", _s.max_objects_before_fail), param_type: ParamType::Label, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
+            Self::FillHoles(_s) => vec![],
             Self::GaussianBlur(_s) => [vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7).".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![] }], vec![ParameterDef { name: "sigma".to_string(), display_name: "Sigma".to_string(), description: "The standard deviation of the Gaussian kernel.\n\nHigher values create a more significant blur effect.\n$$N \\approx 6\\sigma + 1$$".to_string(), value: format!("{}", _s.sigma), param_type: ParamType::Spinner, options: vec![], min: 0.1f32, max: 5.0f32, step: 0.1000f32, groups: vec![] }]].concat(),
             Self::Hessian(_s) => vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Determines which component of the Hessian matrix structure to extract.\n\nDepending on the mode, this can highlight interest points (blobs)\nor directional features (ridges).".to_string(), value: match _s.mode { FiltersHessianHessianModeSettings::Determinant => "Determinant".to_string(), FiltersHessianHessianModeSettings::EigenvaluesX => "Eigenvalues X".to_string(), FiltersHessianHessianModeSettings::EigenvaluesY => "Eigenvalues Y".to_string() }, param_type: ParamType::Dropdown, options: vec!["Determinant".to_string(), "Eigenvalues X".to_string(), "Eigenvalues Y".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
             Self::ImageCache(_s) => vec![ParameterDef { name: "mode".to_string(), display_name: "Mode".to_string(), description: "Whether to save the current state to the cache or load a state from it.".to_string(), value: match _s.mode { MathImageCacheImageCacheModeSettings::Store => "Store".to_string(), MathImageCacheImageCacheModeSettings::Load => "Load".to_string() }, param_type: ParamType::Dropdown, options: vec!["Store".to_string(), "Load".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
@@ -594,6 +607,7 @@ impl PipelineCommand {
             Self::EdgeDetectionSobel(_) => String::new(),
             Self::EnhanceContrast(_) => String::new(),
             Self::ExtractObjects(_) => String::new(),
+            Self::FillHoles(_) => String::new(),
             Self::GaussianBlur(s) => format!(
                 "Kernel Size: {} · Sigma: {}",
                 format!("{:.3}", s.kernel_size),
@@ -1063,6 +1077,7 @@ impl PipelineCommand {
                     }
                 }
             }
+            Self::FillHoles(_) => {}
             Self::GaussianBlur(s) => {
                 if param_name == "kernel_size" {
                     if let Ok(v) = value.parse::<usize>() {
@@ -1716,6 +1731,7 @@ impl PipelineCommand {
             Self::EdgeDetectionSobel(_) => {}
             Self::EnhanceContrast(_) => {}
             Self::ExtractObjects(_) => {}
+            Self::FillHoles(_) => {}
             Self::GaussianBlur(_) => {}
             Self::Hessian(_) => {}
             Self::ImageCache(_) => {}
@@ -1775,6 +1791,7 @@ impl PipelineCommand {
             Self::EdgeDetectionSobel(_) => {}
             Self::EnhanceContrast(_) => {}
             Self::ExtractObjects(_) => {}
+            Self::FillHoles(_) => {}
             Self::GaussianBlur(_) => {}
             Self::Hessian(_) => {}
             Self::ImageCache(_) => {}

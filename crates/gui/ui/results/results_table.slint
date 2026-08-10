@@ -475,6 +475,14 @@ export global ResultsState {
     in-out property <string> export_group_by: "none";
     // Regex pattern, only used when `export_group_by == "regex"`.
     in-out property <string> export_group_regex: "";
+    // Feedback from the last export_autodetect_regex_requested() call, e.g.
+    // "Matched 42/45 filenames" or "No consistent pattern found".
+    in property <string> export_regex_hint: "";
+    // Runs the regex auto-detect heuristic against the loaded results file's
+    // image names, filling `export_group_regex` on success. Session-local -
+    // unlike Matrix's own auto-detect, it does not persist the pattern back
+    // to the project's saved `PlateSettings`.
+    callback export_autodetect_regex_requested();
     // "plate" (default) or "well" — only meaningful when `export_style ==
     // "matrix"`. See `ExportBatchItem.matrix_kind`.
     in-out property <string> export_matrix_kind: "plate";
