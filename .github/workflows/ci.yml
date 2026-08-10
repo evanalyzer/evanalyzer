@@ -117,7 +117,18 @@ jobs:
           git add docs/coverage-badge.svg docs/coverage-history.csv
           if ! git diff --cached --quiet; then
             git commit -m "chore: update coverage badge [skip ci]"
-            git push
+            # The `audit` job commits its own badge to main from the same
+            # workflow run, in parallel - whichever of the two pushes second
+            # would otherwise be rejected as non-fast-forward. Rebase onto
+            # the latest main and retry rather than serializing the jobs.
+            for i in 1 2 3 4 5; do
+              if git push; then
+                break
+              fi
+              echo "Push rejected (attempt ${i}) - rebasing onto latest main and retrying..."
+              git fetch origin main
+              git rebase origin/main
+            done
           else
             echo "Coverage unchanged - nothing to commit."
           fi
@@ -221,7 +232,18 @@ jobs:
           git add docs/audit-badge.svg docs/audit-history.csv
           if ! git diff --cached --quiet; then
             git commit -m "chore: update audit badge [skip ci]"
-            git push
+            # The `test` job commits its own badge to main from the same
+            # workflow run, in parallel - whichever of the two pushes second
+            # would otherwise be rejected as non-fast-forward. Rebase onto
+            # the latest main and retry rather than serializing the jobs.
+            for i in 1 2 3 4 5; do
+              if git push; then
+                break
+              fi
+              echo "Push rejected (attempt ${i}) - rebasing onto latest main and retrying..."
+              git fetch origin main
+              git rebase origin/main
+            done
           else
             echo "Audit result unchanged - nothing to commit."
           fi
