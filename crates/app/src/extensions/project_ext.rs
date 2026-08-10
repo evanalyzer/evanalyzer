@@ -1359,21 +1359,9 @@ fn is_supported_image_path(path: &Path) -> bool {
 
 pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors> {
     let data = fs::read_to_string(path.clone())?;
-    let mut inner: ProjectSettings =
+    let raw: serde_json::Value =
         serde_json::from_str(&data).map_err(|e| InternalErrors::ParseError(e.to_string()))?;
-
-    // A file from a *newer* build may rely on fields/variants this build
-    // doesn't know about yet - serde would have silently dropped them rather
-    // than erroring, so proceeding could quietly discard part of the user's
-    // project on the next save. Refuse instead of guessing.
-    if inner.schema_version > evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION {
-        return Err(InternalErrors::ParseError(format!(
-            "this project was saved by a newer version of EVAnalyzer (format version {}, this build supports up to version {}) - update EVAnalyzer to open it",
-            inner.schema_version,
-            evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION
-        )));
-    }
-    inner.migrate();
+    let mut inner: ProjectSettings = evanalyzer_cfg::load_project_settings(raw)?;
 
     // Reverse of the relativization `save_project_as` does on write - resolve
     // AI command `model_path`s back to absolute now, using this project
