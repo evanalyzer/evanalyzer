@@ -4,6 +4,18 @@ use evanalyzer_cfg::settings::pipeline_command_settings::*;
 
 // ============ ENUM FROM IMPLS ============
 
+#[cfg(feature = "ai")]
+impl From<ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings>
+    for AiClassifyMatchHandling
+{
+    fn from(_s: ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings) -> Self {
+        match _s {
+            ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch => AiClassifyMatchHandling::AddOutputClassIfMatch,
+            ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch => AiClassifyMatchHandling::ReclassifyIfMatch,
+        }
+    }
+}
+
 impl From<FiltersRollingBallBallTypeSettings> for BallType {
     fn from(_s: FiltersRollingBallBallTypeSettings) -> Self {
         match _s {
@@ -26,6 +38,22 @@ impl From<ClassificationClassifyObjectsClassifyMatchHandlingSettings> for Classi
             ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => ClassifyMatchHandling::ReclassifyIfMatch,
             ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => ClassifyMatchHandling::ReclassifyIfNotMatch,
+        }
+    }
+}
+
+impl From<ClassificationColocObjectsColocMultiplicitySettings> for ColocMultiplicity {
+    fn from(_s: ClassificationColocObjectsColocMultiplicitySettings) -> Self {
+        match _s {
+            ClassificationColocObjectsColocMultiplicitySettings::OneToOne => {
+                ColocMultiplicity::OneToOne
+            }
+            ClassificationColocObjectsColocMultiplicitySettings::ManyToMany => {
+                ColocMultiplicity::ManyToMany
+            }
+            ClassificationColocObjectsColocMultiplicitySettings::MultiFor(v) => {
+                ColocMultiplicity::MultiFor(v)
+            }
         }
     }
 }
@@ -242,6 +270,27 @@ impl From<AiSegmentationUnetUNetOutputModeSettings> for UNetOutputMode {
 
 // ============ STRUCT FROM IMPLS ============
 
+#[cfg(feature = "ai")]
+impl From<AiObjectClassifierSettings> for AiObjectClassifier {
+    fn from(_s: AiObjectClassifierSettings) -> Self {
+        AiObjectClassifier {
+            model_path: _s.model_path,
+            segmentation_mapping: _s
+                .segmentation_mapping
+                .into_iter()
+                .map(|v| v.into())
+                .collect(),
+            origin_segmentation: _s
+                .origin_segmentation
+                .into_iter()
+                .map(|v| v.into())
+                .collect(),
+            input_classes: _s.input_classes.into_iter().map(|v| v.into()).collect(),
+            match_handling: AiClassifyMatchHandling::from(_s.match_handling),
+        }
+    }
+}
+
 impl From<BlurSettings> for Blur {
     fn from(_s: BlurSettings) -> Self {
         Blur {
@@ -260,6 +309,16 @@ impl From<CellposeSettings> for Cellpose {
             probability_threshold: _s.probability_threshold.clamp(0.0, 1.0),
             flow_iterations: _s.flow_iterations,
             min_object_size: _s.min_object_size,
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<ClassificationMappingSettings> for ClassificationMapping {
+    fn from(_s: ClassificationMappingSettings) -> Self {
+        ClassificationMapping {
+            object_class: _s.object_class,
+            output_class: _s.output_class,
         }
     }
 }
@@ -301,10 +360,10 @@ impl From<ColocalizationSettings> for Colocalization {
             classes_to_coloc: _s.classes_to_coloc.into_iter().map(|v| v.into()).collect(),
             filter_classes: _s.filter_classes.into_iter().map(|v| v.into()).collect(),
             class_for_overlapping_areas: _s.class_for_overlapping_areas,
-            exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
-            allow_multi_object_coloc: _s.allow_multi_object_coloc,
+            multiplicity: ColocMultiplicity::from(_s.multiplicity),
             size_unit: _s.size_unit,
             min_coloc_area: _s.min_coloc_area,
+            exclude_classes: _s.exclude_classes.into_iter().map(|v| v.into()).collect(),
         }
     }
 }
@@ -473,6 +532,20 @@ impl From<ObjectMathSettings> for ObjectMath {
     }
 }
 
+#[cfg(feature = "ai")]
+impl From<PixelClassifierSettings> for PixelClassifier {
+    fn from(_s: PixelClassifierSettings) -> Self {
+        PixelClassifier {
+            model_path: _s.model_path,
+            segmentation_mapping: _s
+                .segmentation_mapping
+                .into_iter()
+                .map(|v| v.into())
+                .collect(),
+        }
+    }
+}
+
 impl From<RankFilterSettings> for RankFilter {
     fn from(_s: RankFilterSettings) -> Self {
         RankFilter {
@@ -497,6 +570,16 @@ impl From<SaveImageSettings> for SaveImage {
         SaveImage {
             name: _s.name,
             source: ImageSource::from(_s.source),
+        }
+    }
+}
+
+#[cfg(feature = "ai")]
+impl From<SegmentationMappingSettings> for SegmentationMapping {
+    fn from(_s: SegmentationMappingSettings) -> Self {
+        SegmentationMapping {
+            segmentation_class: _s.segmentation_class,
+            object_class_id: _s.object_class_id,
         }
     }
 }
@@ -618,6 +701,15 @@ use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
 
 pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, InternalErrors> {
     match cmd {
+        #[cfg(feature = "ai")]
+        PipelineCommand::AiObjectClassifier(settings) => {
+            Ok(Box::new(crate::algos::AiObjectClassifier::from(settings)))
+        }
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::AiObjectClassifier(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; AiObjectClassifier is unavailable."
+                .into(),
+        )),
         PipelineCommand::Blur(settings) => Ok(Box::new(crate::algos::Blur::from(settings))),
         #[cfg(feature = "ai")]
         PipelineCommand::Cellpose(settings) => Ok(Box::new(crate::algos::Cellpose::from(settings))),
@@ -677,6 +769,15 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         PipelineCommand::ObjectMath(settings) => {
             Ok(Box::new(crate::algos::ObjectMath::from(settings)))
         }
+        #[cfg(feature = "ai")]
+        PipelineCommand::PixelClassifier(settings) => {
+            Ok(Box::new(crate::algos::PixelClassifier::from(settings)))
+        }
+        #[cfg(not(feature = "ai"))]
+        PipelineCommand::PixelClassifier(_settings) => Err(InternalErrors::Generic(
+            "This build was compiled without the ai feature; PixelClassifier is unavailable."
+                .into(),
+        )),
         PipelineCommand::RankFilter(settings) => {
             Ok(Box::new(crate::algos::RankFilter::from(settings)))
         }

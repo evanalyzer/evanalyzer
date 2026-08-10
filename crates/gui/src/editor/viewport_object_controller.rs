@@ -10,15 +10,26 @@ use crate::editor::viewport_cache::ViewportCache;
 use crate::editor::viewport_controller::ViewportController;
 use bitvec::order::Lsb0;
 use bitvec::vec::BitVec;
-use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::extensions::object_ext::ObjectExt;
+use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_core::{ImageContainer, Object};
 use kornia_image::ImageSize;
+use log::warn;
 use slint::ComponentHandle;
 use slint::Model;
 use slint::ModelRc;
 use slint::VecModel;
 use std::sync::Arc;
+
+/// Reads the two corner points a rectangle/oval-drag gesture is expected to
+/// provide, without panicking if fewer were ever supplied. Currently the
+/// Slint side always seeds both slots before the paint-finished callback
+/// fires (`viewport.slint`), but that's a UI-side contract with no
+/// corresponding guarantee here - a future change to how drag interactions
+/// are handled (e.g. an interrupted drag) could violate it.
+fn rect_corners(points: &ModelRc<PointSlint>) -> Option<(PointSlint, PointSlint)> {
+    Some((points.row_data(0)?, points.row_data(1)?))
+}
 
 pub struct ViewPortObjectController {
     pub(crate) ui: slint::Weak<AppWindow>,
@@ -76,7 +87,9 @@ impl ViewPortObjectController {
             ui.global::<ViewportObjectState>()
                 .on_viewport_clicked(move |clicked_x, clicked_y| {
                     manager.find_object_from_clicked_coordinates(clicked_x, clicked_y);
-                    manager.object_list_controller.sync_selected_object_to_slint(true);
+                    manager
+                        .object_list_controller
+                        .sync_selected_object_to_slint(true);
                     manager.viewport_controller.trigger_image_redraw_objects();
                 });
 
@@ -96,7 +109,9 @@ impl ViewPortObjectController {
                                 .write()
                                 .expect("Poisoned")
                                 .object_transparency = transparency;
-                            manager_in.viewport_controller.trigger_image_redraw_objects();
+                            manager_in
+                                .viewport_controller
+                                .trigger_image_redraw_objects();
                         },
                     );
                 });
@@ -245,6 +260,13 @@ impl ViewPortObjectController {
     }
 
     pub fn add_object_from_rect(&self, points: &ModelRc<PointSlint>) {
+        let Some((p0, p1)) = rect_corners(points) else {
+            warn!(
+                "add_object_from_rect: expected 2 points, got {}",
+                points.row_count()
+            );
+            return;
+        };
         let view_port_state = self
             .viewport_controller
             .viewport_state
@@ -252,14 +274,10 @@ impl ViewPortObjectController {
             .expect("Poisoned")
             .clone();
 
-        let x1 =
-            (points.row_data(0).unwrap().x - view_port_state.offset_x) / (view_port_state.zoom);
-        let y1 =
-            (points.row_data(0).unwrap().y - view_port_state.offset_y) / (view_port_state.zoom);
-        let x2 =
-            (points.row_data(1).unwrap().x - view_port_state.offset_x) / (view_port_state.zoom);
-        let y2 =
-            (points.row_data(1).unwrap().y - view_port_state.offset_y) / (view_port_state.zoom);
+        let x1 = (p0.x - view_port_state.offset_x) / (view_port_state.zoom);
+        let y1 = (p0.y - view_port_state.offset_y) / (view_port_state.zoom);
+        let x2 = (p1.x - view_port_state.offset_x) / (view_port_state.zoom);
+        let y2 = (p1.y - view_port_state.offset_y) / (view_port_state.zoom);
 
         // Create mask
         let min_x = x1.min(x2) as u32;
@@ -279,6 +297,13 @@ impl ViewPortObjectController {
     }
 
     pub fn add_oval_from_rect(&self, points: &ModelRc<PointSlint>) {
+        let Some((p0, p1)) = rect_corners(points) else {
+            warn!(
+                "add_oval_from_rect: expected 2 points, got {}",
+                points.row_count()
+            );
+            return;
+        };
         let view_port_state = self
             .viewport_controller
             .viewport_state
@@ -286,14 +311,10 @@ impl ViewPortObjectController {
             .expect("Poisoned")
             .clone();
 
-        let x1 =
-            (points.row_data(0).unwrap().x - view_port_state.offset_x) / (view_port_state.zoom);
-        let y1 =
-            (points.row_data(0).unwrap().y - view_port_state.offset_y) / (view_port_state.zoom);
-        let x2 =
-            (points.row_data(1).unwrap().x - view_port_state.offset_x) / (view_port_state.zoom);
-        let y2 =
-            (points.row_data(1).unwrap().y - view_port_state.offset_y) / (view_port_state.zoom);
+        let x1 = (p0.x - view_port_state.offset_x) / (view_port_state.zoom);
+        let y1 = (p0.y - view_port_state.offset_y) / (view_port_state.zoom);
+        let x2 = (p1.x - view_port_state.offset_x) / (view_port_state.zoom);
+        let y2 = (p1.y - view_port_state.offset_y) / (view_port_state.zoom);
 
         let min_x = x1.min(x2) as u32;
         let max_x = x1.max(x2) as u32;
@@ -462,7 +483,11 @@ mod tests {
     use kornia_image::Image;
     use kornia_image::allocator::CpuAllocator;
 
-    fn make_controller() -> (Arc<UiState>, Arc<ViewPortObjectController>, Arc<ViewportCache>) {
+    fn make_controller() -> (
+        Arc<UiState>,
+        Arc<ViewPortObjectController>,
+        Arc<ViewportCache>,
+    ) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
         let viewport_controller = Arc::new(ViewportController::new(
             slint::Weak::default(),
@@ -526,7 +551,10 @@ mod tests {
 
         controller.find_object_from_clicked_coordinates(12.0, 12.0);
 
-        assert_eq!(ui_state.get_project().get_selected_object_id(), Some(ObjectId(1)));
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(ObjectId(1))
+        );
     }
 
     #[test]
@@ -546,10 +574,7 @@ mod tests {
     // -- add_object_from_rect ------------------------------------------------------
 
     fn points(pairs: &[(f32, f32)]) -> ModelRc<PointSlint> {
-        let items: Vec<PointSlint> = pairs
-            .iter()
-            .map(|&(x, y)| PointSlint { x, y })
-            .collect();
+        let items: Vec<PointSlint> = pairs.iter().map(|&(x, y)| PointSlint { x, y }).collect();
         ModelRc::new(VecModel::from(items))
     }
 
@@ -562,8 +587,8 @@ mod tests {
             width: 20,
             height: 20,
         };
-        let image = Image::<f32, 1, CpuAllocator>::new(size, vec![0.5f32; 20 * 20], CpuAllocator)
-            .unwrap();
+        let image =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![0.5f32; 20 * 20], CpuAllocator).unwrap();
         let container = ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -599,7 +624,9 @@ mod tests {
         controller.add_object_from_rect(&points(&[(2.0, 2.0), (5.0, 5.0)]));
 
         let project = ui_state.get_project();
-        let objects = project.get_objects().expect("current series must have objects");
+        let objects = project
+            .get_objects()
+            .expect("current series must have objects");
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].bbox, [2, 2, 5, 5]);
         // A rectangle mask fills every pixel in its bbox.
@@ -618,6 +645,18 @@ mod tests {
         assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
     }
 
+    #[test]
+    fn add_object_from_rect_with_fewer_than_two_points_is_a_no_op_not_a_panic() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        controller.add_object_from_rect(&points(&[]));
+        controller.add_object_from_rect(&points(&[(2.0, 2.0)]));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
+    }
+
     // -- add_oval_from_rect / add_polygon_from_rect (no cached data) --------------
 
     #[test]
@@ -625,6 +664,18 @@ mod tests {
         let (ui_state, controller, _) = make_controller();
 
         controller.add_oval_from_rect(&points(&[(2.0, 2.0), (8.0, 8.0)]));
+
+        let project = ui_state.get_project();
+        assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
+    }
+
+    #[test]
+    fn add_oval_from_rect_with_fewer_than_two_points_is_a_no_op_not_a_panic() {
+        let (ui_state, controller, viewport_cache) = make_controller();
+        seed_image_cache(&viewport_cache);
+
+        controller.add_oval_from_rect(&points(&[]));
+        controller.add_oval_from_rect(&points(&[(2.0, 2.0)]));
 
         let project = ui_state.get_project();
         assert_eq!(project.get_objects().map(|o| o.len()), Some(0));
@@ -646,13 +697,12 @@ mod tests {
         let (ui_state, controller, viewport_cache) = make_controller();
         seed_image_cache(&viewport_cache);
 
-        controller.add_polygon_from_rect(
-            &points(&[(2.0, 2.0), (10.0, 2.0), (6.0, 10.0)]),
-            3,
-        );
+        controller.add_polygon_from_rect(&points(&[(2.0, 2.0), (10.0, 2.0), (6.0, 10.0)]), 3);
 
         let project = ui_state.get_project();
-        let objects = project.get_objects().expect("current series must have objects");
+        let objects = project
+            .get_objects()
+            .expect("current series must have objects");
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].bbox, [2, 2, 10, 10]);
         assert!(objects[0].area > 0, "the triangle interior must be filled");

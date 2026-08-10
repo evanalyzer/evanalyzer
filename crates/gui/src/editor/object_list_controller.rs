@@ -4,7 +4,7 @@ use crate::helper::color_generators::get_colors_from_class;
 use crate::{AppWindow, ObjectItemDataSlint, ObjectListState};
 use evanalyzer_app::ProjectWithRuntime;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
-use evanalyzer_cfg::core_types::{ObjectClass, SegmentationClass};
+use evanalyzer_cfg::core_types::{ObjectClass, ObjectId, SegmentationClass};
 use evanalyzer_cfg::settings::images_settings::PixelSizeSettings;
 use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use log::warn;
@@ -26,6 +26,32 @@ struct ObjectModalBridge {
     /// existing selection/edit callbacks (which index into the unfiltered list) keep
     /// working unchanged.
     visible_rows: Vec<usize>,
+}
+
+/// Resolves a Slint 1-based `object_id` (as sent by every `ObjectListState`
+/// callback) into the actual `ObjectId` it refers to, branching between the
+/// manual object list and the live-preview object list exactly like
+/// `ObjectModalBridge`'s row indexing does - `object_id` is a position into
+/// the *combined* (manual ++ preview) list, not the manual list alone, so
+/// every callback must resolve it this way rather than indexing straight
+/// into `get_objects()`.
+fn resolve_object_id(project: &ProjectWithRuntime, object_id: i32) -> Option<ObjectId> {
+    if object_id <= 0 {
+        return None;
+    }
+    let row = (object_id - 1) as usize;
+    let manual_len = project.get_objects().map(|r| r.len()).unwrap_or(0);
+    if row < manual_len {
+        project
+            .get_objects()
+            .and_then(|r| r.get(row))
+            .map(|r| r.id.clone())
+    } else {
+        project
+            .get_preview_objects()
+            .get(row - manual_len)
+            .map(|r| r.id.clone())
+    }
 }
 
 pub struct ObjectListController {
@@ -52,64 +78,38 @@ impl ObjectListController {
         if let Some(ui) = ui_handle.upgrade() {
             // On object selected
             let manager = self.clone();
-            ui.global::<ObjectListState>().on_object_selected(move |object_id| {
-                let mut project = manager.app_state.get_project_write();
-                let selected = if object_id > 0 {
-                    let row = (object_id - 1) as usize;
-                    let manual_len = project.get_objects().map(|r| r.len()).unwrap_or(0);
-                    if row < manual_len {
-                        project
-                            .get_objects()
-                            .and_then(|r| r.get(row))
-                            .map(|r| r.id.clone())
-                    } else {
-                        project
-                            .get_preview_objects()
-                            .get(row - manual_len)
-                            .map(|r| r.id.clone())
-                    }
-                } else {
-                    None
-                };
-                project.set_selected_object(selected);
-                drop(project);
-                manager.sync_selected_object_to_slint(false);
-                manager.viewport_controller.trigger_image_redraw_objects();
-            });
+            ui.global::<ObjectListState>()
+                .on_object_selected(move |object_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    let selected = resolve_object_id(&project, object_id);
+                    project.set_selected_object(selected);
+                    drop(project);
+                    manager.sync_selected_object_to_slint(false);
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
 
             // Add class to object
             let manager = self.clone();
-            ui.global::<ObjectListState>().on_object_add_class(move |object_id| {
-                let mut project = manager.app_state.get_project_write();
-                if object_id > 0 {
-                    let class_id = project.get_selected_object_class();
-                    let obj_id = project
-                        .get_objects()
-                        .and_then(|r| r.get((object_id - 1) as usize))
-                        .map(|r| r.id.clone());
-                    if let Some(id) = obj_id {
+            ui.global::<ObjectListState>()
+                .on_object_add_class(move |object_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    if let Some(id) = resolve_object_id(&project, object_id) {
+                        let class_id = project.get_selected_object_class();
                         project.add_class_to_object(id, class_id);
                     }
-                }
-                manager.sync_selected_object_to_slint(false);
-                manager.sync_objects_to_slint();
-                manager.viewport_controller.trigger_image_redraw_objects();
-            });
+                    manager.sync_selected_object_to_slint(false);
+                    manager.sync_objects_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
 
             // Remove class from object
             let manager = self.clone();
             ui.global::<ObjectListState>()
                 .on_object_remove_class(move |object_id, class_id| {
                     let mut project = manager.app_state.get_project_write();
-                    if object_id > 0 {
+                    if let Some(id) = resolve_object_id(&project, object_id) {
                         let class_id = ObjectClass::Valid(class_id as u32);
-                        let obj_id = project
-                            .get_objects()
-                            .and_then(|r| r.get((object_id - 1) as usize))
-                            .map(|r| r.id.clone());
-                        if let Some(id) = obj_id {
-                            project.remove_class_from_object(id, &class_id);
-                        }
+                        project.remove_class_from_object(id, &class_id);
                     }
                     manager.sync_selected_object_to_slint(false);
                     manager.sync_objects_to_slint();
@@ -118,21 +118,18 @@ impl ObjectListController {
 
             // Delete object
             let manager = self.clone();
-            ui.global::<ObjectListState>().on_object_delete(move |object_id| {
-                let mut project = manager.app_state.get_project_write();
-                let obj_id = project
-                    .get_objects()
-                    .and_then(|r| r.get((object_id - 1) as usize))
-                    .map(|r| r.id.clone());
-                if let Some(id) = obj_id {
-                    project.delete_object(id);
-                }
-                project.set_selected_object(None);
-                drop(project);
-                manager.app_state.mark_dirty();
-                manager.sync_objects_to_slint();
-                manager.viewport_controller.trigger_image_redraw_objects();
-            });
+            ui.global::<ObjectListState>()
+                .on_object_delete(move |object_id| {
+                    let mut project = manager.app_state.get_project_write();
+                    if let Some(id) = resolve_object_id(&project, object_id) {
+                        project.delete_object(id);
+                    }
+                    project.set_selected_object(None);
+                    drop(project);
+                    manager.app_state.mark_dirty();
+                    manager.sync_objects_to_slint();
+                    manager.viewport_controller.trigger_image_redraw_objects();
+                });
         }
     }
 
@@ -174,7 +171,8 @@ impl ObjectListController {
                     let label_count = project
                         .get_objects()
                         .map(|objects| {
-                            objects.iter()
+                            objects
+                                .iter()
                                 .filter(|r| r.segmentation_class == object.segmentation_class)
                                 .count() as i32
                         })
@@ -231,15 +229,29 @@ impl Model for ObjectModalBridge {
 
         if underlying_row < manual_len {
             project.get_objects()?.get(underlying_row).map(|object| {
-                let count = *self.label_counts.get(&object.segmentation_class).unwrap_or(&0);
+                let count = *self
+                    .label_counts
+                    .get(&object.segmentation_class)
+                    .unwrap_or(&0);
                 object_rust_to_object_slint(object, &project, count, false, underlying_row as i32)
             })
         } else {
             let preview_objects = project.get_preview_objects();
-            preview_objects.get(underlying_row - manual_len).map(|object| {
-                let count = *self.label_counts.get(&object.segmentation_class).unwrap_or(&0);
-                object_rust_to_object_slint(object, &project, count, false, underlying_row as i32)
-            })
+            preview_objects
+                .get(underlying_row - manual_len)
+                .map(|object| {
+                    let count = *self
+                        .label_counts
+                        .get(&object.segmentation_class)
+                        .unwrap_or(&0);
+                    object_rust_to_object_slint(
+                        object,
+                        &project,
+                        count,
+                        false,
+                        underlying_row as i32,
+                    )
+                })
         }
     }
 
@@ -608,7 +620,10 @@ mod tests {
     fn compute_visible_rows_chains_preview_objects_after_manual_ones() {
         let mut project = project_with_one_image();
         project.add_object(&object_with_class(1, 1, true)); // manual, index 0
-        project.tmp_settings.preview_objects.push(object_with_class(2, 1, true)); // preview, index 1
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, 1, true)); // preview, index 1
         let ui_state = test_ui_state_with_project(project);
 
         assert_eq!(compute_visible_rows(&ui_state), vec![0, 1]);
@@ -620,7 +635,10 @@ mod tests {
         project.add_object(&object_with_class(1, 1, true));
         project.add_object(&object_with_class(2, 1, true));
         project.add_object(&object_with_class(3, 2, true));
-        project.tmp_settings.preview_objects.push(object_with_class(4, 1, true));
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(4, 1, true));
         let ui_state = test_ui_state_with_project(project);
 
         let counts = precompute_label_counts(&ui_state);
@@ -638,7 +656,11 @@ mod tests {
 
     // -- object_rust_to_object_slint -------------------------------------------
 
-    fn class(id: u32, name: &str, color: u32) -> evanalyzer_cfg::settings::classification_settings::Class {
+    fn class(
+        id: u32,
+        name: &str,
+        color: u32,
+    ) -> evanalyzer_cfg::settings::classification_settings::Class {
         evanalyzer_cfg::settings::classification_settings::Class {
             id: ObjectClass::Valid(id),
             color,
@@ -650,7 +672,10 @@ mod tests {
     #[test]
     fn object_rust_to_object_slint_resolves_a_registered_classs_name() {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(class(1, "Nuclei", 0x112233));
+        project
+            .classification
+            .classes_mut()
+            .push(class(1, "Nuclei", 0x112233));
         let mut object = ObjectMetricSettings::default();
         object.object_class.insert(ObjectClass::Valid(1));
 
@@ -658,7 +683,11 @@ mod tests {
 
         assert_eq!(slint_obj.display_name.as_str(), "Nuclei");
         assert_eq!(slint_obj.label_count, 3);
-        let names: Vec<String> = slint_obj.class_names.iter().map(|s| s.to_string()).collect();
+        let names: Vec<String> = slint_obj
+            .class_names
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(names, vec!["Nuclei".to_string()]);
     }
 
@@ -676,8 +705,8 @@ mod tests {
     #[test]
     fn object_rust_to_object_slint_joins_multiple_class_names_with_a_comma() {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(class(1, "A", 0));
-        project.classification.classes.push(class(2, "B", 0));
+        project.classification.classes_mut().push(class(1, "A", 0));
+        project.classification.classes_mut().push(class(2, "B", 0));
         let mut object = ObjectMetricSettings::default();
         object.object_class.insert(ObjectClass::Valid(1));
         object.object_class.insert(ObjectClass::Valid(2));
@@ -687,7 +716,10 @@ mod tests {
         // HashSet iteration order isn't guaranteed - just check both names
         // appear, comma-joined, rather than asserting an exact order.
         let dn = slint_obj.display_name.to_string();
-        assert!(dn.contains('A') && dn.contains('B') && dn.contains(','), "got {dn:?}");
+        assert!(
+            dn.contains('A') && dn.contains('B') && dn.contains(','),
+            "got {dn:?}"
+        );
     }
 
     #[test]
@@ -756,7 +788,10 @@ mod tests {
     fn object_modal_bridge_row_data_reads_past_the_manual_list_from_preview_objects() {
         let mut project = project_with_one_image();
         project.add_object(&object_with_class(1, 1, true)); // manual, underlying row 0
-        project.tmp_settings.preview_objects.push(object_with_class(2, 1, true)); // preview, underlying row 1
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, 1, true)); // preview, underlying row 1
         let ui_state = test_ui_state_with_project(project);
         let bridge = bridge_for(&ui_state);
 
@@ -771,5 +806,169 @@ mod tests {
         let bridge = bridge_for(&ui_state);
 
         assert!(bridge.row_data(0).is_none());
+    }
+
+    // -- resolve_object_id -----------------------------------------------------
+
+    #[test]
+    fn resolve_object_id_returns_none_for_a_non_positive_id() {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let project = ui_state.get_project();
+        assert_eq!(resolve_object_id(&project, 0), None);
+        assert_eq!(resolve_object_id(&project, -1), None);
+    }
+
+    #[test]
+    fn resolve_object_id_resolves_a_manual_object_by_its_combined_index() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true));
+        project.add_object(&object_with_class(2, 1, true));
+        let ui_state = test_ui_state_with_project(project);
+        let project = ui_state.get_project();
+
+        assert_eq!(
+            resolve_object_id(&project, 1),
+            Some(evanalyzer_cfg::core_types::ObjectId(1))
+        );
+        assert_eq!(
+            resolve_object_id(&project, 2),
+            Some(evanalyzer_cfg::core_types::ObjectId(2))
+        );
+    }
+
+    #[test]
+    fn resolve_object_id_resolves_a_preview_object_past_the_end_of_the_manual_list() {
+        // This is the exact bug the audit flagged: `object_add_class`,
+        // `object_remove_class`, and `object_delete` used to index straight
+        // into the manual-only list with the *combined* index, so any id
+        // past the manual list's length silently resolved to `None` instead
+        // of the matching preview object.
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true)); // manual, combined index 0
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, 1, true)); // preview, combined index 1
+        let ui_state = test_ui_state_with_project(project);
+        let project = ui_state.get_project();
+
+        assert_eq!(
+            resolve_object_id(&project, 2),
+            Some(evanalyzer_cfg::core_types::ObjectId(2)),
+            "id 2 (combined index 1) is the preview object - must not resolve to None"
+        );
+    }
+
+    #[test]
+    fn resolve_object_id_out_of_range_past_every_list_returns_none() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true));
+        let ui_state = test_ui_state_with_project(project);
+        let project = ui_state.get_project();
+
+        assert_eq!(resolve_object_id(&project, 5), None);
+    }
+
+    // -- attach_callbacks (live AppWindow) --------------------------------------
+    //
+    // `object_list_controller.rs` was flagged (see the production-readiness
+    // audit) as one of the files where a callback-wiring bug shipped
+    // specifically because it wasn't exercised through `test_ui_windows()` -
+    // only through pure-function tests above. These tests close that gap for
+    // the four `ObjectListState` callbacks.
+
+    use crate::editor::test_support::test_ui_windows;
+    use crate::editor::viewport_controller::ViewportController;
+
+    fn make_controller_with_ui(
+        ui: slint::Weak<AppWindow>,
+        project: ProjectWithRuntime,
+    ) -> (Arc<UiState>, ObjectListController) {
+        let ui_state = test_ui_state_with_project(project);
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        (
+            ui_state.clone(),
+            ObjectListController::new(ui, ui_state, viewport_controller),
+        )
+    }
+
+    #[test]
+    fn attach_callbacks_object_selected_resolves_a_preview_object() {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true)); // manual, combined index 0
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, 1, true)); // preview, combined index 1
+
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak(), project);
+        let controller = Arc::new(controller);
+        controller.attach_callbacks();
+
+        // Selecting id 2 (the preview object) through the real Slint callback
+        // must resolve to the preview object's id, not silently select nothing.
+        ui.global::<ObjectListState>().invoke_object_selected(2);
+
+        assert_eq!(
+            ui_state.get_project().get_selected_object_id(),
+            Some(evanalyzer_cfg::core_types::ObjectId(2))
+        );
+    }
+
+    #[test]
+    fn attach_callbacks_object_add_class_targets_the_manual_object_when_preview_objects_are_also_present()
+     {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, false)); // manual, unclassified
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, 1, true)); // preview, combined index 1
+
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak(), project);
+        let controller = Arc::new(controller);
+        controller.attach_callbacks();
+        ui_state
+            .get_project_write()
+            .set_selected_object_class(ObjectClass::Valid(1));
+
+        // id 1 is the manual object even though a preview object also exists
+        // in the combined list - regression coverage that the shared
+        // resolution logic still picks the right one when both lists are
+        // non-empty at once.
+        ui.global::<ObjectListState>().invoke_object_add_class(1);
+
+        let project = ui_state.get_project();
+        let manual_object = &project.get_objects().unwrap()[0];
+        assert!(
+            manual_object.object_class.contains(&ObjectClass::Valid(1)),
+            "the manual object should have had the class applied"
+        );
+    }
+
+    #[test]
+    fn attach_callbacks_object_delete_removes_the_manual_object_when_preview_objects_are_also_present()
+     {
+        let mut project = project_with_one_image();
+        project.add_object(&object_with_class(1, 1, true)); // manual, combined index 0
+        project
+            .tmp_settings
+            .preview_objects
+            .push(object_with_class(2, 1, true)); // preview, combined index 1
+
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller_with_ui(ui.as_weak(), project);
+        let controller = Arc::new(controller);
+        controller.attach_callbacks();
+
+        ui.global::<ObjectListState>().invoke_object_delete(1);
+
+        let project = ui_state.get_project();
+        assert!(project.get_objects().unwrap().is_empty());
+        // The preview object (not touched by delete_object, which only ever
+        // operates on the manual list) must be unaffected.
+        assert_eq!(project.get_preview_objects().len(), 1);
     }
 }

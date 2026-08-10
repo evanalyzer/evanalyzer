@@ -85,6 +85,9 @@ fn create_results_schema(conn: &duckdb::Connection) {
         CREATE TABLE coloc_stats (
             image VARCHAR NOT NULL, source_class VARCHAR NOT NULL, target_class VARCHAR NOT NULL,
             n_colocalized UBIGINT, avg_targets_per_object DOUBLE, total_source_objects UBIGINT
+        );
+        CREATE TABLE images (
+            image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY
         );",
     )
     .expect("create schema");
@@ -168,6 +171,16 @@ pub(crate) fn seed_view_results_db(path: &Path) {
         3,
         5,
     );
+
+    // Mirrors what `DuckDbExporter::finalize_image` would have written for
+    // these two images.
+    for image in ["img1.tif", "img2.tif"] {
+        conn.execute(
+            "INSERT INTO images (image_name, image_rel_path) VALUES (?, ?)",
+            duckdb::params![image, image],
+        )
+        .unwrap_or_else(|e| panic!("insert image {image}: {e}"));
+    }
 }
 
 /// A scratch directory holding a seeded results DuckDB file, cleaned up on

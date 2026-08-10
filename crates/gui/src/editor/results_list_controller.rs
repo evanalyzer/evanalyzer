@@ -290,7 +290,8 @@ mod tests {
     }
 
     #[test]
-    fn extract_name_from_path_falls_back_to_the_full_stem_when_the_suffix_after_double_underscore_is_empty() {
+    fn extract_name_from_path_falls_back_to_the_full_stem_when_the_suffix_after_double_underscore_is_empty()
+     {
         let path = PathBuf::from("/a/2026-01-01__.evadb");
         assert_eq!(extract_name_from_path(&path), Some("2026-01-01__"));
     }

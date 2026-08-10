@@ -112,7 +112,7 @@ export component ResultsMatrix inherits Rectangle {
                         }
 
                         ComboBox {
-                            width: 170px;
+                            width: 195px;
                             model: ResultsState.matrix_metric_options;
                             current-value: ResultsState.matrix_metric;
                             selected(v) => {
@@ -475,8 +475,8 @@ export component ResultsMatrix inherits Rectangle {
                         y: matrix-scroll.grid-y + cell-row * (matrix-scroll.cell-h + matrix-scroll.cell-spacing);
                         width: matrix-scroll.cell-w;
                         height: matrix-scroll.cell-h;
-                        enabled: cell.has_value;
-                        mouse-cursor: cell.has_value ? pointer : default;
+                        enabled: cell.occupied;
+                        mouse-cursor: cell.occupied ? pointer : default;
                         clicked => {
                             if (ResultsState.matrix_kind == ResultsMatrixKind.plate) {
                                 ResultsState.matrix_well_clicked(cell.label);
@@ -492,7 +492,7 @@ export component ResultsMatrix inherits Rectangle {
                         Rectangle {
                             background: cell.has_value ? cell.color : Theme.panel;
                             border-width: 1px;
-                            border-color: (cell-ta.has-hover && cell.has_value) ? Theme.accent : Theme.border-soft;
+                            border-color: (cell-ta.has-hover && cell.occupied) ? Theme.accent : Theme.border-soft;
                             border-radius: 3px;
                             animate border-color { duration: 80ms; }
 
@@ -503,7 +503,7 @@ export component ResultsMatrix inherits Rectangle {
                                     font-size: 10px;
                                     font-family: Theme.font-mono;
                                     font-weight: 600;
-                                    color: cell.has_value ? white : Theme.text-faint;
+                                    color: cell.has_value ? white : (cell.occupied ? Theme.text : Theme.text-faint);
                                     horizontal-alignment: center;
                                     overflow: elide;
                                 }
@@ -513,6 +513,19 @@ export component ResultsMatrix inherits Rectangle {
                                     font-size: 10px;
                                     font-family: Theme.font-mono;
                                     color: white.with-alpha(0.85);
+                                    horizontal-alignment: center;
+                                    overflow: elide;
+                                }
+
+                                // Object/coloc count summary — always shown for an
+                                // occupied cell (real data or a zero-object
+                                // placeholder), even alongside the colored metric
+                                // value above.
+                                if cell.occupied: Text {
+                                    text: cell.count_line;
+                                    font-size: 9px;
+                                    font-family: Theme.font-mono;
+                                    color: cell.has_value ? white.with-alpha(0.7) : Theme.text-faint;
                                     horizontal-alignment: center;
                                     overflow: elide;
                                 }

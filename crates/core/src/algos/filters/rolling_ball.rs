@@ -73,6 +73,19 @@ impl ImageAlgorithm for RollingBall {
         ctx: &mut PipelineContext,
         _cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
+        // `radius` is only validated as `min = 1` at the UI/schema layer
+        // (`#[cmdsmeta(...)]` above) - a hand-edited or API-produced pipeline
+        // file could still smuggle 0/negative/NaN through to here, where
+        // `build_ball`/`sliding_paraboloid_background` divide by it (e.g.
+        // `0.5 / self.radius`), silently producing Inf/NaN baseline values
+        // instead of a clean error.
+        if !(self.radius > 0.0) {
+            return Err(InternalErrors::Generic(format!(
+                "RollingBall requires a positive radius, got {}",
+                self.radius
+            )));
+        }
+
         let meta = &ctx.image_meta;
         // Dynamically compute the maximum value scale based on the original bit depth
         // (e.g., 255.0 for 8-bit, 65535.0 for 16-bit).
@@ -741,7 +754,14 @@ impl RollingBall {
                 _ => unreachable!("invalid filter1d direction"),
             };
             Self::line_slide_parabola(
-                data, start_pixel, point_inc, length, coeff2, cache, next_point, None,
+                data,
+                start_pixel,
+                point_inc,
+                length,
+                coeff2,
+                cache,
+                next_point,
+                None,
             );
         }
     }
@@ -811,10 +831,8 @@ impl RollingBall {
                     // Time-consuming recalculation of the search limit: wait
                     // a bit after the slope was last updated.
                     let b = (0.5f32 * min_slope / coeff2) as f64;
-                    let max_search = i1 as f64
-                        + b
-                        + (b * b + ((v1 - min_value) / coeff2) as f64).sqrt()
-                        + 1.0; // numeric overflow may make this negative
+                    let max_search =
+                        i1 as f64 + b + (b * b + ((v1 - min_value) / coeff2) as f64).sqrt() + 1.0; // numeric overflow may make this negative
                     let max_search = max_search as i32;
                     if max_search < search_to && max_search > 0 {
                         search_to = max_search;
@@ -913,6 +931,30 @@ mod tests {
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
 
+    #[test]
+    fn zero_or_negative_or_nan_radius_returns_error_instead_of_dividing_by_it() {
+        let size = ImageSize {
+            width: 5,
+            height: 5,
+        };
+        for radius in [0.0, -1.0, f64::NAN] {
+            let img =
+                Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
+            let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+            let mut cache = PipelineCache::default();
+            let cmd = RollingBall {
+                radius,
+                ball_type: BallType::Ball,
+                pre_smooth: false,
+            };
+            let result = cmd.execute(&mut ctx, &mut cache);
+            assert!(
+                result.is_err(),
+                "radius={radius} should be rejected, not divided by"
+            );
+        }
+    }
+
     /// RollingBall is the one filter that mutates `ctx.image` in place (via
     /// `get_f32_gray_image_mut`) instead of the scratch+swap pattern every
     /// other filter uses. If `ctx.image`'s `Arc` is shared with something
@@ -920,8 +962,8 @@ mod tests {
     /// that in-place write must not be observed by the other holder. This is
     /// exactly the copy-on-write boundary `Arc::make_mut` provides.
     #[test]
-    fn rolling_ball_does_not_mutate_a_shared_original_image() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn rolling_ball_does_not_mutate_a_shared_original_image()
+    -> Result<(), Box<dyn std::error::Error>> {
         let width = 40;
         let height = 40;
         let mut data = vec![0.0f32; width * height];
@@ -1188,8 +1230,8 @@ mod tests {
     /// `enlargeImage` - see the comment above the "Enlarge and Subtract"
     /// step in `execute` - and is a clean ground truth for `rollBall` itself.
     #[test]
-    fn test_rolling_ball_matches_cpp_reference_border_touching_peak() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn test_rolling_ball_matches_cpp_reference_border_touching_peak()
+    -> Result<(), Box<dyn std::error::Error>> {
         let width = 20;
         let height = 15;
         let mut data = vec![100.0f32; width * height];

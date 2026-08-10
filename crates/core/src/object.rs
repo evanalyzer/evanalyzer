@@ -329,7 +329,15 @@ impl Object {
 
     pub fn circularity(&self) -> f32 {
         let perimeter = self.get_perimeter();
-        (4.0 * std::f32::consts::PI * self.area as f32) / (perimeter * perimeter)
+        // Same guard as get_roundness() below, which computes the identical
+        // formula - without it, a zero-perimeter object (only possible
+        // alongside zero area) would divide by zero and write NaN/inf into
+        // CSV export and ML training feature vectors instead of erroring.
+        if perimeter > 0.0 {
+            (4.0 * std::f32::consts::PI * self.area as f32) / (perimeter * perimeter)
+        } else {
+            0.0
+        }
     }
 
     /// Returns the object perimeter in pixels, precomputed by
@@ -512,6 +520,11 @@ impl Object {
             id: self.id.clone(),
             segmentation_class: self.segmentation_class,
             object_class: self.object_class.clone(),
+            // A freshly extracted/measured `Object` has no notion of
+            // training exclusion - that's a manual decision made later on
+            // the already-persisted `ObjectMetricSettings`, in the AI
+            // training dialog, not something re-derived here.
+            exclude_from_training: false,
             colocalized_with: self.colocalized_with.clone(),
             parent_id: self.parent_id.clone(),
             children: self.children.clone(),
@@ -1189,6 +1202,28 @@ mod tests {
         width: 1000,
         height: 1000,
     };
+
+    #[test]
+    fn circularity_of_a_zero_area_object_is_zero_not_nan() {
+        // circularity() and get_roundness() compute the identical formula,
+        // but only get_roundness() guarded perimeter == 0 - a zero-area
+        // object (the only way perimeter can be 0) would otherwise divide
+        // by zero here instead of returning a sentinel.
+        let object = Object::new(ObjectInit {
+            id: ObjectId(1),
+            bbox: [0, 0, 0, 0],
+            mask_data: BitVec::<u64, Lsb0>::new(),
+            area: 0,
+            ..Default::default()
+        });
+        assert_eq!(
+            object.get_perimeter(),
+            0.0,
+            "test assumption: zero-area implies zero perimeter"
+        );
+        assert_eq!(object.circularity(), 0.0);
+        assert!(!object.circularity().is_nan());
+    }
 
     #[test]
     fn dilated_geometry_grows_bbox_by_exactly_the_margin() {

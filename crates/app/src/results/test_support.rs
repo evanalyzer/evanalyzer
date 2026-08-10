@@ -45,6 +45,13 @@ fn create_schema(conn: &duckdb::Connection) {
         CREATE TABLE coloc_stats (
             image VARCHAR NOT NULL, source_class VARCHAR NOT NULL, target_class VARCHAR NOT NULL,
             n_colocalized UBIGINT, avg_targets_per_object DOUBLE, total_source_objects UBIGINT
+        );
+        CREATE TABLE images (
+            image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
+            status VARCHAR NOT NULL DEFAULT 'ok', error_message VARCHAR
+        );
+        CREATE TABLE classes (
+            class_id INTEGER NOT NULL PRIMARY KEY, name VARCHAR NOT NULL
         );",
     )
     .expect("create schema");
@@ -112,6 +119,26 @@ pub(crate) fn seed_results_db(path: &Path) {
         2,
         200,
     );
+
+    // Mirrors what `DuckDbExporter::finalize_image` would have written for
+    // these two images.
+    for image in ["img1.tif", "img2.tif"] {
+        conn.execute(
+            "INSERT INTO images (image_name, image_rel_path) VALUES (?, ?)",
+            duckdb::params![image, image],
+        )
+        .unwrap_or_else(|e| panic!("insert image {image}: {e}"));
+    }
+
+    // Mirrors what `DuckDbExporter::new` would have written for the project's
+    // classification registry at export time.
+    for (id, name) in [(1, "ClassA"), (2, "ClassB")] {
+        conn.execute(
+            "INSERT INTO classes (class_id, name) VALUES (?, ?)",
+            duckdb::params![id, name],
+        )
+        .unwrap_or_else(|e| panic!("insert class {name}: {e}"));
+    }
 }
 
 /// Builds a deterministic, order-decodable `object_id` for the bulk fixtures
@@ -160,7 +187,14 @@ pub(crate) fn seed_plate_results_db(path: &Path) {
                 1.0, 1.0, 1.0,
                 ?, '{}'
             )",
-            duckdb::params![image, rel_path, object_id, area_px, area_px as f64, CH0_INTENSITIES_JSON],
+            duckdb::params![
+                image,
+                rel_path,
+                object_id,
+                area_px,
+                area_px as f64,
+                CH0_INTENSITIES_JSON
+            ],
         )
         .unwrap_or_else(|e| panic!("insert object {object_id}: {e}"));
     };

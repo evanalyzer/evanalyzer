@@ -10,6 +10,19 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// Derives the display `image_name` (bare filename) from an image's relative
+/// path, falling back to the full relative path when it has no filename
+/// component. Shared by [`DuckDbExporter::export`] (writes `objects` rows)
+/// and [`DuckDbExporter::finalize_image`] (writes the `images` row) so both
+/// always agree on the same name for the same image.
+fn image_display_name(image_rel_path: &Path) -> String {
+    let rel = image_rel_path.display().to_string();
+    image_rel_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or(rel)
+}
+
 pub struct DuckDbExporter {
     // Connection is Send but !Sync; the Mutex makes the struct Sync so it can
     // satisfy the `PipelineResultExporter: Send + Sync` bound.
@@ -34,6 +47,28 @@ impl DuckDbExporter {
         let conn = Connection::open(&path).map_err(|e| InternalErrors::Io(e.to_string()))?;
         conn.execute_batch(CREATE_TABLES)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
+
+        // Snapshot the project's classification registry into the file
+        // itself, once, up front (like `images`, this assumes a fresh output
+        // file per job - see `generate_analyze_job_from_project_settings` -
+        // so `class_id`'s PRIMARY KEY never collides with a prior run's
+        // rows) — the results view resolves class names from this table
+        // rather than from the live project (which may have renamed/added/
+        // deleted classes since this file was written) or from whatever
+        // ended up baked into each object row's `object_class_name` (which
+        // only ever contains the classes actually assigned to some object,
+        // missing any class with zero matches).
+        {
+            let mut app = conn
+                .appender("classes")
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
+            for (class, name) in &class_names {
+                if let ObjectClass::Valid(n) = class {
+                    app.append_row(params![*n, name])
+                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
+                }
+            }
+        }
 
         // Tuning for sustained tile-by-tile appends:
         //
@@ -137,6 +172,37 @@ CREATE TABLE IF NOT EXISTS coloc_stats (
     n_colocalized       UBIGINT,
     avg_targets_per_object DOUBLE,
     total_source_objects   UBIGINT
+);
+
+-- One row per processed image, written once all of its tiles/planes are
+-- done (see DuckDbExporter::finalize_image) — independent of how many
+-- objects (if any) it produced, so an image with zero detections still
+-- shows up in the file instead of leaving no trace at all. Deliberately
+-- just identity, no object/coloc counts: any real count only means
+-- something scoped to a class or a coloc partner (\"how many ClassA
+-- objects\", \"how many colocalize with ClassB\"), which this table can't
+-- express and callers should instead derive live from `objects`.
+--
+-- `status`/`error_message`: an image is always finalized here even when a
+-- tile or plane failed to export (so it still shows up rather than
+-- vanishing), but that means `status` is the only way to tell a genuinely
+-- complete image from one that has silently incomplete/missing object data.
+CREATE TABLE IF NOT EXISTS images (
+    image_name      VARCHAR NOT NULL,
+    image_rel_path  VARCHAR NOT NULL PRIMARY KEY,
+    status          VARCHAR NOT NULL DEFAULT 'ok',
+    error_message   VARCHAR
+);
+
+-- Snapshot of the project's object-classification registry at the moment
+-- this file was written (see DuckDbExporter::new) — one row per registered
+-- class, regardless of whether any object was actually assigned it. The
+-- authoritative source for the results view's class names/filter, instead
+-- of the live project (which can change after the fact) or re-deriving
+-- names from `objects.object_class_name`.
+CREATE TABLE IF NOT EXISTS classes (
+    class_id  INTEGER NOT NULL PRIMARY KEY,
+    name      VARCHAR NOT NULL
 );
 ";
 
@@ -264,20 +330,41 @@ fn compute_coloc_stats(
 impl PipelineResultExporter for DuckDbExporter {
     fn export(&self, cache: &PipelineCache) -> Result<(), InternalErrors> {
         let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
+        // Objects and their colocalization stats must land together or not at
+        // all - without a transaction, a failure partway through (disk full,
+        // a DuckDB error) could leave one written with no matching rows in
+        // the other. `unchecked_transaction` (rather than `transaction`,
+        // which needs `&mut Connection`) is safe here because `conn` is
+        // already the only handle to this connection, serialized by the
+        // exporter's own Mutex - nothing else can be mid-transaction on it
+        // concurrently. Uncommitted (the `?` early-returns below) rolls back
+        // on drop.
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
         let px = &cache.image_cache.image_meta.pixel_sizes;
         let nr_of_bits = cache.image_cache.image_meta.nr_of_bits;
+        // Same implausible-bit-depth guard as image_reader.rs's read path -
+        // `nr_of_bits` should already have been rejected there before a
+        // cache carrying it could exist, but this shouldn't trust that
+        // blindly: unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
+        // shift-by-too-large, silently producing a wrong (not NaN/Inf, since
+        // this is only ever used as a multiplier below) scale factor instead
+        // of an error.
+        if !(1..=32).contains(&nr_of_bits) {
+            return Err(InternalErrors::Generic(format!(
+                "cannot export {}: implausible bit depth {nr_of_bits} (expected 1-32)",
+                cache.image_rel_path.display()
+            )));
+        }
         let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
         let px_len = (px.px_size_x * px.px_size_y).sqrt() as f64;
         let pxx = px.px_size_x as f64;
         let pxy = px.px_size_y as f64;
 
         let image_rel = cache.image_rel_path.display().to_string();
-        let image_name = cache
-            .image_rel_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| image_rel.clone());
+        let image_name = image_display_name(&cache.image_rel_path);
 
         let label = |c: &ObjectClass| self.class_label(c);
 
@@ -288,7 +375,7 @@ impl PipelineResultExporter for DuckDbExporter {
         // The Appender flushes its buffer to disk when it is dropped, giving
         // constant memory usage regardless of how many images are processed.
         {
-            let mut app = conn
+            let mut app = tx
                 .appender("objects")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
@@ -415,7 +502,7 @@ impl PipelineResultExporter for DuckDbExporter {
         // --- Colocalization statistics ---
         {
             let stats = compute_coloc_stats(cache, &label);
-            let mut app = conn
+            let mut app = tx
                 .appender("coloc_stats")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
@@ -432,6 +519,31 @@ impl PipelineResultExporter for DuckDbExporter {
             }
         }
 
+        tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Records that this image was processed, regardless of whether it
+    /// produced any objects - and regardless of whether `error` is set, so a
+    /// partially-failed image still shows up rather than vanishing entirely.
+    /// `error` is persisted into `status`/`error_message` so that partial
+    /// failure is still visible instead of looking identical to success.
+    /// Called once per image, after every `export()` call for it has returned.
+    fn finalize_image(
+        &self,
+        image_rel_path: &Path,
+        error: Option<&str>,
+    ) -> Result<(), InternalErrors> {
+        let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
+        let image_rel = image_rel_path.display().to_string();
+        let image_name = image_display_name(image_rel_path);
+        let status = if error.is_some() { "error" } else { "ok" };
+
+        conn.execute(
+            "INSERT INTO images (image_name, image_rel_path, status, error_message) VALUES (?, ?, ?, ?)",
+            params![image_name, image_rel, status, error],
+        )
+        .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
     }
 }
@@ -439,6 +551,28 @@ impl PipelineResultExporter for DuckDbExporter {
 // ---------------------------------------------------------------------------
 // DuckDbReader
 // ---------------------------------------------------------------------------
+
+/// Flat DTO for a row in the `images` table: one per processed image,
+/// regardless of whether it produced any objects.
+#[derive(Debug, Clone)]
+pub struct ImageRow {
+    pub image_name: String,
+    pub image_rel_path: String,
+    /// `"ok"` if every tile/plane for this image exported successfully,
+    /// `"error"` if it was finalized despite a failure partway through -
+    /// see `error_message` for details, and `DuckDbExporter::finalize_image`
+    /// for why a failed image still gets a row here rather than none at all.
+    pub status: String,
+    pub error_message: Option<String>,
+}
+
+/// Flat DTO for a row in the `classes` table: one per registered class in
+/// the project's classification settings at the moment the file was written.
+#[derive(Debug, Clone)]
+pub struct ClassRow {
+    pub class_id: i32,
+    pub name: String,
+}
 
 /// Flat DTO for a row in the `objects` table.
 #[derive(Debug, Clone)]
@@ -1201,6 +1335,30 @@ impl DuckDbReader {
             .map_err(err)
     }
 
+    /// Returns every registered class (from `classes`), sorted by id -
+    /// including classes with zero matching objects, and independent of
+    /// whatever the live project's classification settings look like now
+    /// (see the DDL comment on `classes`). The authoritative source for the
+    /// results view's class filter, instead of `get_class_names`'s
+    /// DISTINCT-over-`objects` scan (which only reflects classes actually
+    /// used, and only the names baked in at export time).
+    pub fn get_classes(&self) -> Result<Vec<ClassRow>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare("SELECT class_id, name FROM classes ORDER BY class_id")
+            .map_err(err)?;
+        stmt.query_map([], |row| {
+            Ok(ClassRow {
+                class_id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)
+    }
+
     /// Returns the `(min, max)` of `t_stack` present in the file, or `None`
     /// when there's nothing to step through — either every object's `t_stack` is
     /// NULL (no time axis) or they all share the same single value.
@@ -1215,17 +1373,45 @@ impl DuckDbReader {
         stack_range(&self.conn, "z_stack")
     }
 
-    /// Returns all distinct `image_name` values present in the file, sorted alphabetically.
+    /// Returns all distinct `image_name` values present in the file, sorted
+    /// alphabetically — sourced from `images`, not `objects`, so an image
+    /// that produced zero objects still appears (e.g. in the Table view's
+    /// image filter popup).
     pub fn get_image_names(&self) -> Result<Vec<String>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut stmt = self
             .conn
-            .prepare("SELECT DISTINCT image_name FROM objects ORDER BY image_name")
+            .prepare("SELECT DISTINCT image_name FROM images ORDER BY image_name")
             .map_err(err)?;
         stmt.query_map([], |row| row.get(0))
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)
+    }
+
+    /// Returns one row per processed image (from `images`), sorted by
+    /// relative path — including images that produced zero objects. Used by
+    /// the plate/well Matrix view to render every well/field-of-view slot as
+    /// occupied even when it has nothing to aggregate.
+    pub fn get_images(&self) -> Result<Vec<ImageRow>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT image_name, image_rel_path, status, error_message FROM images ORDER BY image_rel_path",
+            )
+            .map_err(err)?;
+        stmt.query_map([], |row| {
+            Ok(ImageRow {
+                image_name: row.get(0)?,
+                image_rel_path: row.get(1)?,
+                status: row.get(2)?,
+                error_message: row.get(3)?,
+            })
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)
     }
 
     /// Returns all distinct partner-class labels appearing as keys in any object's
@@ -1322,6 +1508,7 @@ mod tests {
     use crate::object::{Object, ObjectInit};
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
+    use std::collections::HashSet;
     use tempfile::TempDir;
 
     fn make_filled_object(id: u128, bbox: [u32; 4]) -> Object {
@@ -1387,6 +1574,236 @@ mod tests {
 
         let reader = DuckDbReader::open(&path).expect("reader open failed");
         (dir, reader)
+    }
+
+    #[test]
+    fn finalize_image_records_an_image_that_produced_zero_objects() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+        // export() is still called for the image's tile(s), but with no objects.
+        let cache = PipelineCache {
+            image_rel_path: "empty.tif".into(),
+            ..Default::default()
+        };
+        exporter.export(&cache).expect("export failed");
+        exporter
+            .finalize_image(Path::new("empty.tif"), None)
+            .expect("finalize_image failed");
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let images = reader.get_images().expect("get_images failed");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].image_name, "empty.tif");
+        assert_eq!(images[0].image_rel_path, "empty.tif");
+        assert_eq!(images[0].status, "ok");
+        assert_eq!(images[0].error_message, None);
+
+        // The Table view's image filter must also see it, not just get_images().
+        assert_eq!(
+            reader.get_image_names().expect("get_image_names failed"),
+            vec!["empty.tif".to_string()]
+        );
+
+        // No objects were ever written for it.
+        assert!(
+            reader
+                .get_objects(&ObjectFilter::default())
+                .expect("get_objects failed")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn finalize_image_with_an_error_is_still_recorded_but_marked_failed() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+        // A partially-failed image must still show up (see the finalize_image
+        // doc comment) - but as "error", not indistinguishable from success.
+        exporter
+            .finalize_image(Path::new("broken.tif"), Some("tile 3: decode failed"))
+            .expect("finalize_image failed");
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let images = reader.get_images().expect("get_images failed");
+        assert_eq!(images.len(), 1, "the failed image must still be recorded");
+        assert_eq!(images[0].status, "error");
+        assert_eq!(
+            images[0].error_message.as_deref(),
+            Some("tile 3: decode failed")
+        );
+    }
+
+    #[test]
+    fn export_rolls_back_object_rows_when_the_coloc_stats_write_fails() {
+        // Regression test for wrapping objects + coloc_stats in one
+        // transaction: force the second write (coloc_stats) to fail after
+        // the first (objects) would already have appended a row, and verify
+        // the object row doesn't end up partially committed on its own.
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+
+        {
+            let conn = exporter.conn.lock().expect("connection mutex poisoned");
+            conn.execute_batch("DROP TABLE coloc_stats;")
+                .expect("failed to drop coloc_stats for the test");
+        }
+
+        let mut cache = PipelineCache {
+            image_rel_path: "broken.tif".into(),
+            ..Default::default()
+        };
+        let object = make_filled_object(1, [0, 0, 9, 9]);
+        cache.object_cache.insert(object.id.clone(), object);
+
+        let result = exporter.export(&cache);
+        assert!(
+            result.is_err(),
+            "expected export to fail once coloc_stats is missing"
+        );
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let objects = reader
+            .get_objects(&ObjectFilter::default())
+            .expect("get_objects failed");
+        assert!(
+            objects.is_empty(),
+            "the object row must have been rolled back with the failed coloc_stats write, \
+             not partially committed on its own"
+        );
+    }
+
+    #[test]
+    fn get_images_lists_every_finalized_image_regardless_of_object_count() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+
+        let mut with_objects = PipelineCache {
+            image_rel_path: "has_objects.tif".into(),
+            ..Default::default()
+        };
+        let object = make_filled_object(1, [0, 0, 9, 9]);
+        with_objects.object_cache.insert(object.id.clone(), object);
+        exporter.export(&with_objects).expect("export failed");
+        exporter
+            .finalize_image(Path::new("has_objects.tif"), None)
+            .expect("finalize_image failed");
+
+        let empty = PipelineCache {
+            image_rel_path: "empty.tif".into(),
+            ..Default::default()
+        };
+        exporter.export(&empty).expect("export failed");
+        exporter
+            .finalize_image(Path::new("empty.tif"), None)
+            .expect("finalize_image failed");
+
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let mut names: Vec<String> = reader
+            .get_images()
+            .expect("get_images failed")
+            .into_iter()
+            .map(|i| i.image_rel_path)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["empty.tif".to_string(), "has_objects.tif".to_string()]
+        );
+    }
+
+    #[test]
+    fn get_classes_returns_the_full_registry_snapshot_including_unused_classes() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let mut class_names = HashMap::new();
+        class_names.insert(ObjectClass::Valid(1), "Positive".to_string());
+        class_names.insert(ObjectClass::Valid(2), "Negative".to_string());
+        // Class 5 is registered but never actually assigned to any object.
+        class_names.insert(ObjectClass::Valid(5), "Unused".to_string());
+
+        let exporter = DuckDbExporter::new(&path, class_names).expect("exporter init failed");
+        let mut cache = PipelineCache {
+            image_rel_path: "img.tif".into(),
+            ..Default::default()
+        };
+        let mut object = make_filled_object(1, [0, 0, 9, 9]);
+        object.object_class = HashSet::from([ObjectClass::Valid(1)]);
+        cache.object_cache.insert(object.id.clone(), object);
+        exporter.export(&cache).expect("export failed");
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let mut classes = reader.get_classes().expect("get_classes failed");
+        classes.sort_by_key(|c| c.class_id);
+        let pairs: Vec<(i32, String)> = classes.into_iter().map(|c| (c.class_id, c.name)).collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (1, "Positive".to_string()),
+                (2, "Negative".to_string()),
+                (5, "Unused".to_string()),
+            ],
+            "the registry must list every registered class, not just ones with objects"
+        );
+    }
+
+    /// Guards a real regression: a caller that builds a class filter value
+    /// from `get_classes()`'s bare `name` (rather than reproducing
+    /// `class_label`'s `"{name} ({id})"` shape) silently matches nothing,
+    /// since `class_case_expr()` - what `class_filter` is actually matched
+    /// against - reads the full `"{name} ({id})"` string `export()` bakes
+    /// into `object_class_name`. This exercises that exact round trip: the
+    /// registry's `(id, name)` reformatted the same way `class_label` would,
+    /// used as an `ObjectFilter::class_filter` value, must still find the
+    /// object it names.
+    #[test]
+    fn class_filter_matches_when_built_from_get_classes_in_class_labels_own_format() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let mut class_names = HashMap::new();
+        class_names.insert(ObjectClass::Valid(1), "Positive".to_string());
+
+        let exporter = DuckDbExporter::new(&path, class_names).expect("exporter init failed");
+        let mut cache = PipelineCache {
+            image_rel_path: "img.tif".into(),
+            ..Default::default()
+        };
+        let mut object = make_filled_object(1, [0, 0, 9, 9]);
+        object.object_class = HashSet::from([ObjectClass::Valid(1)]);
+        cache.object_cache.insert(object.id.clone(), object);
+        exporter.export(&cache).expect("export failed");
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let classes = reader.get_classes().expect("get_classes failed");
+        let class = classes.first().expect("one registered class");
+        let filter_value = format!("{} ({})", class.name, class.class_id);
+        assert_eq!(filter_value, "Positive (1)");
+
+        let filter = ObjectFilter {
+            class_filter: Some(vec![filter_value]),
+            ..Default::default()
+        };
+        let objects = reader.get_objects(&filter).expect("get_objects failed");
+        assert_eq!(
+            objects.len(),
+            1,
+            "a class filter built from get_classes() in class_label's own format must still match"
+        );
     }
 
     #[test]

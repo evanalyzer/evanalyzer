@@ -97,15 +97,23 @@ struct CenterGrid {
 }
 
 impl CenterGrid {
-    fn build(centers: &[(ObjectId, f64, f64)], origin_x: f64, origin_y: f64, w: u32, h: u32) -> Self {
+    fn build(
+        centers: &[(ObjectId, f64, f64)],
+        origin_x: f64,
+        origin_y: f64,
+        w: u32,
+        h: u32,
+    ) -> Self {
         let cell_size = (w as f64 * h as f64 / centers.len() as f64).sqrt().max(1.0);
         let grid_w = ((w as f64 / cell_size).ceil() as usize).max(1);
         let grid_h = ((h as f64 / cell_size).ceil() as usize).max(1);
 
         let mut cells = vec![Vec::new(); grid_w * grid_h];
         for (i, &(_, cx, cy)) in centers.iter().enumerate() {
-            let gx = (((cx - origin_x) / cell_size) as isize).clamp(0, grid_w as isize - 1) as usize;
-            let gy = (((cy - origin_y) / cell_size) as isize).clamp(0, grid_h as isize - 1) as usize;
+            let gx =
+                (((cx - origin_x) / cell_size) as isize).clamp(0, grid_w as isize - 1) as usize;
+            let gy =
+                (((cy - origin_y) / cell_size) as isize).clamp(0, grid_h as isize - 1) as usize;
             cells[gy * grid_w + gx].push(i as u32);
         }
 
@@ -120,8 +128,10 @@ impl CenterGrid {
     }
 
     fn cell_of(&self, x: f64, y: f64) -> (isize, isize) {
-        let gx = (((x - self.origin_x) / self.cell_size) as isize).clamp(0, self.grid_w as isize - 1);
-        let gy = (((y - self.origin_y) / self.cell_size) as isize).clamp(0, self.grid_h as isize - 1);
+        let gx =
+            (((x - self.origin_x) / self.cell_size) as isize).clamp(0, self.grid_w as isize - 1);
+        let gy =
+            (((y - self.origin_y) / self.cell_size) as isize).clamp(0, self.grid_h as isize - 1);
         (gx, gy)
     }
 
@@ -175,12 +185,44 @@ impl CenterGrid {
                 self.scan_cell(px_gx, px_gy, centers, x, y, &mut best_dist_sq, &mut nearest);
             } else {
                 for gx in (px_gx - r)..=(px_gx + r) {
-                    self.scan_cell(gx, px_gy - r, centers, x, y, &mut best_dist_sq, &mut nearest);
-                    self.scan_cell(gx, px_gy + r, centers, x, y, &mut best_dist_sq, &mut nearest);
+                    self.scan_cell(
+                        gx,
+                        px_gy - r,
+                        centers,
+                        x,
+                        y,
+                        &mut best_dist_sq,
+                        &mut nearest,
+                    );
+                    self.scan_cell(
+                        gx,
+                        px_gy + r,
+                        centers,
+                        x,
+                        y,
+                        &mut best_dist_sq,
+                        &mut nearest,
+                    );
                 }
                 for gy in (px_gy - r + 1)..=(px_gy + r - 1) {
-                    self.scan_cell(px_gx - r, gy, centers, x, y, &mut best_dist_sq, &mut nearest);
-                    self.scan_cell(px_gx + r, gy, centers, x, y, &mut best_dist_sq, &mut nearest);
+                    self.scan_cell(
+                        px_gx - r,
+                        gy,
+                        centers,
+                        x,
+                        y,
+                        &mut best_dist_sq,
+                        &mut nearest,
+                    );
+                    self.scan_cell(
+                        px_gx + r,
+                        gy,
+                        centers,
+                        x,
+                        y,
+                        &mut best_dist_sq,
+                        &mut nearest,
+                    );
                 }
             }
 
@@ -613,16 +655,15 @@ mod tests {
         let mut ctx = make_ctx(10, 10);
         let mut cache = PipelineCache::default();
 
-        let channel_img =
-            Image::<f32, 1, CpuAllocator>::new(
-                ImageSize {
-                    width: 10,
-                    height: 10,
-                },
-                vec![VALUE; 100],
-                CpuAllocator,
-            )
-            .unwrap();
+        let channel_img = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: 10,
+                height: 10,
+            },
+            vec![VALUE; 100],
+            CpuAllocator,
+        )
+        .unwrap();
         cache.image_cache.add_to_channel_cache(
             std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: channel_img,

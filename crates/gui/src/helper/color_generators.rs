@@ -1,5 +1,5 @@
-use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::ProjectWithRuntime;
+use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::ObjectClass;
 use slint::Color;
 use std::collections::HashSet;
@@ -67,7 +67,7 @@ mod tests {
 
     fn project_with_class(id: u32, hex_color: u32) -> ProjectWithRuntime {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(Class {
+        project.classification.classes_mut().push(Class {
             id: ObjectClass::Valid(id),
             color: hex_color,
             name: format!("class-{id}"),
@@ -80,7 +80,10 @@ mod tests {
     fn get_colors_from_class_with_no_classes_defaults_to_opaque_red() {
         let project = ProjectWithRuntime::default();
         let color = get_colors_from_class(&project, 128, &HashSet::new());
-        assert_eq!((color.red(), color.green(), color.blue(), color.alpha()), (0xFF, 0, 0, 0xFF));
+        assert_eq!(
+            (color.red(), color.green(), color.blue(), color.alpha()),
+            (0xFF, 0, 0, 0xFF)
+        );
     }
 
     #[test]
@@ -88,7 +91,10 @@ mod tests {
         let project = project_with_class(1, 0x00FF00); // pure green
         let classes = HashSet::from([ObjectClass::Valid(1)]);
         let color = get_colors_from_class(&project, 64, &classes);
-        assert_eq!((color.red(), color.green(), color.blue(), color.alpha()), (0, 0xFF, 0, 64));
+        assert_eq!(
+            (color.red(), color.green(), color.blue(), color.alpha()),
+            (0, 0xFF, 0, 64)
+        );
     }
 
     #[test]
@@ -96,18 +102,21 @@ mod tests {
         let project = ProjectWithRuntime::default(); // no classes registered
         let classes = HashSet::from([ObjectClass::Valid(99)]);
         let color = get_colors_from_class(&project, 200, &classes);
-        assert_eq!((color.red(), color.green(), color.blue(), color.alpha()), (0xFF, 0, 0, 200));
+        assert_eq!(
+            (color.red(), color.green(), color.blue(), color.alpha()),
+            (0xFF, 0, 0, 200)
+        );
     }
 
     #[test]
     fn get_colors_from_class_averages_multiple_classes() {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(Class {
+        project.classification.classes_mut().push(Class {
             id: ObjectClass::Valid(1),
             color: 0xFF0000, // red
             ..Default::default()
         });
-        project.classification.classes.push(Class {
+        project.classification.classes_mut().push(Class {
             id: ObjectClass::Valid(2),
             color: 0x0000FF, // blue
             ..Default::default()

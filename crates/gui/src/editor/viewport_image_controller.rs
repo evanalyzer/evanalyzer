@@ -136,7 +136,7 @@ impl ViewportImageController {
             let manager = Arc::clone(self);
             ui.global::<ChannelState>()
                 .on_toggle_play(move |_play_active| {
-                    manager.clone().handle_play_button_toggled();
+                    manager.handle_play_button_toggled();
                 });
         }
     }
@@ -210,7 +210,9 @@ impl ViewportImageController {
             TimerMode::SingleShot,
             std::time::Duration::from_millis(150),
             move || {
-                self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
+                self_in
+                    .viewport_controller
+                    .trigger_redraw_low_res_and_high_res();
                 self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
@@ -246,7 +248,9 @@ impl ViewportImageController {
             TimerMode::SingleShot,
             std::time::Duration::from_millis(150),
             move || {
-                self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
+                self_in
+                    .viewport_controller
+                    .trigger_redraw_low_res_and_high_res();
                 self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
@@ -278,7 +282,9 @@ impl ViewportImageController {
             TimerMode::SingleShot,
             std::time::Duration::from_millis(150),
             move || {
-                self_in.viewport_controller.trigger_redraw_low_res_and_high_res();
+                self_in
+                    .viewport_controller
+                    .trigger_redraw_low_res_and_high_res();
                 self_in.viewport_controller.trigger_image_redraw_objects();
             },
         );
@@ -558,55 +564,59 @@ impl ViewportImageController {
         self.viewport_controller.trigger_new_series_redraw();
     }
 
-    pub fn handle_play_button_toggled(self: Arc<Self>) {
-        let ui_weak = self.ui.clone();
-        let ui = ui_weak.upgrade().expect("Failed to upgrade UI handle");
+    /// Starts or stops timer-driven T-stack playback based on the Slint side's
+    /// `is_play_active` state, which is already flipped by the time this runs.
+    ///
+    /// This must be the *only* place `on_toggle_play` is ever registered
+    /// (see `attach_callbacks`) - it used to re-register a fresh
+    /// `on_toggle_play` handler on every call instead of just running this
+    /// logic directly, which replaced the handler installed by
+    /// `attach_callbacks` before it had done anything, so the very first
+    /// Play click of every session was silently swallowed and only took
+    /// effect on the second click.
+    pub fn handle_play_button_toggled(self: &Arc<Self>) {
+        let Some(ui) = self.ui.upgrade() else {
+            warn!("UI not available for play button toggle");
+            return;
+        };
+        let state = ui.global::<ChannelState>();
+        let is_playing = state.get_is_play_active();
 
-        ui.global::<ChannelState>()
-            .on_toggle_play(move |_play_active| {
-                let Some(ui) = ui_weak.upgrade() else {
-                    warn!("UI not available for play button toggle");
-                    return;
-                };
-                let state = ui.global::<ChannelState>();
-                let is_playing = state.get_is_play_active();
+        // Always stop the old timer first to clear previous intervals
+        self.playback_timer.stop();
 
-                // Always stop the old timer first to clear previous intervals
-                self.playback_timer.stop();
+        if is_playing {
+            let inner_handle = self.ui.clone();
 
-                if is_playing {
-                    let inner_handle = ui_weak.clone();
+            // Get speed from UI (e.g., 20.0)
+            let hz = state.get_play_back_speed_hz() as f32;
+            let millis = if hz > 0.0 {
+                (1000.0 / hz) as u64
+            } else {
+                1000 // Default to 1Hz if something is wrong
+            };
 
-                    // Get speed from UI (e.g., 20.0)
-                    let hz = state.get_play_back_speed_hz() as f32;
-                    let millis = if hz > 0.0 {
-                        (1000.0 / hz) as u64
-                    } else {
-                        1000 // Default to 1Hz if something is wrong
-                    };
+            self.playback_timer.start(
+                TimerMode::Repeated,
+                std::time::Duration::from_millis(millis),
+                move || {
+                    if let Some(ui_tick) = inner_handle.upgrade() {
+                        let viewport = ui_tick.global::<ViewportSlintState>();
+                        if viewport.get_high_res_ready() {}
+                        let state = ui_tick.global::<ChannelState>();
+                        let meta = ui_tick.global::<ImageMetaData>();
 
-                    self.playback_timer.start(
-                        TimerMode::Repeated,
-                        std::time::Duration::from_millis(millis),
-                        move || {
-                            if let Some(ui_tick) = inner_handle.upgrade() {
-                                let viewport = ui_tick.global::<ViewportSlintState>();
-                                if viewport.get_high_res_ready() {}
-                                let state = ui_tick.global::<ChannelState>();
-                                let meta = ui_tick.global::<ImageMetaData>();
+                        let current = state.get_selected_t_stack();
+                        let total = meta.get_nr_t_stacks();
 
-                                let current = state.get_selected_t_stack();
-                                let total = meta.get_nr_t_stacks();
-
-                                if total > 0 {
-                                    state.set_selected_t_stack((current + 1) % total);
-                                    state.invoke_trigger_channel_state_changed();
-                                }
-                            }
-                        },
-                    );
-                }
-            });
+                        if total > 0 {
+                            state.set_selected_t_stack((current + 1) % total);
+                            state.invoke_trigger_channel_state_changed();
+                        }
+                    }
+                },
+            );
+        }
     }
 }
 
@@ -650,9 +660,15 @@ mod tests {
     fn update_viewport_size_stores_the_given_dimensions() {
         let (_, controller) = make_controller();
 
-        controller.update_viewport_size_in_viewport_state(800.0, 600.0).unwrap();
+        controller
+            .update_viewport_size_in_viewport_state(800.0, 600.0)
+            .unwrap();
 
-        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        let state = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
         assert_eq!(state.viewport_width, 800.0);
         assert_eq!(state.viewport_height, 600.0);
     }
@@ -667,7 +683,11 @@ mod tests {
             .update_viewport_zoom_in_viewport_state(2.5, 10.0, -5.0)
             .unwrap();
 
-        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        let state = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
         assert_eq!(state.zoom, 2.5);
         assert_eq!(state.offset_x, 10.0);
         assert_eq!(state.offset_y, -5.0);
@@ -686,7 +706,11 @@ mod tests {
             .update_viewport_position_in_viewport_state(42.0, -7.0)
             .unwrap();
 
-        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        let state = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
         assert_eq!(state.offset_x, 42.0);
         assert_eq!(state.offset_y, -7.0);
         assert_eq!(state.zoom, 3.0, "position update must not touch zoom");
@@ -700,7 +724,11 @@ mod tests {
 
         controller.update_mouse_position_in_viewport_state(123.0, 456.0);
 
-        let state = controller.viewport_controller.viewport_state.read().unwrap();
+        let state = controller
+            .viewport_controller
+            .viewport_state
+            .read()
+            .unwrap();
         assert_eq!(state.mouse_pos_x, 123.0);
         assert_eq!(state.mouse_pos_y, 456.0);
     }
@@ -738,13 +766,41 @@ mod tests {
     #[test]
     fn update_channel_options_maps_every_projection_kind_to_its_z_stack_handling() {
         let cases = [
-            (IntensityProjection::SingleStack, ZStackHandling::SingleStack, true),
-            (IntensityProjection::AllStacks, ZStackHandling::AllStacks, true),
-            (IntensityProjection::Max, ZStackHandling::MaxIntensity, false),
-            (IntensityProjection::Min, ZStackHandling::MinIntensity, false),
-            (IntensityProjection::Avg, ZStackHandling::AvgIntensity, false),
-            (IntensityProjection::Sum, ZStackHandling::SumIntensity, false),
-            (IntensityProjection::Middle, ZStackHandling::TakeTheMiddle, false),
+            (
+                IntensityProjection::SingleStack,
+                ZStackHandling::SingleStack,
+                true,
+            ),
+            (
+                IntensityProjection::AllStacks,
+                ZStackHandling::AllStacks,
+                true,
+            ),
+            (
+                IntensityProjection::Max,
+                ZStackHandling::MaxIntensity,
+                false,
+            ),
+            (
+                IntensityProjection::Min,
+                ZStackHandling::MinIntensity,
+                false,
+            ),
+            (
+                IntensityProjection::Avg,
+                ZStackHandling::AvgIntensity,
+                false,
+            ),
+            (
+                IntensityProjection::Sum,
+                ZStackHandling::SumIntensity,
+                false,
+            ),
+            (
+                IntensityProjection::Middle,
+                ZStackHandling::TakeTheMiddle,
+                false,
+            ),
         ];
 
         for (projection, expected_handling, expects_range) in cases {
@@ -823,5 +879,81 @@ mod tests {
         let (_, controller) = make_controller();
         controller.sync_pixel_info_throttled();
         controller.sync_pixel_info_throttled();
+    }
+
+    // -- attach_callbacks (live AppWindow) --------------------------------------
+
+    use crate::editor::test_support::test_ui_windows;
+
+    fn make_controller_with_ui(
+        ui: slint::Weak<AppWindow>,
+    ) -> (Arc<UiState>, Arc<ViewportImageController>) {
+        let ui_state = test_ui_state_with_project(project_with_one_image());
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let viewport_cache = Arc::new(ViewportCache::new(ui_state.clone()));
+        let histogram_controller = Arc::new(HistogramController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_meta_controller = Arc::new(ImageMetaController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let controller = Arc::new(ViewportImageController::new(
+            ui,
+            ui_state.clone(),
+            viewport_controller,
+            viewport_cache,
+            histogram_controller,
+            image_meta_controller,
+        ));
+        (ui_state, controller)
+    }
+
+    #[test]
+    fn attach_callbacks_first_play_toggle_starts_the_timer_immediately() {
+        // Regression test: `handle_play_button_toggled` used to re-register a
+        // fresh `on_toggle_play` handler on every call instead of running its
+        // playback logic directly - which replaced the handler
+        // `attach_callbacks` had just installed before it ever started a
+        // timer, so the *first* Play click of every session silently did
+        // nothing (it took a second click to actually start playback).
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+
+        let channel_state = ui.global::<ChannelState>();
+        ui.global::<ImageMetaData>().set_nr_t_stacks(5);
+        // Mirrors image_control_panel.slint: the property is flipped before
+        // the callback fires.
+        channel_state.set_is_play_active(true);
+        channel_state.invoke_toggle_play(true);
+
+        assert!(
+            controller.playback_timer.running(),
+            "the first Play toggle must start the timer immediately"
+        );
+    }
+
+    #[test]
+    fn attach_callbacks_toggling_play_off_stops_the_timer() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller_with_ui(ui.as_weak());
+        controller.attach_callbacks();
+
+        let channel_state = ui.global::<ChannelState>();
+        ui.global::<ImageMetaData>().set_nr_t_stacks(5);
+        channel_state.set_is_play_active(true);
+        channel_state.invoke_toggle_play(true);
+        assert!(controller.playback_timer.running());
+
+        channel_state.set_is_play_active(false);
+        channel_state.invoke_toggle_play(false);
+        assert!(
+            !controller.playback_timer.running(),
+            "toggling play off must stop the timer"
+        );
     }
 }

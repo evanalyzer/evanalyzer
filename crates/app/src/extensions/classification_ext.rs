@@ -45,44 +45,49 @@ pub trait ClassificationExt {
 
 impl ClassificationExt for ClassificationSettings {
     fn add_class(&mut self, mut new_class: Class) -> ObjectClass {
-        new_class.id = next_id(&self.classes);
+        new_class.id = next_id(&self.classes());
         let id = new_class.id;
-        self.classes.push(new_class);
+        self.classes_mut().push(new_class);
         id
     }
 
     fn update_class(&mut self, new_class: Class) -> Result<(), InternalErrors> {
         let index = self
-            .classes
+            .classes()
             .iter()
             .position(|c| c.id == new_class.id)
             .ok_or_else(|| InternalErrors::Generic("Class does not exist!".into()))?;
-        self.classes[index] = new_class;
+        self.classes_mut()[index] = new_class;
         Ok(())
     }
 
     fn get_class(&self, class_id: ObjectClass) -> Option<&Class> {
-        self.classes.iter().find(|c| c.id == class_id)
+        self.classes().iter().find(|c| c.id == class_id)
     }
 
     fn move_up(&mut self, class_id: ObjectClass) {
-        if let Some(i) = self.classes.iter().position(|c| c.id == class_id) {
-            if i > 0 {
-                self.classes.swap(i, i - 1);
+        if let Some(i) = self.classes().iter().position(|c| c.id == class_id) {
+            if i > 1 {
+                // Background class must always be on top, therefore 1 and not 0
+                self.classes_mut().swap(i, i - 1);
             }
         }
     }
 
     fn move_down(&mut self, class_id: ObjectClass) {
-        if let Some(i) = self.classes.iter().position(|c| c.id == class_id) {
-            if i < self.classes.len() - 1 {
-                self.classes.swap(i, i + 1);
+        if let Some(i) = self.classes().iter().position(|c| c.id == class_id) {
+            if i < self.classes().len() - 1 {
+                self.classes_mut().swap(i, i + 1);
             }
         }
     }
 
     fn delete_class(&mut self, class_id: ObjectClass) {
-        self.classes.retain(|c| c.id != class_id);
+        if class_id == ObjectClass::BACKGROUND {
+            // Background class is not allowed to be deleted
+            return;
+        }
+        self.classes_mut().retain(|c| c.id != class_id);
     }
 }
 
@@ -104,11 +109,15 @@ mod tests {
     use super::*;
 
     fn class(id: u32, name: &str) -> Class {
-        Class { id: ObjectClass::Valid(id), name: name.into(), ..Default::default() }
+        Class {
+            id: ObjectClass::Valid(id),
+            name: name.into(),
+            ..Default::default()
+        }
     }
 
     fn settings(classes: Vec<Class>) -> ClassificationSettings {
-        ClassificationSettings { classes }
+        ClassificationSettings::new_from_existing(classes)
     }
 
     // ---- add_class / next_id ----
@@ -118,8 +127,9 @@ mod tests {
         let mut s = settings(vec![]);
         let id = s.add_class(class(0, "Nuclei"));
         assert_eq!(id, ObjectClass::Valid(1));
-        assert_eq!(s.classes.len(), 1);
-        assert_eq!(s.classes[0].id, ObjectClass::Valid(1));
+        // classes()[0] is always the auto-prepended Background class.
+        assert_eq!(s.classes().len(), 2);
+        assert_eq!(s.classes()[1].id, ObjectClass::Valid(1));
     }
 
     #[test]
@@ -137,7 +147,11 @@ mod tests {
         s.add_class(class(0, "B")); // -> id 2
         s.delete_class(a_id); // delete the non-max id
         let c_id = s.add_class(class(0, "C"));
-        assert_eq!(c_id, ObjectClass::Valid(3), "max() is still 2 (B), so the next id must be 3, not the just-freed 1");
+        assert_eq!(
+            c_id,
+            ObjectClass::Valid(3),
+            "max() is still 2 (B), so the next id must be 3, not the just-freed 1"
+        );
     }
 
     #[test]
@@ -153,7 +167,11 @@ mod tests {
         let b_id = s.add_class(class(0, "B")); // -> id 2 (currently the max)
         s.delete_class(b_id);
         let c_id = s.add_class(class(0, "C"));
-        assert_eq!(c_id, ObjectClass::Valid(2), "deleting the current max id makes it immediately reusable");
+        assert_eq!(
+            c_id,
+            ObjectClass::Valid(2),
+            "deleting the current max id makes it immediately reusable"
+        );
     }
 
     // ---- update_class ----
@@ -161,9 +179,14 @@ mod tests {
     #[test]
     fn update_class_replaces_the_class_with_a_matching_id() {
         let mut s = settings(vec![class(1, "Old")]);
-        let updated = Class { id: ObjectClass::Valid(1), name: "New".into(), ..Default::default() };
+        let updated = Class {
+            id: ObjectClass::Valid(1),
+            name: "New".into(),
+            ..Default::default()
+        };
         s.update_class(updated).unwrap();
-        assert_eq!(s.classes[0].name, "New");
+        // classes()[0] is the auto-prepended Background class.
+        assert_eq!(s.classes()[1].name, "New");
     }
 
     #[test]
@@ -171,9 +194,9 @@ mod tests {
         let mut s = settings(vec![class(1, "A")]);
         let err = s.update_class(class(2, "B")).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
-        // The existing class must be untouched.
-        assert_eq!(s.classes.len(), 1);
-        assert_eq!(s.classes[0].name, "A");
+        // The existing class must be untouched. classes()[0] is Background.
+        assert_eq!(s.classes().len(), 2);
+        assert_eq!(s.classes()[1].name, "A");
     }
 
     // ---- get_class ----
@@ -181,7 +204,10 @@ mod tests {
     #[test]
     fn get_class_finds_a_class_by_id() {
         let s = settings(vec![class(1, "A"), class(2, "B")]);
-        assert_eq!(s.get_class(ObjectClass::Valid(2)).map(|c| c.name.as_str()), Some("B"));
+        assert_eq!(
+            s.get_class(ObjectClass::Valid(2)).map(|c| c.name.as_str()),
+            Some("B")
+        );
     }
 
     #[test]
@@ -192,56 +218,96 @@ mod tests {
 
     // ---- move_up / move_down ----
 
+    // classes()[0] is always the auto-prepended Background class - `move_up`'s
+    // `i > 1` guard (not `i > 0`) keeps it pinned there, so index 1 is the
+    // effective "first" position a real class can reach.
+
     #[test]
     fn move_up_swaps_with_the_previous_class() {
         let mut s = settings(vec![class(1, "A"), class(2, "B"), class(3, "C")]);
         s.move_up(ObjectClass::Valid(2));
-        assert_eq!(s.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["B", "A", "C"]);
+        assert_eq!(
+            s.classes()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Background", "B", "A", "C"]
+        );
     }
 
     #[test]
     fn move_up_is_a_noop_when_already_first() {
         let mut s = settings(vec![class(1, "A"), class(2, "B")]);
         s.move_up(ObjectClass::Valid(1));
-        assert_eq!(s.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["A", "B"]);
+        assert_eq!(
+            s.classes()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Background", "A", "B"]
+        );
     }
 
     #[test]
     fn move_up_is_a_noop_for_an_unknown_id() {
         let mut s = settings(vec![class(1, "A"), class(2, "B")]);
         s.move_up(ObjectClass::Valid(99));
-        assert_eq!(s.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["A", "B"]);
+        assert_eq!(
+            s.classes()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Background", "A", "B"]
+        );
     }
 
     #[test]
     fn move_down_swaps_with_the_next_class() {
         let mut s = settings(vec![class(1, "A"), class(2, "B"), class(3, "C")]);
         s.move_down(ObjectClass::Valid(2));
-        assert_eq!(s.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["A", "C", "B"]);
+        assert_eq!(
+            s.classes()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Background", "A", "C", "B"]
+        );
     }
 
     #[test]
     fn move_down_is_a_noop_when_already_last() {
         let mut s = settings(vec![class(1, "A"), class(2, "B")]);
         s.move_down(ObjectClass::Valid(2));
-        assert_eq!(s.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["A", "B"]);
+        assert_eq!(
+            s.classes()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Background", "A", "B"]
+        );
     }
 
     #[test]
     fn move_down_is_a_noop_for_an_unknown_id() {
         let mut s = settings(vec![class(1, "A"), class(2, "B")]);
         s.move_down(ObjectClass::Valid(99));
-        assert_eq!(s.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["A", "B"]);
+        assert_eq!(
+            s.classes()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Background", "A", "B"]
+        );
     }
 
     #[test]
     fn move_down_on_a_single_class_list_does_not_underflow() {
-        // Regression guard for `i < self.classes.len() - 1`: with one class,
-        // `i` is 0 and `len() - 1` is also 0, so the swap must not run (and
-        // must not panic via `usize` underflow on an empty list either).
+        // Regression guard for `i < self.classes().len() - 1`: with Background
+        // + one class, `i` is 1 (A) and `len() - 1` is also 1, so the swap
+        // must not run (and must not panic via `usize` underflow either).
         let mut s = settings(vec![class(1, "A")]);
         s.move_down(ObjectClass::Valid(1));
-        assert_eq!(s.classes.len(), 1);
+        assert_eq!(s.classes().len(), 2);
     }
 
     // ---- delete_class ----
@@ -250,13 +316,19 @@ mod tests {
     fn delete_class_removes_the_matching_class() {
         let mut s = settings(vec![class(1, "A"), class(2, "B")]);
         s.delete_class(ObjectClass::Valid(1));
-        assert_eq!(s.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), vec!["B"]);
+        assert_eq!(
+            s.classes()
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Background", "B"]
+        );
     }
 
     #[test]
     fn delete_class_is_a_noop_for_an_unknown_id() {
         let mut s = settings(vec![class(1, "A")]);
         s.delete_class(ObjectClass::Valid(99));
-        assert_eq!(s.classes.len(), 1);
+        assert_eq!(s.classes().len(), 2);
     }
 }

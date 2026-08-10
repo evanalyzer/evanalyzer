@@ -321,7 +321,10 @@ mod tests {
     /// Erode/Open/Close arms - `test_label_morphology` only covers Dilate,
     /// leaving the rest of that match untested.
     fn label_fixture() -> PipelineContext {
-        let size = ImageSize { width: 5, height: 5 };
+        let size = ImageSize {
+            width: 5,
+            height: 5,
+        };
         let mut img = Image::<u32, 1, CpuAllocator>::from_size_val(size, 0, CpuAllocator).unwrap();
         img.set_pixel(2, 2, 0, 7).unwrap();
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
@@ -330,7 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn test_label_morphology_erode_shrinks_a_single_pixel_label_to_background() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_label_morphology_erode_shrinks_a_single_pixel_label_to_background()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut ctx = label_fixture();
         let cmd = MorphologicalCommand {
             op: MorphOps::Erode,
@@ -347,7 +351,8 @@ mod tests {
     }
 
     #[test]
-    fn test_label_morphology_open_removes_the_single_pixel_label() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_label_morphology_open_removes_the_single_pixel_label()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut ctx = label_fixture();
         let cmd = MorphologicalCommand {
             op: MorphOps::Open,
@@ -364,7 +369,8 @@ mod tests {
     }
 
     #[test]
-    fn test_label_morphology_close_preserves_and_slightly_grows_the_label() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_label_morphology_close_preserves_and_slightly_grows_the_label()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut ctx = label_fixture();
         let cmd = MorphologicalCommand {
             op: MorphOps::Close,

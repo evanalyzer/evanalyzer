@@ -480,7 +480,7 @@ fn colocalization_settings_convert_all_fields() {
         filter_classes: vec![ObjectClass::Valid(3)],
         class_for_overlapping_areas: ObjectClass::Valid(9),
         exclude_classes: vec![ObjectClass::Valid(4)],
-        allow_multi_object_coloc: true,
+        multiplicity: ClassificationColocObjectsColocMultiplicitySettings::ManyToMany,
         size_unit: SizeUnits::Pixels,
         min_coloc_area: 12.5,
     };
@@ -492,7 +492,7 @@ fn colocalization_settings_convert_all_fields() {
     assert_eq!(result.filter_classes, vec![ObjectClass::Valid(3)]);
     assert_eq!(result.class_for_overlapping_areas, ObjectClass::Valid(9));
     assert_eq!(result.exclude_classes, vec![ObjectClass::Valid(4)]);
-    assert!(result.allow_multi_object_coloc);
+    assert_eq!(result.multiplicity, ColocMultiplicity::ManyToMany);
     assert_eq!(result.size_unit, SizeUnits::Pixels);
     assert_eq!(result.min_coloc_area, 12.5);
 }
@@ -1040,7 +1040,10 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
             PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
             "Blur",
         ),
-        (PipelineCommand::Hessian(HessianSettings::default()), "Hessian"),
+        (
+            PipelineCommand::Hessian(HessianSettings::default()),
+            "Hessian",
+        ),
         (
             PipelineCommand::ImageCache(ImageCacheSettings::default()),
             "ImageCache",

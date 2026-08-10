@@ -112,7 +112,11 @@ impl ImagesListController {
     /// paints `bbox_px` (`[xmin, ymin, xmax, ymax]`, in image pixels) as a
     /// highlight box in the viewport. Used when a object row is selected in the
     /// results table so the user can locate the object in its source image.
-    pub fn open_image_and_highlight_object(self: &Arc<Self>, rel_path: &PathBuf, bbox_px: [u32; 4]) {
+    pub fn open_image_and_highlight_object(
+        self: &Arc<Self>,
+        rel_path: &PathBuf,
+        bbox_px: [u32; 4],
+    ) {
         self.open_new_image_from_rel_path(rel_path);
 
         // `open_new_image` clears any previous highlight, so set ours afterwards.
@@ -126,7 +130,8 @@ impl ImagesListController {
             active: true,
         };
         if let Some(ui) = self.ui.upgrade() {
-            ui.global::<ViewportObjectState>().set_object_highlight(highlight);
+            ui.global::<ViewportObjectState>()
+                .set_object_highlight(highlight);
         }
     }
 
@@ -404,33 +409,7 @@ impl ImagesListController {
             .to_lowercase();
 
         let images_guard = &state.get_project().images.list;
-
-        let slint_items: Vec<ImageItemData> = images_guard
-            .values()
-            .filter(|entry| {
-                if filter_text.is_empty() {
-                    return true;
-                }
-                entry
-                    .rel_path
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains(&filter_text)
-            })
-            .map(|entry| ImageItemData {
-                name: entry
-                    .rel_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-                    .into(),
-                path: entry.rel_path.to_string_lossy().to_string().into(),
-                image_dimension: "".into(),
-                image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
-                // TODO: /*!entry.objects.lock().expect("poisoned").is_empty(),*/
-                has_annotations: false,
-            })
-            .collect();
+        let slint_items = build_image_list_items(images_guard, &filter_text);
 
         // The final assignment goes into the event loop
         slint::invoke_from_event_loop(move || {
@@ -483,6 +462,47 @@ impl ImagesListController {
     }
 }
 
+/// Builds the Slint-facing row list for `sync_image_list_to_slint`: applies
+/// the (already-lowercased) filter text against `rel_path`, then maps each
+/// surviving entry to an `ImageItemData`. Pulled out as a pure function so
+/// it can be tested directly - unlike the rest of `sync_image_list_to_slint`,
+/// this doesn't touch Slint's event loop, which the headless
+/// `init_no_event_loop()` testing platform (see `test_ui_windows`) never
+/// actually drains.
+fn build_image_list_items(
+    images: &indexmap::IndexMap<PathBuf, evanalyzer_cfg::settings::images_settings::ImageEntry>,
+    filter_text_lowercase: &str,
+) -> Vec<ImageItemData> {
+    images
+        .values()
+        .filter(|entry| {
+            if filter_text_lowercase.is_empty() {
+                return true;
+            }
+            entry
+                .rel_path
+                .to_string_lossy()
+                .to_lowercase()
+                .contains(filter_text_lowercase)
+        })
+        .map(|entry| ImageItemData {
+            name: entry
+                .rel_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .into(),
+            path: entry.rel_path.to_string_lossy().to_string().into(),
+            image_dimension: "".into(),
+            image_size: format!("{}", format_bytes(entry.file_size as f64)).into(),
+            has_annotations: entry
+                .series
+                .values()
+                .any(|series| !series.objects.is_empty()),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,7 +546,11 @@ mod tests {
         controller.update_image_filter_text_in_project("Nuclei");
 
         assert_eq!(
-            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            *controller
+                .image_controller_state
+                .image_filter_text
+                .read()
+                .unwrap(),
             "Nuclei"
         );
     }
@@ -539,7 +563,11 @@ mod tests {
         controller.update_image_filter_text_in_project("second");
 
         assert_eq!(
-            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            *controller
+                .image_controller_state
+                .image_filter_text
+                .read()
+                .unwrap(),
             "second"
         );
     }
@@ -571,12 +599,18 @@ mod tests {
         controller.open_new_image(&image_path);
 
         let project = controller.app_state.get_project();
-        assert_eq!(project.images.root, Some(PathBuf::from("/some/other/place")));
+        assert_eq!(
+            project.images.root,
+            Some(PathBuf::from("/some/other/place"))
+        );
     }
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------
 
     use crate::editor::test_support::test_ui_windows;
+    use evanalyzer_cfg::settings::images_settings::{ImageEntry, SeriesSettings};
+    use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
+    use std::collections::BTreeMap;
 
     fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> ImagesListController {
         let ui_state = test_ui_state();
@@ -612,10 +646,15 @@ mod tests {
         let controller = Arc::new(make_controller_with_ui(ui.as_weak()));
         controller.attach_callbacks();
 
-        ui.global::<ImagesListState>().invoke_image_filter_text_changed("Nuclei".into());
+        ui.global::<ImagesListState>()
+            .invoke_image_filter_text_changed("Nuclei".into());
 
         assert_eq!(
-            *controller.image_controller_state.image_filter_text.read().unwrap(),
+            *controller
+                .image_controller_state
+                .image_filter_text
+                .read()
+                .unwrap(),
             "Nuclei"
         );
     }
@@ -638,10 +677,70 @@ mod tests {
         // `None` and `open_new_image_from_rel_path` is a no-op - this is
         // exercising that lookup-miss branch through the real callback
         // wiring, not asserting an image actually opened.
-        assert!(controller
-            .app_state
-            .get_project()
-            .get_current_image_path_cloned()
-            .is_none());
+        assert!(
+            controller
+                .app_state
+                .get_project()
+                .get_current_image_path_cloned()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sync_image_list_to_slint_reports_has_annotations_only_for_images_with_objects() {
+        // Regression test: `has_annotations` used to be hardcoded `false`
+        // for every image (the real check was commented out as a TODO),
+        // permanently disabling this indicator. Exercises `sync_image_list_to_slint`'s
+        // item-building logic through `build_image_list_items` directly rather than
+        // reading it back off the live Slint model: the headless test platform (see
+        // `test_ui_windows`) uses `init_no_event_loop()`, under which
+        // `slint::invoke_from_event_loop` - the mechanism `sync_image_list_to_slint`
+        // uses for its actual UI write - has no event loop to run on and always
+        // returns `Err(NoEventLoopProvider)` without invoking the closure, so nothing
+        // would ever land in `images_list` to read back.
+        let controller = make_controller_with_ui(slint::Weak::default());
+
+        {
+            let mut project = controller.app_state.get_project_write();
+
+            let mut series_with_objects = BTreeMap::new();
+            series_with_objects.insert(
+                0,
+                SeriesSettings {
+                    objects: vec![ObjectMetricSettings::default()],
+                    ..Default::default()
+                },
+            );
+            project.images.list.insert(
+                PathBuf::from("with_objects.tif"),
+                ImageEntry {
+                    rel_path: PathBuf::from("with_objects.tif"),
+                    file_size: 0,
+                    selected_series: 0,
+                    series: series_with_objects,
+                },
+            );
+
+            project.images.list.insert(
+                PathBuf::from("empty.tif"),
+                ImageEntry {
+                    rel_path: PathBuf::from("empty.tif"),
+                    file_size: 0,
+                    selected_series: 0,
+                    series: BTreeMap::from([(0, SeriesSettings::default())]),
+                },
+            );
+        }
+
+        let images_list =
+            build_image_list_items(&controller.app_state.get_project().images.list, "");
+
+        let mut has_annotations_by_path = std::collections::HashMap::new();
+        for item in &images_list {
+            has_annotations_by_path.insert(item.path.to_string(), item.has_annotations);
+        }
+
+        assert_eq!(has_annotations_by_path.get("with_objects.tif"), Some(&true));
+        assert_eq!(has_annotations_by_path.get("empty.tif"), Some(&false));
     }
 }

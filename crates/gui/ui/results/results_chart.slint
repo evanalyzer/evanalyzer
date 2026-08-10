@@ -41,6 +41,15 @@ export component ResultsChart inherits Rectangle {
     // shared global binding would.
     property <string> tooltip_text: "";
 
+    // Every settings-strip control below calls this on change instead of
+    // requiring an explicit "Plot" button click - clears any tooltip left
+    // over from the previous render (its data-point positions are stale the
+    // instant the underlying chart changes) and re-renders.
+    function replot() {
+        root.tooltip_text = "";
+        ResultsState.chart_render_requested();
+    }
+
     VerticalLayout {
         spacing: 0px;
 
@@ -68,7 +77,7 @@ export component ResultsChart inherits Rectangle {
                         width: 170px;
                         model: ResultsState.chart_plottable_columns;
                         current-value: ResultsState.chart_hist_column;
-                        selected(v) => { ResultsState.chart_hist_column = v; }
+                        selected(v) => { ResultsState.chart_hist_column = v; root.replot(); }
                     }
 
                     Text {
@@ -84,14 +93,14 @@ export component ResultsChart inherits Rectangle {
                         minimum: 2;
                         maximum: 200;
                         value: ResultsState.chart_bucket_count;
-                        edited(v) => { ResultsState.chart_bucket_count = v; }
+                        edited(v) => { ResultsState.chart_bucket_count = v; root.replot(); }
                     }
 
                     ChartKindButton {
                         width: 85px;
                         label: "Log scale";
                         selected: ResultsState.chart_log_scale;
-                        clicked => { ResultsState.chart_log_scale = !ResultsState.chart_log_scale; }
+                        clicked => { ResultsState.chart_log_scale = !ResultsState.chart_log_scale; root.replot(); }
                     }
 
                     Text {
@@ -108,6 +117,7 @@ export component ResultsChart inherits Rectangle {
                         current-value: ResultsState.chart_color_by == "class" ? "Class" : (ResultsState.chart_color_by == "colocalized" ? "Colocalized" : "None");
                         selected(v) => {
                             ResultsState.chart_color_by = v == "Class" ? "class" : (v == "Colocalized" ? "colocalized" : "");
+                            root.replot();
                         }
                     }
                 }
@@ -127,7 +137,7 @@ export component ResultsChart inherits Rectangle {
                         width: 150px;
                         model: ResultsState.chart_plottable_columns;
                         current-value: ResultsState.chart_scatter_x;
-                        selected(v) => { ResultsState.chart_scatter_x = v; }
+                        selected(v) => { ResultsState.chart_scatter_x = v; root.replot(); }
                     }
 
                     Text {
@@ -142,7 +152,7 @@ export component ResultsChart inherits Rectangle {
                         width: 150px;
                         model: ResultsState.chart_plottable_columns;
                         current-value: ResultsState.chart_scatter_y;
-                        selected(v) => { ResultsState.chart_scatter_y = v; }
+                        selected(v) => { ResultsState.chart_scatter_y = v; root.replot(); }
                     }
 
                     Text {
@@ -159,6 +169,7 @@ export component ResultsChart inherits Rectangle {
                         current-value: ResultsState.chart_color_by == "class" ? "Class" : (ResultsState.chart_color_by == "colocalized" ? "Colocalized" : "None");
                         selected(v) => {
                             ResultsState.chart_color_by = v == "Class" ? "class" : (v == "Colocalized" ? "colocalized" : "");
+                            root.replot();
                         }
                     }
                 }
@@ -178,7 +189,7 @@ export component ResultsChart inherits Rectangle {
                         width: 170px;
                         model: ResultsState.chart_heatmap_metric_options;
                         current-value: ResultsState.chart_heatmap_metric;
-                        selected(v) => { ResultsState.chart_heatmap_metric = v; }
+                        selected(v) => { ResultsState.chart_heatmap_metric = v; root.replot(); }
                     }
 
                     Text {
@@ -194,7 +205,7 @@ export component ResultsChart inherits Rectangle {
                         minimum: 1;
                         maximum: 10000;
                         value: ResultsState.chart_cell_size_px;
-                        edited(v) => { ResultsState.chart_cell_size_px = v; }
+                        edited(v) => { ResultsState.chart_cell_size_px = v; root.replot(); }
                     }
 
                     Text {
@@ -209,7 +220,7 @@ export component ResultsChart inherits Rectangle {
                         width: 110px;
                         model: ResultsState.chart_heatmap_color_scheme_options;
                         current-value: ResultsState.chart_heatmap_color_scheme;
-                        selected(v) => { ResultsState.chart_heatmap_color_scheme = v; }
+                        selected(v) => { ResultsState.chart_heatmap_color_scheme = v; root.replot(); }
                     }
 
                     Text {
@@ -232,6 +243,7 @@ export component ResultsChart inherits Rectangle {
                         edited(t) => {
                             ResultsState.chart_heatmap_range_min = t.to-float();
                             ResultsState.chart_heatmap_range_auto = false;
+                            root.replot();
                         }
                     }
 
@@ -250,6 +262,7 @@ export component ResultsChart inherits Rectangle {
                         edited(t) => {
                             ResultsState.chart_heatmap_range_max = t.to-float();
                             ResultsState.chart_heatmap_range_auto = false;
+                            root.replot();
                         }
                     }
 
@@ -259,6 +272,7 @@ export component ResultsChart inherits Rectangle {
                         mouse-cursor: pointer;
                         clicked => {
                             ResultsState.chart_heatmap_range_auto = !ResultsState.chart_heatmap_range_auto;
+                            root.replot();
                         }
 
                         Rectangle {
@@ -282,32 +296,6 @@ export component ResultsChart inherits Rectangle {
 
                 Rectangle {
                     horizontal-stretch: 1;
-                }
-
-                plot-ta := TouchArea {
-                    width: 64px;
-                    height: 26px;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.tooltip_text = "";
-                        ResultsState.chart_render_requested();
-                    }
-
-                    Rectangle {
-                        border-radius: 4px;
-                        background: plot-ta.has-hover ? Theme.accent.darker(15%) : Theme.accent;
-                        animate background { duration: 80ms; }
-
-                        Text {
-                            text: "Plot";
-                            font-size: 11px;
-                            font-family: Theme.font-sans;
-                            font-weight: 600;
-                            color: white;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
                 }
             }
         }

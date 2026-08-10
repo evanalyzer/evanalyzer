@@ -39,7 +39,7 @@ pub struct IntensitySettings {
 #[serde(rename_all = "camelCase")]
 pub struct TrackSettings {
     pub id: TrackId,
-    pub object_ids: Vec<ObjectId>,        // Ordered list of ROIs over time
+    pub object_ids: Vec<ObjectId>,     // Ordered list of ROIs over time
     pub parent_track: Option<TrackId>, // If created by division
 }
 
@@ -54,6 +54,13 @@ pub struct ObjectMetricSettings {
 
     // Dedicated class after classify object
     pub object_class: HashSet<ObjectClass>,
+
+    // Excludes this object from AI classifier training even though it has an
+    // `object_class` assigned (e.g. a bad/outlier annotation) - unlike
+    // leaving `object_class` empty, the label is kept for display/manual
+    // classification purposes, just not used as a training sample.
+    #[serde(default)]
+    pub exclude_from_training: bool,
 
     // Colocalization
     pub colocalized_with: IndexMap<ObjectClass, Vec<ObjectId>>,

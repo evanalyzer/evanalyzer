@@ -355,8 +355,7 @@ mod tests {
     #[test]
     fn f32_rgb_get_ref_mut_allows_mutation_of_matching_variant() {
         let size = test_size();
-        let mut rgb =
-            F32Rgb::create_container(size, Point2d { x: 0, y: 0 }, test_plane()).unwrap();
+        let mut rgb = F32Rgb::create_container(size, Point2d { x: 0, y: 0 }, test_plane()).unwrap();
 
         {
             let img_mut = F32Rgb::get_ref_mut(&mut rgb).expect("should be F32Rgb");

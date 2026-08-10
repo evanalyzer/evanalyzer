@@ -14,6 +14,25 @@ use std::sync::Mutex;
 struct CsvWriterState {
     writer: csv::Writer<File>,
     header_written: bool,
+    /// The exact channel ids / colocalization classes this exporter's rows
+    /// are shaped around - established once, by the first `export()` call,
+    /// and reused for every row after, so the column count can never drift.
+    /// Previously each `export()` call recomputed its own channel/class set
+    /// from just that call's objects and sized its row to match - different
+    /// tiles/images can have different channels/classes present, so a later
+    /// call's row could end up with more or fewer columns than the header
+    /// declared, silently misaligning every column after the first
+    /// divergence. A call whose objects introduce a genuinely new
+    /// channel/class after this is established has that data dropped from
+    /// the row instead - there's no column for it to go in.
+    ///
+    /// `None` until established - kept separate from `header_written`
+    /// because when appending to an already-existing file, `header_written`
+    /// starts `true` but this process still has no way to know what columns
+    /// that existing header actually has (it isn't re-parsed); this still
+    /// gives every row *this process* writes a single consistent shape, even
+    /// though it can't recover a previous process's exact column set.
+    columns: Option<(Vec<i32>, Vec<ObjectClass>)>,
 }
 
 pub struct CsvExporter {
@@ -42,7 +61,11 @@ impl CsvExporter {
             .map_err(|e| InternalErrors::Io(format!("IO Error: {}", e)))?;
 
         Ok(Self {
-            state: Mutex::new(CsvWriterState { writer: csv::Writer::from_writer(file), header_written }),
+            state: Mutex::new(CsvWriterState {
+                writer: csv::Writer::from_writer(file),
+                header_written,
+                columns: None,
+            }),
             class_names,
         })
     }
@@ -74,23 +97,32 @@ impl PipelineResultExporter for CsvExporter {
 
         let px = &cache.image_cache.image_meta.pixel_sizes;
 
-        // --- Phase 1: Dynamic Channel Extraction ---
-        let mut channel_ids: Vec<i32> = cache
-            .object_cache
-            .values()
-            .flat_map(|object| object.intensities.keys().cloned())
-            .collect();
-        channel_ids.sort();
-        channel_ids.dedup();
+        // --- Phase 1/2: establish (once) the channel/coloc-class set every
+        // row this exporter writes will be shaped around - see the
+        // `columns` field doc comment for why this only happens once.
+        let (channel_ids, coloc_classes) = match &state.columns {
+            Some(columns) => columns.clone(),
+            None => {
+                let mut channel_ids: Vec<i32> = cache
+                    .object_cache
+                    .values()
+                    .flat_map(|object| object.intensities.keys().cloned())
+                    .collect();
+                channel_ids.sort();
+                channel_ids.dedup();
 
-        // --- Phase 2: Dynamic Colocalization Class Extraction ---
-        let mut coloc_classes: Vec<ObjectClass> = cache
-            .object_cache
-            .values()
-            .flat_map(|object| object.colocalized_with.keys().cloned())
-            .collect();
-        coloc_classes.sort_by_key(|c| format!("{:?}", c));
-        coloc_classes.dedup();
+                let mut coloc_classes: Vec<ObjectClass> = cache
+                    .object_cache
+                    .values()
+                    .flat_map(|object| object.colocalized_with.keys().cloned())
+                    .collect();
+                coloc_classes.sort_by_key(|c| format!("{:?}", c));
+                coloc_classes.dedup();
+
+                state.columns = Some((channel_ids.clone(), coloc_classes.clone()));
+                (channel_ids, coloc_classes)
+            }
+        };
 
         // --- Phase 3: Header Assembly ---
         if !state.header_written {
@@ -181,6 +213,16 @@ impl PipelineResultExporter for CsvExporter {
         // --- Phase 4: Data Row Serialization ---
         let px_len = (px.px_size_x * px.px_size_y).sqrt();
         let nr_of_bits = cache.image_cache.image_meta.nr_of_bits;
+        // Same implausible-bit-depth guard as image_reader.rs's read path -
+        // unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
+        // shift-by-too-large, silently producing a wrong scale factor
+        // instead of an error.
+        if !(1..=32).contains(&nr_of_bits) {
+            return Err(InternalErrors::Generic(format!(
+                "cannot export {}: implausible bit depth {nr_of_bits} (expected 1-32)",
+                cache.image_rel_path.display()
+            )));
+        }
         // Max pixel value for the bit depth (e.g. 65535 for 16-bit)
         let bit_max = ((1u64 << nr_of_bits) - 1) as f64;
 
@@ -213,7 +255,12 @@ impl PipelineResultExporter for CsvExporter {
                 // Identity & Lineage
                 object.id.to_string(),
                 object.segmentation_class.to_string(),
-                object.object_class.iter().map(|c| self.class_label(c)).collect::<Vec<_>>().join(","),
+                object
+                    .object_class
+                    .iter()
+                    .map(|c| self.class_label(c))
+                    .collect::<Vec<_>>()
+                    .join(","),
                 parent_id,
                 children,
                 object.track.id.0.to_string(),
@@ -322,7 +369,10 @@ mod tests {
     /// lookups below don't rely on brittle positional/string matching.
     fn parse_csv(content: &str) -> (csv::StringRecord, Vec<csv::StringRecord>) {
         let mut reader = csv::Reader::from_reader(content.as_bytes());
-        let headers = reader.headers().expect("CSV should have a header row").clone();
+        let headers = reader
+            .headers()
+            .expect("CSV should have a header row")
+            .clone();
         let rows = reader
             .records()
             .map(|r| r.expect("valid CSV record"))
@@ -355,7 +405,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("test_export.csv");
 
-        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let exporter =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
         let mut cache = PipelineCache::default();
         cache.image_rel_path = PathBuf::from("test_image.tif");
@@ -370,7 +421,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("test_morphology.csv");
 
-        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let exporter =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
         let cache = PipelineCache::default();
         let _ = exporter.export(&cache);
@@ -397,7 +449,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("test_multi_call.csv");
 
-        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let exporter =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
         let mut cache_a = PipelineCache::default();
         cache_a.image_rel_path = PathBuf::from("image_a.tif");
@@ -421,17 +474,96 @@ mod tests {
         object_b.plane.t = 0;
         cache_b.object_cache.insert(object_b.id.clone(), object_b);
 
-        exporter.export(&cache_a).expect("first export should succeed");
-        exporter.export(&cache_b).expect("second export should succeed");
+        exporter
+            .export(&cache_a)
+            .expect("first export should succeed");
+        exporter
+            .export(&cache_b)
+            .expect("second export should succeed");
 
         let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
         let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines.len(), 3, "expected one header row plus one data row per export() call, got: {content}");
         assert_eq!(
-            lines.iter().filter(|l| l.starts_with("image,channel")).count(),
+            lines.len(),
+            3,
+            "expected one header row plus one data row per export() call, got: {content}"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.starts_with("image,channel"))
+                .count(),
             1,
             "the header row must be written exactly once across multiple export() calls"
         );
+    }
+
+    #[test]
+    fn test_csv_export_keeps_every_row_aligned_with_the_header_even_when_later_calls_have_a_different_channel_set()
+     {
+        // Regression test: the header (and its channel/coloc-class columns)
+        // used to be fixed from the first export() call, but every row's
+        // *column count* was independently recomputed per call from just
+        // that call's objects - a later call with a different channel set
+        // than the first would silently misalign every column after the
+        // channel columns.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let output_path = temp_dir.path().join("test_ragged_columns.csv");
+
+        let exporter =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+
+        // First call: an object with intensities on channels 0 AND 1 -
+        // establishes the header with both channels' columns.
+        let mut cache_a = PipelineCache::default();
+        cache_a.image_rel_path = PathBuf::from("image_a.tif");
+        let mut object_a = crate::object::Object::new(crate::object::ObjectInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            area: 10,
+            bbox: [0, 0, 3, 3],
+            ..Default::default()
+        });
+        object_a.intensities.insert(0, Intensity::default());
+        object_a.intensities.insert(1, Intensity::default());
+        cache_a.object_cache.insert(object_a.id.clone(), object_a);
+
+        // Second call: an object with intensities on channel 0 only - if
+        // this were (incorrectly) used to size the row instead of the
+        // header's established channel set, this row would be 8 columns
+        // short.
+        let mut cache_b = PipelineCache::default();
+        cache_b.image_rel_path = PathBuf::from("image_b.tif");
+        let mut object_b = crate::object::Object::new(crate::object::ObjectInit {
+            id: evanalyzer_cfg::core_types::ObjectId::next(),
+            area: 20,
+            bbox: [1, 1, 4, 4],
+            ..Default::default()
+        });
+        object_b.intensities.insert(0, Intensity::default());
+        cache_b.object_cache.insert(object_b.id.clone(), object_b);
+
+        exporter
+            .export(&cache_a)
+            .expect("first export should succeed");
+        exporter
+            .export(&cache_b)
+            .expect("second export should succeed");
+
+        let mut reader = csv::Reader::from_path(&output_path).expect("failed to open CSV");
+        let header_len = reader.headers().expect("failed to read header").len();
+
+        let mut row_count = 0;
+        for record in reader.records() {
+            let record = record.expect("failed to read row");
+            row_count += 1;
+            assert_eq!(
+                record.len(),
+                header_len,
+                "row {row_count} has {} columns, header has {header_len} - columns are misaligned",
+                record.len()
+            );
+        }
+        assert_eq!(row_count, 2, "expected exactly one row per export() call");
     }
 
     #[test]
@@ -443,7 +575,8 @@ mod tests {
         let mut class_names = HashMap::new();
         class_names.insert(ObjectClass::Valid(5), "Positive".to_string());
 
-        let exporter = CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
+        let exporter =
+            CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
 
         let mut cache = PipelineCache::default();
         cache.image_rel_path = PathBuf::from("classes.tif");
@@ -485,17 +618,29 @@ mod tests {
         let (headers, rows) = parse_csv(&content);
 
         assert_eq!(
-            column(&headers, row_by_object_id(&headers, &rows, &named_id.to_string()), "object_class"),
+            column(
+                &headers,
+                row_by_object_id(&headers, &rows, &named_id.to_string()),
+                "object_class"
+            ),
             "Positive (5)",
             "a class present in class_names should render as '<name> (<n>)'"
         );
         assert_eq!(
-            column(&headers, row_by_object_id(&headers, &rows, &unnamed_id.to_string()), "object_class"),
+            column(
+                &headers,
+                row_by_object_id(&headers, &rows, &unnamed_id.to_string()),
+                "object_class"
+            ),
             "class_7",
             "a class absent from class_names should fall back to 'class_<n>'"
         );
         assert_eq!(
-            column(&headers, row_by_object_id(&headers, &rows, &unset_id.to_string()), "object_class"),
+            column(
+                &headers,
+                row_by_object_id(&headers, &rows, &unset_id.to_string()),
+                "object_class"
+            ),
             "unset",
             "ObjectClass::Unset should render as 'unset'"
         );
@@ -509,7 +654,8 @@ mod tests {
         let mut class_names = HashMap::new();
         class_names.insert(ObjectClass::Valid(9), "Nuclei".to_string());
 
-        let exporter = CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
+        let exporter =
+            CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
 
         let mut cache = PipelineCache::default();
         cache.image_rel_path = PathBuf::from("coloc.tif");
@@ -537,7 +683,9 @@ mod tests {
             ..Default::default()
         });
 
-        cache.object_cache.insert(colocalized.id.clone(), colocalized);
+        cache
+            .object_cache
+            .insert(colocalized.id.clone(), colocalized);
         cache.object_cache.insert(solo.id.clone(), solo);
 
         exporter.export(&cache).expect("export should succeed");
@@ -554,12 +702,20 @@ mod tests {
 
         let expected_ids = format!("{},{}", partner_a, partner_b);
         assert_eq!(
-            column(&headers, row_by_object_id(&headers, &rows, &colocalized_id.to_string()), coloc_col),
+            column(
+                &headers,
+                row_by_object_id(&headers, &rows, &colocalized_id.to_string()),
+                coloc_col
+            ),
             expected_ids,
             "multiple colocalization partners should be comma-joined"
         );
         assert_eq!(
-            column(&headers, row_by_object_id(&headers, &rows, &solo_id.to_string()), coloc_col),
+            column(
+                &headers,
+                row_by_object_id(&headers, &rows, &solo_id.to_string()),
+                coloc_col
+            ),
             "",
             "an object with no colocalization for that class should have an empty cell"
         );
@@ -570,7 +726,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("test_intensities.csv");
 
-        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let exporter =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
         let mut cache = PipelineCache::default();
         cache.image_rel_path = PathBuf::from("intensities.tif");
@@ -655,7 +812,8 @@ mod tests {
         let output_path = temp_dir.path().join("test_preexisting.csv");
 
         // First, independent exporter instance creates the file and writes header + one row.
-        let exporter_1 = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let exporter_1 =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
         let mut cache_a = PipelineCache::default();
         cache_a.image_rel_path = PathBuf::from("image_a.tif");
         let object_a = crate::object::Object::new(crate::object::ObjectInit {
@@ -665,12 +823,15 @@ mod tests {
             ..Default::default()
         });
         cache_a.object_cache.insert(object_a.id.clone(), object_a);
-        exporter_1.export(&cache_a).expect("first export should succeed");
+        exporter_1
+            .export(&cache_a)
+            .expect("first export should succeed");
         drop(exporter_1);
 
         // A brand-new CsvExporter instance pointed at the now-existing file should treat the
         // header as already written (header_written = output_path.exists()) and only append.
-        let exporter_2 = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let exporter_2 =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
         let mut cache_b = PipelineCache::default();
         cache_b.image_rel_path = PathBuf::from("image_b.tif");
         let object_b = crate::object::Object::new(crate::object::ObjectInit {
@@ -680,7 +841,9 @@ mod tests {
             ..Default::default()
         });
         cache_b.object_cache.insert(object_b.id.clone(), object_b);
-        exporter_2.export(&cache_b).expect("second export (fresh instance) should succeed");
+        exporter_2
+            .export(&cache_b)
+            .expect("second export (fresh instance) should succeed");
 
         let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
         let lines: Vec<&str> = content.lines().collect();
@@ -690,7 +853,10 @@ mod tests {
             "expected one header row plus one data row per export() call, got: {content}"
         );
         assert_eq!(
-            lines.iter().filter(|l| l.starts_with("image,channel")).count(),
+            lines
+                .iter()
+                .filter(|l| l.starts_with("image,channel"))
+                .count(),
             1,
             "a second CsvExporter instance over a pre-existing file must not rewrite the header"
         );
@@ -701,7 +867,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let output_path = temp_dir.path().join("test_lineage.csv");
 
-        let exporter = CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
+        let exporter =
+            CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
         let mut cache = PipelineCache::default();
         cache.image_rel_path = PathBuf::from("lineage.tif");

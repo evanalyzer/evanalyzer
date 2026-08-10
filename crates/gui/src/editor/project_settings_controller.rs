@@ -94,11 +94,7 @@ impl ProjectSettingsController {
                 .global::<ProjectSettingsState>()
                 .on_well_dims_changed(move |rows, cols| {
                     if let Some(results_ui) = results_ui_weak.upgrade() {
-                        resize_well_values(
-                            results_ui.global::<ProjectSettingsState>(),
-                            rows,
-                            cols,
-                        );
+                        resize_well_values(results_ui.global::<ProjectSettingsState>(), rows, cols);
                     }
                 });
         }

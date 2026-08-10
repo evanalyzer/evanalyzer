@@ -1,13 +1,13 @@
+use crate::AppWindow;
+use crate::PipelinesPanelState;
 use crate::ToolbarState;
 use crate::UiState;
 use crate::editor::classification_controller::ClassificationController;
 use crate::editor::images_list_controller::ImagesListController;
+use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
-use crate::editor::object_list_controller::ObjectListController;
 use crate::editor::viewport_controller::ViewportController;
-use crate::AppWindow;
-use crate::PipelinesPanelState;
 use evanalyzer_cfg::core_types::PipelineId;
 use slint::ComponentHandle;
 use std::sync::Arc;
@@ -94,16 +94,18 @@ impl UndoRedoController {
             .sync_classification_to_slint();
         self.pipelines_controller.sync_pipelines_to_slint();
         self.object_list_controller.sync_objects_to_slint();
-        self.object_list_controller.sync_selected_object_to_slint(false);
+        self.object_list_controller
+            .sync_selected_object_to_slint(false);
         self.viewport_controller.trigger_image_redraw_objects();
 
         if let Some(ui) = self.ui.upgrade() {
             let active_pipeline_id = ui.global::<PipelinesPanelState>().get_active_pipeline_id();
             if active_pipeline_id != 0 {
-                self.pipelines_controller.sync_steps_of_selected_pipeline_to_slint(
-                    PipelineId(active_pipeline_id as u32),
-                    false,
-                );
+                self.pipelines_controller
+                    .sync_steps_of_selected_pipeline_to_slint(
+                        PipelineId(active_pipeline_id as u32),
+                        false,
+                    );
             }
         }
     }
@@ -124,7 +126,9 @@ mod tests {
         make_controller_with_ui(slint::Weak::default())
     }
 
-    fn make_controller_with_ui(ui: slint::Weak<AppWindow>) -> (Arc<UiState>, Arc<UndoRedoController>) {
+    fn make_controller_with_ui(
+        ui: slint::Weak<AppWindow>,
+    ) -> (Arc<UiState>, Arc<UndoRedoController>) {
         let ui_state = test_ui_state_with_project(project_with_one_image());
         let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
         let object_list_controller = Arc::new(ObjectListController::new(

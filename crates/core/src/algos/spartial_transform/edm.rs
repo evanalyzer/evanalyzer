@@ -346,8 +346,8 @@ mod tests {
     /// local maximum, turning a ~1s Watershed run into 200+ seconds on real
     /// data (828 maxima found instead of ~87,000 spurious ones).
     #[test]
-    fn test_distance_transform_zeroes_stale_scratch_background(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn test_distance_transform_zeroes_stale_scratch_background()
+    -> Result<(), Box<dyn std::error::Error>> {
         let size = ImageSize {
             width: 4,
             height: 4,
@@ -366,17 +366,11 @@ mod tests {
         // Simulate a scratch_pad reused from a previous pipeline step: same
         // container type and size, but full of non-zero garbage instead of
         // freshly-zeroed memory.
-        ctx.scratch_pad = Arc::new(ImageContainer::F32Gray(
-            crate::image::ManagedImage {
-                data: Image::<f32, 1, CpuAllocator>::new(
-                    size,
-                    vec![123.456f32; 16],
-                    CpuAllocator,
-                )?,
-                tile_offset: ctx.scratch_pad.tile_offset(),
-                plane: ctx.scratch_pad.plane(),
-            },
-        ));
+        ctx.scratch_pad = Arc::new(ImageContainer::F32Gray(crate::image::ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::new(size, vec![123.456f32; 16], CpuAllocator)?,
+            tile_offset: ctx.scratch_pad.tile_offset(),
+            plane: ctx.scratch_pad.plane(),
+        }));
 
         let edm = DistanceTransform {
             threshold: 0.5,
@@ -416,8 +410,8 @@ mod tests {
     /// half of the disc collapses to ~1.0 instead of growing up to ~4.12 at its
     /// centre.
     #[test]
-    fn test_distance_transform_matches_cpp_reference_border_touching_disc() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn test_distance_transform_matches_cpp_reference_border_touching_disc()
+    -> Result<(), Box<dyn std::error::Error>> {
         const MASK: &[&str] = &[
             "............",
             "#...........",
@@ -451,11 +445,8 @@ mod tests {
             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ];
 
-        let img = Image::<f32, 1, CpuAllocator>::new(
-            ImageSize { width, height },
-            data,
-            CpuAllocator,
-        )?;
+        let img =
+            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
         let mut ctx = PipelineContext::new_from_image_test(img)?;
         let mut cache = PipelineCache::default();
 

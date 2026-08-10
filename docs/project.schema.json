@@ -40,6 +40,46 @@
     "pipelines"
   ],
   "$defs": {
+    "AiObjectClassifierSettings": {
+      "description": "An object classifier trained via the app's AI training dialog (an\n `.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),\n applied here as a pipeline classification step: every object already\n present in `PipelineCache::object_cache` matching `origin_segmentation`/\n `input_classes` is scored independently (reusing the same feature recipe\n used at training time), then remapped through `segmentation_mapping` into\n this project's own classes and applied via `match_handling` - the same\n input selection `ClassifyObjects` uses, but the output class comes from\n the model's prediction instead of a fixed rule.\n\n Predicted classes with no matching `segmentation_mapping` entry leave the\n object untouched, mirroring how `PixelClassifier` leaves unmapped\n predictions as background - mapping only the classes you care about is a\n deliberate simplification, not an oversight.",
+      "type": "object",
+      "properties": {
+        "inputClasses": {
+          "description": "Restrict classification to objects that already carry one of these classes\n\n Only ROIs that have been assigned at least one of the listed classes by a prior\n pipeline step will be evaluated by the model. Leave empty to apply the model to\n every object regardless of its current class.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "matchHandling": {
+          "description": "What to do with object class labels after prediction\n\n - **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.\n - **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.",
+          "$ref": "#/$defs/ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings",
+          "default": "RECLASSIFY_IF_MATCH"
+        },
+        "modelPath": {
+          "description": "Path to a trained object classifier model, saved from the AI training dialog.",
+          "type": "string",
+          "default": ""
+        },
+        "originSegmentation": {
+          "description": "Apply only to objects with this given segmentation class\n\n The segmentation class value is assigned to each pixel in the image\n after a Threshold, Pixel classifier or AI classifier.\n If no seg class is selected the criteria are applied to all objects.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SegmentationClass"
+          }
+        },
+        "segmentationMapping": {
+          "description": "Maps the model's predicted classes to this project's object classes.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ClassificationMappingSettings"
+          }
+        }
+      }
+    },
     "AiSegmentationUnetUNetOutputModeSettings": {
       "description": "How a multi-channel U-Net output should be turned into a single foreground\n probability map. Ignored for single-channel outputs, which are always\n treated as already-activated foreground probabilities.",
       "oneOf": [
@@ -172,6 +212,14 @@
         "notes"
       ]
     },
+    "ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings": {
+      "description": "What to do with an object's class labels once the model has predicted (and\n `segmentation_mapping` has remapped) a class for it.",
+      "type": "string",
+      "enum": [
+        "ADD_OUTPUT_CLASS_IF_MATCH",
+        "RECLASSIFY_IF_MATCH"
+      ]
+    },
     "ClassificationClassifyObjectsClassifyMatchHandlingSettings": {
       "type": "string",
       "enum": [
@@ -185,6 +233,55 @@
         "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
         "RECLASSIFY_IF_MATCH",
         "RECLASSIFY_IF_NOT_MATCH"
+      ]
+    },
+    "ClassificationColocObjectsColocMultiplicitySettings": {
+      "description": "How many partners an object may coloc with at once.",
+      "oneOf": [
+        {
+          "description": "Every object keeps only its single best-overlap match per other class -\ne.g. a small object sitting on the border of two larger ones picks\nexactly one (the larger overlap; ties go to the lower `ObjectId`).",
+          "type": "string",
+          "const": "ONE_TO_ONE"
+        },
+        {
+          "description": "Every object may coloc with every overlapping partner meeting `min_coloc_area`.",
+          "type": "string",
+          "const": "MANY_TO_MANY"
+        },
+        {
+          "description": "Only objects of these classes may coloc with more than one partner;\nevery other class in `classes_to_coloc` is capped to its single\nbest-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and\n`MultiFor([Cell])`, a cell can coloc with any number of spots, but\neach spot colocs with exactly one cell (the one it overlaps most).",
+          "type": "object",
+          "properties": {
+            "MULTI_FOR": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ObjectClass"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "MULTI_FOR"
+          ]
+        }
+      ]
+    },
+    "ClassificationMappingSettings": {
+      "description": "Maps one class the model was trained to predict to a class ID meaningful\n in this project. Model class IDs are a snapshot taken at training time\n (see `evanalyzer_cfg::ObjectClassLabel`'s doc comment) and aren't\n guaranteed to line up with this project's own `ObjectClass` IDs - this is\n the bridge between the two.",
+      "type": "object",
+      "properties": {
+        "objectClass": {
+          "description": "Object class predicted by the classifier model.",
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "outputClass": {
+          "description": "The project's own object class objects predicted as `object_class`\n are assigned.",
+          "$ref": "#/$defs/ObjectClass"
+        }
+      },
+      "required": [
+        "objectClass",
+        "outputClass"
       ]
     },
     "ClassificationObjectMathObjectSetOperationSettings": {
@@ -558,23 +655,21 @@
       "description": "Calculates spatial colocalization and intersections between specified object classes.\n\n This command scans the object cache, groups objects by their designated classes,\n and performs spatial overlap analysis. It records colocalization relationships\n between intersecting entities and can optionally generate new child ROIs representing\n the precise intersection regions.",
       "type": "object",
       "properties": {
-        "allowMultiObjectColoc": {
-          "description": "If set one object is allowed to coloc with more than one other object",
-          "type": "boolean"
-        },
         "classForOverlappingAreas": {
           "description": "Class of the overlapping area if needed\n\n If defined the overlapping coloc area is added as new object and labeled with this class",
-          "$ref": "#/$defs/ObjectClass"
+          "$ref": "#/$defs/ObjectClass",
+          "default": "UNSET"
         },
         "classesToColoc": {
           "description": "Theses are the classes the coloclization should be calculated for",
           "type": "array",
+          "default": [],
           "items": {
             "$ref": "#/$defs/ObjectClass"
           }
         },
         "excludeClasses": {
-          "description": "Classes an object must NOT overlap to be considered colocalized.\n\n An object that otherwise satisfies `classes_to_coloc` is excluded entirely\n (no relation recorded, no intersection object created) if it also overlaps any\n object from one of these classes with at least `min_coloc_area`. Leave empty\n (the default) to disable this filter - exclusion is opt-in.\n\n Example: to find objects colocalizing with class 1 and 2 but *not* 3, set\n `classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.",
+          "description": "Classes an object must NOT overlap to be considered colocalized.\n\n Exclude_classes is a blocklist — \"even if an object matches everything else, throw it out if it also touches one of these classes.\"\n Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).\n Without exclude_classes, any object satisfying that gets recorded as colocalized.\n With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.\n So it's a \"match A and B, but not C\" filter\n\n Example: \"cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker.\"",
           "type": "array",
           "default": [],
           "items": {
@@ -584,6 +679,7 @@
         "filterClasses": {
           "description": "Optional additional label filters.\n\n Only classes which matches all of these filters are used for coloc calculation",
           "type": "array",
+          "default": [],
           "items": {
             "$ref": "#/$defs/ObjectClass"
           }
@@ -591,20 +687,20 @@
         "minColocArea": {
           "description": "Minimum overlapping area size to count objects as coloc",
           "type": "number",
-          "format": "float"
+          "format": "float",
+          "default": 0.0
+        },
+        "multiplicity": {
+          "description": "How many partners an object may coloc with at once.",
+          "$ref": "#/$defs/ClassificationColocObjectsColocMultiplicitySettings",
+          "default": "ONE_TO_ONE"
         },
         "sizeUnit": {
-          "$ref": "#/$defs/SizeUnits"
+          "description": "Size unit for the minimum coloc area size",
+          "$ref": "#/$defs/SizeUnits",
+          "default": "px"
         }
-      },
-      "required": [
-        "classesToColoc",
-        "filterClasses",
-        "classForOverlappingAreas",
-        "allowMultiObjectColoc",
-        "sizeUnit",
-        "minColocArea"
-      ]
+      }
     },
     "ColorFilterCommandSettings": {
       "description": "A command that filters an image based on a specific HSV color range.\n\n Pixels falling outside the provided [`HsvRange`] are masked\n out by setting to black.\n\n # Examples\n\n ```\n # use imagec::backend::algos::{ColorFilterCommand, HsvRange};\n let range = HsvRange {\n     min_h: 0.0,   max_h: 30.0, // Red tones\n     min_s: 0.5,   max_s: 1.0,\n     min_v: 0.5,   max_v: 1.0,\n };\n\n let command = ColorFilterCommand { range };\n ```",
@@ -1600,6 +1696,10 @@
             }
           }
         },
+        "excludeFromTraining": {
+          "type": "boolean",
+          "default": false
+        },
         "id": {
           "$ref": "#/$defs/ObjectId"
         },
@@ -1707,6 +1807,19 @@
     },
     "PipelineCommand": {
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "aiObjectClassifier"
+            }
+          },
+          "$ref": "#/$defs/AiObjectClassifierSettings",
+          "required": [
+            "type"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -1972,6 +2085,19 @@
           "properties": {
             "type": {
               "type": "string",
+              "const": "pixelClassifier"
+            }
+          },
+          "$ref": "#/$defs/PixelClassifierSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
               "const": "rankFilter"
             }
           },
@@ -2171,6 +2297,27 @@
         "command"
       ]
     },
+    "PixelClassifierSettings": {
+      "description": "A pixel classifier trained via the app's AI training dialog\n (an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),\n applied here as a pipeline segmentation step: every pixel is classified\n independently (reusing the same feature recipe used at training time),\n then remapped through `segmentation_mapping` into this project's own\n classes and written to the segmentation map - the same output shape\n `Threshold` produces, so downstream steps (extraction, classification)\n don't need to care which one ran.\n\n Predicted classes with no matching `segmentation_mapping` entry are\n written as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`\n leaves pixels outside every configured range as background - mapping\n only the classes you care about is a deliberate simplification, not an\n oversight.",
+      "type": "object",
+      "properties": {
+        "modelPath": {
+          "description": "Path to a trained pixel classifier model, saved from the AI training dialog.",
+          "type": "string"
+        },
+        "segmentationMapping": {
+          "description": "Maps the model's predicted classes to this project's segmentation classes.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SegmentationMappingSettings"
+          }
+        }
+      },
+      "required": [
+        "modelPath",
+        "segmentationMapping"
+      ]
+    },
     "PixelSizeSettings": {
       "type": "object",
       "properties": {
@@ -2325,6 +2472,24 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "SegmentationMappingSettings": {
+      "description": "Maps one class the model was trained to predict to a class ID meaningful\n in this project. Model class IDs are a snapshot taken at training time\n (see `evanalyzer_cfg::PixelClassLabel`'s doc comment) and aren't\n guaranteed to line up with this project's own `SegmentationClass` IDs -\n this is the bridge between the two.",
+      "type": "object",
+      "properties": {
+        "objectClassId": {
+          "description": "The project's own segmentation class pixels predicted as\n `segmentation_class` are written as.",
+          "$ref": "#/$defs/SegmentationClass"
+        },
+        "segmentationClass": {
+          "description": "Segmentation class predicted by the classifier model.",
+          "$ref": "#/$defs/SegmentationClass"
+        }
+      },
+      "required": [
+        "segmentationClass",
+        "objectClassId"
+      ]
     },
     "SegmentationThresholdThresholdMethodSettings": {
       "description": "The mathematical strategy used to determine the optimal global threshold.\n\n Most methods analyze the image histogram to find a \"cut-off\" point that\n best separates the foreground from the background.",

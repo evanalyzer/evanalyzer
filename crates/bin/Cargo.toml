@@ -4,16 +4,22 @@ version = { workspace = true }
 edition = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
+publish = { workspace = true }
 
 [dependencies]
-evanalyzer_core = { workspace = true }
-evanalyzer_cfg = { path = "../cfg" }
+evanalyzer_cfg = { workspace = true }
 evanalyzer_gui    = { path = "../gui" }
 evanalyzer_cli    = { path = "../cli" }
-evanalyzer_app    = { path = "../app" }
-log = "0.4"
-env_logger = "0.11"
-clap = { version = "4", features = ["derive"] }
+evanalyzer_app    = { workspace = true }
+evanalyzer_llm    = { workspace = true, optional = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+
+# Off by default: local-LLM pipeline generation is too slow on CPU for a
+# shipped desktop build right now. Build with `--features llm` to include it.
+[features]
+llm = ["dep:evanalyzer_llm"]
 
 [[bin]]
 name = "evanalyzer"

@@ -346,20 +346,10 @@ mod tests {
         let full_h = 20;
         let tile_size = (20, 20);
 
-        let cache_a = run_two_stage_pipeline_on_tile(
-            full_w,
-            full_h,
-            (0, 0),
-            tile_size,
-            [8, 8, 11, 11],
-        );
-        let cache_b = run_two_stage_pipeline_on_tile(
-            full_w,
-            full_h,
-            (20, 0),
-            tile_size,
-            [8, 8, 11, 11],
-        );
+        let cache_a =
+            run_two_stage_pipeline_on_tile(full_w, full_h, (0, 0), tile_size, [8, 8, 11, 11]);
+        let cache_b =
+            run_two_stage_pipeline_on_tile(full_w, full_h, (20, 0), tile_size, [8, 8, 11, 11]);
 
         for (cache, lo_x, hi_x) in [(&cache_a, 0u32, 20u32), (&cache_b, 20u32, 40u32)] {
             let regions: Vec<&Object> = cache
@@ -456,9 +446,7 @@ mod tests {
                 start_image: ImageAddress::Channel(0),
             },
         );
-        pipeline.add_command(Box::new(FakeSegmenter {
-            rect: [0, 0, 1, 1],
-        }));
+        pipeline.add_command(Box::new(FakeSegmenter { rect: [0, 0, 1, 1] }));
 
         let result = pipeline
             .run(PathBuf::default(), cache, None, false)

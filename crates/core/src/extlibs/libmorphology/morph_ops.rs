@@ -701,13 +701,21 @@ mod tests {
                         let mut naive = blank();
                         dilate(&src, &mut fast, &kernel, padding_mode, [0]).unwrap();
                         dilate(&src, &mut naive, &naive_kernel, padding_mode, [0]).unwrap();
-                        assert_eq!(fast.as_slice(), naive.as_slice(), "dilate mismatch for {ctx}");
+                        assert_eq!(
+                            fast.as_slice(),
+                            naive.as_slice(),
+                            "dilate mismatch for {ctx}"
+                        );
 
                         let mut fast = blank();
                         let mut naive = blank();
                         erode(&src, &mut fast, &kernel, padding_mode, [0]).unwrap();
                         erode(&src, &mut naive, &naive_kernel, padding_mode, [0]).unwrap();
-                        assert_eq!(fast.as_slice(), naive.as_slice(), "erode mismatch for {ctx}");
+                        assert_eq!(
+                            fast.as_slice(),
+                            naive.as_slice(),
+                            "erode mismatch for {ctx}"
+                        );
                     }
                 }
             }
@@ -774,8 +782,8 @@ mod tests {
     }
 
     #[test]
-    fn open_and_close_still_correct_through_the_fast_path_with_a_cross_kernel() -> Result<(), ImageError>
-    {
+    fn open_and_close_still_correct_through_the_fast_path_with_a_cross_kernel()
+    -> Result<(), ImageError> {
         let size = ImageSize {
             width: 7,
             height: 7,

@@ -4,39 +4,37 @@ version = { workspace = true }
 edition = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
+publish = { workspace = true }
 
 [dependencies]
 evanalyzer_core = { workspace = true }
-evanalyzer_app = { path = "../app" }
-evanalyzer_cfg = { path = "../cfg" }
+evanalyzer_app = { workspace = true }
+evanalyzer_cfg = { workspace = true }
 evanalyzer_gui_slint = { path = "ui" }
 
 rfd = "0.17"
 copypasta = "0.10"
-log = "0.4"
-env_logger = "0.11"
-rayon = "1.10"
-kornia-image = { version = "0.1.14"}
-kornia-imgproc = { version = "0.1.14"}
-bitflags = "2.11.0"
-enumset = "1.1.10"
+log = { workspace = true }
+rayon = { workspace = true }
+kornia-image = { workspace = true }
+kornia-imgproc = { workspace = true }
 clru = "0.6.3"
-indexmap = "2.13.0"
-use = "0.0.1-pre.0"
-bitvec = "1.0.1"
-chrono = "0.4.44"
-serde_json = "1.0"
+indexmap = { workspace = true }
+bitvec = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 
 
 # For Linux/macOS: Use Skia
 [target.'cfg(not(target_os = "windows"))'.dependencies.slint]
-version = "1.15"
+version = "1.17"
 features = ["renderer-skia"]
 
 # For Windows: Use Software Renderer (No Skia/VC++ requirement)
 [target.'cfg(target_os = "windows")'.dependencies.slint]
-version = "1.15"
+version = "1.17"
 default-features = false
 features = [
     "std",
@@ -46,9 +44,7 @@ features = [
 ]
 
 [dev-dependencies]
-kornia-apriltag = {version = "0.1.10"}
-# Must track the exact `slint` version resolved workspace-wide (1.17.1, per
-# Cargo.lock) - this crate doesn't follow semver.
+kornia-apriltag = { workspace = true }
 i-slint-backend-testing = "=1.17.1"
 
 

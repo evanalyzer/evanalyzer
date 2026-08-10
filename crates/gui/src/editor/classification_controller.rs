@@ -183,7 +183,7 @@ impl ClassificationController {
                 let project = bridge_ptr.app_state.get_project();
                 let total_visible: i32 = project
                     .classification
-                    .classes
+                    .classes()
                     .iter()
                     .filter(|c| project.is_class_visible(&c.id))
                     .map(|c| project.count_objects_for_class(&c.id) as i32)
@@ -294,7 +294,7 @@ impl Model for ClassificationModelBridge {
     /// * If the internal classification read-lock is poisoned.
     fn row_count(&self) -> usize {
         let project = self.app_state.get_project();
-        project.classification.classes.len()
+        project.classification.classes().len()
     }
 
     /// Retrieves the display data for a specific classification row.
@@ -314,7 +314,7 @@ impl Model for ClassificationModelBridge {
     /// * If the internal classification read-lock is poisoned.
     fn row_data(&self, row: usize) -> Option<Self::Data> {
         let project = self.app_state.get_project();
-        let classes = project.classification.classes.clone();
+        let classes = project.classification.classes().clone();
         classes.get(row).map(|c| {
             let r = ((c.color >> 16) & 0xff) as u8;
             let g = ((c.color >> 8) & 0xff) as u8;
@@ -384,9 +384,13 @@ mod tests {
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
 
         let project = ui_state.get_project();
-        assert_eq!(project.classification.classes.len(), 1);
-        assert_eq!(project.classification.classes[0].id, ObjectClass::Valid(1));
-        assert_eq!(project.classification.classes[0].name, "Nuclei");
+        // classes()[0] is the auto-prepended Background class.
+        assert_eq!(project.classification.classes().len(), 2);
+        assert_eq!(
+            project.classification.classes()[1].id,
+            ObjectClass::Valid(1)
+        );
+        assert_eq!(project.classification.classes()[1].name, "Nuclei");
     }
 
     #[test]
@@ -397,12 +401,13 @@ mod tests {
         controller.update_class_settings_in_project(settings(1, "Renamed"));
 
         let project = ui_state.get_project();
+        // classes()[0] is the auto-prepended Background class.
         assert_eq!(
-            project.classification.classes.len(),
-            1,
+            project.classification.classes().len(),
+            2,
             "updating must not create a second class"
         );
-        assert_eq!(project.classification.classes[0].name, "Renamed");
+        assert_eq!(project.classification.classes()[1].name, "Renamed");
     }
 
     #[test]
@@ -414,7 +419,9 @@ mod tests {
         controller.update_class_settings_in_project(settings(1, "Ghost"));
 
         let project = ui_state.get_project();
-        assert!(project.classification.classes.is_empty());
+        // A fresh project always has exactly the auto-prepended Background
+        // class and nothing else.
+        assert_eq!(project.classification.classes().len(), 1);
     }
 
     #[test]
@@ -425,7 +432,11 @@ mod tests {
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
 
         let project = ui_state.get_project();
-        assert_eq!(project.classification.classes[0].color, color.as_argb_encoded());
+        // classes()[0] is the auto-prepended Background class.
+        assert_eq!(
+            project.classification.classes()[1].color,
+            color.as_argb_encoded()
+        );
     }
 
     // -- ClassificationModelBridge (Model impl) --------------------------------
@@ -445,7 +456,8 @@ mod tests {
 
         let bridge = bridge_for(&ui_state);
 
-        assert_eq!(bridge.row_count(), 2);
+        // Background, plus the two added classes.
+        assert_eq!(bridge.row_count(), 3);
     }
 
     #[test]
@@ -459,9 +471,10 @@ mod tests {
         });
 
         let bridge = bridge_for(&ui_state);
-        let row = bridge.row_data(0).expect("one class was added");
+        // Row 0 is the auto-prepended Background class; Nuclei lands at row 1.
+        let row = bridge.row_data(1).expect("one class was added");
 
-        assert_eq!(row.id, 1); // add_class assigns id 1 to the first class
+        assert_eq!(row.id, 1); // add_class assigns id 1 to the first added class
         assert_eq!(row.name.as_str(), "Nuclei");
         assert_eq!(row.color, Color::from_rgb_u8(0x11, 0x22, 0x33));
     }
@@ -473,20 +486,26 @@ mod tests {
         );
         {
             let mut project = ui_state.get_project_write();
-            project.classification.classes.push(evanalyzer_cfg::settings::classification_settings::Class {
-                id: ObjectClass::Valid(1),
-                color: 0,
-                name: "Nuclei".to_string(),
-                notes: String::new(),
-            });
-            let mut with_class = evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default();
+            project.classification.classes_mut().push(
+                evanalyzer_cfg::settings::classification_settings::Class {
+                    id: ObjectClass::Valid(1),
+                    color: 0,
+                    name: "Nuclei".to_string(),
+                    notes: String::new(),
+                },
+            );
+            let mut with_class =
+                evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default();
             with_class.object_class.insert(ObjectClass::Valid(1));
             project.add_object(&with_class);
-            project.add_object(&evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default());
+            project.add_object(
+                &evanalyzer_cfg::settings::object_settings::ObjectMetricSettings::default(),
+            );
         }
 
         let bridge = bridge_for(&ui_state);
-        let row = bridge.row_data(0).expect("one class registered");
+        // Row 0 is the auto-prepended Background class; Nuclei lands at row 1.
+        let row = bridge.row_data(1).expect("one class registered");
 
         assert_eq!(row.count, 1);
     }
@@ -496,8 +515,9 @@ mod tests {
         let (ui_state, controller) = make_controller();
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
 
+        // Row 0 is the auto-prepended Background class; Nuclei lands at row 1.
         assert!(
-            bridge_for(&ui_state).row_data(0).unwrap().visible,
+            bridge_for(&ui_state).row_data(1).unwrap().visible,
             "classes are visible by default"
         );
 
@@ -505,14 +525,16 @@ mod tests {
             .get_project_write()
             .toggle_class_visibility(ObjectClass::Valid(1));
 
-        assert!(!bridge_for(&ui_state).row_data(0).unwrap().visible);
+        assert!(!bridge_for(&ui_state).row_data(1).unwrap().visible);
     }
 
     #[test]
     fn classification_model_bridge_row_data_out_of_range_returns_none() {
         let (ui_state, _controller) = make_controller();
 
-        assert!(bridge_for(&ui_state).row_data(0).is_none());
+        // A fresh project already has one row (Background) - row 1 is the
+        // first genuinely out-of-range index.
+        assert!(bridge_for(&ui_state).row_data(1).is_none());
     }
 
     // -- sync_classification_to_slint / sync_class_settings_to_class_edit_dialog_slint
@@ -526,7 +548,8 @@ mod tests {
     }
 
     #[test]
-    fn sync_class_settings_to_class_edit_dialog_slint_does_not_panic_for_a_known_or_unknown_class() {
+    fn sync_class_settings_to_class_edit_dialog_slint_does_not_panic_for_a_known_or_unknown_class()
+    {
         let (_, controller) = make_controller();
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
 
@@ -546,10 +569,16 @@ mod tests {
         controller.attach_callbacks();
 
         ui.global::<ClassificationState>().invoke_class_selected(3);
-        assert_eq!(ui_state.get_project().get_selected_object_class(), ObjectClass::Valid(3));
+        assert_eq!(
+            ui_state.get_project().get_selected_object_class(),
+            ObjectClass::Valid(3)
+        );
 
         ui.global::<ClassificationState>().invoke_class_selected(-1);
-        assert_eq!(ui_state.get_project().get_selected_object_class(), ObjectClass::Unset);
+        assert_eq!(
+            ui_state.get_project().get_selected_object_class(),
+            ObjectClass::Unset
+        );
     }
 
     #[test]
@@ -562,7 +591,9 @@ mod tests {
         ui.global::<ClassificationState>().invoke_class_delete(1);
 
         let project = ui_state.get_project();
-        assert!(project.classification.classes.is_empty());
+        // Background can't be deleted (see `ClassificationExt::delete_class`),
+        // so a fresh project falls back to exactly that one class.
+        assert_eq!(project.classification.classes().len(), 1);
         assert_eq!(project.get_selected_object_class(), ObjectClass::Unset);
     }
 
@@ -574,11 +605,14 @@ mod tests {
         controller.update_class_settings_in_project(settings(-1, "B"));
         controller.attach_callbacks();
 
+        // classes()[0] is the auto-prepended Background class, which
+        // `move_up`/`move_down` always keep pinned there - starting state is
+        // [Background, A, B].
         ui.global::<ClassificationState>().invoke_class_move_up(2);
-        assert_eq!(ui_state.get_project().classification.classes[0].name, "B");
+        assert_eq!(ui_state.get_project().classification.classes()[1].name, "B");
 
         ui.global::<ClassificationState>().invoke_class_move_down(2);
-        assert_eq!(ui_state.get_project().classification.classes[1].name, "B");
+        assert_eq!(ui_state.get_project().classification.classes()[2].name, "B");
     }
 
     #[test]
@@ -588,9 +622,14 @@ mod tests {
         controller.update_class_settings_in_project(settings(-1, "Nuclei"));
         controller.attach_callbacks();
 
-        ui.global::<ClassificationState>().invoke_class_visibility_toggled(1);
+        ui.global::<ClassificationState>()
+            .invoke_class_visibility_toggled(1);
 
-        assert!(!ui_state.get_project().is_class_visible(&ObjectClass::Valid(1)));
+        assert!(
+            !ui_state
+                .get_project()
+                .is_class_visible(&ObjectClass::Valid(1))
+        );
     }
 
     #[test]
@@ -600,7 +639,8 @@ mod tests {
         controller.attach_callbacks();
         let initial = ui_state.get_project().hide_unclassified_objects();
 
-        ui.global::<ClassificationState>().invoke_hide_unclassified_toggled();
+        ui.global::<ClassificationState>()
+            .invoke_hide_unclassified_toggled();
 
         assert_eq!(ui_state.get_project().hide_unclassified_objects(), !initial);
     }
@@ -615,7 +655,8 @@ mod tests {
             .invoke_apply_classification_settings(settings(-1, "Nuclei"));
 
         let project = ui_state.get_project();
-        assert_eq!(project.classification.classes.len(), 1);
-        assert_eq!(project.classification.classes[0].name, "Nuclei");
+        // classes()[0] is the auto-prepended Background class.
+        assert_eq!(project.classification.classes().len(), 2);
+        assert_eq!(project.classification.classes()[1].name, "Nuclei");
     }
 }

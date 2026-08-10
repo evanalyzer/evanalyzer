@@ -32,6 +32,10 @@ impl SegmentationClass {
         self.0
     }
 
+    pub fn as_usize(&self) -> usize {
+        self.0 as usize
+    }
+
     pub fn to_string(&self) -> String {
         format!("{}", self)
     }
@@ -78,6 +82,8 @@ pub enum ObjectClass {
 
 #[allow(dead_code)]
 impl ObjectClass {
+    pub const BACKGROUND: Self = ObjectClass::Valid(0);
+
     pub fn from_segmentation_class(class: SegmentationClass) -> Self {
         ObjectClass::Valid(class.0)
     }

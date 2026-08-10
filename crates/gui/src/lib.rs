@@ -29,6 +29,7 @@ mod editor;
 mod helper;
 mod license_text;
 mod prelude;
+mod third_party_licenses;
 
 // ----------------------------------------------------------------
 // UiState - shared across all GUI controllers
@@ -408,6 +409,26 @@ fn load_about_dialog_information(ui: &AppWindow) {
         .collect();
     info.set_license_paragraphs(slint::ModelRc::new(slint::VecModel::from(paragraphs)));
 
+    let (third_party_groups, third_party_package_count) = third_party_licenses::load();
+    info.set_third_party_package_count(third_party_package_count as i32);
+    let third_party_groups: Vec<ThirdPartyLicense> = third_party_groups
+        .into_iter()
+        .map(|g| ThirdPartyLicense {
+            id: g.id.into(),
+            name: g.name.into(),
+            crates: g.crates.into(),
+            text_paragraphs: slint::ModelRc::new(slint::VecModel::from(
+                g.text_paragraphs
+                    .into_iter()
+                    .map(slint::SharedString::from)
+                    .collect::<Vec<_>>(),
+            )),
+        })
+        .collect();
+    info.set_third_party_licenses(slint::ModelRc::new(slint::VecModel::from(
+        third_party_groups,
+    )));
+
     let ui_weak = ui.as_weak();
     std::thread::spawn(move || {
         let cuda_available = evanalyzer_core::cuda_is_available();
@@ -492,7 +513,10 @@ mod ui_state_tests {
         set_name(&ui_state, "first edit");
         assert_eq!(name(&ui_state), "first edit");
 
-        assert!(ui_state.undo(), "a checkpoint of the pre-edit state must exist");
+        assert!(
+            ui_state.undo(),
+            "a checkpoint of the pre-edit state must exist"
+        );
         assert_eq!(
             name(&ui_state),
             "",

@@ -5,6 +5,7 @@ use crate::project_owner::{ProjectTmpSettings, ProjectWithRuntime};
 use bitvec::{order::Lsb0, vec::BitVec};
 use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectId, PipelineId};
+use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
 use evanalyzer_cfg::settings::images_settings::{
     ChannelSettings, HistogramSettings, PixelSizeSettings, TStackSettings, ZStackSettings,
 };
@@ -307,7 +308,7 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     fn get_class_from_id(&self, id: &ObjectClass) -> Option<&Class> {
-        self.classification.classes.iter().find(|c| c.id == *id)
+        self.classification.classes().iter().find(|c| c.id == *id)
     }
 
     /// Internal helper to get the relative key of the currently active image.
@@ -710,7 +711,7 @@ impl ProjectExt for ProjectWithRuntime {
     }
 
     fn delete_all_classes(&mut self) {
-        self.classification.classes.clear();
+        self.classification = ClassificationSettings::new();
     }
 
     fn get_image_absolute_path_from_relative(&self, path: &Path) -> Option<PathBuf> {
@@ -1072,7 +1073,23 @@ impl ProjectExt for ProjectWithRuntime {
         // project still has `schema_version: 0` from `Default`).
         self.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
 
-        let json = serde_json::to_string_pretty(&self.settings)
+        // Every command's file-path field (AI model paths today - see
+        // `relativize_file_paths`'s doc comment for why this isn't limited to
+        // those specifically) is stored relative to the project's own
+        // directory on disk so the project keeps working after the folder is
+        // moved or copied elsewhere - but only in the serialized copy; the
+        // in-memory settings keep absolute paths so the rest of the app
+        // (pipeline preview, the model-info dialog, ...) doesn't need to
+        // know about the project directory to resolve them.
+        let mut on_disk_settings = self.settings.clone();
+        if let Some(project_dir) = final_path.parent() {
+            crate::extensions::utils::relativize_file_paths(
+                &mut on_disk_settings.pipelines,
+                project_dir,
+            );
+        }
+
+        let json = serde_json::to_string_pretty(&on_disk_settings)
             .map_err(|e| InternalErrors::ParseError(e.to_string()))?;
         fs::write(final_path.clone(), json)?;
 
@@ -1358,6 +1375,14 @@ pub fn load_project(path: &PathBuf) -> Result<ProjectWithRuntime, InternalErrors
     }
     inner.migrate();
 
+    // Reverse of the relativization `save_project_as` does on write - resolve
+    // AI command `model_path`s back to absolute now, using this project
+    // file's own directory, so the rest of the app can keep treating them as
+    // plain absolute paths.
+    if let Some(project_dir) = path.parent() {
+        crate::extensions::utils::resolve_file_paths(&mut inner.pipelines, project_dir);
+    }
+
     let mut project = ProjectWithRuntime {
         settings: inner,
         tmp_settings: ProjectTmpSettings::default(),
@@ -1524,8 +1549,8 @@ mod tests {
     #[test]
     fn get_class_from_id_finds_by_id_not_position() {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(class(1, "A"));
-        project.classification.classes.push(class(2, "B"));
+        project.classification.classes_mut().push(class(1, "A"));
+        project.classification.classes_mut().push(class(2, "B"));
 
         let found = project.get_class_from_id(&ObjectClass::Valid(2)).unwrap();
         assert_eq!(found.name, "B");
@@ -1535,9 +1560,12 @@ mod tests {
     #[test]
     fn delete_all_classes_clears_the_list() {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(class(1, "A"));
+        project.classification.classes_mut().push(class(1, "A"));
         project.delete_all_classes();
-        assert!(project.classification.classes.is_empty());
+        assert!(project.classification.classes().len() == 1);
+        assert!(project.classification.classes()[0].id == ObjectClass::BACKGROUND);
+        assert!(project.classification.classes()[0].color == 0x97978F);
+        assert!(project.classification.classes()[0].name == "Background");
     }
 
     #[test]
@@ -1784,7 +1812,10 @@ mod tests {
         let path = dir.path().join("full.evaproj");
 
         let mut project = project_with_one_image();
-        project.classification.classes.push(class(1, "Nucleus"));
+        project
+            .classification
+            .classes_mut()
+            .push(class(1, "Nucleus"));
         project.add_object(&ObjectMetricSettings {
             id: ObjectId(1),
             area: 1234,
@@ -1794,14 +1825,57 @@ mod tests {
         project.save_project_as(&path).unwrap();
 
         let loaded = load_project(&path).expect("load should succeed");
-        assert_eq!(loaded.classification.classes.len(), 1);
-        assert_eq!(loaded.classification.classes[0].name, "Nucleus");
+        // classes()[0] is the auto-prepended Background class.
+        assert_eq!(loaded.classification.classes().len(), 2);
+        assert_eq!(loaded.classification.classes()[1].name, "Nucleus");
         // `load_project` doesn't select an image on its own - it only loads
         // `settings`, leaving `tmp_settings` at its defaults.
         assert_eq!(loaded.get_current_image_path_cloned(), None);
         let objects = &loaded.images.list.get(Path::new("img.tif")).unwrap().series[&0].objects;
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].area, 1234);
+    }
+
+    #[test]
+    fn save_project_as_stores_ai_model_paths_relative_to_the_project_dir() {
+        use evanalyzer_cfg::settings::pipeline_command::PipelineCommand;
+        use evanalyzer_cfg::settings::pipeline_command_settings::PixelClassifierSettings;
+        use evanalyzer_cfg::settings::pipeline_settings::PipelineStepSettings;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.evaproj");
+        let absolute_model_path = dir.path().join("models").join("nuclei.evamodel");
+
+        let mut project = ProjectWithRuntime::default();
+        let mut step_pipeline = pipeline(1);
+        step_pipeline.steps.push(PipelineStepSettings {
+            enabled: true,
+            command: PipelineCommand::PixelClassifier(PixelClassifierSettings {
+                model_path: absolute_model_path.clone(),
+                ..Default::default()
+            }),
+        });
+        project.add_pipeline(step_pipeline);
+        project.save_project_as(&path).unwrap();
+
+        // On disk, the path is relative to the project directory - not the
+        // absolute temp-dir path it was set from - so the project stays
+        // valid if the folder is moved or copied elsewhere.
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("models/nuclei.evamodel")
+                && !written.contains(&*absolute_model_path.to_string_lossy()),
+            "expected a relative model path on disk, got: {written}"
+        );
+
+        // Reloading resolves it straight back to the original absolute path
+        // - the rest of the app never has to know about relative storage.
+        let loaded = load_project(&path).expect("load should succeed");
+        let PipelineCommand::PixelClassifier(settings) = &loaded.pipelines[0].steps[0].command
+        else {
+            panic!("expected a PixelClassifier command");
+        };
+        assert_eq!(settings.model_path, absolute_model_path);
     }
 
     // -- Pipeline management ---------------------------------------------
@@ -1955,15 +2029,14 @@ mod tests {
     #[test]
     fn apply_project_template_replaces_classification_plate_and_pipelines() {
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(class(1, "Stale"));
+        project.classification.classes_mut().push(class(1, "Stale"));
         project.add_pipeline(pipeline(1));
 
         let template = evanalyzer_cfg::settings::templates::ProjectTemplate {
             meta: Default::default(),
             classification:
-                evanalyzer_cfg::settings::classification_settings::ClassificationSettings {
-                    classes: vec![class(9, "Fresh")],
-                },
+                evanalyzer_cfg::settings::classification_settings::ClassificationSettings::new_from_existing(
+                   vec![class(9, "Fresh")]),
             plate: Default::default(),
             pipelines: vec![evanalyzer_cfg::settings::templates::PipelineTemplate {
                 meta: evanalyzer_cfg::settings::meta_data::MetaData {
@@ -1975,8 +2048,9 @@ mod tests {
         };
         project.apply_project_template(&template);
 
-        assert_eq!(project.classification.classes.len(), 1);
-        assert_eq!(project.classification.classes[0].name, "Fresh");
+        // classes()[0] is the auto-prepended Background class.
+        assert_eq!(project.classification.classes().len(), 2);
+        assert_eq!(project.classification.classes()[1].name, "Fresh");
         assert_eq!(project.pipelines.len(), 1);
         assert_eq!(
             project.pipelines[0].id,
@@ -2271,32 +2345,38 @@ mod tests {
     #[test]
     fn auto_add_classes_creates_one_class_per_channel_of_the_first_image() {
         let mut project = project_with_one_image();
-        assert!(project.classification.classes.is_empty());
+        // A fresh project always has exactly the auto-prepended Background
+        // class and nothing else.
+        assert_eq!(project.classification.classes().len(), 1);
 
         project.auto_add_classes_based_on_image_meta();
 
         let names: Vec<&str> = project
             .classification
-            .classes
+            .classes()
             .iter()
             .map(|c| c.name.as_str())
             .collect();
-        assert_eq!(names.len(), 2);
+        // Background, plus one class per channel.
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&"Background"));
         assert!(names.contains(&"Ch0"));
         assert!(names.contains(&"Ch1"));
-        // `add_class` (via `ClassificationExt`) assigns each one a fresh,
-        // unique id - the `ObjectClass::Unset` built in the collected `Class`
-        // is only a placeholder that gets overwritten there, not the final id.
+        // `add_class` (via `ClassificationExt`) assigns each new class a
+        // fresh, unique id - the `ObjectClass::Unset` built in the collected
+        // `Class` is only a placeholder that gets overwritten there, not the
+        // final id. Background's own id is always `Valid(0)`, so all three
+        // classes have a real `Valid` id here.
         let ids: Vec<u32> = project
             .classification
-            .classes
+            .classes()
             .iter()
             .filter_map(|c| c.id.to_u32())
             .collect();
         assert_eq!(
             ids.len(),
-            2,
-            "both classes must have been assigned a real Valid id"
+            3,
+            "Background and both new classes must have a real Valid id"
         );
     }
 
@@ -2521,7 +2601,7 @@ mod tests {
     fn save_project_as_template_writes_classification_plate_and_pipelines() {
         let dir = tempfile::tempdir().unwrap();
         let mut project = ProjectWithRuntime::default();
-        project.classification.classes.push(class(1, "A"));
+        project.classification.classes_mut().push(class(1, "A"));
         let mut p = pipeline(1);
         p.name = Some("MyPipe".into());
         project.add_pipeline(p);
@@ -2541,8 +2621,9 @@ mod tests {
         assert!(expected.exists());
         let content = std::fs::read_to_string(&expected).unwrap();
         let parsed: ProjectTemplate = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed.classification.classes.len(), 1);
-        assert_eq!(parsed.classification.classes[0].name, "A");
+        // classes()[0] is the auto-prepended Background class.
+        assert_eq!(parsed.classification.classes().len(), 2);
+        assert_eq!(parsed.classification.classes()[1].name, "A");
         assert_eq!(parsed.pipelines.len(), 1);
         assert_eq!(parsed.pipelines[0].meta.name, "MyPipe");
     }
@@ -2594,7 +2675,13 @@ mod tests {
     fn new_returns_an_arc_wrapped_default_project() {
         let project = ProjectWithRuntime::default();
         let fresh = project.new();
-        assert!(fresh.classification.classes.is_empty());
+        // A fresh project always has exactly the auto-prepended Background
+        // class and nothing else.
+        assert_eq!(fresh.classification.classes().len(), 1);
+        assert_eq!(
+            fresh.classification.classes()[0].id,
+            ObjectClass::BACKGROUND
+        );
         assert!(fresh.images.list.is_empty());
     }
 
@@ -2611,7 +2698,13 @@ mod tests {
             .join(format!("newproj.{}", PROJECT_FILE_EXTENSIONS));
         assert!(expected.exists());
         assert_eq!(created.tmp_settings.current_project, Some(expected));
-        assert!(created.classification.classes.is_empty());
+        // A fresh project always has exactly the auto-prepended Background
+        // class and nothing else.
+        assert_eq!(created.classification.classes().len(), 1);
+        assert_eq!(
+            created.classification.classes()[0].id,
+            ObjectClass::BACKGROUND
+        );
     }
 
     // -- load_project schema version check ------------------------------------

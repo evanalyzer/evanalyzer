@@ -583,7 +583,8 @@ impl PipelineContext {
 mod tests {
     use super::*;
     use crate::{
-        F32Gray, F32Rgb, ImageContainer, image::PixelSizes, pipeline::pipeline_context::PipelineContext,
+        F32Gray, F32Rgb, ImageContainer, image::PixelSizes,
+        pipeline::pipeline_context::PipelineContext,
     };
 
     impl PipelineContext {
@@ -779,7 +780,11 @@ mod tests {
             let pixel_count: usize = size.width * size.height;
             Ok(Self {
                 output_path: Some(PathBuf::default()),
-                image: Arc::new(T::create_container(size, offset, ImagePlane { z: 0, c: 0, t: 0 })?),
+                image: Arc::new(T::create_container(
+                    size,
+                    offset,
+                    ImagePlane { z: 0, c: 0, t: 0 },
+                )?),
                 scratch_pad: Arc::new(T::create_container(
                     size,
                     offset,
@@ -871,7 +876,10 @@ mod tests {
 
         assert_eq!(ctx.output_path, Some(PathBuf::from("/tmp/out")));
         assert!(matches!(ctx.image.as_ref(), ImageContainer::F32Gray(_)));
-        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+        assert!(matches!(
+            ctx.scratch_pad.as_ref(),
+            ImageContainer::F32Gray(_)
+        ));
         assert_eq!(ctx.get_image_size(), size);
         assert_eq!(ctx.get_image_tile_offset(), Point2d { x: 1, y: 2 });
 
@@ -890,21 +898,24 @@ mod tests {
             width: 2,
             height: 2,
         };
-        let input_img = Image::<f32, 1, CpuAllocator>::new(
-            size,
-            vec![1.0, 2.0, 3.0, 4.0],
-            CpuAllocator,
-        )
-        .unwrap();
+        let input_img =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![1.0, 2.0, 3.0, 4.0], CpuAllocator)
+                .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
         // Freshly constructed via `new_from_image_test`, so the scratch pad
         // starts out as an F32Gray clone of the main image (not F32Rgb).
-        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+        assert!(matches!(
+            ctx.scratch_pad.as_ref(),
+            ImageContainer::F32Gray(_)
+        ));
 
         let (input, scratch) = ctx.get_f32_gray_image_and_prep_scratch::<F32Rgb>().unwrap();
         assert_eq!(input.as_slice(), &[1.0, 2.0, 3.0, 4.0]);
         assert_eq!(scratch.data.size(), size);
-        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)));
+        assert!(matches!(
+            ctx.scratch_pad.as_ref(),
+            ImageContainer::F32Rgb(_)
+        ));
     }
 
     #[test]
@@ -940,13 +951,19 @@ mod tests {
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
-        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)));
+        assert!(matches!(
+            ctx.scratch_pad.as_ref(),
+            ImageContainer::F32Rgb(_)
+        ));
 
         {
             let gray = ctx.get_scratch_as_f32_gray();
             assert_eq!(gray.as_slice(), &[0.0, 0.0, 0.0, 0.0]);
         }
-        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+        assert!(matches!(
+            ctx.scratch_pad.as_ref(),
+            ImageContainer::F32Gray(_)
+        ));
 
         let scratch_pad_ptr_before = Arc::as_ptr(&ctx.scratch_pad);
         ctx.get_scratch_as_f32_gray();
@@ -965,13 +982,19 @@ mod tests {
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+        assert!(matches!(
+            ctx.scratch_pad.as_ref(),
+            ImageContainer::F32Gray(_)
+        ));
 
         {
             let rgb = ctx.get_scratch_as_f32_rgb();
             assert_eq!(rgb.as_slice(), &[0.0; 4 * 3]);
         }
-        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Rgb(_)));
+        assert!(matches!(
+            ctx.scratch_pad.as_ref(),
+            ImageContainer::F32Rgb(_)
+        ));
 
         let scratch_pad_ptr_before = Arc::as_ptr(&ctx.scratch_pad);
         ctx.get_scratch_as_f32_rgb();
@@ -990,7 +1013,10 @@ mod tests {
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        assert!(matches!(ctx.scratch_pad.as_ref(), ImageContainer::F32Gray(_)));
+        assert!(matches!(
+            ctx.scratch_pad.as_ref(),
+            ImageContainer::F32Gray(_)
+        ));
 
         {
             let u32_scratch = ctx.get_scratch_as_u32();

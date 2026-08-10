@@ -10,11 +10,19 @@ pub fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
         .pipelines
         .iter()
         .map(|p| {
-            let name = p.name.clone().unwrap_or_else(|| format!("Pipeline {}", p.id.0));
+            let name = p
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Pipeline {}", p.id.0));
             (name, p.enabled, p.steps.len())
         })
         .collect();
-    let class_names: Vec<&str> = project.classification.classes.iter().map(|c| c.name.as_str()).collect();
+    let class_names: Vec<&str> = project
+        .classification
+        .classes()
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
     let reachable = project.does_project_images_exist();
 
     if args.json {
@@ -93,7 +101,8 @@ pub fn run_validate(args: ValidateArgs) -> Result<(), InternalErrors> {
     println!("Project:    {}", args.project.display());
     println!(
         "Image root: {}",
-        root.map(|p| p.display().to_string()).unwrap_or_else(|| "(none)".into())
+        root.map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none)".into())
     );
     println!("Checked {total} image(s)");
 

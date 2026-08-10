@@ -23,7 +23,7 @@ jobs:
     # merges, and avoids paying for CUDA/Windows/macOS runners on every push.
     runs-on: ubuntu-latest
     container:
-      image: joda001/evanalyzer-toolchain:0.1.5
+      image: joda001/evanalyzer-toolchain:0.2.0
       credentials:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -120,4 +120,108 @@ jobs:
             git push
           else
             echo "Coverage unchanged - nothing to commit."
+          fi
+
+  fmt:
+    # Checks that source is `cargo fmt`-clean, including the files
+    # `evanalyzer_cfg`'s build.rs (re-)generates - see
+    # crates/cfg/build/pipeline_commands_generator.rs - which writes
+    # crates/cfg/src/modules/pipeline_command*.rs and
+    # crates/core/src/job/algos_from_config.rs, running each through
+    # `rustfmt` itself as part of generation.
+    #
+    # A plain checkout isn't enough to check those files correctly: the
+    # committed copies could be stale relative to the algo structs they're
+    # derived from, so this builds `evanalyzer_cfg` first to regenerate
+    # them before running `cargo fmt --check` against the result.
+    # `evanalyzer_cfg` has no native dependencies (it doesn't depend on
+    # evanalyzer_core), so this is cheap and doesn't need the libtorch/JRE
+    # downloads the `test` job pays for.
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.2.0
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64-fmt
+
+      - name: Regenerate build-script-generated source
+        run: cargo check -p evanalyzer_cfg
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+  audit:
+    # Dependency/license audit via cargo-audit (RUSTSEC advisory DB). Only
+    # needs Cargo.lock, not a full build, so it's a separate lightweight job
+    # rather than a step tacked onto `test` - no libtorch/JRE download, no
+    # compilation.
+    #
+    # Informational, not a merge gate: it doesn't fail the job on findings
+    # (mirrors the coverage job, which reports a badge rather than enforcing
+    # a threshold). Flip this to enforce a MSRV/deny policy later via
+    # `cargo audit --deny warnings` once the current advisories are triaged.
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.2.0
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    # `contents: write` is only used by the last step (committing the audit
+    # badge/history back to `main`) - everything else only reads.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run cargo audit
+        # Exits non-zero when vulnerabilities (not just warnings) are found -
+        # capture that in the job summary instead of failing the step, since
+        # this job is informational. Two invocations (plain + --json): the
+        # plain-text one drives the human-readable job summary and the
+        # badge's counts, the JSON one feeds write_audit_history.py the
+        # per-crate/advisory detail the plain text doesn't structure cleanly.
+        run: |
+          set -o pipefail
+          cargo audit | tee audit-output.txt || true
+          cargo audit --json > audit-output.json || true
+
+      - name: Publish audit results to the job summary
+        run: |
+          {
+            echo "## Dependency audit (cargo-audit)"
+            echo
+            echo '```'
+            cat audit-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update audit badge & history (push to main only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          VULNS=$(grep -oP '(?<=error: )\d+(?= vulnerabilit)' audit-output.txt || echo 0)
+          WARNINGS=$(grep -oP '(?<=warning: )\d+(?= allowed warning)' audit-output.txt || echo 0)
+          bash .github/scripts/update_audit_badge.sh "${VULNS}" "${WARNINGS}"
+          python3 .github/scripts/write_audit_history.py audit-output.json "$(git rev-parse --short HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/audit-badge.svg docs/audit-history.csv
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update audit badge [skip ci]"
+            git push
+          else
+            echo "Audit result unchanged - nothing to commit."
           fi

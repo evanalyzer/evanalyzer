@@ -861,7 +861,11 @@ mod tests {
             (ZStackHandling::TakeTheMiddle, ZProjection::TakeTheMiddle),
         ];
         for (handling, expected) in cases {
-            assert_eq!(to_z_projection(handling.clone()), expected, "for {handling:?}");
+            assert_eq!(
+                to_z_projection(handling.clone()),
+                expected,
+                "for {handling:?}"
+            );
         }
     }
 
@@ -916,7 +920,8 @@ mod tests {
         // (LOW_RES_MAX_WIDTH_AND_HEIGHT), not the (huge) requested size.
         resolutions.insert(0, pyramid(2000, 2000));
 
-        let (level, w, h) = look_for_best_matching_resolution_index(10_000, 10_000, &resolutions, true);
+        let (level, w, h) =
+            look_for_best_matching_resolution_index(10_000, 10_000, &resolutions, true);
 
         assert_eq!(level, 0);
         assert_eq!((w, h), (2000.0, 2000.0));

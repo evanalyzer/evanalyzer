@@ -18,8 +18,8 @@ use kornia_imgproc::filter::spatial_gradient_float;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
 use rayon::iter::IntoParallelRefMutIterator;
-use std::sync::Arc;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 /// The specific calculation to extract from the Structure Tensor.
 pub enum TensorMode {
@@ -110,8 +110,19 @@ impl ImageAlgorithm for StructureTensor {
                 });
             }
         };
-        // Compute gradients
+        // spatial_gradient_float panics inside kornia itself (chunks_mut(0))
+        // for a zero-width image - the `?`/`map_err` calls below can't catch
+        // that, since the panic happens before any Result is produced. Guard
+        // explicitly instead.
         let size = input.size();
+        if size.width == 0 || size.height == 0 {
+            return Err(InternalErrors::Generic(format!(
+                "StructureTensor requires a non-empty image, got {}x{}",
+                size.width, size.height
+            )));
+        }
+
+        // Compute gradients
         let mut gx = Image::<f32, 1, CpuAllocator>::new(
             size,
             vec![0.0; size.width * size.height],
@@ -298,5 +309,29 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn zero_width_image_returns_error_instead_of_panicking() {
+        let size = ImageSize {
+            width: 0,
+            height: 5,
+        };
+        let input_img =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![], CpuAllocator).expect("image");
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        let mut cache = PipelineCache::default();
+
+        let algo = StructureTensor {
+            kernel_size: 3,
+            sigma: 1.0,
+            mode: TensorMode::Coherence,
+        };
+
+        let result = algo.execute(&mut ctx, &mut cache);
+        assert!(
+            result.is_err(),
+            "expected an error for a zero-width image, got Ok"
+        );
     }
 }

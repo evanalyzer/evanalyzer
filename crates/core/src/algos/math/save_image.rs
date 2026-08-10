@@ -64,8 +64,29 @@ impl ImageAlgorithm for SaveImage {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
+        let Some(output_path) = ctx.output_path.clone() else {
+            return Err(InternalErrors::Io("No output path!".into()));
+        };
+
+        // Control images are grouped per source image (its relative path, minus
+        // extension, becomes its own output folder) so e.g. every image's
+        // "segmentation_mask" control image doesn't collide on the same filename.
+        let image_folder = cache.image_rel_path.with_extension("");
+        let out_dir = output_path.join("images").join(image_folder);
+        std::fs::create_dir_all(&out_dir).map_err(|e| InternalErrors::Io(e.to_string()))?;
+
+        // All tiles of one image are kept in the same folder (not nested per-tile)
+        // so users reconstructing the full image from its tiles don't have to hunt
+        // across subfolders. The offset is zero-padded so filenames sort in tile
+        // order in a plain file browser, not just numerically.
+        let tile_offset = ctx.get_image_tile_offset();
+        let out_path = out_dir.join(format!(
+            "{}_x{:06}_y{:06}.png",
+            self.name, tile_offset.x, tile_offset.y
+        ));
+
         // We look at ctx.image (the current state of the pipeline)
         if self.source == ImageSource::Image {
             match ctx.image.as_ref() {
@@ -90,11 +111,9 @@ impl ImageAlgorithm for SaveImage {
                     .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
 
                     // Save to disk
-                    if let Some(out_path) = &ctx.output_path {
-                        buffer
-                            .save(out_path.join(format!("{}.png", self.name)))
-                            .map_err(|e| InternalErrors::Io(e.to_string()))?;
-                    }
+                    buffer
+                        .save(&out_path)
+                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
                     return Ok(());
                 }
 
@@ -115,11 +134,9 @@ impl ImageAlgorithm for SaveImage {
                     )
                     .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
 
-                    if let Some(out_path) = &ctx.output_path {
-                        buffer
-                            .save(out_path.join(format!("{}.png", self.name)))
-                            .map_err(|e| InternalErrors::Io(e.to_string()))?;
-                    }
+                    buffer
+                        .save(&out_path)
+                        .map_err(|e| InternalErrors::Io(e.to_string()))?;
                     return Ok(());
                 }
                 _ => {
@@ -144,11 +161,9 @@ impl ImageAlgorithm for SaveImage {
             .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
 
             // Save to disk
-            if let Some(out_path) = &ctx.output_path {
-                buffer
-                    .save(out_path.join(format!("{}.png", self.name)))
-                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            }
+            buffer
+                .save(&out_path)
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
             return Ok(());
         } else if self.source == ImageSource::SegmentationMask {
@@ -165,11 +180,9 @@ impl ImageAlgorithm for SaveImage {
             .ok_or_else(|| InternalErrors::Internal("Buffer size mismatch".into()))?;
 
             // Save to disk
-            if let Some(out_path) = &ctx.output_path {
-                buffer
-                    .save(out_path.join(format!("{}.png", self.name)))
-                    .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            }
+            buffer
+                .save(&out_path)
+                .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
             return Ok(());
         } else {
@@ -234,15 +247,27 @@ mod tests {
         )
         .expect("Failed to create test image");
 
-        // 2. Setup PipelineContext
+        // 2. Setup PipelineContext - each test gets its own directory (not a
+        // fixed `images/` folder relative to the process CWD) so concurrently
+        // running tests in this module can never race on it: a previous
+        // version shared one `images/` folder across tests, and one test's
+        // cleanup (`remove_dir` after its own file was gone) could delete the
+        // directory out from under another test between its `create_dir_all`
+        // and `.save()` calls - intermittent "No such file or directory",
+        // more reliably hit under CI's parallel test execution.
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        // Write into the current directory so the relative `test_path` below matches.
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
 
         let mut cache = PipelineCache::default();
 
-        // 3. Define a temporary path
-        let test_path = PathBuf::from("test_output_deleteme.png");
+        // 3. Control images are written under
+        // `<output_path>/images/<image_rel_path>/<name>_x<off>_y<off>.png`; the
+        // default (empty) `image_rel_path` used here maps to `images/`
+        // directly, and the test context's tile offset defaults to (0, 0).
+        let test_path = dir
+            .path()
+            .join("images/test_output_deleteme_x000000_y000000.png");
 
         // 4. Run the command
         let saver = SaveImage {
@@ -259,8 +284,7 @@ mod tests {
         let metadata = fs::metadata(&test_path).unwrap();
         assert!(metadata.len() > 0, "Saved file is empty");
 
-        // Cleanup: remove the file after test
-        let _ = fs::remove_file(test_path);
+        // `dir` cleans itself up on drop - no manual cleanup needed.
     }
     #[test]
     fn test_save_rgb_command_execution() {
@@ -283,10 +307,13 @@ mod tests {
         )
         .expect("Failed to create test RGB image");
 
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
-        let test_path = PathBuf::from("test_output_rgb_deleteme.png");
+        let test_path = dir
+            .path()
+            .join("images/test_output_rgb_deleteme_x000000_y000000.png");
 
         // 2. Run the command
         let saver = SaveImage {
@@ -299,8 +326,7 @@ mod tests {
         assert!(result.is_ok());
         assert!(test_path.exists());
 
-        // Cleanup
-        let _ = fs::remove_file(test_path);
+        // `dir` cleans itself up on drop - no manual cleanup needed.
     }
 
     #[test]
@@ -315,7 +341,9 @@ mod tests {
             Image::<u32, 1, _>::from_size_slice(size, &data, CpuAllocator).unwrap();
 
         // 2. Setup context
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_u32_image_test(unsupported_img).unwrap();
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
         let saver = SaveImage {
             name: "fail".into(),
@@ -370,8 +398,9 @@ mod tests {
         // data[center_idx + 2] = 0.0; // Blue (already 0)
 
         let input_img = Image::new(size, data, CpuAllocator).unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
 
         // Try saving to an illegal path (e.g., a directory that doesn't exist)
@@ -429,15 +458,21 @@ mod tests {
         // `ImageSource::InstanceMap` branch (untested before this) can reuse
         // the same fixture as the `ImageSource::Image` tests above.
         let input_img = Image::<f32, 1, _>::from_size_slice(
-            ImageSize { width: 2, height: 2 },
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
             &[0.0f32, 0.5, 0.5, 1.0],
             CpuAllocator,
         )
         .unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
-        let test_path = PathBuf::from("test_output_instance_map_deleteme.png");
+        let test_path = dir
+            .path()
+            .join("images/test_output_instance_map_deleteme_x000000_y000000.png");
 
         let saver = SaveImage {
             name: "test_output_instance_map_deleteme".into(),
@@ -447,21 +482,27 @@ mod tests {
 
         assert!(result.is_ok(), "Save command failed: {:?}", result.err());
         assert!(test_path.exists(), "File was not actually created on disk");
-        let _ = fs::remove_file(test_path);
+        // `dir` cleans itself up on drop - no manual cleanup needed.
     }
 
     #[test]
     fn test_save_segmentation_mask_command_execution() {
         let input_img = Image::<f32, 1, _>::from_size_slice(
-            ImageSize { width: 2, height: 2 },
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
             &[0.0f32, 0.5, 0.5, 1.0],
             CpuAllocator,
         )
         .unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        ctx.output_path = Some(PathBuf::default());
+        ctx.output_path = Some(dir.path().to_path_buf());
         let mut cache = PipelineCache::default();
-        let test_path = PathBuf::from("test_output_seg_mask_deleteme.png");
+        let test_path = dir
+            .path()
+            .join("images/test_output_seg_mask_deleteme_x000000_y000000.png");
 
         let saver = SaveImage {
             name: "test_output_seg_mask_deleteme".into(),
@@ -471,7 +512,7 @@ mod tests {
 
         assert!(result.is_ok(), "Save command failed: {:?}", result.err());
         assert!(test_path.exists(), "File was not actually created on disk");
-        let _ = fs::remove_file(test_path);
+        // `dir` cleans itself up on drop - no manual cleanup needed.
     }
 
     #[test]

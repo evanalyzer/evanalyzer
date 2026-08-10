@@ -1,3 +1,6 @@
+pub mod ai_learning_object_settings;
+pub mod ai_learning_pixel_settings;
+pub mod ai_learning_settings;
 pub mod classification_settings;
 pub mod images_settings;
 pub mod meta_data;

@@ -1205,7 +1205,8 @@ mod breakpoint_state_tests {
             width: 2,
             height: 2,
         };
-        let image = Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 4], CpuAllocator).unwrap();
+        let image =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 4], CpuAllocator).unwrap();
         ImageContainer::F32Gray(ManagedImage {
             data: image,
             tile_offset: Point2d { x: 0, y: 0 },
@@ -1226,10 +1227,16 @@ mod breakpoint_state_tests {
         let controller = make_controller();
 
         controller.set_breakpoint_view_mode(1);
-        assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Segmentation);
+        assert_eq!(
+            controller.breakpoint_view_mode(),
+            BreakpointViewMode::Segmentation
+        );
 
         controller.set_breakpoint_view_mode(2);
-        assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Instances);
+        assert_eq!(
+            controller.breakpoint_view_mode(),
+            BreakpointViewMode::Instances
+        );
 
         controller.set_breakpoint_view_mode(0);
         assert_eq!(controller.breakpoint_view_mode(), BreakpointViewMode::Image);

@@ -1,8 +1,9 @@
 use crate::resources::recommended_jvm_heap_bytes;
 use evanalyzer_cfg::core_types::InternalErrors;
-use jni::objects::GlobalRef;
+use jni::objects::JClass;
+use jni::refs::Global;
 use jni::sys::jmethodID;
-use jni::{InitArgsBuilder, JNIVersion, JavaVM};
+use jni::{InitArgsBuilder, JNIVersion, JavaVM, jni_sig, jni_str};
 use log::{info, warn};
 use std::env;
 use std::error::Error;
@@ -11,7 +12,7 @@ use std::sync::{Mutex, OnceLock}; // Use OnceCell from the crate, not std
 
 pub struct JavaWrapper {
     pub jvm: Option<JavaVM>,
-    pub m_bioformats_class: Option<GlobalRef>,
+    pub m_bioformats_class: Option<Global<JClass<'static>>>,
     // The instance of BioFormatsWrapper (GlobalRef so it's not GC'd)
     // Cached Method IDs (valid for the lifetime of the JVM)
     pub m_constructor: Option<jmethodID>,
@@ -181,7 +182,7 @@ impl JavaWrapper {
         // 3. Initialize JVM
         // Note: The 'jni' crate will look for jvm.dll/so in the PATH we just updated
         let jvm_args = InitArgsBuilder::new()
-            .version(JNIVersion::V8)
+            .version(JNIVersion::V1_8)
             .option(classpath)
             .option(ram_arg)
             .option(headless_arg)
@@ -189,46 +190,63 @@ impl JavaWrapper {
 
         let jvm = JavaVM::new(jvm_args)?;
 
-        {
-            // Inside your init function's scoped block:
-            let mut env = jvm.attach_current_thread()?;
+        // jni 0.22's `attach_current_thread` only ever hands out an `Env`
+        // reference within a closure (never an owned guard tied to `jvm`),
+        // so every JNI call that needs it happens inside this closure; the
+        // resolved class ref and cached method IDs are returned out of it.
+        let (global_cls, constructor, close, get_image_properties, read_image_tile) = jvm
+            .attach_current_thread(|env| -> jni::errors::Result<_> {
+                let class_name = jni_str!("BioFormatsWrapper");
+                let local_cls = env.find_class(class_name)?;
 
-            let class_name = "BioFormatsWrapper";
-            let local_cls = env.find_class(class_name)?;
-
-            let global_cls = env.new_global_ref(local_cls)?;
-            self.m_bioformats_class = Some(global_cls);
-
-            // 1.  Cache the Method IDs
-            // C++: mConstructor = myGlobEnv->GetMethodID(mBioformatsClass, "<init>", "(Ljava/lang/String;)V");
-            // We use .into_raw() to store them as simple pointers
-            if let Some(ref class_ref) = self.m_bioformats_class {
-                self.m_constructor = Some(
-                    env.get_method_id(class_ref, "<init>", "(Ljava/lang/String;Z)V")?
-                        .into_raw(),
-                );
-
-                self.m_close = Some(env.get_method_id(class_ref, "close", "()V")?.into_raw());
-
-                self.m_get_image_properties = Some(
-                    env.get_method_id(class_ref, "getImageProperties", "()Ljava/lang/String;")?
-                        .into_raw(),
-                );
-
-                self.m_read_image_tile = Some(
-                    env.get_method_id(
-                        class_ref,
-                        "readImageTile",
-                        "(Ljava/nio/ByteBuffer;IIIIIIIII)V",
+                // 1.  Cache the Method IDs
+                // C++: mConstructor = myGlobEnv->GetMethodID(mBioformatsClass, "<init>", "(Ljava/lang/String;)V");
+                // We use .into_raw() to store them as simple pointers
+                let constructor = env
+                    .get_method_id(
+                        &local_cls,
+                        jni_str!("<init>"),
+                        jni_sig!("(Ljava/lang/String;Z)V"),
                     )?
-                    .into_raw(),
-                );
-            }
-        };
-        // 'env' is dropped here, so the borrow on 'jvm' is released.
+                    .into_raw();
 
-        // In Rust's jni crate, we often call methods by name/sig directly
-        // or cache MethodIDs if performance is critical.
+                let close = env
+                    .get_method_id(&local_cls, jni_str!("close"), jni_sig!("()V"))?
+                    .into_raw();
+
+                let get_image_properties = env
+                    .get_method_id(
+                        &local_cls,
+                        jni_str!("getImageProperties"),
+                        jni_sig!("()Ljava/lang/String;"),
+                    )?
+                    .into_raw();
+
+                let read_image_tile = env
+                    .get_method_id(
+                        &local_cls,
+                        jni_str!("readImageTile"),
+                        jni_sig!("(Ljava/nio/ByteBuffer;IIIIIIIII)V"),
+                    )?
+                    .into_raw();
+
+                let global_cls = env.new_global_ref(local_cls)?;
+
+                Ok((
+                    global_cls,
+                    constructor,
+                    close,
+                    get_image_properties,
+                    read_image_tile,
+                ))
+            })?;
+
+        self.m_bioformats_class = Some(global_cls);
+        self.m_constructor = Some(constructor);
+        self.m_close = Some(close);
+        self.m_get_image_properties = Some(get_image_properties);
+        self.m_read_image_tile = Some(read_image_tile);
+
         info!("JVM Initialized and BioFormatsWrapper loaded!");
         self.jvm = Some(jvm);
         Ok(())
@@ -285,35 +303,10 @@ impl JavaWrapper {
     }
 }
 
-/// Drops the global refs of the JNI
-///
-/// # Arguments
-///
-/// - `&mut self` (`undefined`) - Self
-///
-/// # Examples
-///
-/// ```
-/// use crate::...;
-///
-/// let _ = drop();
-/// ```
-impl Drop for JavaWrapper {
-    fn drop(&mut self) {
-        // 1. Take the class reference out of the Option
-        let class_ref = self.m_bioformats_class.take();
-        // 2. Only proceed if we actually have a JVM and a class reference to clean up
-        if let (Some(jvm), Some(class)) = (&self.jvm, class_ref) {
-            // 3. Attach the thread to provide a JNIEnv for the cleanup
-            if let Ok(_env) = jvm.attach_current_thread() {
-                // 4. Explicitly drop the GlobalRef while _env is alive
-                drop(class);
-                // After this line, the JNI DeleteGlobalRef has been called safely.
-            }
-            // _env drops here, detaching the thread
-        }
-    }
-}
+// No `Drop` impl is needed here: since jni 0.22, `Global`'s own `Drop` impl
+// attaches the current thread internally (via `JavaVM::singleton()`) to call
+// `DeleteGlobalRef`, so `m_bioformats_class` cleans itself up when this
+// struct's fields are dropped in the normal way.
 
 #[cfg(test)]
 mod tests {

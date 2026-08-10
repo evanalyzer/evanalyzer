@@ -31,7 +31,10 @@ fn write_grid(
     headers: &[String],
     rows: &[Vec<String>],
 ) -> std::io::Result<()> {
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count().min(MAX_COL_WIDTH)).collect();
+    let mut widths: Vec<usize> = headers
+        .iter()
+        .map(|h| h.chars().count().min(MAX_COL_WIDTH))
+        .collect();
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
             if let Some(w) = widths.get_mut(i) {

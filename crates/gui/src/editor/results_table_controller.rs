@@ -1832,7 +1832,24 @@ impl ResultsTableController {
                 ..Default::default()
             });
             let img_names = loader.get_image_names();
-            let cls_names = loader.get_class_names();
+            // The registry snapshot written into the file itself (see
+            // `evanalyzer_core::storage::duckdb`'s `classes` table), not the
+            // live project's current classification settings (which can
+            // have since renamed/added/deleted classes) and not a distinct
+            // scan over `objects` (which would miss any class with zero
+            // matching objects).
+            // Formatted to match `class_label`'s exact `"{name} ({id})"`
+            // shape (see `evanalyzer_core::storage::duckdb`) - that's what's
+            // actually stored in `objects.object_class_name` and what
+            // `class_case_expr()` matches a `class_filter` value against, so
+            // the filter items must use the identical string, not just the
+            // bare name.
+            let cls_names = loader.get_classes().map(|classes| {
+                classes
+                    .into_iter()
+                    .map(|c| format!("{} ({})", c.name, c.class_id))
+                    .collect::<Vec<_>>()
+            });
             let coloc_partner_classes = loader.get_coloc_partner_class_names();
             // Non-fatal: a file with no time/depth axis (or a lookup error)
             // just means the frame steppers stay hidden.
@@ -1923,10 +1940,8 @@ impl ResultsTableController {
                             state.set_filter_class_active(false);
                             state.set_filter_class_all_popup_checked(true);
 
-                            let mut matrix_class_options =
-                                vec![SharedString::from("All classes")];
-                            matrix_class_options
-                                .extend(cls_names.iter().map(SharedString::from));
+                            let mut matrix_class_options = vec![SharedString::from("All classes")];
+                            matrix_class_options.extend(cls_names.iter().map(SharedString::from));
                             state.set_matrix_class_options(slint::ModelRc::new(
                                 slint::VecModel::from(matrix_class_options),
                             ));
@@ -2108,6 +2123,12 @@ impl ResultsTableController {
                 this.displayed_objects.lock().unwrap().reset();
                 let widths = this.column_widths.lock().unwrap().clone();
 
+                // The Columns popup was previously left stale here (still
+                // whatever `load_from_file`/the last ungrouped reload set),
+                // so grouping never refreshed it at all - see
+                // `grouped_column_items`.
+                let column_items = grouped_column_items(&base_specs);
+
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(window) = ui.upgrade() {
                         let state = window.global::<ResultsState>();
@@ -2130,6 +2151,13 @@ impl ResultsTableController {
                         state.set_loading_more(false);
                         state.set_group_active(true);
                         state.set_group_computing(false);
+                        state.set_column_popup_all_checked(all_checked(&column_items));
+                        state.set_column_items(slint::ModelRc::new(slint::VecModel::from(
+                            column_items.clone(),
+                        )));
+                        state.set_column_popup(slint::ModelRc::new(slint::VecModel::from(
+                            column_items,
+                        )));
                     }
                 });
             }
@@ -3553,6 +3581,38 @@ fn column_items_from_specs(specs: &[ColumnSpec]) -> Vec<FilterItem> {
     mark_group_headers(items)
 }
 
+/// Seeds the live Table view's own "Columns" popup while grouped: the same
+/// per-object base columns shown when ungrouped - unchecking one still
+/// round-trips through `column_filter_apply`'s label match against
+/// `self.column_specs` and controls which metrics get aggregated - plus an
+/// always-checked "Number of Objects" entry for the group's own object
+/// count (`build_group_specs`'s "ROIs" column). That count has no
+/// per-object equivalent to base a toggle on, so it's appended on its own
+/// rather than folded into the base-column list (whose labels must stay
+/// exactly what `column_filter_apply` expects).
+fn grouped_column_items(base_specs: &[ColumnSpec]) -> Vec<FilterItem> {
+    let mut items = vec![FilterItem {
+        label: "Number of Objects".into(),
+        checked: true,
+        group: SharedString::new(),
+        group_header: false,
+        group_all_checked: false,
+    }];
+    items.extend(mark_group_headers(
+        base_specs
+            .iter()
+            .map(|c| FilterItem {
+                label: c.label.as_str().into(),
+                checked: c.visible,
+                group: column_group(&c.id).into(),
+                group_header: false,
+                group_all_checked: false,
+            })
+            .collect(),
+    ));
+    items
+}
+
 /// Section a column belongs to in the export dialog's "Columns to export"
 /// checklist, or `""` for columns that don't belong to a section.
 ///
@@ -4521,6 +4581,39 @@ mod tests {
         );
     }
 
+    // -- grouped_column_items --------------------------------------------------------
+
+    #[test]
+    fn grouped_column_items_includes_base_columns_plus_number_of_objects() {
+        let specs = vec![
+            spec("object_id", "object ID", true),
+            spec("area_px", "Area (px)", false),
+        ];
+        let items = grouped_column_items(&specs);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].label, SharedString::from("Number of Objects"));
+        assert!(items[0].checked, "ROI count is always shown once grouped");
+        assert_eq!(items[1].label, SharedString::from("object ID"));
+        assert!(items[1].checked);
+        assert_eq!(items[2].label, SharedString::from("Area (px)"));
+        assert!(!items[2].checked);
+    }
+
+    #[test]
+    fn grouped_column_items_number_of_objects_label_never_collides_with_a_real_column() {
+        // `column_filter_apply` matches by label against `self.column_specs`
+        // (the base per-object specs passed in here) - "Number of Objects"
+        // must never collide with a real base column's label, or toggling
+        // one would silently affect the other.
+        let specs = vec![spec("area_px", "Area (px)", true)];
+        assert!(!specs.iter().any(|c| c.label == "Number of Objects"));
+        let items = grouped_column_items(&specs);
+        assert_eq!(
+            items.first().unwrap().label,
+            SharedString::from("Number of Objects")
+        );
+    }
+
     #[test]
     fn sanitize_filename_replaces_illegal_characters() {
         assert_eq!(sanitize_filename("Group A/B:C"), "Group A_B_C");
@@ -5093,7 +5186,10 @@ mod tests {
         let items = model_to_vec(&state.get_filter_image_items());
         assert!(!items.iter().find(|i| i.label == "a").unwrap().checked);
         assert!(items.iter().find(|i| i.label == "b").unwrap().checked);
-        assert!(state.get_filter_image_active(), "one unchecked item makes the filter active");
+        assert!(
+            state.get_filter_image_active(),
+            "one unchecked item makes the filter active"
+        );
     }
 
     #[test]
@@ -5102,8 +5198,14 @@ mod tests {
         let (_ui_state, controller) = make_controller(results_ui.as_weak());
         controller.attach_callbacks();
         let state = results_ui.global::<ResultsState>();
-        state.set_filter_image_items(to_model(vec![plain_item("a", false), plain_item("b", false)]));
-        state.set_filter_image_popup(to_model(vec![plain_item("a", false), plain_item("b", false)]));
+        state.set_filter_image_items(to_model(vec![
+            plain_item("a", false),
+            plain_item("b", false),
+        ]));
+        state.set_filter_image_popup(to_model(vec![
+            plain_item("a", false),
+            plain_item("b", false),
+        ]));
 
         state.invoke_image_select_all();
         let items = model_to_vec(&state.get_filter_image_items());
@@ -5129,7 +5231,11 @@ mod tests {
         assert!(!model_to_vec(&state.get_filter_class_items())[0].checked);
 
         state.invoke_class_select_all();
-        assert!(model_to_vec(&state.get_filter_class_items()).iter().all(|i| i.checked));
+        assert!(
+            model_to_vec(&state.get_filter_class_items())
+                .iter()
+                .all(|i| i.checked)
+        );
     }
 
     #[test]
@@ -5157,14 +5263,28 @@ mod tests {
         let (_ui_state, controller) = make_controller(results_ui.as_weak());
         controller.attach_callbacks();
         let state = results_ui.global::<ResultsState>();
-        state.set_column_items(to_model(vec![plain_item("Area", false), plain_item("Class", false)]));
-        state.set_column_popup(to_model(vec![plain_item("Area", false), plain_item("Class", false)]));
+        state.set_column_items(to_model(vec![
+            plain_item("Area", false),
+            plain_item("Class", false),
+        ]));
+        state.set_column_popup(to_model(vec![
+            plain_item("Area", false),
+            plain_item("Class", false),
+        ]));
 
         state.invoke_column_select_all();
-        assert!(model_to_vec(&state.get_column_items()).iter().all(|i| i.checked));
+        assert!(
+            model_to_vec(&state.get_column_items())
+                .iter()
+                .all(|i| i.checked)
+        );
 
         state.invoke_column_clear_all();
-        assert!(model_to_vec(&state.get_column_items()).iter().all(|i| !i.checked));
+        assert!(
+            model_to_vec(&state.get_column_items())
+                .iter()
+                .all(|i| !i.checked)
+        );
     }
 
     #[test]
@@ -5173,7 +5293,10 @@ mod tests {
         let (_ui_state, controller) = make_controller(results_ui.as_weak());
         controller.attach_callbacks();
         let state = results_ui.global::<ResultsState>();
-        state.set_filter_image_items(to_model(vec![plain_item("apple", false), plain_item("banana", false)]));
+        state.set_filter_image_items(to_model(vec![
+            plain_item("apple", false),
+            plain_item("banana", false),
+        ]));
 
         state.invoke_image_filter_search_changed("app".into());
 
@@ -5189,11 +5312,17 @@ mod tests {
         let (_ui_state, controller) = make_controller(results_ui.as_weak());
         controller.attach_callbacks();
 
-        results_ui.global::<ResultsState>()
+        results_ui
+            .global::<ResultsState>()
             .invoke_column_width_changed("area_px".into(), 120.0);
 
         assert_eq!(
-            controller.column_widths.lock().unwrap().get("area_px").copied(),
+            controller
+                .column_widths
+                .lock()
+                .unwrap()
+                .get("area_px")
+                .copied(),
             Some(120.0)
         );
     }

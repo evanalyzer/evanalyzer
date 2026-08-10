@@ -4,13 +4,14 @@ mod modules;
 mod types;
 mod utils;
 
-pub use legacy_import::{import_legacy_project, LegacyImportError, LegacyImportOutcome};
+pub use legacy_import::{LegacyImportError, LegacyImportOutcome, import_legacy_project};
 
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
 pub const PROJECT_FILE_TEMPLATE_EXTENSIONS: &str = &"evapt";
 pub const PIPELINE_EXTENSIONS: &str = &"evapipe";
 pub const RESULTS_FILE_EXTENSION: &str = &"evadb";
+pub const EVANALYZER_TRAINED_AI_MODELS: &str = &"evamodel";
 /// Project file extension used by the old (pre-rewrite) application.
 pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 
@@ -58,7 +59,7 @@ mod tests {
         assert_eq!(project.pipelines.len(), 2);
         assert_eq!(project.pipelines[0].steps.len(), 7);
         assert_eq!(project.pipelines[1].steps.len(), 5);
-        assert_eq!(project.classification.classes.len(), 3);
+        assert_eq!(project.classification.classes().len(), 3);
     }
 
     /// All shipped `.evapt`/`.evapipe` template files must deserialize into
@@ -89,13 +90,19 @@ mod tests {
             match ext {
                 "evapt" => {
                     serde_json::from_str::<ProjectTemplate>(&json).unwrap_or_else(|e| {
-                        panic!("{} failed to deserialize as ProjectTemplate: {e}", path.display())
+                        panic!(
+                            "{} failed to deserialize as ProjectTemplate: {e}",
+                            path.display()
+                        )
                     });
                     checked_evapt += 1;
                 }
                 "evapipe" => {
                     serde_json::from_str::<PipelineTemplate>(&json).unwrap_or_else(|e| {
-                        panic!("{} failed to deserialize as PipelineTemplate: {e}", path.display())
+                        panic!(
+                            "{} failed to deserialize as PipelineTemplate: {e}",
+                            path.display()
+                        )
                     });
                     checked_evapipe += 1;
                 }
@@ -103,8 +110,16 @@ mod tests {
             }
         }
 
-        assert!(checked_evapt > 0, "no .evapt files found under {}", templates_dir.display());
-        assert!(checked_evapipe > 0, "no .evapipe files found under {}", templates_dir.display());
+        assert!(
+            checked_evapt > 0,
+            "no .evapt files found under {}",
+            templates_dir.display()
+        );
+        assert!(
+            checked_evapipe > 0,
+            "no .evapipe files found under {}",
+            templates_dir.display()
+        );
     }
 
     /// Regression test for the generator's "rich enum" support: a `TransformFunction`-like

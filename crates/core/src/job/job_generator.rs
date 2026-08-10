@@ -9,7 +9,7 @@ use chrono::Utc;
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use evanalyzer_cfg::{
     core_types::InternalErrors,
-    settings::{project_settings::ProjectSettings, object_settings::ObjectMetricSettings},
+    settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
 };
 use log::{error, info};
 use std::{
@@ -51,7 +51,7 @@ pub fn generate_analyze_job_from_project_settings(
 ) -> Result<JobExecutor, InternalErrors> {
     let class_names: std::collections::HashMap<_, _> = config
         .classification
-        .classes
+        .classes()
         .iter()
         .filter_map(|c| {
             c.id.to_u32().map(|n| {
@@ -69,9 +69,7 @@ pub fn generate_analyze_job_from_project_settings(
         .as_deref()
         .map(sanitize_job_name)
         .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| {
-            petname::petname(2, "_").expect("Problem in random job name generator")
-        });
+        .unwrap_or_else(|| petname::petname(2, "_").expect("Problem in random job name generator"));
     let output_path = project_path
         .join("results")
         .join(format!("{file_date}__{job_name}"));
@@ -105,7 +103,13 @@ fn sanitize_job_name(name: &str) -> String {
     let cleaned: String = name
         .trim()
         .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.trim().to_string();
     if cleaned.chars().all(|c| c == '_') {
@@ -223,14 +227,15 @@ mod tests {
         let image_root = tempfile::tempdir().unwrap();
         let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
 
-        let job = generate_preview_job_from_project_settings(
-            project,
-            project_dir.path().to_path_buf(),
-        )
-        .expect("valid config with an image root must succeed");
+        let job =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .expect("valid config with an image root must succeed");
 
         let expected_output = project_dir.path().join("results").join("preview");
-        assert!(expected_output.is_dir(), "preview output directory must be created on disk");
+        assert!(
+            expected_output.is_dir(),
+            "preview output directory must be created on disk"
+        );
         assert_eq!(job.output_path, expected_output);
         assert_eq!(job.project_path, project_dir.path());
         assert_eq!(job.image_base_path, image_root.path());
@@ -249,13 +254,15 @@ mod tests {
             ],
         );
 
-        let job = generate_preview_job_from_project_settings(
-            project,
-            project_dir.path().to_path_buf(),
-        )
-        .unwrap();
+        let job =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .unwrap();
 
-        assert_eq!(job.pipelines.len(), 1, "only the enabled pipeline must be added");
+        assert_eq!(
+            job.pipelines.len(),
+            1,
+            "only the enabled pipeline must be added"
+        );
         assert!(job.pipelines.contains_key(&PipelineId(2)));
         assert!(!job.pipelines.contains_key(&PipelineId(1)));
     }
@@ -273,14 +280,19 @@ mod tests {
             )],
         );
 
-        let job = generate_preview_job_from_project_settings(
-            project,
-            project_dir.path().to_path_buf(),
-        )
-        .unwrap();
+        let job =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .unwrap();
 
-        let built = job.pipelines.get(&PipelineId(1)).expect("pipeline 1 must exist");
-        assert_eq!(built.commands.len(), 2, "only the two enabled steps must become commands");
+        let built = job
+            .pipelines
+            .get(&PipelineId(1))
+            .expect("pipeline 1 must exist");
+        assert_eq!(
+            built.commands.len(),
+            2,
+            "only the two enabled steps must become commands"
+        );
     }
 
     #[test]
@@ -288,15 +300,19 @@ mod tests {
         let project_dir = tempfile::tempdir().unwrap();
         let image_root = tempfile::tempdir().unwrap();
         let mut project = project_with(Some(image_root.path().to_path_buf()), vec![]);
-        project.images.settings.pixel_sizes = Some(PixelSizeSettings { x: 1.5, y: 2.5, z: 3.5 });
+        project.images.settings.pixel_sizes = Some(PixelSizeSettings {
+            x: 1.5,
+            y: 2.5,
+            z: 3.5,
+        });
 
-        let job = generate_preview_job_from_project_settings(
-            project,
-            project_dir.path().to_path_buf(),
-        )
-        .unwrap();
+        let job =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .unwrap();
 
-        let sizes = job.override_pixel_sizes.expect("pixel size override must be forwarded");
+        let sizes = job
+            .override_pixel_sizes
+            .expect("pixel size override must be forwarded");
         assert_eq!(sizes.px_size_x, 1.5);
         assert_eq!(sizes.px_size_y, 2.5);
         assert_eq!(sizes.px_size_z, 3.5);
@@ -308,11 +324,9 @@ mod tests {
         let image_root = tempfile::tempdir().unwrap();
         let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
 
-        let job = generate_preview_job_from_project_settings(
-            project,
-            project_dir.path().to_path_buf(),
-        )
-        .unwrap();
+        let job =
+            generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
+                .unwrap();
 
         assert!(job.override_pixel_sizes.is_none());
     }
@@ -335,7 +349,8 @@ mod tests {
 
         assert_eq!(job.pipelines.len(), 1);
         assert!(
-            job.output_path.starts_with(project_dir.path().join("results")),
+            job.output_path
+                .starts_with(project_dir.path().join("results")),
             "the analyze job's output directory must live under <project>/results"
         );
         assert!(job.output_path.is_dir());
@@ -364,7 +379,12 @@ mod tests {
         )
         .unwrap();
 
-        let folder_name = job.output_path.file_name().unwrap().to_string_lossy().into_owned();
+        let folder_name = job
+            .output_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         assert!(
             folder_name.ends_with("__dose_response_1"),
             "the timestamp prefix must still be kept alongside the custom name, got {folder_name}"
@@ -387,7 +407,10 @@ mod tests {
 
         // Must stay a single path segment directly under <project>/results,
         // never escape it via the sanitized name.
-        assert_eq!(job.output_path.parent().unwrap(), project_dir.path().join("results"));
+        assert_eq!(
+            job.output_path.parent().unwrap(),
+            project_dir.path().join("results")
+        );
     }
 
     #[test]
@@ -403,7 +426,12 @@ mod tests {
                 Some(blank.to_string()),
             )
             .unwrap();
-            let folder_name = job.output_path.file_name().unwrap().to_string_lossy().into_owned();
+            let folder_name = job
+                .output_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             assert!(
                 !folder_name.ends_with("__"),
                 "blank/illegal-only input {blank:?} must fall back to a random name, got {folder_name}"

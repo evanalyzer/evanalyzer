@@ -84,6 +84,13 @@ impl ImageAlgorithm for EdgeDetectionCanny {
             }
         };
 
+        let (width, height) = (input.width(), input.height());
+        if width == 0 || height == 0 {
+            return Err(InternalErrors::Generic(format!(
+                "EdgeDetectionCanny requires a non-empty image, got {width}x{height}"
+            )));
+        }
+
         // Noise Reduction
         let sigma: f32 = calculate_sigma(self.kernel_size);
         gaussian_blur(
@@ -104,7 +111,6 @@ impl ImageAlgorithm for EdgeDetectionCanny {
         spatial_gradient_float(&output, &mut grad_x, &mut grad_y)
             .map_err(InternalErrors::from_kornia)?;
 
-        let (width, height) = (input.width(), input.height());
         let mut magnitude = vec![0.0f32; width * height];
         let mut direction = vec![0.0f32; width * height];
 
@@ -181,33 +187,42 @@ impl ImageAlgorithm for EdgeDetectionCanny {
 /// * `width` - The width of the image for coordinate calculations.
 /// * `low` - The lower hysteresis threshold.
 fn check_hysteresis(mag: &[f32], out: &mut [f32], start_idx: usize, width: usize, low: f32) {
+    if width == 0 {
+        return;
+    }
+    let height = mag.len() / width;
     let mut stack = vec![start_idx];
-    let _height = mag.len() / width;
 
-    let neighbors = [
-        -(width as isize) - 1,
-        -(width as isize),
-        -(width as isize) + 1,
-        -1,
-        1,
-        (width as isize) - 1,
-        (width as isize),
-        (width as isize) + 1,
+    // 2D (dx, dy) offsets, not flat 1D offsets - a flat-index bounds check alone
+    // can't distinguish "off the left/right edge of the image" from "on the
+    // previous/next row", so it must be checked in (x, y) space.
+    const NEIGHBOR_OFFSETS: [(isize, isize); 8] = [
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+        (-1, 0),
+        (1, 0),
+        (-1, 1),
+        (0, 1),
+        (1, 1),
     ];
 
     while let Some(curr_idx) = stack.pop() {
-        for &offset in &neighbors {
-            let n_idx_isize = curr_idx as isize + offset;
+        let cx = (curr_idx % width) as isize;
+        let cy = (curr_idx / width) as isize;
 
-            // Bounds check
-            if n_idx_isize >= 0 && n_idx_isize < mag.len() as isize {
-                let n_idx = n_idx_isize as usize;
+        for &(dx, dy) in &NEIGHBOR_OFFSETS {
+            let nx = cx + dx;
+            let ny = cy + dy;
+            if nx < 0 || nx >= width as isize || ny < 0 || ny >= height as isize {
+                continue;
+            }
+            let n_idx = ny as usize * width + nx as usize;
 
-                // If it's a weak edge and not already marked as a final edge
-                if out[n_idx] == 0.0 && mag[n_idx] >= low {
-                    out[n_idx] = 1.0;
-                    stack.push(n_idx); // Follow the chain
-                }
+            // If it's a weak edge and not already marked as a final edge
+            if out[n_idx] == 0.0 && mag[n_idx] >= low {
+                out[n_idx] = 1.0;
+                stack.push(n_idx); // Follow the chain
             }
         }
     }
@@ -299,5 +314,109 @@ mod tests {
         } else {
             panic!("Output image was not F32Gray");
         }
+    }
+
+    #[test]
+    fn zero_width_image_returns_error_instead_of_panicking() {
+        let input_img = kornia_image::Image::<f32, 1, CpuAllocator>::new(
+            kornia_image::ImageSize {
+                width: 0,
+                height: 5,
+            },
+            vec![],
+            CpuAllocator,
+        )
+        .unwrap();
+
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        let mut cache = PipelineCache::default();
+        let canny = EdgeDetectionCanny {
+            kernel_size: 3,
+            threshold_min: 0.1,
+            threshold_max: 0.3,
+        };
+
+        let result = canny.execute(&mut ctx, &mut cache);
+        assert!(
+            result.is_err(),
+            "expected an error for a zero-width image, got Ok"
+        );
+    }
+
+    #[test]
+    fn zero_height_image_returns_error_instead_of_panicking() {
+        let input_img = kornia_image::Image::<f32, 1, CpuAllocator>::new(
+            kornia_image::ImageSize {
+                width: 5,
+                height: 0,
+            },
+            vec![],
+            CpuAllocator,
+        )
+        .unwrap();
+
+        let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
+        let mut cache = PipelineCache::default();
+        let canny = EdgeDetectionCanny {
+            kernel_size: 3,
+            threshold_min: 0.1,
+            threshold_max: 0.3,
+        };
+
+        let result = canny.execute(&mut ctx, &mut cache);
+        assert!(
+            result.is_err(),
+            "expected an error for a zero-height image, got Ok"
+        );
+    }
+
+    #[test]
+    fn check_hysteresis_does_not_link_across_the_right_edge_wrap() {
+        // width=4: a flat index of (row0, x=3) + 1 lands on (row1, x=0) - a
+        // real neighbor under the old flat-index-only bounds check, but not
+        // spatially adjacent at all.
+        let width = 4;
+        let height = 3;
+        let low = 0.5;
+        let mut mag = vec![0.0f32; width * height];
+        mag[4] = 0.9; // row 1, x = 0 - NOT adjacent to (row0, x=3)
+        mag[2] = 0.9; // row 0, x = 2 - genuinely 8-adjacent to (row0, x=3)
+
+        let mut out = vec![0.0f32; width * height];
+        let start_idx = 3; // row 0, x = 3 (rightmost column)
+        out[start_idx] = 1.0;
+
+        check_hysteresis(&mag, &mut out, start_idx, width, low);
+
+        assert_eq!(
+            out[4], 0.0,
+            "pixel at row1,x0 was linked from row0,x3 - hysteresis wrapped across the row border"
+        );
+        assert_eq!(
+            out[2], 1.0,
+            "genuinely adjacent weak pixel (row0,x2) should still be linked"
+        );
+    }
+
+    #[test]
+    fn check_hysteresis_does_not_link_across_the_left_edge_wrap() {
+        // width=4: a flat index of (row1, x=0) - 1 lands on (row0, x=3) -
+        // again a flat-index neighbor but not a real spatial one.
+        let width = 4;
+        let height = 3;
+        let low = 0.5;
+        let mut mag = vec![0.0f32; width * height];
+        mag[3] = 0.9; // row 0, x = 3 - NOT adjacent to (row1, x=0)
+
+        let mut out = vec![0.0f32; width * height];
+        let start_idx = 4; // row 1, x = 0 (leftmost column)
+        out[start_idx] = 1.0;
+
+        check_hysteresis(&mag, &mut out, start_idx, width, low);
+
+        assert_eq!(
+            out[3], 0.0,
+            "pixel at row0,x3 was linked from row1,x0 - hysteresis wrapped across the row border"
+        );
     }
 }

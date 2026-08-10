@@ -39,7 +39,11 @@ use crate::{
 /// segmentation and instance maps. Runs on GPU automatically if CUDA is
 /// available in the linked libtorch build, otherwise falls back to CPU.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment", next = "measure", display_name = "AI Stardist Segmentation")]
+#[cmdsmeta(
+    category = "segment",
+    next = "measure",
+    display_name = "AI Stardist Segmentation"
+)]
 pub struct Stardist {
     /// Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
     #[cmdsmeta(file_extensions = "pt,pth")]
@@ -240,7 +244,11 @@ impl Stardist {
             for gx in 0..grid_w {
                 let idx = gy * grid_w + gx;
                 let score = prob_flat[idx];
-                if score < self.probability_threshold {
+                // NaN fails every `<` comparison, so a NaN score would
+                // otherwise sail past the threshold check below (`NaN <
+                // threshold` is always false) and later reach the score sort
+                // in `non_max_suppress`, which can't order it.
+                if !score.is_finite() || score < self.probability_threshold {
                     continue;
                 }
 
@@ -270,6 +278,20 @@ impl Stardist {
         width: usize,
         height: usize,
     ) -> Option<Candidate> {
+        // A single degenerate ray distance (model output NaN/inf for one grid
+        // cell, e.g. from a blank/degenerate input tile) poisons this whole
+        // star-convex polygon. `f32::min`/`max` below silently ignore NaN
+        // operands (so the bbox wouldn't catch it), but the raw polygon is
+        // also fed to `rasterize_polygon`'s scanline sort, which can't order
+        // a NaN crossing - reject the candidate outright instead of letting
+        // a corrupted shape (or a panic) through.
+        if polygon
+            .iter()
+            .any(|(x, y)| !x.is_finite() || !y.is_finite())
+        {
+            return None;
+        }
+
         let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for &(x, y) in polygon {
             min_x = min_x.min(x);
@@ -323,7 +345,11 @@ impl Stardist {
                     crossings.push(x0 + t * (x1 - x0));
                 }
             }
-            crossings.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            // `build_candidate` already rejects any polygon with a non-finite
+            // vertex, so `crossings` shouldn't contain NaN here - `unwrap_or`
+            // is defense in depth against a future caller of this function
+            // skipping that check, not the primary fix.
+            crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
             for pair in crossings.chunks_exact(2) {
                 let x_start = (pair[0].round() as i64 - min_x).clamp(0, local_w as i64 - 1);
@@ -377,7 +403,16 @@ impl Stardist {
     /// by descending score (highest-scoring objects are painted first).
     fn non_max_suppress(candidates: Vec<Candidate>, nms_threshold: f32) -> Vec<Candidate> {
         let mut order: Vec<usize> = (0..candidates.len()).collect();
-        order.sort_by(|&a, &b| candidates[b].score.partial_cmp(&candidates[a].score).unwrap());
+        // `build_candidates` already skips non-finite scores before a
+        // `Candidate` is ever built, so `unwrap_or` here is defense in depth
+        // against a future caller constructing candidates some other way,
+        // not the primary fix.
+        order.sort_by(|&a, &b| {
+            candidates[b]
+                .score
+                .partial_cmp(&candidates[a].score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut suppressed = vec![false; candidates.len()];
         let mut keep_order = Vec::new();
@@ -388,7 +423,9 @@ impl Stardist {
             }
             keep_order.push(i);
             for &j in &order {
-                if j == i || suppressed[j] || !Self::bbox_overlaps(&candidates[i].bbox, &candidates[j].bbox)
+                if j == i
+                    || suppressed[j]
+                    || !Self::bbox_overlaps(&candidates[i].bbox, &candidates[j].bbox)
                 {
                     continue;
                 }
@@ -460,7 +497,12 @@ mod tests {
     fn square(min_x: i64, min_y: i64, side: i64, score: f32) -> Candidate {
         let bbox = [min_x, min_y, min_x + side - 1, min_y + side - 1];
         let w = side as usize;
-        Candidate { score, bbox, mask: vec![true; w * w], area: w * w }
+        Candidate {
+            score,
+            bbox,
+            mask: vec![true; w * w],
+            area: w * w,
+        }
     }
 
     // ---- rasterize_polygon ----
@@ -476,7 +518,10 @@ mod tests {
         let bbox = [0, 0, 3, 3];
         let mask = Stardist::rasterize_polygon(&polygon, bbox);
         assert_eq!(mask.len(), 16);
-        assert!(mask.iter().all(|&b| b), "every pixel center lies inside the square");
+        assert!(
+            mask.iter().all(|&b| b),
+            "every pixel center lies inside the square"
+        );
     }
 
     #[test]
@@ -499,7 +544,11 @@ mod tests {
         let polygon = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
         let candidate = Stardist::build_candidate(0.9, &polygon, 4, 4)
             .expect("a large square overlapping the image must produce a candidate");
-        assert_eq!(candidate.bbox, [0, 0, 3, 3], "bbox must be clamped to the image dimensions");
+        assert_eq!(
+            candidate.bbox,
+            [0, 0, 3, 3],
+            "bbox must be clamped to the image dimensions"
+        );
     }
 
     #[test]
@@ -543,7 +592,10 @@ mod tests {
         let bbox = candidates[0].bbox;
         // The unscaled radius (1px) would collapse to a single pixel; scaled
         // by ~10x it must span a large fraction of the 10x10 image instead.
-        assert!(bbox[2] - bbox[0] > 4, "bbox must reflect the scaled radius, not the raw 1px ray length");
+        assert!(
+            bbox[2] - bbox[0] > 4,
+            "bbox must reflect the scaled radius, not the raw 1px ray length"
+        );
     }
 
     // ---- bbox_overlaps ----
@@ -588,7 +640,11 @@ mod tests {
 
     #[test]
     fn non_max_suppress_keeps_every_candidate_when_none_overlap() {
-        let candidates = vec![square(0, 0, 2, 0.9), square(10, 10, 2, 0.8), square(20, 20, 2, 0.7)];
+        let candidates = vec![
+            square(0, 0, 2, 0.9),
+            square(10, 10, 2, 0.8),
+            square(20, 20, 2, 0.7),
+        ];
         let kept = Stardist::non_max_suppress(candidates, 0.3);
         assert_eq!(kept.len(), 3);
     }
@@ -599,7 +655,10 @@ mod tests {
         let candidates = vec![square(0, 0, 4, 0.4), square(0, 0, 4, 0.9)];
         let kept = Stardist::non_max_suppress(candidates, 0.3);
         assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].score, 0.9, "the higher-scoring candidate must survive");
+        assert_eq!(
+            kept[0].score, 0.9,
+            "the higher-scoring candidate must survive"
+        );
     }
 
     #[test]
@@ -607,12 +666,20 @@ mod tests {
         // 4x4 squares shifted by 3px overlap in a 1x4 strip: iou = 4/(16+16-4) = 4/28 ≈ 0.14.
         let candidates = vec![square(0, 0, 4, 0.9), square(3, 0, 4, 0.8)];
         let kept = Stardist::non_max_suppress(candidates, 0.3);
-        assert_eq!(kept.len(), 2, "0.14 overlap must not exceed a 0.3 suppression threshold");
+        assert_eq!(
+            kept.len(),
+            2,
+            "0.14 overlap must not exceed a 0.3 suppression threshold"
+        );
     }
 
     #[test]
     fn non_max_suppress_returns_candidates_sorted_by_descending_score() {
-        let candidates = vec![square(0, 0, 2, 0.3), square(50, 50, 2, 0.9), square(100, 100, 2, 0.6)];
+        let candidates = vec![
+            square(0, 0, 2, 0.3),
+            square(50, 50, 2, 0.9),
+            square(100, 100, 2, 0.6),
+        ];
         let kept = Stardist::non_max_suppress(candidates, 0.3);
         let scores: Vec<f32> = kept.iter().map(|c| c.score).collect();
         assert_eq!(scores, vec![0.9, 0.6, 0.3]);
@@ -647,36 +714,70 @@ mod tests {
                 let idx = y * 4 + x;
                 if x < 2 && y < 2 {
                     assert_eq!(inst[idx], 1, "pixel ({x},{y}) should belong to instance 1");
-                    assert_eq!(seg[idx], 7, "pixel ({x},{y}) should carry the foreground class");
+                    assert_eq!(
+                        seg[idx], 7,
+                        "pixel ({x},{y}) should carry the foreground class"
+                    );
                 } else {
-                    assert_eq!(inst[idx], 0, "pixel ({x},{y}) should be reset to background");
+                    assert_eq!(
+                        inst[idx], 0,
+                        "pixel ({x},{y}) should be reset to background"
+                    );
                     assert_eq!(seg[idx], 0, "pixel ({x},{y}) should be reset to background");
                 }
             }
         }
     }
 
-    // ---- known-bug regression tests: NaN model output panics ----
+    // ---- NaN model output no longer panics ----
     //
-    // Tracked in BETA_REVIEW.md ("StarDist panics on NaN model output"): a
-    // degenerate/blank tile or an incompatible model export can make the
-    // TorchScript model emit NaN, and both sort call sites below use
-    // `partial_cmp(...).unwrap()`, which panics for NaN (`partial_cmp`
-    // returns `None`). These tests pin the *current* (buggy) behaviour so
-    // the fix - tracked separately, not applied here - has a clear
-    // before/after signal; update or remove them once it lands.
+    // A degenerate/blank tile or an incompatible model export can make the
+    // TorchScript model emit NaN. Fixed at three points: `build_candidates`
+    // skips non-finite scores before a `Candidate` is even built,
+    // `build_candidate` rejects any polygon with a non-finite vertex, and
+    // both `partial_cmp(...).unwrap()` sort call sites were changed to
+    // `unwrap_or(Ordering::Equal)` as defense in depth for callers that
+    // bypass the two filters above (as these tests deliberately do, to
+    // exercise that fallback directly).
 
     #[test]
-    #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
-    fn rasterize_polygon_panics_on_a_nan_vertex_known_bug() {
+    fn rasterize_polygon_does_not_panic_on_a_nan_vertex() {
         let polygon = [(0.0, 0.0), (f32::NAN, 4.0), (4.0, 4.0)];
+        // No assertion on the resulting mask's shape - a NaN vertex makes the
+        // polygon meaningless, but `rasterize_polygon` (unlike
+        // `build_candidate`, which rejects this polygon outright) is a
+        // low-level primitive that must at least not crash.
         let _ = Stardist::rasterize_polygon(&polygon, [0, 0, 3, 3]);
     }
 
     #[test]
-    #[should_panic(expected = "called `Option::unwrap()` on a `None` value")]
-    fn non_max_suppress_panics_when_a_candidate_score_is_nan_known_bug() {
+    fn non_max_suppress_does_not_panic_when_a_candidate_score_is_nan() {
         let candidates = vec![square(0, 0, 2, f32::NAN), square(10, 10, 2, 0.5)];
-        let _ = Stardist::non_max_suppress(candidates, 0.3);
+        let kept = Stardist::non_max_suppress(candidates, 0.3);
+        assert_eq!(kept.len(), 2, "non-overlapping candidates are both kept");
+    }
+
+    #[test]
+    fn build_candidates_skips_a_nan_score_grid_cell() {
+        let algo = stardist(0.5, 0.3);
+        // 1x2 grid: cell 0 has a NaN score (e.g. degenerate model output),
+        // cell 1 clears the threshold normally.
+        let prob_flat = [f32::NAN, 0.9];
+        let dist_flat = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        let candidates = algo.build_candidates(&prob_flat, &dist_flat, 1, 2, 4, 20, 10);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].score, 0.9);
+    }
+
+    #[test]
+    fn build_candidate_returns_none_for_a_polygon_with_a_nan_vertex() {
+        let polygon = [(1.0, 1.0), (f32::NAN, 5.0), (5.0, 5.0), (1.0, 5.0)];
+        assert!(Stardist::build_candidate(0.9, &polygon, 10, 10).is_none());
+    }
+
+    #[test]
+    fn build_candidate_returns_none_for_a_polygon_with_an_infinite_vertex() {
+        let polygon = [(1.0, 1.0), (f32::INFINITY, 5.0), (5.0, 5.0), (1.0, 5.0)];
+        assert!(Stardist::build_candidate(0.9, &polygon, 10, 10).is_none());
     }
 }

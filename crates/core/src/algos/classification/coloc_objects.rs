@@ -27,6 +27,28 @@ use log::{debug, info, warn};
 use macros::CommandsMeta;
 use std::sync::Arc;
 
+/// How many partners an object may coloc with at once.
+#[derive(CommandsMeta, Debug, PartialEq)]
+pub enum ColocMultiplicity {
+    /// Every object keeps only its single best-overlap match per other class -
+    /// e.g. a small object sitting on the border of two larger ones picks
+    /// exactly one (the larger overlap; ties go to the lower `ObjectId`).
+    #[cmdsmeta(display_name = "No multi coloc (1:1)")]
+    OneToOne,
+
+    /// Every object may coloc with every overlapping partner meeting `min_coloc_area`.
+    #[cmdsmeta(display_name = "Allow multi coloc")]
+    ManyToMany,
+
+    /// Only objects of these classes may coloc with more than one partner;
+    /// every other class in `classes_to_coloc` is capped to its single
+    /// best-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and
+    /// `MultiFor([Cell])`, a cell can coloc with any number of spots, but
+    /// each spot colocs with exactly one cell (the one it overlaps most).
+    #[cmdsmeta(display_name = "Multi coloc only for selected")]
+    MultiFor(Vec<ObjectClass>),
+}
+
 /// Calculates spatial colocalization and intersections between specified object classes.
 ///
 /// This command scans the object cache, groups objects by their designated classes,
@@ -42,6 +64,7 @@ pub struct Colocalization {
     /// Optional additional label filters.
     ///
     /// Only classes which matches all of these filters are used for coloc calculation
+    #[cmdsmeta(visible = false)]
     pub filter_classes: Vec<ObjectClass>,
 
     /// Class of the overlapping area if needed
@@ -49,26 +72,29 @@ pub struct Colocalization {
     /// If defined the overlapping coloc area is added as new object and labeled with this class
     pub class_for_overlapping_areas: ObjectClass,
 
-    /// Classes an object must NOT overlap to be considered colocalized.
-    ///
-    /// An object that otherwise satisfies `classes_to_coloc` is excluded entirely
-    /// (no relation recorded, no intersection object created) if it also overlaps any
-    /// object from one of these classes with at least `min_coloc_area`. Leave empty
-    /// (the default) to disable this filter - exclusion is opt-in.
-    ///
-    /// Example: to find objects colocalizing with class 1 and 2 but *not* 3, set
-    /// `classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.
-    #[cmdsmeta(optional = true)]
-    pub exclude_classes: Vec<ObjectClass>,
+    /// How many partners an object may coloc with at once.
+    #[cmdsmeta(default = ColocMultiplicity::OneToOne)]
+    pub multiplicity: ColocMultiplicity,
 
-    /// If set one object is allowed to coloc with more than one other object
-    pub allow_multi_object_coloc: bool,
-
-    // Size unit for the minimum coloc area size
+    /// Size unit for the minimum coloc area size
+    #[cmdsmeta(default = SizeUnits::Pixels)]
     pub size_unit: SizeUnits,
 
     /// Minimum overlapping area size to count objects as coloc
+    #[cmdsmeta(default = 0.0)]
     pub min_coloc_area: f32,
+
+    /// Classes an object must NOT overlap to be considered colocalized.
+    ///
+    /// Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
+    /// Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).
+    /// Without exclude_classes, any object satisfying that gets recorded as colocalized.
+    /// With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.
+    /// So it's a "match A and B, but not C" filter
+    ///
+    /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
+    #[cmdsmeta(optional = true)]
+    pub exclude_classes: Vec<ObjectClass>,
 }
 
 impl ImageAlgorithm for Colocalization {
@@ -141,6 +167,49 @@ impl ImageAlgorithm for Colocalization {
         let mut processed_combinations: std::collections::HashSet<Vec<ObjectId>> =
             std::collections::HashSet::new();
 
+        // Precompute, for every object of a class that is capped to a single partner
+        // (see `allows_multi`), its single best-overlap match per other class. Both
+        // directions of a relation must agree on this pick: an unrestricted anchor
+        // (e.g. a Cell under `MultiFor([Cell])`) may only list a capped partner (e.g.
+        // a Spot) if that partner's own single pick points back at this exact anchor -
+        // otherwise the same Spot would show up under every Cell it merely touches,
+        // even though it only "colocs" with the one it overlaps most.
+        let mut best_partner: std::collections::HashMap<(ObjectId, ObjectClass), ObjectId> =
+            std::collections::HashMap::new();
+        for (source_idx, source_class) in self.classes_to_coloc.iter().enumerate() {
+            if self.allows_multi(source_class) {
+                continue;
+            }
+            let source_ids = match class_buckets.get(source_class) {
+                Some(b) => b,
+                None => continue,
+            };
+            for (target_idx, target_class) in self.classes_to_coloc.iter().enumerate() {
+                if target_idx == source_idx {
+                    continue;
+                }
+                let target_bucket = match class_buckets.get(target_class) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                for source_id in source_ids {
+                    let source_object = match cache.object_cache.get(source_id) {
+                        Some(o) => o,
+                        None => continue,
+                    };
+                    if let Some(best_id) = Self::best_overlap(
+                        source_object,
+                        source_id,
+                        target_bucket,
+                        cache,
+                        min_area_px,
+                    ) {
+                        best_partner.insert((source_id.clone(), *target_class), best_id);
+                    }
+                }
+            }
+        }
+
         // --- PHASE 2: For each object, check whether it overlaps at least one object from every
         //              other class. Only then is it considered colocalized. ---
         for (class_idx, anchor_class) in self.classes_to_coloc.iter().enumerate() {
@@ -183,17 +252,29 @@ impl ImageAlgorithm for Colocalization {
                         })
                         .collect();
 
-                    if !self.allow_multi_object_coloc {
-                        // Keep only the single best match (largest overlap area) per class.
-                        if let Some(best_idx) = candidates
-                            .iter()
-                            .enumerate()
-                            .max_by_key(|(_, (_, area))| *area)
-                            .map(|(idx, _)| idx)
-                        {
-                            let best = candidates.swap_remove(best_idx);
-                            candidates = vec![best];
-                        }
+                    if !self.allows_multi(anchor_class) {
+                        // Keep only the single best match (largest overlap area) per
+                        // class - ties (equal overlap area, e.g. an object sitting
+                        // exactly on the border between two equally-overlapping
+                        // partners) go to the lower ObjectId, so the pick is
+                        // deterministic rather than depending on cache iteration order.
+                        candidates = best_partner
+                            .get(&(anchor_id.clone(), *other_class))
+                            .and_then(|best_id| {
+                                candidates.iter().find(|(id, _)| id == best_id).cloned()
+                            })
+                            .into_iter()
+                            .collect();
+                    }
+
+                    if !self.allows_multi(other_class) {
+                        // `other_class` is itself capped to a single partner: only keep a
+                        // candidate if this anchor is also that candidate's own single
+                        // best match, so a capped object never ends up listed under more
+                        // than one anchor.
+                        candidates.retain(|(other_id, _)| {
+                            best_partner.get(&(other_id.clone(), *anchor_class)) == Some(anchor_id)
+                        });
                     }
 
                     let overlapping: Vec<ObjectId> =
@@ -254,7 +335,9 @@ impl ImageAlgorithm for Colocalization {
                             for (current_object, current_ids) in &states {
                                 for next_id in next_ids {
                                     if let Some(next_object) = cache.object_cache.get(next_id) {
-                                        if let Some(intersection) = current_object.overlaps(next_object) {
+                                        if let Some(intersection) =
+                                            current_object.overlaps(next_object)
+                                        {
                                             let mut new_ids = current_ids.clone();
                                             new_ids.push(next_id.clone());
                                             next_states.push((intersection, new_ids));
@@ -311,18 +394,58 @@ impl ImageAlgorithm for Colocalization {
     }
 }
 
+impl Colocalization {
+    /// Whether an anchor object of `anchor_class` may keep more than one
+    /// overlapping partner per other class, or must be capped to its single
+    /// best-overlap match (see [`ColocMultiplicity`]).
+    fn allows_multi(&self, anchor_class: &ObjectClass) -> bool {
+        match &self.multiplicity {
+            ColocMultiplicity::OneToOne => false,
+            ColocMultiplicity::ManyToMany => true,
+            ColocMultiplicity::MultiFor(classes) => classes.contains(anchor_class),
+        }
+    }
+
+    /// Finds the single overlapping object in `bucket` with the largest overlap
+    /// area against `object` (>= `min_area_px`), ties broken toward the lower
+    /// `ObjectId` for a deterministic pick independent of cache iteration order.
+    fn best_overlap(
+        object: &Object,
+        exclude_id: &ObjectId,
+        bucket: &[ObjectId],
+        cache: &crate::pipeline::pipeline_cache::PipelineCache,
+        min_area_px: usize,
+    ) -> Option<ObjectId> {
+        bucket
+            .iter()
+            .filter(|other_id| *other_id != exclude_id)
+            .filter_map(|other_id| {
+                cache
+                    .object_cache
+                    .get(other_id)
+                    .and_then(|r| object.overlaps(r))
+                    .filter(|intersection| intersection.area >= min_area_px)
+                    .map(|intersection| (other_id.clone(), intersection.area))
+            })
+            .max_by(|(id_a, area_a), (id_b, area_b)| {
+                area_a.cmp(area_b).then_with(|| id_b.cmp(id_a))
+            })
+            .map(|(id, _)| id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::*;
     use crate::{
+        ImageContainer, ImagePlane, ManagedImage,
         image::PixelSizes,
         pipeline::{
             pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
             pipeline_context::PipelineContext,
         },
-        ImageContainer, ImagePlane, ManagedImage,
     };
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
@@ -364,7 +487,12 @@ mod tests {
         .unwrap()
     }
 
-    fn make_filled_object(id: u128, bbox: [u32; 4], plane: ImagePlane, class: ObjectClass) -> Object {
+    fn make_filled_object(
+        id: u128,
+        bbox: [u32; 4],
+        plane: ImagePlane,
+        class: ObjectClass,
+    ) -> Object {
         let [x_min, y_min, x_max, y_max] = bbox;
         // bbox uses inclusive convention: width = xmax - xmin + 1
         let w = (x_max - x_min + 1) as usize;
@@ -405,7 +533,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -415,10 +543,12 @@ mod tests {
 
         run(&coloc, &mut cache);
 
-        assert!(cache
-            .object_cache
-            .values()
-            .all(|r| r.colocalized_with.is_empty()));
+        assert!(
+            cache
+                .object_cache
+                .values()
+                .all(|r| r.colocalized_with.is_empty())
+        );
     }
 
     #[test]
@@ -428,7 +558,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -463,7 +593,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -476,10 +606,12 @@ mod tests {
 
         run(&coloc, &mut cache);
 
-        assert!(cache
-            .object_cache
-            .values()
-            .all(|r| r.colocalized_with.is_empty()));
+        assert!(
+            cache
+                .object_cache
+                .values()
+                .all(|r| r.colocalized_with.is_empty())
+        );
     }
 
     #[test]
@@ -491,7 +623,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -524,7 +656,7 @@ mod tests {
             filter_classes: vec![CLASS_C], // only ROIs also carrying CLASS_C participate
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -540,10 +672,12 @@ mod tests {
         run(&coloc, &mut cache);
 
         // object_a is excluded from CLASS_A bucket so no colocalization occurs
-        assert!(cache
-            .object_cache
-            .values()
-            .all(|r| r.colocalized_with.is_empty()));
+        assert!(
+            cache
+                .object_cache
+                .values()
+                .all(|r| r.colocalized_with.is_empty())
+        );
     }
 
     #[test]
@@ -553,7 +687,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -567,7 +701,11 @@ mod tests {
         run(&coloc, &mut cache);
 
         // Three ROIs total: the original two + the intersection object
-        assert_eq!(cache.object_cache.len(), 3, "intersection object should be added");
+        assert_eq!(
+            cache.object_cache.len(),
+            3,
+            "intersection object should be added"
+        );
         let overlap_object = cache
             .object_cache
             .values()
@@ -642,7 +780,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -675,7 +813,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -735,7 +873,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: CLASS_OVERLAP,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -777,7 +915,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -824,7 +962,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -874,7 +1012,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -906,7 +1044,10 @@ mod tests {
         run(&coloc, &mut cache);
 
         let x = cache.object_cache.get(&ObjectId(ID_X)).unwrap();
-        assert!(x.colocalized_with.contains_key(&CLASS_C), "X must coloc with C");
+        assert!(
+            x.colocalized_with.contains_key(&CLASS_C),
+            "X must coloc with C"
+        );
         assert_eq!(
             x.colocalized_with[&CLASS_C],
             vec![ObjectId(ID_Y)],
@@ -925,7 +1066,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![CLASS_C],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -957,7 +1098,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![CLASS_C],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -987,7 +1128,7 @@ mod tests {
             filter_classes: vec![],
             exclude_classes: vec![],
             class_for_overlapping_areas: ObjectClass::Unset,
-            allow_multi_object_coloc: true,
+            multiplicity: ColocMultiplicity::ManyToMany,
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
@@ -1001,5 +1142,422 @@ mod tests {
 
         let a = cache.object_cache.get(&ObjectId(ID_A)).unwrap();
         assert!(a.colocalized_with.contains_key(&CLASS_B));
+    }
+
+    // --- ColocMultiplicity::MultiFor ---
+
+    #[test]
+    fn multi_for_lets_listed_class_coloc_multiple_while_capping_the_other_to_its_single_best_match()
+    {
+        // Cells (CLASS_A, listed in MultiFor) may coloc with any number of
+        // spots; spots (CLASS_B, not listed) must each pick exactly one cell -
+        // the "count spots per cell" use case, where a spot sitting on the
+        // border between two cells must not be double-counted under both. This
+        // also means a cell's own partner list must agree with the spot's pick:
+        // a spot that chose a different cell must not also show up here,
+        // otherwise summing spots-per-cell across all cells would overcount.
+        let coloc = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            filter_classes: vec![],
+            exclude_classes: vec![],
+            class_for_overlapping_areas: ObjectClass::Unset,
+            multiplicity: ColocMultiplicity::MultiFor(vec![CLASS_A]),
+            min_coloc_area: 0.0,
+            size_unit: SizeUnits::Pixels,
+        };
+        let mut cache = PipelineCache::default();
+
+        const ID_CELL_A: u128 = 900_001; // lower id - wins area ties
+        const ID_CELL_B: u128 = 900_002;
+        const ID_SPOT_BORDER: u128 = 900_003; // straddles both cells, equal overlap area
+        const ID_SPOT_IN_A: u128 = 900_004;
+        const ID_SPOT_IN_B: u128 = 900_005;
+
+        // Cell A: [0,9]x[0,9]; Cell B: [10,19]x[0,9] - adjacent, non-overlapping.
+        let cell_a = make_filled_object(ID_CELL_A, [0, 0, 9, 9], ImagePlane::default(), CLASS_A);
+        let cell_b = make_filled_object(ID_CELL_B, [10, 0, 19, 9], ImagePlane::default(), CLASS_A);
+        // Border spot [8,11]x[4,5]: overlaps A in x=[8,9] (2 cols) and B in
+        // x=[10,11] (2 cols), same y=[4,5] range both times -> 2x2=4 px each,
+        // an exact tie.
+        let spot_border = make_filled_object(
+            ID_SPOT_BORDER,
+            [8, 4, 11, 5],
+            ImagePlane::default(),
+            CLASS_B,
+        );
+        let spot_in_a =
+            make_filled_object(ID_SPOT_IN_A, [2, 2, 3, 3], ImagePlane::default(), CLASS_B);
+        let spot_in_b =
+            make_filled_object(ID_SPOT_IN_B, [15, 2, 16, 3], ImagePlane::default(), CLASS_B);
+
+        cache.object_cache.insert(cell_a.id.clone(), cell_a);
+        cache.object_cache.insert(cell_b.id.clone(), cell_b);
+        cache
+            .object_cache
+            .insert(spot_border.id.clone(), spot_border);
+        cache.object_cache.insert(spot_in_a.id.clone(), spot_in_a);
+        cache.object_cache.insert(spot_in_b.id.clone(), spot_in_b);
+
+        run(&coloc, &mut cache);
+
+        // Cell A (listed in MultiFor) sees every spot that picked it, including
+        // the border spot (tie broken toward the lower ObjectId, Cell A).
+        let cell_a = cache.object_cache.get(&ObjectId(ID_CELL_A)).unwrap();
+        let mut a_spots = cell_a.colocalized_with[&CLASS_B].clone();
+        a_spots.sort();
+        let mut expected_a = vec![ObjectId(ID_SPOT_BORDER), ObjectId(ID_SPOT_IN_A)];
+        expected_a.sort();
+        assert_eq!(
+            a_spots, expected_a,
+            "Cell A must list every spot that picked it"
+        );
+
+        // Cell B only sees the spot that picked it (spot_in_b). The border spot
+        // touches Cell B too, but it picked Cell A, so it must NOT also appear
+        // here - otherwise the same spot would be double-counted across cells.
+        let cell_b = cache.object_cache.get(&ObjectId(ID_CELL_B)).unwrap();
+        let mut b_spots = cell_b.colocalized_with[&CLASS_B].clone();
+        b_spots.sort();
+        let expected_b = vec![ObjectId(ID_SPOT_IN_B)];
+        assert_eq!(
+            b_spots, expected_b,
+            "Cell B must not list a spot that picked a different cell"
+        );
+
+        // The border spot overlaps both cells by the exact same area, so it
+        // picks exactly one partner - not both - breaking the tie toward the
+        // lower ObjectId (Cell A).
+        let spot_border = cache.object_cache.get(&ObjectId(ID_SPOT_BORDER)).unwrap();
+        assert_eq!(
+            spot_border.colocalized_with[&CLASS_A],
+            vec![ObjectId(ID_CELL_A)],
+            "an equal-overlap tie must resolve to the lower ObjectId, not both cells"
+        );
+
+        // Spots overlapping only one cell are unaffected by the cap.
+        let spot_in_a = cache.object_cache.get(&ObjectId(ID_SPOT_IN_A)).unwrap();
+        assert_eq!(
+            spot_in_a.colocalized_with[&CLASS_A],
+            vec![ObjectId(ID_CELL_A)]
+        );
+        let spot_in_b = cache.object_cache.get(&ObjectId(ID_SPOT_IN_B)).unwrap();
+        assert_eq!(
+            spot_in_b.colocalized_with[&CLASS_A],
+            vec![ObjectId(ID_CELL_B)]
+        );
+    }
+
+    #[test]
+    fn multi_for_two_independent_spot_channels_each_coloc_with_exactly_one_cell() {
+        // 5 cells (CLASS_A) and two independent spot channels (CLASS_B, CLASS_C),
+        // combined via two separate Colocalization runs against the *same* cells -
+        // mirroring a real pipeline where each spot channel gets its own coloc step.
+        // With `MultiFor([CLASS_A])`, cells may coloc with any number of spots, but
+        // each spot must pick exactly one cell. Layout:
+        //
+        //   Cell 0 [0,9]x[0,9]      - adjacent to Cell 1 along x=9/10 (B border)
+        //   Cell 1 [10,19]x[0,9]    - adjacent to Cell 0 (B border) and Cell 4 (C border)
+        //   Cell 4 [10,19]x[10,19]  - adjacent to Cell 1 along y=9/10 (C border)
+        //   Cell 2 [40,49]x[0,9]    - isolated, only touched by channel B
+        //   Cell 3 [60,69]x[0,9]    - isolated, only touched by channel C
+        //
+        // IDs are chosen so ties resolve deterministically: Cell 0 beats Cell 1 for
+        // the B border, and Cell 4 beats Cell 1 for the C border (lower ObjectId
+        // wins a tie), leaving Cell 1 as the loser of both.
+        const ID_CELL_0: u128 = 910_000;
+        const ID_CELL_1: u128 = 910_100; // deliberately highest id - loses both border ties
+        const ID_CELL_2: u128 = 910_002;
+        const ID_CELL_3: u128 = 910_003;
+        const ID_CELL_4: u128 = 910_004;
+
+        let mut cache = PipelineCache::default();
+        let cell_0 = make_filled_object(ID_CELL_0, [0, 0, 9, 9], ImagePlane::default(), CLASS_A);
+        let cell_1 = make_filled_object(ID_CELL_1, [10, 0, 19, 9], ImagePlane::default(), CLASS_A);
+        let cell_2 = make_filled_object(ID_CELL_2, [40, 0, 49, 9], ImagePlane::default(), CLASS_A);
+        let cell_3 = make_filled_object(ID_CELL_3, [60, 0, 69, 9], ImagePlane::default(), CLASS_A);
+        let cell_4 =
+            make_filled_object(ID_CELL_4, [10, 10, 19, 19], ImagePlane::default(), CLASS_A);
+        for cell in [cell_0, cell_1, cell_2, cell_3, cell_4] {
+            cache.object_cache.insert(cell.id.clone(), cell);
+        }
+
+        // --- Channel B: 15 spots -------------------------------------------
+        let mut next_b_id = 920_000u128;
+        let mut make_b = |bbox: [u32; 4]| {
+            next_b_id += 1;
+            make_filled_object(next_b_id, bbox, ImagePlane::default(), CLASS_B)
+        };
+
+        let mut b_direct_0 = Vec::new();
+        for bbox in [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]] {
+            let spot = make_b(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            b_direct_0.push(id);
+        }
+        let mut b_direct_1 = Vec::new();
+        for bbox in [[12, 1, 12, 1], [13, 2, 13, 2], [14, 3, 14, 3]] {
+            let spot = make_b(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            b_direct_1.push(id);
+        }
+        let mut b_direct_2 = Vec::new();
+        for bbox in [[41, 1, 41, 1], [42, 2, 42, 2], [43, 3, 43, 3]] {
+            let spot = make_b(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            b_direct_2.push(id);
+        }
+        // Border spots straddling Cell 0 / Cell 1 (x=9/10): 2 px overlap on each
+        // side - an exact tie.
+        let mut b_border = Vec::new();
+        for bbox in [[8, 5, 11, 5], [8, 6, 11, 6], [8, 7, 11, 7]] {
+            let spot = make_b(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            b_border.push(id);
+        }
+        let mut b_none = Vec::new();
+        for bbox in [[90, 90, 90, 90], [91, 91, 91, 91], [92, 92, 92, 92]] {
+            let spot = make_b(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            b_none.push(id);
+        }
+
+        // --- Channel C: 15 spots -------------------------------------------
+        let mut next_c_id = 930_000u128;
+        let mut make_c = |bbox: [u32; 4]| {
+            next_c_id += 1;
+            make_filled_object(next_c_id, bbox, ImagePlane::default(), CLASS_C)
+        };
+
+        let mut c_direct_0 = Vec::new();
+        for bbox in [[1, 4, 1, 4], [2, 5, 2, 5], [3, 6, 3, 6]] {
+            let spot = make_c(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            c_direct_0.push(id);
+        }
+        let mut c_direct_1 = Vec::new();
+        for bbox in [[16, 4, 16, 4], [17, 5, 17, 5], [18, 6, 18, 6]] {
+            let spot = make_c(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            c_direct_1.push(id);
+        }
+        let mut c_direct_3 = Vec::new();
+        for bbox in [[61, 1, 61, 1], [62, 2, 62, 2], [63, 3, 63, 3]] {
+            let spot = make_c(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            c_direct_3.push(id);
+        }
+        // Border spots straddling Cell 1 / Cell 4 (y=9/10): 2 px overlap on each
+        // side - an exact tie.
+        let mut c_border = Vec::new();
+        for bbox in [[12, 8, 12, 11], [13, 8, 13, 11], [14, 8, 14, 11]] {
+            let spot = make_c(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            c_border.push(id);
+        }
+        let mut c_none = Vec::new();
+        for bbox in [[95, 95, 95, 95], [96, 96, 96, 96], [97, 97, 97, 97]] {
+            let spot = make_c(bbox);
+            let id = spot.id.clone();
+            cache.object_cache.insert(id.clone(), spot);
+            c_none.push(id);
+        }
+
+        // Two independent runs - one per spot channel - both against the same
+        // cells, as in a pipeline that colocs each spot channel with the cell
+        // mask separately.
+        let coloc_b = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            filter_classes: vec![],
+            exclude_classes: vec![],
+            class_for_overlapping_areas: ObjectClass::Unset,
+            multiplicity: ColocMultiplicity::MultiFor(vec![CLASS_A]),
+            min_coloc_area: 0.0,
+            size_unit: SizeUnits::Pixels,
+        };
+        let coloc_c = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_C],
+            filter_classes: vec![],
+            exclude_classes: vec![],
+            class_for_overlapping_areas: ObjectClass::Unset,
+            multiplicity: ColocMultiplicity::MultiFor(vec![CLASS_A]),
+            min_coloc_area: 0.0,
+            size_unit: SizeUnits::Pixels,
+        };
+        run(&coloc_b, &mut cache);
+        run(&coloc_c, &mut cache);
+
+        let coloc_count = |cache: &PipelineCache, id: u128, class: ObjectClass| -> usize {
+            cache
+                .object_cache
+                .get(&ObjectId(id))
+                .and_then(|o| o.colocalized_with.get(&class))
+                .map(|v| v.len())
+                .unwrap_or(0)
+        };
+
+        // Cell 2 and Cell 3 are the "clean" single-channel cells.
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_2, CLASS_B),
+            3,
+            "Cell 2 gets exactly its 3 direct B spots"
+        );
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_2, CLASS_C),
+            0,
+            "Cell 2 is never touched by channel C"
+        );
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_3, CLASS_C),
+            3,
+            "Cell 3 gets exactly its 3 direct C spots"
+        );
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_3, CLASS_B),
+            0,
+            "Cell 3 is never touched by channel B"
+        );
+
+        // Cell 0 wins the B border tie (lower id than Cell 1): 3 direct + 3 border = 6.
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_0, CLASS_B),
+            6,
+            "Cell 0 wins the B border tie"
+        );
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_0, CLASS_C),
+            3,
+            "Cell 0 gets its 3 direct C spots, no C border"
+        );
+
+        // Cell 1 loses both border ties, left with just its direct spots.
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_1, CLASS_B),
+            3,
+            "Cell 1 loses the B border tie to Cell 0"
+        );
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_1, CLASS_C),
+            3,
+            "Cell 1 loses the C border tie to Cell 4"
+        );
+
+        // Cell 4 has no direct spots of its own; it wins the C border tie
+        // (lower id than Cell 1).
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_4, CLASS_B),
+            0,
+            "Cell 4 is never touched by channel B"
+        );
+        assert_eq!(
+            coloc_count(&cache, ID_CELL_4, CLASS_C),
+            3,
+            "Cell 4 wins the C border tie"
+        );
+
+        // Sums across all cells must equal the number of spots that found a
+        // partner (12 of 15 in each channel - the other 3 touch nothing), not
+        // more - which is exactly the double-counting bug this test guards
+        // against.
+        let sum_b: usize = [ID_CELL_0, ID_CELL_1, ID_CELL_2, ID_CELL_3, ID_CELL_4]
+            .iter()
+            .map(|id| coloc_count(&cache, *id, CLASS_B))
+            .sum();
+        let sum_c: usize = [ID_CELL_0, ID_CELL_1, ID_CELL_2, ID_CELL_3, ID_CELL_4]
+            .iter()
+            .map(|id| coloc_count(&cache, *id, CLASS_C))
+            .sum();
+        assert_eq!(
+            sum_b, 12,
+            "sum of B-colocs across all cells must equal the 12 assigned B spots"
+        );
+        assert_eq!(
+            sum_c, 12,
+            "sum of C-colocs across all cells must equal the 12 assigned C spots"
+        );
+
+        // Every assigned spot picks exactly one cell; the "nothing" spots pick none.
+        for id in b_direct_0
+            .iter()
+            .chain(&b_direct_1)
+            .chain(&b_direct_2)
+            .chain(&b_border)
+        {
+            let spot = cache.object_cache.get(id).unwrap();
+            assert_eq!(
+                spot.colocalized_with[&CLASS_A].len(),
+                1,
+                "every colocalized B spot must pick exactly one cell"
+            );
+        }
+        for id in &b_none {
+            let spot = cache.object_cache.get(id).unwrap();
+            assert!(
+                spot.colocalized_with.is_empty(),
+                "a B spot touching nothing must not be colocalized"
+            );
+        }
+        for id in c_direct_0
+            .iter()
+            .chain(&c_direct_1)
+            .chain(&c_direct_3)
+            .chain(&c_border)
+        {
+            let spot = cache.object_cache.get(id).unwrap();
+            assert_eq!(
+                spot.colocalized_with[&CLASS_A].len(),
+                1,
+                "every colocalized C spot must pick exactly one cell"
+            );
+        }
+        for id in &c_none {
+            let spot = cache.object_cache.get(id).unwrap();
+            assert!(
+                spot.colocalized_with.is_empty(),
+                "a C spot touching nothing must not be colocalized"
+            );
+        }
+
+        // The B border spots must all resolve to Cell 0 - not split, not
+        // double-booked with Cell 1.
+        for id in &b_border {
+            let spot = cache.object_cache.get(id).unwrap();
+            assert_eq!(spot.colocalized_with[&CLASS_A], vec![ObjectId(ID_CELL_0)]);
+        }
+        // The C border spots must all resolve to Cell 4.
+        for id in &c_border {
+            let spot = cache.object_cache.get(id).unwrap();
+            assert_eq!(spot.colocalized_with[&CLASS_A], vec![ObjectId(ID_CELL_4)]);
+        }
+
+        // Cell 1's B-list must be exactly its direct spots (the border spots it
+        // merely touches, but didn't win, must be excluded).
+        let cell_1 = cache.object_cache.get(&ObjectId(ID_CELL_1)).unwrap();
+        let mut cell_1_b = cell_1.colocalized_with[&CLASS_B].clone();
+        cell_1_b.sort();
+        let mut expected_cell_1_b = b_direct_1.clone();
+        expected_cell_1_b.sort();
+        assert_eq!(
+            cell_1_b, expected_cell_1_b,
+            "Cell 1 must not list a B spot it merely touches but didn't win"
+        );
+
+        // Cell 1's C-list must be exactly its direct spots (the C border went to Cell 4).
+        let mut cell_1_c = cell_1.colocalized_with[&CLASS_C].clone();
+        cell_1_c.sort();
+        let mut expected_cell_1_c = c_direct_1.clone();
+        expected_cell_1_c.sort();
+        assert_eq!(
+            cell_1_c, expected_cell_1_c,
+            "Cell 1 must not list a C spot it merely touches but didn't win"
+        );
     }
 }

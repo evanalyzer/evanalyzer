@@ -169,10 +169,19 @@ outputs:
             Err(RdfError::Yaml(e)) => RdfError::Yaml(e),
             other => panic!("expected a Yaml error, got {other:?}"),
         };
-        assert!(yaml_err.to_string().starts_with("failed to parse rdf.yaml:"));
+        assert!(
+            yaml_err
+                .to_string()
+                .starts_with("failed to parse rdf.yaml:")
+        );
 
-        let not_a_model = RdfError::NotAModel { kind: "dataset".into() };
-        assert_eq!(not_a_model.to_string(), "RDF describes a 'dataset', not a model");
+        let not_a_model = RdfError::NotAModel {
+            kind: "dataset".into(),
+        };
+        assert_eq!(
+            not_a_model.to_string(),
+            "RDF describes a 'dataset', not a model"
+        );
     }
 
     #[test]
@@ -182,7 +191,9 @@ outputs:
         let io_err = RdfError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "nope"));
         assert!(io_err.source().is_some());
 
-        let not_a_model = RdfError::NotAModel { kind: "dataset".into() };
+        let not_a_model = RdfError::NotAModel {
+            kind: "dataset".into(),
+        };
         assert!(not_a_model.source().is_none());
     }
 }

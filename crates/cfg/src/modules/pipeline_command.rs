@@ -58,6 +58,7 @@ impl CommandCategory {
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PipelineCommand {
+    AiObjectClassifier(AiObjectClassifierSettings),
     Blur(BlurSettings),
     Cellpose(CellposeSettings),
     ClassifyObjects(ClassifyObjectsSettings),
@@ -78,6 +79,7 @@ pub enum PipelineCommand {
     MedianSubtract(MedianSubtractSettings),
     MorphologicalCommand(MorphologicalCommandSettings),
     ObjectMath(ObjectMathSettings),
+    PixelClassifier(PixelClassifierSettings),
     RankFilter(RankFilterSettings),
     RollingBall(RollingBallSettings),
     SaveImage(SaveImageSettings),
@@ -103,104 +105,310 @@ pub struct CommandMeta {
 #[allow(dead_code)]
 pub fn all_command_meta() -> Vec<CommandMeta> {
     vec![
-        CommandMeta { id: 0, name: "Blur", category: CommandCategory::Preprocess, summary: "Smooths an image by averaging pixel intensities within a local neighborhood.", description: "This algorithm applies a uniform box filter where every pixel within the moving\nwindow contributes equally to the final value. It is a computationally fast\nmethod used for general image smoothing, blending variations, and rapid noise\nsuppression where edge precision is less critical." },
-        CommandMeta { id: 1, name: "AI Cellpose Segmentation", category: CommandCategory::Segment, summary: "Instance segmentation using a pretrained Cellpose model exported as TorchScript.", description: "The model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)\ngrayscale image is placed in channel 0 and any remaining channels are filled\nwith zeros. Standard Cellpose networks expect **two** channels (cytoplasm +\noptional nucleus), which is the default; single-channel exports use\n`input_channels = 1`. The model must return a `[1, C, H, W]` tensor with\n`C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow\n`dX` (channel 1) and the cell-probability logits (channel 2), which is\nCellpose's spatial-gradient representation. Exports that wrap the output in a\ntuple (e.g. `(flows, style)`) are also supported — the first tensor with at\nleast three channels is used.\n\nInstances are recovered with Cellpose's *dynamics*: every pixel whose\ncell probability reaches `probability_threshold` is advected for\n`flow_iterations` Euler steps along the (down-scaled) flow field until it\nconverges to the sink at its cell's center. Pixels whose trajectories end in\nthe same sink basin — found by connected components over the final-position\ndensity map — form one instance. Instances smaller than `min_object_size`\npixels are discarded. Runs on GPU automatically if CUDA is available in the\nlinked libtorch build, otherwise falls back to CPU." },
-        CommandMeta { id: 2, name: "ClassifyObjects", category: CommandCategory::Classify, summary: "Classifies ROIs based on morphological and intensity features.", description: "This command applies rule-based classification logic to assign object classes\nto extracted ROIs. Classification is performed using configurable criteria\nincluding area, shape descriptors, and intensity statistics." },
-        CommandMeta { id: 3, name: "Colocalization", category: CommandCategory::Classify, summary: "Calculates spatial colocalization and intersections between specified object classes.", description: "This command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions." },
-        CommandMeta { id: 4, name: "ColorFilterCommand", category: CommandCategory::Preprocess, summary: "A command that filters an image based on a specific HSV color range.", description: "Pixels falling outside the provided [`HsvRange`] are masked\nout by setting to black.\n\n# Examples\n\n```\n# use imagec::backend::algos::{ColorFilterCommand, HsvRange};\nlet range = HsvRange {\nmin_h: 0.0,   max_h: 30.0, // Red tones\nmin_s: 0.5,   max_s: 1.0,\nmin_v: 0.5,   max_v: 1.0,\n};\n\nlet command = ColorFilterCommand { range };\n```" },
-        CommandMeta { id: 5, name: "ConnectedComponents", category: CommandCategory::Object, summary: "Identifies and labels discrete objects within a binary or multi-class image.", description: "" },
-        CommandMeta { id: 6, name: "DistanceTransform", category: CommandCategory::Preprocess, summary: "A command that calculates the Euclidean Distance Map (EDM) of an f32 image.", description: "This algorithm identifies pixels below a threshold as \"background\" and\ncalculates the distance of every \"foreground\" pixel to the nearest background pixel." },
-        CommandMeta { id: 7, name: "EdgeDetectionCanny", category: CommandCategory::Preprocess, summary: "Extracts structural boundaries and fine edges using the multi-stage Canny algorithm.", description: "This algorithm identifies optimal edge locations by calculating spatial intensity\ngradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,\nand applying a dual-threshold hysteresis loop to preserve weak edges connected\nto strong ones while completely rejecting isolated noise.\n\n# Examples\n\n```\n# use imagec::backend::algos::EdgeDetectionCanny;\nlet edges = EdgeDetectionCanny {\nkernel_size: 3,\nthreshold_min: 0.1,\nthreshold_max: 0.3,\n};\n```" },
-        CommandMeta { id: 8, name: "EdgeDetectionSobel", category: CommandCategory::Preprocess, summary: "Extracts directional boundaries by computing spatial image intensity gradients.", description: "This algorithm applies localized 3x3 kernels to approximate the first derivative\nof pixel intensities across the horizontal and vertical axes. It highlights\nareas of sharp luminance changes, producing a continuous gradient map that\nemphasizes prominent structural edges and surface transitions.\n\n# Examples\n\n```\n# use imagec::backend::algos::EdgeDetectionSobel;\nlet filter = EdgeDetectionSobel { kernel_size: 3 };\n```" },
-        CommandMeta { id: 9, name: "EnhanceContrast", category: CommandCategory::Preprocess, summary: "Configuration for contrast enhancement and histogram manipulation.", description: "This algorithm can perform linear contrast stretching, normalization,\nor histogram equalization to improve the dynamic range of an image.\n\n# Examples\n\n```\n# use imagec::backend::algos::EnhanceContrast;\nlet settings = EnhanceContrast {\nsaturated_pixels: 0.01,   // Clip 1% of outliers\nnormalize: true,          // Stretch to [0.0, 1.0]\nequalize_histogram: false,\n};\n```" },
-        CommandMeta { id: 10, name: "ExtractObjects", category: CommandCategory::Measure, summary: "Represents a bounded object extracted from a labeled image.", description: "A command to extract spatial statistics and bounding boxes from labeled objects." },
-        CommandMeta { id: 11, name: "GaussianBlur", category: CommandCategory::Preprocess, summary: "Smooths an image and reduces background noise using a Gaussian kernel.", description: "This algorithm applies a localized, bell-curve weighted blur that suppresses\nhigh-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\nor dust) while preserving structural features. It is commonly used as a\npreprocessing step to optimize thresholding and edge detection tasks.\n\n# Examples\n\n```\nuse imagec::backend::algos::GaussianBlur;\n\nlet settings = GaussianBlur {\nkernel_size: 5,\nsigma: 2.0\n};\n```" },
-        CommandMeta { id: 12, name: "Hessian", category: CommandCategory::Preprocess, summary: "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.", description: "This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.\n\n# Examples\n\n```\n# use imagec::backend::algos::{Hessian, HessianMode};\nlet detector = Hessian {\nmode: HessianMode::Determinant,\n};\n```" },
-        CommandMeta { id: 13, name: "ImageCache", category: CommandCategory::Preprocess, summary: "A filter that acts as a synchronization point between the pipeline and a storage backend.", description: "`ImageCache` allows the pipeline to branch or \"undo\" operations by saving\nstates to a named address and reloading them as needed.\n\n# Examples\n\n```\nuse imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};\nlet checkpoint = ImageCache {\nmode: ImageCacheMode::Store,\naddress: ImageAddress::from(\"pre_processed_state\"),\n};\n```" },
-        CommandMeta { id: 14, name: "ImageMath", category: CommandCategory::Preprocess, summary: "A filter that performs pixel-wise mathematical operations between the current", description: "pipeline image and a secondary image stored in the cache.\n\nThis command allows for complex image blending, masking, and comparison.\n\n# Examples\n\n```\nuse imagec::backend::algos::{ImageMath, Operand};\nlet subtract_bg = ImageMath {\noperand: Operand::Subtract,\nsecond_image_address: ImageAddress::from(\"background\"),\nswap_operands: false,\n};\n```" },
-        CommandMeta { id: 15, name: "IntensityTransformation", category: CommandCategory::Preprocess, summary: "Configuration for adjusting image contrast and brightness.", description: "This transformation applies a linear mapping to pixel values.\nIn [`Mode::Manual`], the output is typically calculated as:\n`output = input * contrast + brightness`." },
-        CommandMeta { id: 16, name: "Laplacian", category: CommandCategory::Preprocess, summary: "Configuration for the Laplacian edge detection filter.", description: "The Laplacian is a second-order derivative operator used to find regions of\nrapid intensity change. It is particularly effective for detecting edges\nand fine details, though it is highly sensitive to noise.\n\n# Examples\n\n```\n# use imagec::backend::algos::Laplacian;\nlet filter = Laplacian { kernel_size: 3 };\n```" },
-        CommandMeta { id: 17, name: "MedianSubtract", category: CommandCategory::Preprocess, summary: "A background subtraction filter that uses a median rank operator.", description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.\n\n# Examples\n\n```\nuse imagec::backend::algos::MedianSubtract;\nlet filter = MedianSubtract { radius: 10.0 };\n```" },
-        CommandMeta { id: 18, name: "MorphologicalCommand", category: CommandCategory::Preprocess, summary: "A filter that applies mathematical morphology to an image.", description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.\n\n# Examples\n\n```\nuse imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};\nlet clean_noise = MorphologicalCommand {\nop: MorphOps::Open,\nkernel_size: 3,\nkernel_shape: KernelShapes::Ellipse,\n};\n```" },
-        CommandMeta { id: 19, name: "ObjectMath", category: CommandCategory::Classify, summary: "Computes a boolean set operation between two object classes, object pair by", description: "object pair.\n\nWhen more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in." },
-        CommandMeta { id: 20, name: "RankFilter", category: CommandCategory::Preprocess, summary: "A filter that transforms pixels based on the statistical rank of their neighbors.", description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges." },
-        CommandMeta { id: 21, name: "RollingBall", category: CommandCategory::Preprocess, summary: "Removes non-uniform background illumination by calculating a local intensity baseline.", description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features." },
-        CommandMeta { id: 22, name: "SaveImage", category: CommandCategory::Preprocess, summary: "A command that exports the current image to a persistent file on disk.", description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```" },
-        CommandMeta { id: 23, name: "AI Stardist Segmentation", category: CommandCategory::Segment, summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU." },
-        CommandMeta { id: 24, name: "StructureTensor", category: CommandCategory::Preprocess, summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.", description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```" },
-        CommandMeta { id: 25, name: "Threshold", category: CommandCategory::Segment, summary: "A filter that segments an image into discrete classes based on intensity.", description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.\n\n# Examples\n\n```\nuse imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\nlet binary = Threshold {\nthresholds: vec![ThresholdSettings {\nmethod: ThresholdMethod::Otsu,\nmin_threshold: 0.0,\nmax_threshold: 1.0,\nobject_class_id: ObjectLabel::Foreground,\n}]\n};\n```" },
-        CommandMeta { id: 26, name: "TransformObjects", category: CommandCategory::Classify, summary: "Transforms given ROIs and either replaces the old ones or creates new ones.", description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object." },
-        CommandMeta { id: 27, name: "AI UNet Segmentation", category: CommandCategory::Segment, summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.", description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU." },
-        CommandMeta { id: 28, name: "Voronoi", category: CommandCategory::Classify, summary: "Computes a Voronoi tessellation from segmented seed objects.", description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object." },
-        CommandMeta { id: 29, name: "Watershed", category: CommandCategory::Object, summary: "A morphological segmentation algorithm that splits touching objects using distance topography.", description: "This is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances." },
-        CommandMeta { id: 30, name: "WeightedDeviation", category: CommandCategory::Preprocess, summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.", description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n# Examples\n\n```\nuse imagec::backend::algos::WeightedDeviation;\nlet settings = WeightedDeviation {\nkernel_size: 7,\nsigma: 2.0,\n};\n```" },
+        CommandMeta {
+            id: 0,
+            name: "AI Object Classifier",
+            category: CommandCategory::Classify,
+            summary: "An object classifier trained via the app's AI training dialog (an",
+            description: "`.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),\napplied here as a pipeline classification step: every object already\npresent in `PipelineCache::object_cache` matching `origin_segmentation`/\n`input_classes` is scored independently (reusing the same feature recipe\nused at training time), then remapped through `segmentation_mapping` into\nthis project's own classes and applied via `match_handling` - the same\ninput selection `ClassifyObjects` uses, but the output class comes from\nthe model's prediction instead of a fixed rule.\n\nPredicted classes with no matching `segmentation_mapping` entry leave the\nobject untouched, mirroring how `PixelClassifier` leaves unmapped\npredictions as background - mapping only the classes you care about is a\ndeliberate simplification, not an oversight.",
+        },
+        CommandMeta {
+            id: 1,
+            name: "Blur",
+            category: CommandCategory::Preprocess,
+            summary: "Smooths an image by averaging pixel intensities within a local neighborhood.",
+            description: "This algorithm applies a uniform box filter where every pixel within the moving\nwindow contributes equally to the final value. It is a computationally fast\nmethod used for general image smoothing, blending variations, and rapid noise\nsuppression where edge precision is less critical.",
+        },
+        CommandMeta {
+            id: 2,
+            name: "AI Cellpose Segmentation",
+            category: CommandCategory::Segment,
+            summary: "Instance segmentation using a pretrained Cellpose model exported as TorchScript.",
+            description: "The model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)\ngrayscale image is placed in channel 0 and any remaining channels are filled\nwith zeros. Standard Cellpose networks expect **two** channels (cytoplasm +\noptional nucleus), which is the default; single-channel exports use\n`input_channels = 1`. The model must return a `[1, C, H, W]` tensor with\n`C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow\n`dX` (channel 1) and the cell-probability logits (channel 2), which is\nCellpose's spatial-gradient representation. Exports that wrap the output in a\ntuple (e.g. `(flows, style)`) are also supported — the first tensor with at\nleast three channels is used.\n\nInstances are recovered with Cellpose's *dynamics*: every pixel whose\ncell probability reaches `probability_threshold` is advected for\n`flow_iterations` Euler steps along the (down-scaled) flow field until it\nconverges to the sink at its cell's center. Pixels whose trajectories end in\nthe same sink basin — found by connected components over the final-position\ndensity map — form one instance. Instances smaller than `min_object_size`\npixels are discarded. Runs on GPU automatically if CUDA is available in the\nlinked libtorch build, otherwise falls back to CPU.",
+        },
+        CommandMeta {
+            id: 3,
+            name: "ClassifyObjects",
+            category: CommandCategory::Classify,
+            summary: "Classifies ROIs based on morphological and intensity features.",
+            description: "This command applies rule-based classification logic to assign object classes\nto extracted ROIs. Classification is performed using configurable criteria\nincluding area, shape descriptors, and intensity statistics.",
+        },
+        CommandMeta {
+            id: 4,
+            name: "Colocalization",
+            category: CommandCategory::Classify,
+            summary: "Calculates spatial colocalization and intersections between specified object classes.",
+            description: "This command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions.",
+        },
+        CommandMeta {
+            id: 5,
+            name: "ColorFilterCommand",
+            category: CommandCategory::Preprocess,
+            summary: "A command that filters an image based on a specific HSV color range.",
+            description: "Pixels falling outside the provided [`HsvRange`] are masked\nout by setting to black.\n\n# Examples\n\n```\n# use imagec::backend::algos::{ColorFilterCommand, HsvRange};\nlet range = HsvRange {\nmin_h: 0.0,   max_h: 30.0, // Red tones\nmin_s: 0.5,   max_s: 1.0,\nmin_v: 0.5,   max_v: 1.0,\n};\n\nlet command = ColorFilterCommand { range };\n```",
+        },
+        CommandMeta {
+            id: 6,
+            name: "ConnectedComponents",
+            category: CommandCategory::Object,
+            summary: "Identifies and labels discrete objects within a binary or multi-class image.",
+            description: "",
+        },
+        CommandMeta {
+            id: 7,
+            name: "DistanceTransform",
+            category: CommandCategory::Preprocess,
+            summary: "A command that calculates the Euclidean Distance Map (EDM) of an f32 image.",
+            description: "This algorithm identifies pixels below a threshold as \"background\" and\ncalculates the distance of every \"foreground\" pixel to the nearest background pixel.",
+        },
+        CommandMeta {
+            id: 8,
+            name: "EdgeDetectionCanny",
+            category: CommandCategory::Preprocess,
+            summary: "Extracts structural boundaries and fine edges using the multi-stage Canny algorithm.",
+            description: "This algorithm identifies optimal edge locations by calculating spatial intensity\ngradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,\nand applying a dual-threshold hysteresis loop to preserve weak edges connected\nto strong ones while completely rejecting isolated noise.\n\n# Examples\n\n```\n# use imagec::backend::algos::EdgeDetectionCanny;\nlet edges = EdgeDetectionCanny {\nkernel_size: 3,\nthreshold_min: 0.1,\nthreshold_max: 0.3,\n};\n```",
+        },
+        CommandMeta {
+            id: 9,
+            name: "EdgeDetectionSobel",
+            category: CommandCategory::Preprocess,
+            summary: "Extracts directional boundaries by computing spatial image intensity gradients.",
+            description: "This algorithm applies localized 3x3 kernels to approximate the first derivative\nof pixel intensities across the horizontal and vertical axes. It highlights\nareas of sharp luminance changes, producing a continuous gradient map that\nemphasizes prominent structural edges and surface transitions.\n\n# Examples\n\n```\n# use imagec::backend::algos::EdgeDetectionSobel;\nlet filter = EdgeDetectionSobel { kernel_size: 3 };\n```",
+        },
+        CommandMeta {
+            id: 10,
+            name: "EnhanceContrast",
+            category: CommandCategory::Preprocess,
+            summary: "Configuration for contrast enhancement and histogram manipulation.",
+            description: "This algorithm can perform linear contrast stretching, normalization,\nor histogram equalization to improve the dynamic range of an image.\n\n# Examples\n\n```\n# use imagec::backend::algos::EnhanceContrast;\nlet settings = EnhanceContrast {\nsaturated_pixels: 0.01,   // Clip 1% of outliers\nnormalize: true,          // Stretch to [0.0, 1.0]\nequalize_histogram: false,\n};\n```",
+        },
+        CommandMeta {
+            id: 11,
+            name: "ExtractObjects",
+            category: CommandCategory::Measure,
+            summary: "Represents a bounded object extracted from a labeled image.",
+            description: "A command to extract spatial statistics and bounding boxes from labeled objects.",
+        },
+        CommandMeta {
+            id: 12,
+            name: "GaussianBlur",
+            category: CommandCategory::Preprocess,
+            summary: "Smooths an image and reduces background noise using a Gaussian kernel.",
+            description: "This algorithm applies a localized, bell-curve weighted blur that suppresses\nhigh-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\nor dust) while preserving structural features. It is commonly used as a\npreprocessing step to optimize thresholding and edge detection tasks.\n\n# Examples\n\n```\nuse imagec::backend::algos::GaussianBlur;\n\nlet settings = GaussianBlur {\nkernel_size: 5,\nsigma: 2.0\n};\n```",
+        },
+        CommandMeta {
+            id: 13,
+            name: "Hessian",
+            category: CommandCategory::Preprocess,
+            summary: "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.",
+            description: "This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.\n\n# Examples\n\n```\n# use imagec::backend::algos::{Hessian, HessianMode};\nlet detector = Hessian {\nmode: HessianMode::Determinant,\n};\n```",
+        },
+        CommandMeta {
+            id: 14,
+            name: "ImageCache",
+            category: CommandCategory::Preprocess,
+            summary: "A filter that acts as a synchronization point between the pipeline and a storage backend.",
+            description: "`ImageCache` allows the pipeline to branch or \"undo\" operations by saving\nstates to a named address and reloading them as needed.\n\n# Examples\n\n```\nuse imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};\nlet checkpoint = ImageCache {\nmode: ImageCacheMode::Store,\naddress: ImageAddress::from(\"pre_processed_state\"),\n};\n```",
+        },
+        CommandMeta {
+            id: 15,
+            name: "ImageMath",
+            category: CommandCategory::Preprocess,
+            summary: "A filter that performs pixel-wise mathematical operations between the current",
+            description: "pipeline image and a secondary image stored in the cache.\n\nThis command allows for complex image blending, masking, and comparison.\n\n# Examples\n\n```\nuse imagec::backend::algos::{ImageMath, Operand};\nlet subtract_bg = ImageMath {\noperand: Operand::Subtract,\nsecond_image_address: ImageAddress::from(\"background\"),\nswap_operands: false,\n};\n```",
+        },
+        CommandMeta {
+            id: 16,
+            name: "IntensityTransformation",
+            category: CommandCategory::Preprocess,
+            summary: "Configuration for adjusting image contrast and brightness.",
+            description: "This transformation applies a linear mapping to pixel values.\nIn [`Mode::Manual`], the output is typically calculated as:\n`output = input * contrast + brightness`.",
+        },
+        CommandMeta {
+            id: 17,
+            name: "Laplacian",
+            category: CommandCategory::Preprocess,
+            summary: "Configuration for the Laplacian edge detection filter.",
+            description: "The Laplacian is a second-order derivative operator used to find regions of\nrapid intensity change. It is particularly effective for detecting edges\nand fine details, though it is highly sensitive to noise.\n\n# Examples\n\n```\n# use imagec::backend::algos::Laplacian;\nlet filter = Laplacian { kernel_size: 3 };\n```",
+        },
+        CommandMeta {
+            id: 18,
+            name: "MedianSubtract",
+            category: CommandCategory::Preprocess,
+            summary: "A background subtraction filter that uses a median rank operator.",
+            description: "This algorithm is highly effective for removing large-scale background\nvariations while preserving small, high-contrast features. It works by\nestimating the background as the median intensity within a local radius.\n\n# Examples\n\n```\nuse imagec::backend::algos::MedianSubtract;\nlet filter = MedianSubtract { radius: 10.0 };\n```",
+        },
+        CommandMeta {
+            id: 19,
+            name: "MorphologicalCommand",
+            category: CommandCategory::Preprocess,
+            summary: "A filter that applies mathematical morphology to an image.",
+            description: "Morphological operations use a structuring element (kernel) to probe\nand modify the shapes within an image.\n\n# Examples\n\n```\nuse imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};\nlet clean_noise = MorphologicalCommand {\nop: MorphOps::Open,\nkernel_size: 3,\nkernel_shape: KernelShapes::Ellipse,\n};\n```",
+        },
+        CommandMeta {
+            id: 20,
+            name: "ObjectMath",
+            category: CommandCategory::Classify,
+            summary: "Computes a boolean set operation between two object classes, object pair by",
+            description: "object pair.\n\nWhen more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
+        },
+        CommandMeta {
+            id: 21,
+            name: "AI Pixel Classifier",
+            category: CommandCategory::Segment,
+            summary: "A pixel classifier trained via the app's AI training dialog",
+            description: "(an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),\napplied here as a pipeline segmentation step: every pixel is classified\nindependently (reusing the same feature recipe used at training time),\nthen remapped through `segmentation_mapping` into this project's own\nclasses and written to the segmentation map - the same output shape\n`Threshold` produces, so downstream steps (extraction, classification)\ndon't need to care which one ran.\n\nPredicted classes with no matching `segmentation_mapping` entry are\nwritten as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`\nleaves pixels outside every configured range as background - mapping\nonly the classes you care about is a deliberate simplification, not an\noversight.",
+        },
+        CommandMeta {
+            id: 22,
+            name: "RankFilter",
+            category: CommandCategory::Preprocess,
+            summary: "A filter that transforms pixels based on the statistical rank of their neighbors.",
+            description: "Rank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
+        },
+        CommandMeta {
+            id: 23,
+            name: "RollingBall",
+            category: CommandCategory::Preprocess,
+            summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
+            description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
+        },
+        CommandMeta {
+            id: 24,
+            name: "SaveImage",
+            category: CommandCategory::Preprocess,
+            summary: "A command that exports the current image to a persistent file on disk.",
+            description: "This is a **transparent command**: it does not modify the image data in the\npipeline context, nor does it perform a buffer swap. It acts as a tap\nto view the state of the image at a specific point in the pipeline.\n\n# Examples\n\n```\nuse imagec::backend::algos::SaveImage;\nlet saver = SaveImage {path:\"output/processed_cell.png\"};\n```",
+        },
+        CommandMeta {
+            id: 25,
+            name: "AI Stardist Segmentation",
+            category: CommandCategory::Segment,
+            summary: "Instance segmentation using a pretrained StarDist model exported as TorchScript.",
+            description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return two tensors:\nan object-probability map `[1, 1, H', W']` and a ray-distance map\n`[1, n_rays, H', W']` giving, for each grid cell, the distance to the object\nboundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon\nrepresentation). `H'`/`W'` may be smaller than the input size if the model\npredicts on a coarser grid; this is detected from the output shape and the\npolygons are rescaled back to image resolution automatically.\n\nSome TorchScript exports concatenate both outputs into a single\n`[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =\ndistances); this is also supported.\n\nPer grid cell candidates above `probability_threshold` are converted to\nstar-convex polygons, then greedily filtered with non-maximum suppression\n(polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds\n`nms_threshold` are discarded) before being rasterized into the pipeline's\nsegmentation and instance maps. Runs on GPU automatically if CUDA is\navailable in the linked libtorch build, otherwise falls back to CPU.",
+        },
+        CommandMeta {
+            id: 26,
+            name: "StructureTensor",
+            category: CommandCategory::Preprocess,
+            summary: "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.",
+            description: "This algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```",
+        },
+        CommandMeta {
+            id: 27,
+            name: "Threshold",
+            category: CommandCategory::Segment,
+            summary: "A filter that segments an image into discrete classes based on intensity.",
+            description: "This supports \"Multi-Otsu\" style behavior by allowing a vector of\n[`ThresholdSettings`]. Each pixel is evaluated against the settings to\ndetermine which `object_class_id` it belongs to.\n\n# Examples\n\n```\nuse imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\nlet binary = Threshold {\nthresholds: vec![ThresholdSettings {\nmethod: ThresholdMethod::Otsu,\nmin_threshold: 0.0,\nmax_threshold: 1.0,\nobject_class_id: ObjectLabel::Foreground,\n}]\n};\n```",
+        },
+        CommandMeta {
+            id: 28,
+            name: "TransformObjects",
+            category: CommandCategory::Classify,
+            summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
+            description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
+        },
+        CommandMeta {
+            id: 29,
+            name: "AI UNet Segmentation",
+            category: CommandCategory::Segment,
+            summary: "Semantic segmentation using a pretrained U-Net exported as TorchScript.",
+            description: "The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,\nsame normalization as the rest of the pipeline) and return either a\n`[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already\napplies its final sigmoid) or a `[1, C, H, W]` tensor with more than one\nchannel, in which case `output_mode` and `foreground_channel` decide how the\nforeground probability is extracted (see [`UNetOutputMode`]). Runs on GPU\nautomatically if CUDA is available in the linked libtorch build, otherwise\nfalls back to CPU.",
+        },
+        CommandMeta {
+            id: 30,
+            name: "Voronoi",
+            category: CommandCategory::Classify,
+            summary: "Computes a Voronoi tessellation from segmented seed objects.",
+            description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
+        },
+        CommandMeta {
+            id: 31,
+            name: "Watershed",
+            category: CommandCategory::Object,
+            summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
+            description: "This is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
+        },
+        CommandMeta {
+            id: 32,
+            name: "WeightedDeviation",
+            category: CommandCategory::Preprocess,
+            summary: "A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.",
+            description: "Unlike a standard deviation filter which treats all pixels in a window equally,\nthe Weighted Deviation uses a Gaussian kernel to give more importance to\npixels closer to the center. This is particularly effective for edge-preserving\nnoise analysis and local contrast enhancement.\n\nThis algorithm evaluates local variance by calculating two distinct Gaussian-blurred\nbaselines across the image: the weighted average of the pixel intensities, and the\nweighted average of the squared intensities. By subtracting the squared mean from\nthe mean of squares, it yields a localized, smooth statistical variance map that\nhighlights micro-textures and subtle surface boundaries without producing blocky artifacts.\n\n# Examples\n\n```\nuse imagec::backend::algos::WeightedDeviation;\nlet settings = WeightedDeviation {\nkernel_size: 7,\nsigma: 2.0,\n};\n```",
+        },
     ]
 }
 
 #[allow(dead_code)]
 pub fn default_command(id: i32) -> Option<PipelineCommand> {
     match id {
-        0 => Some(PipelineCommand::Blur(BlurSettings::default())),
-        1 => Some(PipelineCommand::Cellpose(CellposeSettings::default())),
-        2 => Some(PipelineCommand::ClassifyObjects(
+        0 => Some(PipelineCommand::AiObjectClassifier(
+            AiObjectClassifierSettings::default(),
+        )),
+        1 => Some(PipelineCommand::Blur(BlurSettings::default())),
+        2 => Some(PipelineCommand::Cellpose(CellposeSettings::default())),
+        3 => Some(PipelineCommand::ClassifyObjects(
             ClassifyObjectsSettings::default(),
         )),
-        3 => Some(PipelineCommand::Colocalization(
+        4 => Some(PipelineCommand::Colocalization(
             ColocalizationSettings::default(),
         )),
-        4 => Some(PipelineCommand::ColorFilterCommand(
+        5 => Some(PipelineCommand::ColorFilterCommand(
             ColorFilterCommandSettings::default(),
         )),
-        5 => Some(PipelineCommand::ConnectedComponents(
+        6 => Some(PipelineCommand::ConnectedComponents(
             ConnectedComponentsSettings::default(),
         )),
-        6 => Some(PipelineCommand::DistanceTransform(
+        7 => Some(PipelineCommand::DistanceTransform(
             DistanceTransformSettings::default(),
         )),
-        7 => Some(PipelineCommand::EdgeDetectionCanny(
+        8 => Some(PipelineCommand::EdgeDetectionCanny(
             EdgeDetectionCannySettings::default(),
         )),
-        8 => Some(PipelineCommand::EdgeDetectionSobel(
+        9 => Some(PipelineCommand::EdgeDetectionSobel(
             EdgeDetectionSobelSettings::default(),
         )),
-        9 => Some(PipelineCommand::EnhanceContrast(
+        10 => Some(PipelineCommand::EnhanceContrast(
             EnhanceContrastSettings::default(),
         )),
-        10 => Some(PipelineCommand::ExtractObjects(
+        11 => Some(PipelineCommand::ExtractObjects(
             ExtractObjectsSettings::default(),
         )),
-        11 => Some(PipelineCommand::GaussianBlur(
+        12 => Some(PipelineCommand::GaussianBlur(
             GaussianBlurSettings::default(),
         )),
-        12 => Some(PipelineCommand::Hessian(HessianSettings::default())),
-        13 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
-        14 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
-        15 => Some(PipelineCommand::IntensityTransformation(
+        13 => Some(PipelineCommand::Hessian(HessianSettings::default())),
+        14 => Some(PipelineCommand::ImageCache(ImageCacheSettings::default())),
+        15 => Some(PipelineCommand::ImageMath(ImageMathSettings::default())),
+        16 => Some(PipelineCommand::IntensityTransformation(
             IntensityTransformationSettings::default(),
         )),
-        16 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
-        17 => Some(PipelineCommand::MedianSubtract(
+        17 => Some(PipelineCommand::Laplacian(LaplacianSettings::default())),
+        18 => Some(PipelineCommand::MedianSubtract(
             MedianSubtractSettings::default(),
         )),
-        18 => Some(PipelineCommand::MorphologicalCommand(
+        19 => Some(PipelineCommand::MorphologicalCommand(
             MorphologicalCommandSettings::default(),
         )),
-        19 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
-        20 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
-        21 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
-        22 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
-        23 => Some(PipelineCommand::Stardist(StardistSettings::default())),
-        24 => Some(PipelineCommand::StructureTensor(
+        20 => Some(PipelineCommand::ObjectMath(ObjectMathSettings::default())),
+        21 => Some(PipelineCommand::PixelClassifier(
+            PixelClassifierSettings::default(),
+        )),
+        22 => Some(PipelineCommand::RankFilter(RankFilterSettings::default())),
+        23 => Some(PipelineCommand::RollingBall(RollingBallSettings::default())),
+        24 => Some(PipelineCommand::SaveImage(SaveImageSettings::default())),
+        25 => Some(PipelineCommand::Stardist(StardistSettings::default())),
+        26 => Some(PipelineCommand::StructureTensor(
             StructureTensorSettings::default(),
         )),
-        25 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
-        26 => Some(PipelineCommand::TransformObjects(
+        27 => Some(PipelineCommand::Threshold(ThresholdSettings::default())),
+        28 => Some(PipelineCommand::TransformObjects(
             TransformObjectsSettings::default(),
         )),
-        27 => Some(PipelineCommand::UNet(UNetSettings::default())),
-        28 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
-        29 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
-        30 => Some(PipelineCommand::WeightedDeviation(
+        29 => Some(PipelineCommand::UNet(UNetSettings::default())),
+        30 => Some(PipelineCommand::Voronoi(VoronoiSettings::default())),
+        31 => Some(PipelineCommand::Watershed(WatershedSettings::default())),
+        32 => Some(PipelineCommand::WeightedDeviation(
             WeightedDeviationSettings::default(),
         )),
         _ => None,
@@ -211,6 +419,7 @@ pub fn default_command(id: i32) -> Option<PipelineCommand> {
 impl PipelineCommand {
     pub fn name(&self) -> &str {
         match self {
+            Self::AiObjectClassifier(_) => "AI Object Classifier",
             Self::Blur(_) => "Blur",
             Self::Cellpose(_) => "AI Cellpose Segmentation",
             Self::ClassifyObjects(_) => "ClassifyObjects",
@@ -231,6 +440,7 @@ impl PipelineCommand {
             Self::MedianSubtract(_) => "MedianSubtract",
             Self::MorphologicalCommand(_) => "MorphologicalCommand",
             Self::ObjectMath(_) => "ObjectMath",
+            Self::PixelClassifier(_) => "AI Pixel Classifier",
             Self::RankFilter(_) => "RankFilter",
             Self::RollingBall(_) => "RollingBall",
             Self::SaveImage(_) => "SaveImage",
@@ -247,6 +457,7 @@ impl PipelineCommand {
 
     pub fn category(&self) -> &CommandCategory {
         match self {
+            Self::AiObjectClassifier(_) => &CommandCategory::Classify,
             Self::Blur(_) => &CommandCategory::Preprocess,
             Self::Cellpose(_) => &CommandCategory::Segment,
             Self::ClassifyObjects(_) => &CommandCategory::Classify,
@@ -267,6 +478,7 @@ impl PipelineCommand {
             Self::MedianSubtract(_) => &CommandCategory::Preprocess,
             Self::MorphologicalCommand(_) => &CommandCategory::Preprocess,
             Self::ObjectMath(_) => &CommandCategory::Classify,
+            Self::PixelClassifier(_) => &CommandCategory::Segment,
             Self::RankFilter(_) => &CommandCategory::Preprocess,
             Self::RollingBall(_) => &CommandCategory::Preprocess,
             Self::SaveImage(_) => &CommandCategory::Preprocess,
@@ -284,6 +496,7 @@ impl PipelineCommand {
     /// Categories that may be inserted immediately after this command.
     pub fn allowed_next(&self) -> &'static [CommandCategory] {
         match self {
+            Self::AiObjectClassifier(_) => &[CommandCategory::Classify],
             Self::Blur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Cellpose(_) => &[CommandCategory::Measure],
             Self::ClassifyObjects(_) => &[CommandCategory::Classify],
@@ -308,6 +521,7 @@ impl PipelineCommand {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
             }
             Self::ObjectMath(_) => &[CommandCategory::Classify],
+            Self::PixelClassifier(_) => &[CommandCategory::Object],
             Self::RankFilter(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::RollingBall(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::SaveImage(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
@@ -324,10 +538,11 @@ impl PipelineCommand {
 
     pub fn to_parameters(&self) -> Vec<ParameterDef> {
         match self {
+            Self::AiObjectClassifier(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a trained object classifier model, saved from the AI training dialog.".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["evamodel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "segmentation_mapping".to_string(), display_name: "Segmentation Mapping".to_string(), description: "Maps the model's predicted classes to this project's object classes.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.segmentation_mapping.iter().map(|__item| [vec![ParameterDef { name: "object_class".to_string(), display_name: "Object Class".to_string(), description: "Object class predicted by the classifier model.".to_string(), value: match __item.object_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "The project's own object class objects predicted as `object_class`\nare assigned.".to_string(), value: match __item.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat()).collect() }], vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated by the model. Leave empty to apply the model to\nevery object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after prediction\n\n- **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.\n- **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.".to_string(), value: match _s.match_handling { ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string() }, param_type: ParamType::Dropdown, options: vec!["Add class on match".to_string(), "Reclassify on match".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::Blur(_s) => vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel size".to_string(), description: "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7)".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Spinner, options: vec![], min: 3.0f32, max: 27.0f32, step: 2.0000f32, groups: vec![] }],
             Self::Cellpose(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "input_channels".to_string(), display_name: "Input Channels".to_string(), description: "Number of input channels the model expects. The grayscale image goes in\nchannel 0; any further channels are zero-filled. Standard Cellpose models\ntake `2` (cytoplasm + optional nucleus); set `1` for single-channel\nexports, or higher to match a custom model.".to_string(), value: format!("{}", _s.input_channels), param_type: ParamType::Dropdown, options: vec!["1".to_string(), "2".to_string(), "3".to_string(), "4".to_string(), "5".to_string(), "6".to_string(), "7".to_string(), "8".to_string()], min: 1.0f32, max: 8.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Cell probability above which a pixel takes part in the flow dynamics and\ncan be assigned to an object. The raw cell-probability logits are passed\nthrough a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's\ndefault logit threshold of `0` corresponds to `0.5`).".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] }], vec![ParameterDef { name: "flow_iterations".to_string(), display_name: "Flow Iterations".to_string(), description: "Number of Euler integration steps used to follow the flow field. Higher\nvalues let pixels of large cells reach their sink at the cost of runtime;\nCellpose's default is `200`.".to_string(), value: format!("{}", _s.flow_iterations), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 1000.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_object_size".to_string(), display_name: "Min Object Size".to_string(), description: "Minimum object size, in pixels. After the dynamics, any instance smaller\nthan this is removed (its pixels become background). `0` disables the filter.".to_string(), value: format!("{}", _s.min_object_size), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 100000.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ClassifyObjects(_s) => [vec![ParameterDef { name: "input_classes".to_string(), display_name: "Input Classes".to_string(), description: "Restrict classification to objects that already carry one of these classes\n\nOnly ROIs that have been assigned at least one of the listed classes by a prior\npipeline step will be evaluated against the morphological and intensity criteria below.\nLeave empty to apply the criteria to every object regardless of its current class.".to_string(), value: _s.input_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.input_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "match_handling".to_string(), display_name: "Match Handling".to_string(), description: "What to do with object class labels after criteria evaluation\n\nControls whether the output class is added or existing classes are removed,\nand whether the action is triggered on a criteria **match** or a **non-match**:\n\n- **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n- **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n- **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n- **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n- **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.".to_string(), value: match _s.match_handling { ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => "Add class on match".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => "Add class on mismatch".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => "Remove class on match".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => "Remove class on mismatch".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => "Remove output class on match".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => "Remove output class on mismatch".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => "Remove objects matching criteria".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => "Keep objects matching criteria".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => "Reclassify on match".to_string(), ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => "Reclassify on mismatch".to_string() }, param_type: ParamType::Dropdown, options: vec!["Add class on match".to_string(), "Add class on mismatch".to_string(), "Remove class on match".to_string(), "Remove class on mismatch".to_string(), "Remove output class on match".to_string(), "Remove output class on mismatch".to_string(), "Remove objects matching criteria".to_string(), "Keep objects matching criteria".to_string(), "Reclassify on match".to_string(), "Reclassify on mismatch".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Tag".to_string(), description: "Class label assigned to (or removed from) objects by the chosen operation\n\nUsed as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.\nHas no effect when the selected operation only manipulates input classes or clears all classes.".to_string(), value: match _s.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "overlapping_with".to_string(), display_name: "Intersecting With".to_string(), description: "Additional criterion: the object must intersect an object carrying this class\n\nIf unset (the default) this filter is not applied. When set, an object only\nsatisfies the overall criteria if it also overlaps at least one object carrying this\nclass by at least `min_intersection_area`. Combine with e.g.\n`RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,\nor `AddOutputClassIfMatch` to tag objects that do.".to_string(), value: match _s.overlapping_with.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_intersection_area".to_string(), display_name: "Min Intersection Area".to_string(), description: "Minimum intersection area with an `overlapping_with` object, in `size_unit`\n\nHas no effect while `overlapping_with` is Unset.".to_string(), value: format!("{}", _s.min_intersection_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Unit to use for object extraction".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_area".to_string(), display_name: "Min Area".to_string(), description: "Minimum area size\n\nMinimum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.min_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "max_area".to_string(), display_name: "Max Area".to_string(), description: "Maximum area size\n\nMaximum area size of the object in selected unit (px^2 or nm^2).".to_string(), value: format!("{}", _s.max_area), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_circularity".to_string(), display_name: "Min Circularity".to_string(), description: "Circularity range: 0 = elongated, 1 = perfect circle\n\nCircularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\nA circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\nIt is calculated with `4*Pi*AreaSize / Perimeter^2`".to_string(), value: format!("{}", _s.min_circularity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "max_circularity".to_string(), display_name: "Max Circularity".to_string(), description: "Circularity range: 0 = elongated, 1 = perfect circle\n\nCircularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.\nA circle is the mathematically perfect shape for maximizing area while minimizing perimeter.\nIt is calculated with `4*Pi*AreaSize / Perimeter^2`".to_string(), value: format!("{}", _s.max_circularity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "min_solidity".to_string(), display_name: "Min Solidity".to_string(), description: "Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.min_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "max_solidity".to_string(), display_name: "Max Solidity".to_string(), description: "Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex\n\nSolidity is a structural metric used in shape analysis to measure how \"solid\" or compact an object is.\nIt compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,\noften visualized as a rubber band stretched around the shape).\n\nSolidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.\nSolidity < 1.0: The object has irregular boundaries, deep \"bays,\" protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.".to_string(), value: format!("{}", _s.max_solidity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "min_aspect_ratio".to_string(), display_name: "Min Aspect Ratio".to_string(), description: "Minimum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.min_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "max_aspect_ratio".to_string(), display_name: "Max Aspect Ratio".to_string(), description: "Maximum proportional relationship between an object's width and its height\n\nThis value is calculated by the object bounding box with and height and is defined with `a = with/height`.\nThe value is without unit in the range of 0 to MAX_F32".to_string(), value: format!("{}", _s.max_aspect_ratio), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_eccentricity".to_string(), display_name: "Min Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.min_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "max_eccentricity".to_string(), display_name: "Max Eccentricity".to_string(), description: "Eccentricity: 0 = perfect circle, 1 = line\n\nEccentricity is a metric that measures how much a shape deviates from being a perfect circle.\nIt imagines the shape as an ellipse and measures how far apart its focal points are.\nIt is calculated with `sqrt(1-(b/a)^2)`".to_string(), value: format!("{}", _s.max_eccentricity), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.1000f32, groups: vec![] }], vec![ParameterDef { name: "min_feret".to_string(), display_name: "Min Feret".to_string(), description: "Feret diameter threshold\n\nThe absolute shortest parallel distance across the object.\nThis represents the minimum sieve size a particle could pass through.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.min_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "max_feret".to_string(), display_name: "Max Feret".to_string(), description: "Maximum feret diameter threshold in selected unit (px or nm)\n\nThe absolute longest distance across the object at any angle.\nUsed to measure elongation or the maximum length of a particle.\n\nIn image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.\nIt mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.\nWhen analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.".to_string(), value: format!("{}", _s.max_feret), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 2147483648.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "allow_edge_touching".to_string(), display_name: "Allow Edge Touching".to_string(), description: "Whether object can touch image edge".to_string(), value: format!("{}", _s.allow_edge_touching), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
-            Self::Colocalization(_s) => [vec![ParameterDef { name: "classes_to_coloc".to_string(), display_name: "Classes To Coloc".to_string(), description: "Theses are the classes the coloclization should be calculated for".to_string(), value: _s.classes_to_coloc.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes_to_coloc.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "filter_classes".to_string(), display_name: "Filter Classes".to_string(), description: "Optional additional label filters.\n\nOnly classes which matches all of these filters are used for coloc calculation".to_string(), value: _s.filter_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "class_for_overlapping_areas".to_string(), display_name: "Class For Overlapping Areas".to_string(), description: "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class".to_string(), value: match _s.class_for_overlapping_areas.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "exclude_classes".to_string(), display_name: "Exclude Classes".to_string(), description: "Classes an object must NOT overlap to be considered colocalized.\n\nAn object that otherwise satisfies `classes_to_coloc` is excluded entirely\n(no relation recorded, no intersection object created) if it also overlaps any\nobject from one of these classes with at least `min_coloc_area`. Leave empty\n(the default) to disable this filter - exclusion is opt-in.\n\nExample: to find objects colocalizing with class 1 and 2 but *not* 3, set\n`classes_to_coloc: [1, 2]` and `exclude_classes: [3]`.".to_string(), value: _s.exclude_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.exclude_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "allow_multi_object_coloc".to_string(), display_name: "Allow Multi Object Coloc".to_string(), description: "If set one object is allowed to coloc with more than one other object".to_string(), value: format!("{}", _s.allow_multi_object_coloc), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_coloc_area".to_string(), display_name: "Min Coloc Area".to_string(), description: "Minimum overlapping area size to count objects as coloc".to_string(), value: format!("{}", _s.min_coloc_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
+            Self::Colocalization(_s) => [vec![ParameterDef { name: "classes_to_coloc".to_string(), display_name: "Classes To Coloc".to_string(), description: "Theses are the classes the coloclization should be calculated for".to_string(), value: _s.classes_to_coloc.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.classes_to_coloc.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "class_for_overlapping_areas".to_string(), display_name: "Class For Overlapping Areas".to_string(), description: "Class of the overlapping area if needed\n\nIf defined the overlapping coloc area is added as new object and labeled with this class".to_string(), value: match _s.class_for_overlapping_areas.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "multiplicity".to_string(), display_name: "Multiplicity".to_string(), description: "How many partners an object may coloc with at once.".to_string(), value: match _s.multiplicity { ClassificationColocObjectsColocMultiplicitySettings::OneToOne => "No multi coloc (1:1)".to_string(), ClassificationColocObjectsColocMultiplicitySettings::ManyToMany => "Allow multi coloc".to_string(), ClassificationColocObjectsColocMultiplicitySettings::MultiFor(_) => "Multi coloc only for selected".to_string() }, param_type: ParamType::Dropdown, options: vec!["No multi coloc (1:1)".to_string(), "Allow multi coloc".to_string(), "Multi coloc only for selected".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], match &_s.multiplicity { ClassificationColocObjectsColocMultiplicitySettings::OneToOne => vec![], ClassificationColocObjectsColocMultiplicitySettings::ManyToMany => vec![], ClassificationColocObjectsColocMultiplicitySettings::MultiFor(__inner) => vec![ParameterDef { name: "multiplicity.0".to_string(), display_name: "Multi coloc only for selected".to_string(), description: "Only objects of these classes may coloc with more than one partner;\nevery other class in `classes_to_coloc` is capped to its single\nbest-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and\n`MultiFor([Cell])`, a cell can coloc with any number of spots, but\neach spot colocs with exactly one cell (the one it overlaps most).".to_string(), value: __inner.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if __inner.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }] }, vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for the minimum coloc area size".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_coloc_area".to_string(), display_name: "Min Coloc Area".to_string(), description: "Minimum overlapping area size to count objects as coloc".to_string(), value: format!("{}", _s.min_coloc_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "exclude_classes".to_string(), display_name: "Exclude Classes".to_string(), description: "Classes an object must NOT overlap to be considered colocalized.\n\nExclude_classes is a blocklist — \"even if an object matches everything else, throw it out if it also touches one of these classes.\"\nConcretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).\nWithout exclude_classes, any object satisfying that gets recorded as colocalized.\nWith exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.\nSo it's a \"match A and B, but not C\" filter\n\nExample: \"cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker.\"".to_string(), value: _s.exclude_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.exclude_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ColorFilterCommand(_s) => [vec![ParameterDef { name: "range.min_h".to_string(), display_name: "Min H".to_string(), description: "Minimum Hue angle in degrees [0.0, 360.0].".to_string(), value: format!("{}", _s.range.min_h), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "range.max_h".to_string(), display_name: "Max H".to_string(), description: "Maximum Hue angle in degrees [0.0, 360.0].".to_string(), value: format!("{}", _s.range.max_h), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "range.min_s".to_string(), display_name: "Min S".to_string(), description: "Minimum Saturation normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.min_s), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "range.max_s".to_string(), display_name: "Max S".to_string(), description: "Maximum Saturation normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.max_s), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "range.min_v".to_string(), display_name: "Min V".to_string(), description: "Minimum Value (Brightness) normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.min_v), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "range.max_v".to_string(), display_name: "Max V".to_string(), description: "Maximum Value (Brightness) normalized [0.0, 1.0].".to_string(), value: format!("{}", _s.range.max_v), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ConnectedComponents(_s) => vec![ParameterDef { name: "min_size".to_string(), display_name: "Min Size".to_string(), description: "Minimum object size, in pixels, an object must have to be kept.\n\nAfter labeling, connected components with a pixel count below this\nthreshold are discarded (their pixels are reset to background) and\nthe remaining object IDs are re-compacted to a contiguous range.\nUseful for suppressing noise/speckle artifacts before they reach\ndownstream measurement or classification steps. A value of 0 (the\ndefault) disables filtering.".to_string(), value: format!("{}", _s.min_size), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
             Self::DistanceTransform(_s) => [vec![ParameterDef { name: "threshold".to_string(), display_name: "Threshold".to_string(), description: "Values less than or equal to this are treated as background (distance = 0).".to_string(), value: format!("{}", _s.threshold), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "edges_are_background".to_string(), display_name: "Edges Are Background".to_string(), description: "If true, the pixels outside the image boundary are treated as background.".to_string(), value: format!("{}", _s.edges_are_background), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
@@ -344,7 +559,8 @@ impl PipelineCommand {
             Self::MedianSubtract(_s) => vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the neighborhood used to estimate the background.\n\nFeatures smaller than this radius will be preserved, while\nlarger structures will be treated as background and removed.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }],
             Self::MorphologicalCommand(_s) => [vec![ParameterDef { name: "op".to_string(), display_name: "Op".to_string(), description: "The transformation type (e.g., Dilate, Erode).".to_string(), value: match _s.op { MorphologyMorphologicalTransformationMorphOpsSettings::Dilate => "Dilate".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Erode => "Erode".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Open => "Open".to_string(), MorphologyMorphologicalTransformationMorphOpsSettings::Close => "Close".to_string() }, param_type: ParamType::Dropdown, options: vec!["Dilate".to_string(), "Erode".to_string(), "Open".to_string(), "Close".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "kernel_size".to_string(), display_name: "Kernel Size".to_string(), description: "The diameter of the structuring element in pixels.\nMust be an odd number (e.g., 3, 5, 7).".to_string(), value: format!("{}", _s.kernel_size), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "kernel_shape".to_string(), display_name: "Kernel Shape".to_string(), description: "The geometric profile of the structuring element.".to_string(), value: match _s.kernel_shape { MorphologyMorphologicalTransformationKernelShapesSettings::Box => "Box".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Ellipse => "Ellipse".to_string(), MorphologyMorphologicalTransformationKernelShapesSettings::Cross => "Cross".to_string() }, param_type: ParamType::Dropdown, options: vec!["Box".to_string(), "Ellipse".to_string(), "Cross".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "use_grayscale".to_string(), display_name: "Use Grayscale".to_string(), description: "If set the grayscale image instead of the labeld image is taken to perform a morphological transform".to_string(), value: format!("{}", _s.use_grayscale), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::ObjectMath(_s) => [vec![ParameterDef { name: "operation".to_string(), display_name: "Operation".to_string(), description: "Boolean set operation to apply".to_string(), value: match _s.operation { ClassificationObjectMathObjectSetOperationSettings::And => "And".to_string(), ClassificationObjectMathObjectSetOperationSettings::Or => "Or".to_string(), ClassificationObjectMathObjectSetOperationSettings::Xor => "Xor".to_string(), ClassificationObjectMathObjectSetOperationSettings::Subtract => "Subtract".to_string() }, param_type: ParamType::Dropdown, options: vec!["And".to_string(), "Or".to_string(), "Xor".to_string(), "Subtract".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "input_class".to_string(), display_name: "Input Class".to_string(), description: "ROIs carrying this class are the left-hand operand (\"A\").".to_string(), value: match _s.input_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "other_class".to_string(), display_name: "Other Class".to_string(), description: "ROIs carrying this class are the right-hand operand (\"B\").".to_string(), value: match _s.other_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "other_filter_classes".to_string(), display_name: "Other Filter Classes".to_string(), description: "Optional additional label filters applied to `other_class` objects.\n\nOnly `other_class` objects that carry all listed classes are used.".to_string(), value: _s.other_filter_classes.iter().filter_map(|c| c.to_u32()).map(|v| v.to_string()).collect::<Vec<_>>().join(","), param_type: ParamType::MultiObjClass, options: (0u32..33u32).map(|__idx| if _s.other_filter_classes.iter().any(|c| c.to_u32().map_or(false, |v| v == __idx)) { "1".to_string() } else { "0".to_string() }).collect::<Vec<_>>(), min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "size_unit".to_string(), display_name: "Size Unit".to_string(), description: "Size unit for `min_overlap_area`".to_string(), value: match _s.size_unit { SizeUnits::NanoMeter => "nm".to_string(), SizeUnits::Pixels => "px".to_string() }, param_type: ParamType::SizeUnits, options: vec!["nm".to_string(), "px".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "min_overlap_area".to_string(), display_name: "Min Overlap Area".to_string(), description: "Minimum overlap area before an `other_class` object is treated as a partner\nof an input object; objects overlapping less than this are ignored.".to_string(), value: format!("{}", _s.min_overlap_area), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "output_class".to_string(), display_name: "Output Class".to_string(), description: "If unset, the result replaces the input object in place.\n\nIf set, a new object carrying this class is created for each input object instead,\nleaving the input object untouched.".to_string(), value: match _s.output_class.to_u32() { Some(v) => format!("{}", v), None => "-1".to_string() }, param_type: ParamType::ObjClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "keep_unmatched".to_string(), display_name: "Keep Unmatched".to_string(), description: "When an input object has no qualifying overlapping partner: keep it unchanged in\nthe output (true), or drop it entirely - no output for it at all - (false).\n\nNote this is a policy override, not the literal mathematical result: e.g. for\n`And`, the true result of \"A and nothing\" is empty, but `keep_unmatched = true`\nstill leaves A untouched rather than emitting a zero-area object.".to_string(), value: format!("{}", _s.keep_unmatched), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
-            Self::RankFilter(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The circular radius of the neighborhood to consider.\n\nA radius of 1.0 roughly corresponds to a 3x3 square, while larger\nvalues increase the effect's strength and computational cost.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "filter_type".to_string(), display_name: "Filter Type".to_string(), description: "The specific ranking algorithm to apply to the neighborhood.".to_string(), value: match _s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Min".to_string(), "Max".to_string(), "Mean".to_string(), "Outliers".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
+            Self::PixelClassifier(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a trained pixel classifier model, saved from the AI training dialog.".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["evamodel".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "segmentation_mapping".to_string(), display_name: "Segmentation Mapping".to_string(), description: "Maps the model's predicted classes to this project's segmentation classes.".to_string(), value: String::new(), param_type: ParamType::Group, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: _s.segmentation_mapping.iter().map(|__item| [vec![ParameterDef { name: "segmentation_class".to_string(), display_name: "Segmentation Class".to_string(), description: "Segmentation class predicted by the classifier model.".to_string(), value: format!("{}", __item.segmentation_class.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The project's own segmentation class pixels predicted as\n`segmentation_class` are written as.".to_string(), value: format!("{}", __item.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat()).collect() }]].concat(),
+            Self::RankFilter(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The circular radius of the neighborhood to consider.\n\nA radius of 1.0 roughly corresponds to a 3x3 square, while larger\nvalues increase the effect's strength and computational cost.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "filter_type".to_string(), display_name: "Filter Type".to_string(), description: "The specific ranking algorithm to apply to the neighborhood.".to_string(), value: match _s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => "Median".to_string(), FiltersRankFilterRankFilterTypeSettings::Min => "Min".to_string(), FiltersRankFilterRankFilterTypeSettings::Max => "Max".to_string(), FiltersRankFilterRankFilterTypeSettings::Mean => "Mean".to_string(), FiltersRankFilterRankFilterTypeSettings::Outliers(_) => "Outliers".to_string() }, param_type: ParamType::Dropdown, options: vec!["Median".to_string(), "Min".to_string(), "Max".to_string(), "Mean".to_string(), "Outliers".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], match &_s.filter_type { FiltersRankFilterRankFilterTypeSettings::Median => vec![], FiltersRankFilterRankFilterTypeSettings::Min => vec![], FiltersRankFilterRankFilterTypeSettings::Max => vec![], FiltersRankFilterRankFilterTypeSettings::Mean => vec![], FiltersRankFilterRankFilterTypeSettings::Outliers(__inner) => vec![ParameterDef { name: "filter_type.0".to_string(), display_name: "Outliers".to_string(), description: "Replaces a pixel only if it deviates from the neighborhood median\nby more than the specified threshold.".to_string(), value: format!("{}", __inner), param_type: ParamType::Number, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }] }].concat(),
             Self::RollingBall(_s) => [vec![ParameterDef { name: "radius".to_string(), display_name: "Radius".to_string(), description: "The radius of the ball or paraboloid in pixels.\n\nThis should be at least as large as the radius of the largest\nobject in the image that is not part of the background.".to_string(), value: format!("{}", _s.radius), param_type: ParamType::Spinner, options: vec![], min: 1.0f32, max: 64.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "ball_type".to_string(), display_name: "Ball Type".to_string(), description: "The geometric shape of the rolling structural element.".to_string(), value: match _s.ball_type { FiltersRollingBallBallTypeSettings::Ball => "Ball".to_string(), FiltersRollingBallBallTypeSettings::Paraboloid => "Paraboloid".to_string() }, param_type: ParamType::Dropdown, options: vec!["Ball".to_string(), "Paraboloid".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "pre_smooth".to_string(), display_name: "Pre Smooth".to_string(), description: "".to_string(), value: format!("{}", _s.pre_smooth), param_type: ParamType::Toggle, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::SaveImage(_s) => [vec![ParameterDef { name: "name".to_string(), display_name: "Name".to_string(), description: "Name the image should be stord under".to_string(), value: _s.name.clone(), param_type: ParamType::Text, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "source".to_string(), display_name: "Source".to_string(), description: "Which image from the pipeline should be stored".to_string(), value: match _s.source { MathSaveImageImageSourceSettings::Image => "Image".to_string(), MathSaveImageImageSourceSettings::InstanceMap => "Instance Map".to_string(), MathSaveImageImageSourceSettings::SegmentationMask => "Segmentation Mask".to_string() }, param_type: ParamType::Dropdown, options: vec!["Image".to_string(), "Instance Map".to_string(), "Segmentation Mask".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }]].concat(),
             Self::Stardist(_s) => [vec![ParameterDef { name: "model_path".to_string(), display_name: "Model Path".to_string(), description: "Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).".to_string(), value: _s.model_path.display().to_string(), param_type: ParamType::FilePath, options: vec!["pt,pth".to_string()], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "object_class_id".to_string(), display_name: "Object Class Id".to_string(), description: "The class assigned to pixels of every detected object. All other\npixels are assigned `SegmentationClass::BACKGROUND`.".to_string(), value: format!("{}", _s.object_class_id.as_u32()), param_type: ParamType::SegClass, options: vec![], min: 0.0f32, max: 0.0f32, step: 1.0000f32, groups: vec![] }], vec![ParameterDef { name: "probability_threshold".to_string(), display_name: "Probability Threshold".to_string(), description: "Probability above which a grid cell is considered a candidate object center.".to_string(), value: format!("{}", _s.probability_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] }], vec![ParameterDef { name: "nms_threshold".to_string(), display_name: "Nms Threshold".to_string(), description: "Pixel-overlap ratio (intersection / union) above which a lower-scoring\ncandidate polygon is suppressed in favor of an overlapping higher-scoring one.".to_string(), value: format!("{}", _s.nms_threshold), param_type: ParamType::Spinner, options: vec![], min: 0.0f32, max: 1.0f32, step: 0.0100f32, groups: vec![] }]].concat(),
@@ -360,9 +576,16 @@ impl PipelineCommand {
 
     pub fn to_summary(&self) -> String {
         match self {
+            Self::AiObjectClassifier(_) => String::new(),
             Self::Blur(s) => format!("Kernel size: {}", format!("{:.3}", s.kernel_size)),
             Self::Cellpose(_) => String::new(),
-            Self::ClassifyObjects(s) => format!("Min Area: {} · Min Eccentricity: {} · Max Eccentricity: {} · Allow Edge Touching: {}", format!("{:.3}", s.min_area), format!("{:.3}", s.min_eccentricity), format!("{:.3}", s.max_eccentricity), format!("{}", s.allow_edge_touching)),
+            Self::ClassifyObjects(s) => format!(
+                "Min Area: {} · Min Eccentricity: {} · Max Eccentricity: {} · Allow Edge Touching: {}",
+                format!("{:.3}", s.min_area),
+                format!("{:.3}", s.min_eccentricity),
+                format!("{:.3}", s.max_eccentricity),
+                format!("{}", s.allow_edge_touching)
+            ),
             Self::Colocalization(_) => String::new(),
             Self::ColorFilterCommand(_) => String::new(),
             Self::ConnectedComponents(s) => format!("Min Size: {}", format!("{:.3}", s.min_size)),
@@ -371,7 +594,11 @@ impl PipelineCommand {
             Self::EdgeDetectionSobel(_) => String::new(),
             Self::EnhanceContrast(_) => String::new(),
             Self::ExtractObjects(_) => String::new(),
-            Self::GaussianBlur(s) => format!("Kernel Size: {} · Sigma: {}", format!("{:.3}", s.kernel_size), format!("{:.3}", s.sigma)),
+            Self::GaussianBlur(s) => format!(
+                "Kernel Size: {} · Sigma: {}",
+                format!("{:.3}", s.kernel_size),
+                format!("{:.3}", s.sigma)
+            ),
             Self::Hessian(_) => String::new(),
             Self::ImageCache(_) => String::new(),
             Self::ImageMath(_) => String::new(),
@@ -379,14 +606,46 @@ impl PipelineCommand {
             Self::Laplacian(_) => String::new(),
             Self::MedianSubtract(_) => String::new(),
             Self::MorphologicalCommand(_) => String::new(),
-            Self::ObjectMath(s) => format!("Operation: {}", match s.operation { ClassificationObjectMathObjectSetOperationSettings::And => "And".to_string(), ClassificationObjectMathObjectSetOperationSettings::Or => "Or".to_string(), ClassificationObjectMathObjectSetOperationSettings::Xor => "Xor".to_string(), ClassificationObjectMathObjectSetOperationSettings::Subtract => "Subtract".to_string() }),
+            Self::ObjectMath(s) => format!(
+                "Operation: {}",
+                match s.operation {
+                    ClassificationObjectMathObjectSetOperationSettings::And => "And".to_string(),
+                    ClassificationObjectMathObjectSetOperationSettings::Or => "Or".to_string(),
+                    ClassificationObjectMathObjectSetOperationSettings::Xor => "Xor".to_string(),
+                    ClassificationObjectMathObjectSetOperationSettings::Subtract =>
+                        "Subtract".to_string(),
+                }
+            ),
+            Self::PixelClassifier(_) => String::new(),
             Self::RankFilter(_) => String::new(),
             Self::RollingBall(_) => String::new(),
             Self::SaveImage(_) => String::new(),
             Self::Stardist(_) => String::new(),
             Self::StructureTensor(_) => String::new(),
             Self::Threshold(_) => String::new(),
-            Self::TransformObjects(s) => format!("Function: {}", match s.function { ClassificationTransformObjectsTransformFunctionSettings::Scale { .. } => "Scale".to_string(), ClassificationTransformObjectsTransformFunctionSettings::SnapArea { .. } => "Snap Area".to_string(), ClassificationTransformObjectsTransformFunctionSettings::MinCircle { .. } => "Min Circle".to_string(), ClassificationTransformObjectsTransformFunctionSettings::DrawCircle { .. } => "Draw Circle".to_string(), ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse { .. } => "Fitting Ellipse".to_string(), ClassificationTransformObjectsTransformFunctionSettings::Expand { .. } => "Expand".to_string(), ClassificationTransformObjectsTransformFunctionSettings::Shrink { .. } => "Shrink".to_string() }),
+            Self::TransformObjects(s) => format!(
+                "Function: {}",
+                match s.function {
+                    ClassificationTransformObjectsTransformFunctionSettings::Scale { .. } =>
+                        "Scale".to_string(),
+                    ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
+                        ..
+                    } => "Snap Area".to_string(),
+                    ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
+                        ..
+                    } => "Min Circle".to_string(),
+                    ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
+                        ..
+                    } => "Draw Circle".to_string(),
+                    ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse {
+                        ..
+                    } => "Fitting Ellipse".to_string(),
+                    ClassificationTransformObjectsTransformFunctionSettings::Expand { .. } =>
+                        "Expand".to_string(),
+                    ClassificationTransformObjectsTransformFunctionSettings::Shrink { .. } =>
+                        "Shrink".to_string(),
+                }
+            ),
             Self::UNet(_) => String::new(),
             Self::Voronoi(_) => String::new(),
             Self::Watershed(_) => String::new(),
@@ -396,6 +655,61 @@ impl PipelineCommand {
 
     pub fn apply_param_change(&mut self, param_name: &str, value: &str) {
         match self {
+            Self::AiObjectClassifier(s) => {
+                if param_name == "model_path" {
+                    s.model_path = std::path::PathBuf::from(value);
+                }
+                if param_name.starts_with("segmentation_mapping.") {
+                    let rest = &param_name[21..];
+                    let mut _p = rest.splitn(2, '.');
+                    if let (Some(_i), Some(nested_name)) = (_p.next(), _p.next()) {
+                        if let Ok(_idx) = _i.parse::<usize>() {
+                            if let Some(item) = s.segmentation_mapping.get_mut(_idx) {
+                                if nested_name == "object_class" {
+                                    if value == "-1" {
+                                        item.object_class = ObjectClass::Unset;
+                                    } else if let Ok(v) = value.parse::<u32>() {
+                                        item.object_class = ObjectClass::Valid(v);
+                                    }
+                                }
+                                if nested_name == "output_class" {
+                                    if value == "-1" {
+                                        item.output_class = ObjectClass::Unset;
+                                    } else if let Ok(v) = value.parse::<u32>() {
+                                        item.output_class = ObjectClass::Valid(v);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if param_name == "input_classes" {
+                    if let Some(id) = value
+                        .strip_prefix("toggle:")
+                        .and_then(|x| x.trim().parse::<u32>().ok())
+                    {
+                        if s.input_classes
+                            .iter()
+                            .any(|c| c.to_u32().map_or(false, |v| v == id))
+                        {
+                            s.input_classes
+                                .retain(|c| c.to_u32().map_or(true, |v| v != id));
+                        } else {
+                            s.input_classes.push(ObjectClass::Valid(id));
+                        }
+                    } else {
+                        s.input_classes = value
+                            .split(',')
+                            .filter(|x| !x.is_empty())
+                            .filter_map(|x| x.trim().parse::<u32>().ok())
+                            .map(|v| ObjectClass::Valid(v))
+                            .collect();
+                    }
+                }
+                if param_name == "match_handling" {
+                    s.match_handling = match value { "Add class on match" => ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch, "Reclassify on match" => ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch, _ => s.match_handling.clone() };
+                }
+            }
             Self::Blur(s) => {
                 if param_name == "kernel_size" {
                     if let Ok(v) = value.parse::<usize>() {
@@ -573,34 +887,63 @@ impl PipelineCommand {
                             .collect();
                     }
                 }
-                if param_name == "filter_classes" {
-                    if let Some(id) = value
-                        .strip_prefix("toggle:")
-                        .and_then(|x| x.trim().parse::<u32>().ok())
-                    {
-                        if s.filter_classes
-                            .iter()
-                            .any(|c| c.to_u32().map_or(false, |v| v == id))
-                        {
-                            s.filter_classes
-                                .retain(|c| c.to_u32().map_or(true, |v| v != id));
-                        } else {
-                            s.filter_classes.push(ObjectClass::Valid(id));
-                        }
-                    } else {
-                        s.filter_classes = value
-                            .split(',')
-                            .filter(|x| !x.is_empty())
-                            .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .map(|v| ObjectClass::Valid(v))
-                            .collect();
-                    }
-                }
                 if param_name == "class_for_overlapping_areas" {
                     if value == "-1" {
                         s.class_for_overlapping_areas = ObjectClass::Unset;
                     } else if let Ok(v) = value.parse::<u32>() {
                         s.class_for_overlapping_areas = ObjectClass::Valid(v);
+                    }
+                }
+                if param_name == "multiplicity" {
+                    s.multiplicity = match value {
+                        "No multi coloc (1:1)" => {
+                            ClassificationColocObjectsColocMultiplicitySettings::OneToOne
+                        }
+                        "Allow multi coloc" => {
+                            ClassificationColocObjectsColocMultiplicitySettings::ManyToMany
+                        }
+                        "Multi coloc only for selected" => {
+                            ClassificationColocObjectsColocMultiplicitySettings::MultiFor(vec![])
+                        }
+                        _ => s.multiplicity.clone(),
+                    };
+                }
+                if let ClassificationColocObjectsColocMultiplicitySettings::MultiFor(
+                    ref mut __inner,
+                ) = s.multiplicity
+                {
+                    if param_name == "multiplicity.0" {
+                        if let Some(id) = value
+                            .strip_prefix("toggle:")
+                            .and_then(|x| x.trim().parse::<u32>().ok())
+                        {
+                            if __inner
+                                .iter()
+                                .any(|c| c.to_u32().map_or(false, |v| v == id))
+                            {
+                                __inner.retain(|c| c.to_u32().map_or(true, |v| v != id));
+                            } else {
+                                __inner.push(ObjectClass::Valid(id));
+                            }
+                        } else {
+                            *__inner = value
+                                .split(',')
+                                .filter(|x| !x.is_empty())
+                                .filter_map(|x| x.trim().parse::<u32>().ok())
+                                .map(ObjectClass::Valid)
+                                .collect();
+                        }
+                    }
+                }
+                if param_name == "size_unit" {
+                    s.size_unit = match value {
+                        "nm" => SizeUnits::NanoMeter,
+                        _ => SizeUnits::Pixels,
+                    };
+                }
+                if param_name == "min_coloc_area" {
+                    if let Ok(v) = value.parse::<f32>() {
+                        s.min_coloc_area = v;
                     }
                 }
                 if param_name == "exclude_classes" {
@@ -624,20 +967,6 @@ impl PipelineCommand {
                             .filter_map(|x| x.trim().parse::<u32>().ok())
                             .map(|v| ObjectClass::Valid(v))
                             .collect();
-                    }
-                }
-                if param_name == "allow_multi_object_coloc" {
-                    s.allow_multi_object_coloc = value == "true";
-                }
-                if param_name == "size_unit" {
-                    s.size_unit = match value {
-                        "nm" => SizeUnits::NanoMeter,
-                        _ => SizeUnits::Pixels,
-                    };
-                }
-                if param_name == "min_coloc_area" {
-                    if let Ok(v) = value.parse::<f32>() {
-                        s.min_coloc_area = v;
                     }
                 }
             }
@@ -921,6 +1250,31 @@ impl PipelineCommand {
                     s.keep_unmatched = value == "true";
                 }
             }
+            Self::PixelClassifier(s) => {
+                if param_name == "model_path" {
+                    s.model_path = std::path::PathBuf::from(value);
+                }
+                if param_name.starts_with("segmentation_mapping.") {
+                    let rest = &param_name[21..];
+                    let mut _p = rest.splitn(2, '.');
+                    if let (Some(_i), Some(nested_name)) = (_p.next(), _p.next()) {
+                        if let Ok(_idx) = _i.parse::<usize>() {
+                            if let Some(item) = s.segmentation_mapping.get_mut(_idx) {
+                                if nested_name == "segmentation_class" {
+                                    if let Ok(v) = value.parse::<u32>() {
+                                        item.segmentation_class = SegmentationClass(v);
+                                    }
+                                }
+                                if nested_name == "object_class_id" {
+                                    if let Ok(v) = value.parse::<u32>() {
+                                        item.object_class_id = SegmentationClass(v);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Self::RankFilter(s) => {
                 if param_name == "radius" {
                     if let Ok(v) = value.parse::<f64>() {
@@ -933,8 +1287,20 @@ impl PipelineCommand {
                         "Min" => FiltersRankFilterRankFilterTypeSettings::Min,
                         "Max" => FiltersRankFilterRankFilterTypeSettings::Max,
                         "Mean" => FiltersRankFilterRankFilterTypeSettings::Mean,
+                        "Outliers" => {
+                            FiltersRankFilterRankFilterTypeSettings::Outliers(f32::default())
+                        }
                         _ => s.filter_type.clone(),
                     };
+                }
+                if let FiltersRankFilterRankFilterTypeSettings::Outliers(ref mut __inner) =
+                    s.filter_type
+                {
+                    if param_name == "filter_type.0" {
+                        if let Ok(v) = value.parse::<f32>() {
+                            *__inner = v;
+                        }
+                    }
                 }
             }
             Self::RollingBall(s) => {
@@ -1329,6 +1695,16 @@ impl PipelineCommand {
 
     pub fn add_group_item(&mut self, param_name: &str) {
         match self {
+            Self::AiObjectClassifier(s) => {
+                if param_name == "segmentation_mapping" {
+                    if let Some(last) = s.segmentation_mapping.last().cloned() {
+                        s.segmentation_mapping.push(last);
+                    } else {
+                        s.segmentation_mapping
+                            .push(ClassificationMappingSettings::default());
+                    }
+                }
+            }
             Self::Blur(_) => {}
             Self::Cellpose(_) => {}
             Self::ClassifyObjects(_) => {}
@@ -1349,6 +1725,16 @@ impl PipelineCommand {
             Self::MedianSubtract(_) => {}
             Self::MorphologicalCommand(_) => {}
             Self::ObjectMath(_) => {}
+            Self::PixelClassifier(s) => {
+                if param_name == "segmentation_mapping" {
+                    if let Some(last) = s.segmentation_mapping.last().cloned() {
+                        s.segmentation_mapping.push(last);
+                    } else {
+                        s.segmentation_mapping
+                            .push(SegmentationMappingSettings::default());
+                    }
+                }
+            }
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}
@@ -1373,6 +1759,11 @@ impl PipelineCommand {
 
     pub fn remove_group_item(&mut self, param_name: &str, idx: usize) {
         match self {
+            Self::AiObjectClassifier(s) => {
+                if param_name == "segmentation_mapping" && idx < s.segmentation_mapping.len() {
+                    s.segmentation_mapping.remove(idx);
+                }
+            }
             Self::Blur(_) => {}
             Self::Cellpose(_) => {}
             Self::ClassifyObjects(_) => {}
@@ -1393,6 +1784,11 @@ impl PipelineCommand {
             Self::MedianSubtract(_) => {}
             Self::MorphologicalCommand(_) => {}
             Self::ObjectMath(_) => {}
+            Self::PixelClassifier(s) => {
+                if param_name == "segmentation_mapping" && idx < s.segmentation_mapping.len() {
+                    s.segmentation_mapping.remove(idx);
+                }
+            }
             Self::RankFilter(_) => {}
             Self::RollingBall(_) => {}
             Self::SaveImage(_) => {}

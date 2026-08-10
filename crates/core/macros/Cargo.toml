@@ -4,10 +4,12 @@ version = { workspace = true }
 edition = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
+publish = { workspace = true }
 
 [lib]
 proc-macro = true
 
 [dependencies]
+# Major version 2.x, deliberately not unified with evanalyzer_cfg's build
+# script's 3.x via workspace.dependencies - see the note in the root Cargo.toml.
 syn = { version = "2.0", features = ["full", "extra-traits"] }
-quote = "1.0"

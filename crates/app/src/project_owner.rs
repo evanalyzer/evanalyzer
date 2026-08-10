@@ -14,6 +14,34 @@ use std::{
 
 use crate::extensions::project_ext::ProjectExt;
 
+/// Acquires a write lock on the shared project, recovering from poison
+/// instead of panicking.
+///
+/// `project` is the one lock genuinely shared between the UI thread and
+/// every background worker thread (pipeline/viewport workers, job threads -
+/// anything holding an `AppHandle`). A panic on *any* of those threads while
+/// holding this lock would otherwise poison it, and the next
+/// `.expect("Poisoned")` anywhere - including the UI thread on its very next
+/// access - would panic too, taking down the whole app over a failure that
+/// happened somewhere else entirely. `into_inner()` recovers the
+/// (potentially inconsistent, but still usable) guard instead.
+fn lock_project_write(
+    project: &RwLock<ProjectWithRuntime>,
+) -> RwLockWriteGuard<'_, ProjectWithRuntime> {
+    project
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Read-lock equivalent of [`lock_project_write`] - see its doc comment.
+fn lock_project_read(
+    project: &RwLock<ProjectWithRuntime>,
+) -> RwLockReadGuard<'_, ProjectWithRuntime> {
+    project
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// ProjectTmpSettings transient, never serialised
 /// Lives alongside ProjectSettings but owned by evanalyzer_app.
 #[derive(Debug)]
@@ -112,14 +140,14 @@ impl ProjectOwner {
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
         let project = crate::extensions::project_ext::load_project(path)?;
-        *self.project.write().expect("Poisoned") = project;
+        *lock_project_write(&self.project) = project;
         *self.current_path.lock().unwrap() = Some(path.clone());
         Ok(())
     }
 
     /// Saves the current project to disk.
     pub fn save_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
-        let mut project = self.project.write().expect("Poisoned");
+        let mut project = lock_project_write(&self.project);
         project.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
         let content = serde_json::to_string_pretty(&project.settings)
             .map_err(|e| InternalErrors::Internal(e.to_string()))?;
@@ -177,20 +205,20 @@ impl AppHandle {
     /// Multiple threads can hold read guards concurrently.
     /// Drop the guard before calling `get_project_write`.
     pub fn get_project(&self) -> RwLockReadGuard<'_, ProjectWithRuntime> {
-        self.project.read().expect("Poisoned")
+        lock_project_read(&self.project)
     }
 
     /// Acquire a write guard.
     /// Exclusive - blocks all readers until dropped.
     /// Never hold a read guard on the same thread when calling this.
     pub fn get_project_write(&self) -> RwLockWriteGuard<'_, ProjectWithRuntime> {
-        self.project.write().expect("Poisoned")
+        lock_project_write(&self.project)
     }
 
     /// Loads a project from disk replacing the current project.
     pub fn load_project(&self, path: &PathBuf) -> Result<(), InternalErrors> {
         let project = crate::extensions::project_ext::load_project(path)?;
-        *self.project.write().expect("Poisoned") = project;
+        *lock_project_write(&self.project) = project;
         Ok(())
     }
 
@@ -207,7 +235,7 @@ impl AppHandle {
             crate::extensions::project_ext::import_legacy_project(path).map_err(|e| {
                 InternalErrors::Internal(format!("Could not import legacy project: {e}"))
             })?;
-        *self.project.write().expect("Poisoned") = project;
+        *lock_project_write(&self.project) = project;
         Ok((warnings, legacy_image_folder))
     }
 
@@ -350,6 +378,37 @@ mod tests {
     fn current_path_is_none_for_a_fresh_owner() {
         let owner = ProjectOwner::new();
         assert_eq!(owner.current_path(), None);
+    }
+
+    #[test]
+    fn get_project_and_get_project_write_recover_from_a_poisoned_lock() {
+        // `project` is shared between the UI thread and every background
+        // worker thread via `AppHandle` - a panic on any of them while
+        // holding this lock must not cascade into every other holder
+        // panicking too (see `lock_project_write`/`lock_project_read`).
+        let owner = ProjectOwner::new();
+        let handle = owner.handle();
+
+        // Poison the lock: panicking while a write guard is held marks it
+        // poisoned when the guard's Drop runs during unwind, exactly as it
+        // would from a real worker thread - `catch_unwind` on this thread
+        // exercises the same Drop-during-unwind path without needing to
+        // actually spawn one.
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = handle.get_project_write();
+            panic!("simulated worker-thread panic while holding the project lock");
+        }));
+        assert!(panicked.is_err(), "the panic should have propagated");
+
+        // Both accessors must recover instead of panicking themselves.
+        let _write_guard = handle.get_project_write();
+        drop(_write_guard);
+        let _read_guard = handle.get_project();
+        drop(_read_guard);
+
+        // The lock is genuinely usable afterwards, not just "didn't panic".
+        handle.get_project_write().metadata.name = "recovered".into();
+        assert_eq!(handle.get_project().metadata.name, "recovered");
     }
 
     #[test]
