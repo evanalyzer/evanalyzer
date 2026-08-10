@@ -429,6 +429,12 @@ impl From<ExtractObjectsSettings> for ExtractObjects {
     }
 }
 
+impl From<FillHolesSettings> for FillHoles {
+    fn from(_s: FillHolesSettings) -> Self {
+        FillHoles {}
+    }
+}
+
 impl From<GaussianBlurSettings> for GaussianBlur {
     fn from(_s: GaussianBlurSettings) -> Self {
         GaussianBlur {
@@ -743,6 +749,9 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
         }
         PipelineCommand::ExtractObjects(settings) => {
             Ok(Box::new(crate::algos::ExtractObjects::from(settings)))
+        }
+        PipelineCommand::FillHoles(settings) => {
+            Ok(Box::new(crate::algos::FillHoles::from(settings)))
         }
         PipelineCommand::GaussianBlur(settings) => {
             Ok(Box::new(crate::algos::GaussianBlur::from(settings)))

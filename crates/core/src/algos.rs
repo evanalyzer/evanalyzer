@@ -64,6 +64,7 @@ pub use self::math::image_math::Operand;
 pub use self::math::median_subtract::MedianSubtract;
 pub use self::math::save_image::ImageSource;
 pub use self::math::save_image::SaveImage;
+pub use self::morphology::fill_holes::FillHoles;
 pub use self::morphology::morphological_transformation::KernelShapes;
 pub use self::morphology::morphological_transformation::MorphOps;
 pub use self::morphology::morphological_transformation::MorphologicalCommand;
