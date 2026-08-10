@@ -1184,6 +1184,11 @@
     "MetaData": {
       "type": "object",
       "properties": {
+        "appVersion": {
+          "description": "Version of EVAnalyzer that last wrote this file (`CARGO_PKG_VERSION`\nof the writing build). Empty for files written before this field\nexisted, or built by hand rather than saved from the app.",
+          "type": "string",
+          "default": ""
+        },
         "authorFirstName": {
           "description": "Author first name",
           "type": "string"

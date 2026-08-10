@@ -1072,6 +1072,7 @@ impl ProjectExt for ProjectWithRuntime {
         // whether it was ever loaded from disk at all - e.g. a brand-new
         // project still has `schema_version: 0` from `Default`).
         self.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
+        self.settings.metadata.app_version = env!("CARGO_PKG_VERSION").to_string();
 
         // Every command's file-path field (AI model paths today - see
         // `relativize_file_paths`'s doc comment for why this isn't limited to
@@ -1100,9 +1101,10 @@ impl ProjectExt for ProjectWithRuntime {
     /// Stores the actual project as template project
     fn save_project_as_template(
         &mut self,
-        meta: MetaData,
+        mut meta: MetaData,
         path: &PathBuf,
     ) -> Result<(), InternalErrors> {
+        meta.app_version = env!("CARGO_PKG_VERSION").to_string();
         let template = ProjectTemplate {
             meta,
             classification: self.classification.clone(),
@@ -1135,7 +1137,7 @@ impl ProjectExt for ProjectWithRuntime {
     /// Stores the selected pipeline as template
     fn save_pipeline_as_template(
         &mut self,
-        meta: MetaData,
+        mut meta: MetaData,
         pipeline_id: PipelineId,
         path: &PathBuf,
     ) -> Result<(), InternalErrors> {
@@ -1145,6 +1147,7 @@ impl ProjectExt for ProjectWithRuntime {
             .find(|p| p.id == pipeline_id)
             .ok_or_else(|| InternalErrors::Internal("Pipeline not found".into()))?;
 
+        meta.app_version = env!("CARGO_PKG_VERSION").to_string();
         let template = PipelineTemplate {
             meta,
             pipeline_steps: pipeline.steps.clone(),

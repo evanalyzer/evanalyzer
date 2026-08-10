@@ -32,4 +32,10 @@ pub struct MetaData {
     /// Free-form keywords used to search/filter templates
     #[serde(default)]
     pub tags: Vec<String>,
+
+    /// Version of EVAnalyzer that last wrote this file (`CARGO_PKG_VERSION`
+    /// of the writing build). Empty for files written before this field
+    /// existed, or built by hand rather than saved from the app.
+    #[serde(default)]
+    pub app_version: String,
 }
