@@ -17,3 +17,4 @@ date,commit,kind,crate,version,advisory_id,cve,cvss_vector,title
 2026-08-07T13:49:21Z,d5a068a9,yanked,core2,0.4.0,,,,core2 0.4.0 is yanked
 2026-08-10T04:43:55Z,19c02b70,clean,,,,,,No vulnerabilities or warnings found
 2026-08-10T15:10:18Z,edb934d0,clean,,,,,,No vulnerabilities or warnings found
+2026-08-10T19:07:29Z,216d622f,clean,,,,,,No vulnerabilities or warnings found
