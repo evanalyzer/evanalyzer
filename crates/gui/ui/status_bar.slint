@@ -4,6 +4,7 @@ import {
     ViewportState,
     ViewportObjectState,
 } from "editor/viewport_state.slint";
+import { ImageMetaData } from "editor/image_meta_panel.slint";
 
 
 export component StatusBar inherits Rectangle {
@@ -32,7 +33,7 @@ export component StatusBar inherits Rectangle {
 
         // Status Message
         Text {
-            text: get_state(ViewportState.high_res_ready, ViewportObjectState.is_drawing);
+            text: get_state(ViewportState.high_res_ready, ViewportObjectState.is_drawing) + " / " + ImageMetaData.image_name;
             font-size: 11px;
             vertical-alignment: center;
         }
