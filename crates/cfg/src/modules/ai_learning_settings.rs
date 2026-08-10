@@ -223,6 +223,13 @@ pub enum AiLearningClassifierSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AiLearningSettings {
+    /// On-disk format version of this settings document. Absent on files
+    /// written before versioning was introduced, which `serde(default)`
+    /// reads as `0` - see `CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION` and
+    /// `evanalyzer_cfg::load_ai_learning_settings`.
+    #[serde(default)]
+    pub schema_version: u32,
+
     /// Name, description, author, creation time, category/tags - the same
     /// browsable-artifact metadata project templates already use, so a
     /// future "pick a model" UI can list/search/filter saved models the same

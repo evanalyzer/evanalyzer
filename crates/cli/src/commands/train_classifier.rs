@@ -21,12 +21,14 @@ pub fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {
             args.settings.display()
         ))
     })?;
-    let settings: AiLearningSettings = serde_json::from_str(&settings_json).map_err(|e| {
+    let raw: serde_json::Value = serde_json::from_str(&settings_json).map_err(|e| {
         InternalErrors::InvalidArgument(format!(
             "Could not parse '{}' as AiLearningSettings: {e}",
             args.settings.display()
         ))
     })?;
+    let settings: AiLearningSettings = evanalyzer_cfg::load_ai_learning_settings(raw)
+        .map_err(|e| InternalErrors::InvalidArgument(e.to_string()))?;
 
     let model_name = args
         .model_name
@@ -174,6 +176,7 @@ mod tests {
 
     fn empty_object_settings() -> AiLearningSettings {
         AiLearningSettings {
+            schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
             metadata: Default::default(),
             backend: AiLearningBackendSettings::RandomForest(Default::default()),
             classifier: AiLearningClassifierSettings::Object {
@@ -229,6 +232,7 @@ mod tests {
         use evanalyzer_cfg::settings::ai_learning_settings::ObjectClassLabel;
 
         AiLearningSettings {
+            schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
             metadata: Default::default(),
             backend: AiLearningBackendSettings::RandomForest(Default::default()),
             classifier: AiLearningClassifierSettings::Object {

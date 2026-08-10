@@ -785,6 +785,10 @@
         }
       }
     },
+    "FillHolesSettings": {
+      "description": "Fills enclosed background holes in the segmentation map.\n\n A direct port of ImageJ's `Process > Binary > Fill Holes` command\n (`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\n Landini): a background pixel counts as a \"hole\" - and is turned into\n foreground - exactly when it cannot be reached from the image border by a\n path of background pixels using 4-connectivity.\n\n Like ImageJ's own command, this treats the image as strictly binary: every\n non-background pixel is \"foreground\" regardless of its actual label/class\n value, and a filled hole is stamped with a single fixed value rather than\n inheriting whatever label happens to surround it. If the segmentation map\n carries several distinct label values, holes are not attributed back to\n the object that encloses them - only ImageJ's original background/\n foreground distinction is reproduced here.\n\n # Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)\n 1. Scan every pixel on the image border; for each one that is background\n    (`0`), flood-fill outward from it using 4-connectivity (up/down/left/\n    right only - diagonal neighbors are **not** considered connected),\n    marking every background pixel reached this way as \"outside\".\n 2. Any background pixel never marked \"outside\" is enclosed and becomes\n    foreground. Every non-background pixel is copied through unchanged.\n\n The 4-connectivity in step 1 is load-bearing, not an implementation\n detail: a boundary that only touches itself diagonally (8-connected) does\n **not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,\n whose own docs specify a 4-connected fill.",
+      "type": "object"
+    },
     "FiltersHessianHessianModeSettings": {
       "description": "Specifies the feature extraction method for the Hessian matrix.\n\n The Hessian matrix describes the local second-order structure of an image,\n often used for blob detection (LoG) or ridge extraction.",
       "oneOf": [
@@ -1239,6 +1243,11 @@
     "MetaData": {
       "type": "object",
       "properties": {
+        "appVersion": {
+          "description": "Version of EVAnalyzer that last wrote this file (`CARGO_PKG_VERSION`\nof the writing build). Empty for files written before this field\nexisted, or built by hand rather than saved from the app.",
+          "type": "string",
+          "default": ""
+        },
         "authorFirstName": {
           "description": "Author first name",
           "type": "string"
@@ -1595,6 +1604,19 @@
             }
           },
           "$ref": "#/$defs/ExtractObjectsSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "fillHoles"
+            }
+          },
+          "$ref": "#/$defs/FillHolesSettings",
           "required": [
             "type"
           ]
@@ -2259,7 +2281,7 @@
       }
     },
     "ThresholdSettings": {
-      "description": "A filter that segments an image into discrete classes based on intensity.\n\n This supports \"Multi-Otsu\" style behavior by allowing a vector of\n [`ThresholdSettings`]. Each pixel is evaluated against the settings to\n determine which `object_class_id` it belongs to.\n\n # Examples\n\n ```\n use imagec::backend::algos::{Threshold, ThresholdSettings, ThresholdMethod};\n let binary = Threshold {\n     thresholds: vec![ThresholdSettings {\n         method: ThresholdMethod::Otsu,\n         min_threshold: 0.0,\n         max_threshold: 1.0,\n         object_class_id: ObjectLabel::Foreground,\n     }]\n };\n ```",
+      "description": "A filter that segments an image into discrete classes based on intensity.\n\n This supports \"Multi-Otsu\" style behavior by allowing a vector of\n [`ThresholdSettings`]. Each pixel is evaluated against the settings to\n determine which `object_class_id` it belongs to.",
       "type": "object",
       "properties": {
         "thresholds": {
