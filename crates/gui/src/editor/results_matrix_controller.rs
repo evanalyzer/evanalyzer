@@ -412,15 +412,19 @@ impl ResultsMatrixController {
         } else {
             let mut plate_rows = plate_rows;
             let mut plate_cols = plate_cols;
-            let plate_values = |result: &PlateMatrixResult| -> Vec<f64> {
-                result
-                    .cells
-                    .iter()
-                    .filter_map(|c| {
-                        cell_value(!c.label.is_empty(), is_object_count, c.count, c.value)
-                    })
-                    .collect()
-            };
+            // Whether the grid has anything to show at all: a cell with a
+            // non-empty label, real data or a zero-object placeholder alike.
+            // Deliberately *not* based on `cell_value`/colorable values -
+            // when every image in the data set (or just the current
+            // filter/class selection) has zero objects, a real metric like
+            // Area has no aggregate to show for any of them, so every cell's
+            // value is `None` even though every well is legitimately
+            // occupied. Gating on values-empty there mistook "nothing to
+            // color" for "nothing matched" and hid the whole grid behind a
+            // "No wells matched" status instead of showing the (blank, but
+            // present) wells.
+            let any_occupied =
+                |result: &PlateMatrixResult| result.cells.iter().any(|c| !c.label.is_empty());
 
             let mut result = compute_plate_matrix(
                 &objects,
@@ -432,13 +436,13 @@ impl ResultsMatrixController {
                 plate_rows,
                 plate_cols,
             );
-            let mut values: Vec<f64> = plate_values(&result);
+            let mut occupied = any_occupied(&result);
 
             // Every well-shaped label decoded fine, but none of them fit the
             // configured plate size (e.g. still at the "1 Well" default) -
             // grow to the smallest preset that fits everything and retry,
             // instead of leaving the user staring at an empty grid.
-            if values.is_empty()
+            if !occupied
                 && let Some((need_rows, need_cols)) = result.required_span
                 && let Some((new_rows, new_cols)) = fitting_preset(need_rows, need_cols)
             {
@@ -463,28 +467,20 @@ impl ResultsMatrixController {
                     plate_rows,
                     plate_cols,
                 );
-                values = plate_values(&result);
+                occupied = any_occupied(&result);
             }
 
-            let status = if values.is_empty() {
-                match (
-                    result.required_span,
-                    result.group_count,
-                    &result.sample_label,
-                ) {
-                    (Some((r, c)), ..) => format!(
-                        "No wells fit — this data needs at least a {r} x {c} plate. Increase Plate size."
-                    ),
-                    (None, count, Some(sample)) if count > 0 => {
-                        format!(
-                            "Group by regex matched {count} group(s), but none look like well ids (e.g. \"D14\") - got \"{sample}\" instead. Capture group 1 should be just the well id, not the whole match - check for an extra wrapping parenthesis."
-                        )
-                    }
-                    _ => "No wells matched — check Matrix's regex.".to_string(),
-                }
-            } else {
-                String::new()
-            };
+            let status = plate_status_message(
+                occupied,
+                result.required_span,
+                result.group_count,
+                &result.sample_label,
+            );
+            let values: Vec<f64> = result
+                .cells
+                .iter()
+                .filter_map(|c| cell_value(!c.label.is_empty(), is_object_count, c.count, c.value))
+                .collect();
             let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
             let cells: Vec<ResultsMatrixCell> = result
                 .cells
@@ -666,6 +662,40 @@ fn color_scheme_labels() -> Vec<SharedString> {
         .iter()
         .map(|s| SharedString::from(s.label()))
         .collect()
+}
+
+/// The plate view's status line: empty (grid shown) when at least one cell
+/// is occupied, otherwise one of a few diagnostic messages depending on why
+/// - explicitly keyed on *occupancy*, not on whether any cell has a
+/// colorable value. A data set where every image has zero objects is fully
+/// occupied (one placeholder cell per well) but, for any metric other than
+/// "Number of Objects", has no aggregate value for any of them - that must
+/// still render the (blank) grid, not this "nothing matched" status (the
+/// bug this function's extraction fixes: the caller used to gate on
+/// values-empty instead of occupied-empty, hiding the whole grid behind
+/// "No wells matched" whenever every well was a zero-object placeholder).
+fn plate_status_message(
+    occupied: bool,
+    required_span: Option<(usize, usize)>,
+    group_count: usize,
+    sample_label: &Option<String>,
+) -> String {
+    if occupied {
+        return String::new();
+    }
+    match (required_span, group_count, sample_label) {
+        (Some((r, c)), ..) => {
+            format!(
+                "No wells fit — this data needs at least a {r} x {c} plate. Increase Plate size."
+            )
+        }
+        (None, count, Some(sample)) if count > 0 => {
+            format!(
+                "Group by regex matched {count} group(s), but none look like well ids (e.g. \"D14\") - got \"{sample}\" instead. Capture group 1 should be just the well id, not the whole match - check for an extra wrapping parenthesis."
+            )
+        }
+        _ => "No wells matched — check Matrix's regex.".to_string(),
+    }
 }
 
 /// The value a cell should be colored/positioned by: for the
@@ -1142,6 +1172,339 @@ mod tests {
             project_settings_controller,
         ));
         (ui_state, controller)
+    }
+
+    /// Reproduces the exact cell-building steps `bg_compute_matrix`'s plate
+    /// branch runs (lines ~489-504): `compute_plate_matrix` -> `cell_value`
+    /// -> `matrix_cell`, for a plate with one well that has a real object and
+    /// one well that has an image but zero objects - checking whether the
+    /// zero-object well is still occupied (label shown, just uncolored) when
+    /// a real metric (not the "Number of Objects" pseudo-metric) is
+    /// selected, the same way `matrix_cell_with_a_label_but_no_value_is_occupied_but_uncolored`
+    /// checks `matrix_cell` in isolation - this instead drives it through the
+    /// real `compute_plate_matrix` output.
+    #[test]
+    fn plate_branch_keeps_a_zero_object_well_occupied_for_a_real_metric() {
+        use evanalyzer_app::result::{ImageRow, ObjectRow};
+
+        fn obj(image_name: &str) -> ObjectRow {
+            ObjectRow {
+                image_name: image_name.into(),
+                image_rel_path: image_name.into(),
+                c_stack: None,
+                z_stack: None,
+                t_stack: None,
+                object_id: "00000000-0000-0000-0000-000000000001".into(),
+                seg_class_name: None,
+                seg_class_id: None,
+                object_class_name: vec![],
+                object_class_id: vec![],
+                parent_id: None,
+                children: vec![],
+                track_id: 0,
+                centroid_x_px: 0.0,
+                centroid_y_px: 0.0,
+                centroid_x_nm: 0.0,
+                centroid_y_nm: 0.0,
+                area_px: 10,
+                area_nm2: 10.0,
+                perimeter_px: 0.0,
+                perimeter_nm: 0.0,
+                circularity: 0.0,
+                solidity: 0.0,
+                aspect_ratio: 0.0,
+                roundness: 0.0,
+                compactness: 0.0,
+                major_axis_px: 0.0,
+                minor_axis_px: 0.0,
+                touches_edge: false,
+                intensities_json: "{}".into(),
+                coloc_json: "{}".into(),
+                bbox_px: [0, 0, 0, 0],
+            }
+        }
+        fn image(name: &str) -> ImageRow {
+            ImageRow {
+                image_name: name.into(),
+                image_rel_path: name.into(),
+                status: "ok".into(),
+                error_message: None,
+            }
+        }
+
+        let objects = vec![obj("A14_01.tif")];
+        let all_images = vec![image("A14_01.tif"), image("A15_01.tif")];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let metric = ColumnSpec {
+            id: "area_px".into(),
+            label: "Area (px)".into(),
+            filterable: false,
+            visible: true,
+        };
+
+        let result = compute_plate_matrix(
+            &objects,
+            &all_images,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &metric,
+            8,
+            24,
+        );
+
+        // Same mapping `bg_compute_matrix` uses to go from `PlateCell` to
+        // `ResultsMatrixCell`, with `is_object_count: false` (a real metric
+        // picked, not "Number of Objects").
+        let is_object_count = false;
+        let (lo, hi) = resolve_range(
+            &result
+                .cells
+                .iter()
+                .filter_map(|c| cell_value(!c.label.is_empty(), is_object_count, c.count, c.value))
+                .collect::<Vec<_>>(),
+            true,
+            0.0,
+            0.0,
+        );
+        let cells: Vec<ResultsMatrixCell> = result
+            .cells
+            .iter()
+            .map(|c| {
+                let occupied = !c.label.is_empty();
+                matrix_cell(
+                    c.label.clone(),
+                    cell_value(occupied, is_object_count, c.count, c.value),
+                    c.count,
+                    c.coloc_count,
+                    lo,
+                    hi,
+                    HeatmapColorScheme::Viridis,
+                )
+            })
+            .collect();
+
+        let a15 = &cells[14]; // row 0 ('A'), col 14 (15-1)
+        assert_eq!(a15.label.as_str(), "A15");
+        assert!(
+            a15.occupied,
+            "a zero-object well must stay occupied (label shown) even when a real metric is selected"
+        );
+        assert!(!a15.has_value, "no aggregate value exists for zero objects");
+        assert_eq!(a15.count_line.as_str(), "0 obj");
+    }
+
+    #[test]
+    fn plate_status_message_is_empty_whenever_any_cell_is_occupied() {
+        // The bug this guards against: a data set where *every* image has
+        // zero objects is fully occupied (a placeholder cell per well), but
+        // for a real metric none of those cells have a colorable value - the
+        // status must stay empty (grid shown) regardless, not fall back to
+        // one of the "nothing matched" messages below just because nothing
+        // is colorable.
+        assert_eq!(
+            plate_status_message(true, Some((1, 1)), 3, &Some("A1".to_string())),
+            ""
+        );
+        assert_eq!(plate_status_message(true, None, 0, &None), "");
+    }
+
+    #[test]
+    fn plate_status_message_reports_the_right_reason_when_nothing_is_occupied() {
+        assert_eq!(
+            plate_status_message(false, Some((16, 24)), 5, &Some("D14".to_string())),
+            "No wells fit — this data needs at least a 16 x 24 plate. Increase Plate size."
+        );
+        assert_eq!(
+            plate_status_message(false, None, 3, &Some("plateA".to_string())),
+            "Group by regex matched 3 group(s), but none look like well ids (e.g. \"D14\") - got \"plateA\" instead. Capture group 1 should be just the well id, not the whole match - check for an extra wrapping parenthesis."
+        );
+        assert_eq!(
+            plate_status_message(false, None, 0, &None),
+            "No wells matched — check Matrix's regex."
+        );
+    }
+
+    /// Regression test for the bug reported live: with *every* image in the
+    /// data set producing zero objects, switching the plate view's metric
+    /// from "Number of Objects" to a real metric (e.g. Area) made the whole
+    /// grid disappear behind a "No wells matched" status - because the
+    /// caller decided "is there anything to show" from whether any cell had
+    /// a *colorable value* (`cell_value`/`plate_values`, all `None` here)
+    /// rather than whether any cell was *occupied* (every well is, via the
+    /// `all_images` zero-object placeholders). Exercises the same
+    /// `compute_plate_matrix` -> occupancy-check -> `plate_status_message`
+    /// sequence `bg_compute_matrix`'s plate branch runs.
+    #[test]
+    fn plate_status_message_stays_empty_when_every_well_is_a_zero_object_placeholder() {
+        use evanalyzer_app::result::ImageRow;
+
+        fn image(name: &str) -> ImageRow {
+            ImageRow {
+                image_name: name.into(),
+                image_rel_path: name.into(),
+                status: "ok".into(),
+                error_message: None,
+            }
+        }
+
+        // No objects anywhere in the data set - just processed images.
+        let objects = vec![];
+        let all_images = vec![image("A14_01.tif"), image("B2_01.tif")];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let metric = ColumnSpec {
+            id: "area_px".into(),
+            label: "Area (px)".into(),
+            filterable: false,
+            visible: true,
+        };
+
+        let result = compute_plate_matrix(
+            &objects,
+            &all_images,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &metric,
+            8,
+            24,
+        );
+        let occupied = result.cells.iter().any(|c| !c.label.is_empty());
+        assert!(
+            occupied,
+            "both wells have a processed image and must be occupied placeholders"
+        );
+
+        let status = plate_status_message(
+            occupied,
+            result.required_span,
+            result.group_count,
+            &result.sample_label,
+        );
+        assert_eq!(
+            status, "",
+            "the grid must render (blank cells) instead of being replaced by a status message"
+        );
+    }
+
+    /// Same check as `plate_branch_keeps_a_zero_object_well_occupied_for_a_real_metric`,
+    /// but for the well (field-of-view) drill-down branch (lines ~374-394),
+    /// which maps `compute_well_matrix` output through the same
+    /// `cell_value`/`matrix_cell` pair via its own separate `plotted` step.
+    #[test]
+    fn well_branch_keeps_a_zero_object_image_occupied_for_a_real_metric() {
+        use evanalyzer_app::result::{ImageRow, ObjectRow};
+
+        fn obj(image_name: &str) -> ObjectRow {
+            ObjectRow {
+                image_name: image_name.into(),
+                image_rel_path: image_name.into(),
+                c_stack: None,
+                z_stack: None,
+                t_stack: None,
+                object_id: "00000000-0000-0000-0000-000000000001".into(),
+                seg_class_name: None,
+                seg_class_id: None,
+                object_class_name: vec![],
+                object_class_id: vec![],
+                parent_id: None,
+                children: vec![],
+                track_id: 0,
+                centroid_x_px: 0.0,
+                centroid_y_px: 0.0,
+                centroid_x_nm: 0.0,
+                centroid_y_nm: 0.0,
+                area_px: 10,
+                area_nm2: 10.0,
+                perimeter_px: 0.0,
+                perimeter_nm: 0.0,
+                circularity: 0.0,
+                solidity: 0.0,
+                aspect_ratio: 0.0,
+                roundness: 0.0,
+                compactness: 0.0,
+                major_axis_px: 0.0,
+                minor_axis_px: 0.0,
+                touches_edge: false,
+                intensities_json: "{}".into(),
+                coloc_json: "{}".into(),
+                bbox_px: [0, 0, 0, 0],
+            }
+        }
+        fn image(name: &str) -> ImageRow {
+            ImageRow {
+                image_name: name.into(),
+                image_rel_path: name.into(),
+                status: "ok".into(),
+                error_message: None,
+            }
+        }
+
+        let objects = vec![obj("my_file_01_A14_01.tif")];
+        let all_images = vec![
+            image("my_file_01_A14_01.tif"),
+            image("my_file_01_A14_02.tif"), // zero objects
+        ];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let metric = ColumnSpec {
+            id: "area_px".into(),
+            label: "Area (px)".into(),
+            filterable: false,
+            visible: true,
+        };
+
+        let result = compute_well_matrix(
+            &objects,
+            &all_images,
+            regex,
+            "A14",
+            AggFunc::Avg,
+            &metric,
+            2,
+            2,
+            &[1, 2, 3, 4],
+        )
+        .expect("well has sub-position data");
+
+        let is_object_count = false;
+        let plotted: Vec<(String, Option<f64>, usize, usize)> = result
+            .cells
+            .iter()
+            .map(|c| {
+                let occupied = !c.image_name.is_empty();
+                (
+                    c.image_name.clone(),
+                    cell_value(occupied, is_object_count, c.count, c.value),
+                    c.count,
+                    c.coloc_count,
+                )
+            })
+            .collect();
+        let values: Vec<f64> = plotted.iter().filter_map(|(_, v, ..)| *v).collect();
+        let (lo, hi) = resolve_range(&values, true, 0.0, 0.0);
+        let cells: Vec<ResultsMatrixCell> = plotted
+            .into_iter()
+            .map(|(label, value, count, coloc_count)| {
+                matrix_cell(
+                    label,
+                    value,
+                    count,
+                    coloc_count,
+                    lo,
+                    hi,
+                    HeatmapColorScheme::Viridis,
+                )
+            })
+            .collect();
+
+        let second = &cells[1];
+        assert_eq!(second.label.as_str(), "my_file_01_A14_02.tif");
+        assert!(
+            second.occupied,
+            "a zero-object field of view must stay occupied even when a real metric is selected"
+        );
+        assert!(!second.has_value);
+        assert_eq!(second.count_line.as_str(), "0 obj");
     }
 
     #[test]
