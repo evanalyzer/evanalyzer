@@ -1155,15 +1155,16 @@ mod tests {
             ),
             object_list_controller,
         ));
-        let results_table_controller = Arc::new(ResultsTableController::new(
-            results_ui.clone(),
-            ui_state.clone(),
-            image_list_controller,
-        ));
         let project_settings_controller = Arc::new(ProjectSettingsController::new(
             slint::Weak::default(),
             slint::Weak::default(),
             ui_state.clone(),
+        ));
+        let results_table_controller = Arc::new(ResultsTableController::new(
+            results_ui.clone(),
+            ui_state.clone(),
+            image_list_controller,
+            project_settings_controller.clone(),
         ));
         let controller = Arc::new(ResultsMatrixController::new(
             results_ui,

@@ -1011,6 +1011,7 @@ mod tests {
             slint::Weak::default(),
             ui_state.clone(),
             image_list_controller.clone(),
+            project_settings_controller.clone(),
         ));
         let results_list_controller = Arc::new(ResultsListController::new(
             slint::Weak::default(),

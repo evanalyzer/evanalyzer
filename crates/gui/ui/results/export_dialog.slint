@@ -803,9 +803,31 @@ export component ExportDialog inherits Rectangle {
                             text <=> ResultsState.export_group_regex;
                         }
 
+                        if ResultsState.export_group_by == "regex": table-autodetect-ta := TouchArea {
+                            width: table-autodetect-text.width;
+                            mouse-cursor: pointer;
+                            clicked => { ResultsState.export_autodetect_regex_requested(); }
+
+                            table-autodetect-text := Text {
+                                text: "Auto-detect";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                color: table-autodetect-ta.has-hover ? Theme.accent.brighter(20%) : Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
+
                         if ResultsState.export_group_by != "regex": Rectangle {
                             horizontal-stretch: 1;
                         }
+                    }
+
+                    if ResultsState.export_style == "table" && ResultsState.export_group_by == "regex" && ResultsState.export_regex_hint != "": Text {
+                        text: ResultsState.export_regex_hint;
+                        font-size: 10px;
+                        font-family: Theme.font-mono;
+                        color: Theme.text-faint;
+                        overflow: elide;
                     }
 
                     // -- Matrix: Plate (one grid for the whole plate) vs. Well (one
@@ -876,9 +898,31 @@ export component ExportDialog inherits Rectangle {
                             text <=> ResultsState.export_group_regex;
                         }
 
+                        if ResultsState.export_group_by == "regex": matrix-autodetect-ta := TouchArea {
+                            width: matrix-autodetect-text.width;
+                            mouse-cursor: pointer;
+                            clicked => { ResultsState.export_autodetect_regex_requested(); }
+
+                            matrix-autodetect-text := Text {
+                                text: "Auto-detect";
+                                font-size: 11px;
+                                font-family: Theme.font-sans;
+                                color: matrix-autodetect-ta.has-hover ? Theme.accent.brighter(20%) : Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
+
                         if ResultsState.export_group_by != "regex": Rectangle {
                             horizontal-stretch: 1;
                         }
+                    }
+
+                    if ResultsState.export_style == "matrix" && ResultsState.export_group_by == "regex" && ResultsState.export_regex_hint != "": Text {
+                        text: ResultsState.export_regex_hint;
+                        font-size: 10px;
+                        font-family: Theme.font-mono;
+                        color: Theme.text-faint;
+                        overflow: elide;
                     }
 
                     // -- Matrix: Value / Aggregate / Colors / Range — same picks as
