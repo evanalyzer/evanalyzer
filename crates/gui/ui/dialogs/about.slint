@@ -8,6 +8,7 @@ component TabButton inherits Rectangle {
     in property <bool> active;
     callback clicked;
 
+    horizontal-stretch: 1;
     height: 30px;
     border-radius: 7px;
     background: root.active ? Theme.accent.with-alpha(0.14) : (ta.has-hover ? Theme.hover : transparent);
@@ -28,23 +29,60 @@ component TabButton inherits Rectangle {
     }
 }
 
-component ContributorRow inherits VerticalLayout {
+component ContributorRow inherits Rectangle {
     in property <string> person_name;
     in property <string> role;
-    spacing: 2px;
+    in property <string> initials;
+    in property <bool> is_last: false;
 
-    Text {
-        text: root.person_name;
-        font-size: 13px;
-        font-weight: 700;
-        color: Theme.text;
+    HorizontalLayout {
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 12px;
+
+        Rectangle {
+            width: 32px;
+            height: 32px;
+            border-radius: 16px;
+            background: Theme.accent-dim;
+            y: 0px;
+
+            Text {
+                text: root.initials;
+                font-size: 12px;
+                font-weight: 700;
+                color: Theme.accent;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            alignment: start;
+            spacing: 2px;
+
+            Text {
+                text: root.person_name;
+                font-size: 13px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+
+            Text {
+                text: root.role;
+                font-size: 11.5px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+        }
     }
 
-    Text {
-        text: root.role;
-        font-size: 12px;
-        color: Theme.text-dim;
-        wrap: word-wrap;
+    if !root.is_last: Rectangle {
+        x: 0;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: Theme.border-soft;
     }
 }
 
@@ -53,21 +91,24 @@ component InfoStat inherits Rectangle {
     in property <string> value;
     in property <color> value_color: Theme.text;
 
-    height: 56px;
+    horizontal-stretch: 1;
+    height: 72px;
     background: Theme.raised;
     border-radius: 8px;
 
     VerticalLayout {
         alignment: center;
         padding: 8px;
-        spacing: 4px;
+        spacing: 6px;
 
         Text {
             text: root.label;
-            font-size: 10px;
+            font-size: 9.5px;
             font-weight: 600;
+            letter-spacing: 0.3px;
             color: Theme.text-mute;
             horizontal-alignment: center;
+            wrap: word-wrap;
         }
 
         Text {
@@ -76,6 +117,85 @@ component InfoStat inherits Rectangle {
             font-weight: 700;
             color: root.value_color;
             horizontal-alignment: center;
+        }
+    }
+}
+
+component LicenseCard inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> expanded;
+    callback toggled;
+
+    background: Theme.raised;
+    border-radius: 8px;
+    clip: true;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+
+        Rectangle {
+            height: header-row.preferred-height;
+
+            header-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.toggled(); }
+            }
+
+            header-row := HorizontalLayout {
+                spacing: 8px;
+
+                Text {
+                    text: root.expanded ? "▾" : "▸";
+                    font-size: 10px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+
+                    Text {
+                        text: root.title;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: header-ta.has-hover ? Theme.accent : Theme.text;
+                    }
+
+                    Text {
+                        text: root.subtitle;
+                        font-size: 11px;
+                        color: Theme.text-dim;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        if root.expanded: Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+
+        // Always instantiated (unlike the divider above) so `@children` has
+        // somewhere to live - `@children` can't appear inside a conditional
+        // (`if`) element. Collapsed to zero height instead, which - combined
+        // with `clip: true` on the root `Rectangle` - keeps the paragraph
+        // text invisible and out of the layout until expanded, rather than
+        // it rendering unconditionally wherever the root places extra
+        // children (which is what happened before this had anywhere to go).
+        ScrollView {
+            height: root.expanded ? 180px : 0px;
+            animate height { duration: 100ms; }
+
+            VerticalLayout {
+                alignment: start;
+                spacing: 6px;
+
+                @children
+            }
         }
     }
 }
@@ -95,8 +215,8 @@ export component AboutDialog inherits Rectangle {
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 700px;
-        height: 800px;
+        width: 600px;
+        height: 600px;
         background: Theme.panel;
         border-radius: 14px;
         border-width: 1px;
@@ -110,22 +230,22 @@ export component AboutDialog inherits Rectangle {
             padding: 28px;
             spacing: 0px;
 
-            // -- Header: icon + name + version --------------------------------
+            // -- Header: icon + name + version + tagline ----------------------
             HorizontalLayout {
-                height: 60px;
+                height: 64px;
                 spacing: 14px;
 
                 Rectangle {
-                    width: 56px;
-                    height: 56px;
-                    border-radius: 14px;
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 16px;
                     background: Theme.accent.with-alpha(0.12);
                     border-width: 1px;
                     border-color: Theme.accent.with-alpha(0.25);
                     Image {
                         source: @image-url("../icons/icon.png");
-                        width: 38px;
-                        height: 38px;
+                        width: 40px;
+                        height: 40px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }
@@ -133,7 +253,7 @@ export component AboutDialog inherits Rectangle {
 
                 VerticalLayout {
                     alignment: center;
-                    spacing: 4px;
+                    spacing: 3px;
 
                     Text {
                         text: "EVAnalyzer";
@@ -147,6 +267,12 @@ export component AboutDialog inherits Rectangle {
                         font-size: 12px;
                         font-weight: 500;
                         color: Theme.accent;
+                    }
+
+                    Text {
+                        text: "High-throughput image analysis";
+                        font-size: 11.5px;
+                        color: Theme.text-mute;
                     }
                 }
             }
@@ -164,7 +290,7 @@ export component AboutDialog inherits Rectangle {
                 height: 18px;
             }
 
-            // -- Tab strip -----------------------------------------------------
+            // -- Tab strip: equal-width tabs -----------------------------------
             HorizontalLayout {
                 height: 30px;
                 spacing: 4px;
@@ -202,31 +328,45 @@ export component AboutDialog inherits Rectangle {
             Rectangle {
                 vertical-stretch: 1;
 
-                // -- About ---------------------------------------------------
+                // -- About: top-aligned, link as pill ------------------------
                 if (root.current-tab == 0): VerticalLayout {
-                    alignment: center;
-                    spacing: 16px;
+                    alignment: start;
+                    spacing: 14px;
+                    padding-top: 6px;
 
                     Text {
                         text: "EVAnalyzer " + AppInfoState.version + " is an application for high throughput image processing.";
                         font-size: 13px;
                         color: Theme.text-dim;
                         wrap: word-wrap;
-                        horizontal-alignment: center;
                     }
 
                     Text {
                         text: "Copyright 2019-2026 Joachim Danmayr";
                         font-size: 12px;
                         color: Theme.text-mute;
-                        horizontal-alignment: center;
                     }
 
-                    Text {
-                        text: "https://evanalyzer.org/";
-                        font-size: 12px;
-                        color: Theme.accent;
-                        horizontal-alignment: center;
+                    Rectangle {
+                        width: link-text.preferred-width + 28px;
+                        height: 30px;
+                        border-radius: 15px;
+                        background: Theme.raised;
+                        border-width: 1px;
+                        border-color: Theme.border;
+
+                        link-text := Text {
+                            text: "evanalyzer.org ↗";
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: Theme.accent;
+                            x: 14px;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
                     }
 
                     Text {
@@ -235,81 +375,84 @@ export component AboutDialog inherits Rectangle {
                         font-weight: 700;
                         letter-spacing: 1px;
                         color: Theme.text-faint;
-                        horizontal-alignment: center;
                     }
                 }
 
-                // -- Contributors ----------------------------------------------
+                // -- Contributors: divider rows + initial avatars ---------------
                 if (root.current-tab == 1): ScrollView {
                     width: 100%;
                     height: 100%;
 
                     VerticalLayout {
                         padding-right: 10px;
-                        spacing: 16px;
+                        spacing: 0px;
                         alignment: start;
 
                         ContributorRow {
                             person_name: "Joachim Danmayr";
                             role: "Creator, Programming, Documentation, Testing";
+                            initials: "JD";
                         }
 
                         ContributorRow {
                             person_name: "Melanie Schuerz";
                             role: "Co-Creator, Conceptualization, Testing, AI-Training";
-                        }
-
-                        Rectangle {
-                            border-width: 1px;
-                            border-color: #000;
-                            height: 1px;
+                            initials: "MS";
                         }
 
                         ContributorRow {
                             person_name: "Tanja Plank";
                             role: "Testing";
+                            initials: "TP";
                         }
 
                         ContributorRow {
                             person_name: "Maria Jaritsch";
                             role: "Testing";
+                            initials: "MJ";
                         }
 
                         ContributorRow {
                             person_name: "Patricia Hrasnova";
                             role: "Testing";
+                            initials: "PH";
                         }
 
                         ContributorRow {
                             person_name: "Anna Dlugosch";
                             role: "Testing";
+                            initials: "AD";
+                            is_last: true;
                         }
                     }
                 }
 
-                // -- System -------------------------------------------------------
+                // -- System: 3-column stat grid -----------------------------------
                 if (root.current-tab == 2): VerticalLayout {
                     alignment: start;
-                    spacing: 10px;
 
-                    InfoStat {
-                        label: "CPU Cores";
-                        value: "\{AppInfoState.cpu_cores}";
-                    }
+                    HorizontalLayout {
+                        spacing: 10px;
 
-                    InfoStat {
-                        label: "Available RAM";
-                        value: AppInfoState.ram_total;
-                    }
+                        InfoStat {
+                            label: "CPU CORES";
+                            value: "\{AppInfoState.cpu_cores}";
+                        }
 
-                    InfoStat {
-                        label: "CUDA (GPU) Acceleration";
-                        value: AppInfoState.cuda_available ? "Available" : "Not available";
-                        value_color: AppInfoState.cuda_available ? Theme.ok : Theme.text-mute;
+                        InfoStat {
+                            label: "AVAILABLE RAM";
+                            value: AppInfoState.ram_total;
+                        }
+
+                        InfoStat {
+                            label: "CUDA (GPU)";
+                            value: AppInfoState.cuda_available ? "Available" : "Not available";
+                            value_color: AppInfoState.cuda_available ? Theme.ok : Theme.text-mute;
+                        }
                     }
                 }
 
-                // -- Licenses --------------------------------------------------
+                // -- Licenses: chevron + capped inner-scroll body ---------------
                 if (root.current-tab == 3): ScrollView {
                     width: 100%;
                     height: 100%;
@@ -333,60 +476,20 @@ export component AboutDialog inherits Rectangle {
                         // third-party entries below, just pinned first and
                         // driven off its own sentinel (-2) rather than the
                         // model index.
-                        Rectangle {
-                            background: Theme.raised;
-                            border-radius: 8px;
-                            clip: true;
+                        LicenseCard {
+                            title: "EVAnalyzer  (AGPL-3.0)";
+                            subtitle: "This application's own license";
+                            expanded: root.expanded-third-party-index == -2;
+                            toggled => {
+                                root.expanded-third-party-index = (root.expanded-third-party-index == -2) ? -1 : -2;
+                            }
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 6px;
-
-                                Rectangle {
-                                    height: own-header-col.preferred-height;
-
-                                    own-header-ta := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.expanded-third-party-index = (root.expanded-third-party-index == -2) ? -1 : -2;
-                                        }
-                                    }
-
-                                    own-header-col := VerticalLayout {
-                                        spacing: 4px;
-
-                                        Text {
-                                            text: "EVAnalyzer  (AGPL-3.0)";
-                                            font-size: 12px;
-                                            font-weight: 700;
-                                            color: own-header-ta.has-hover ? Theme.accent : Theme.text;
-                                        }
-
-                                        Text {
-                                            text: "This application's own license";
-                                            font-size: 11px;
-                                            color: Theme.text-dim;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-                                }
-
-                                if (root.expanded-third-party-index == -2): VerticalLayout {
-                                    spacing: 6px;
-
-                                    Rectangle {
-                                        height: 1px;
-                                        background: Theme.border;
-                                    }
-
-                                    for paragraph in AppInfoState.license_paragraphs: Text {
-                                        text: paragraph;
-                                        font-family: Theme.font-mono;
-                                        font-size: 10px;
-                                        color: Theme.text-dim;
-                                        wrap: word-wrap;
-                                    }
-                                }
+                            for paragraph in AppInfoState.license_paragraphs: Text {
+                                text: paragraph;
+                                font-family: Theme.font-mono;
+                                font-size: 10px;
+                                color: Theme.text-dim;
+                                wrap: word-wrap;
                             }
                         }
 
@@ -405,60 +508,20 @@ export component AboutDialog inherits Rectangle {
                             height: 4px;
                         }
 
-                        for group[i] in AppInfoState.third_party_licenses: Rectangle {
-                            background: Theme.raised;
-                            border-radius: 8px;
-                            clip: true;
+                        for group[i] in AppInfoState.third_party_licenses: LicenseCard {
+                            title: group.name + "  (" + group.id + ")";
+                            subtitle: group.crates;
+                            expanded: root.expanded-third-party-index == i;
+                            toggled => {
+                                root.expanded-third-party-index = (root.expanded-third-party-index == i) ? -1 : i;
+                            }
 
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 6px;
-
-                                Rectangle {
-                                    height: header-col.preferred-height;
-
-                                    header-ta := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.expanded-third-party-index = (root.expanded-third-party-index == i) ? -1 : i;
-                                        }
-                                    }
-
-                                    header-col := VerticalLayout {
-                                        spacing: 4px;
-
-                                        Text {
-                                            text: group.name + "  (" + group.id + ")";
-                                            font-size: 12px;
-                                            font-weight: 700;
-                                            color: header-ta.has-hover ? Theme.accent : Theme.text;
-                                        }
-
-                                        Text {
-                                            text: group.crates;
-                                            font-size: 11px;
-                                            color: Theme.text-dim;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-                                }
-
-                                if (root.expanded-third-party-index == i): VerticalLayout {
-                                    spacing: 6px;
-
-                                    Rectangle {
-                                        height: 1px;
-                                        background: Theme.border;
-                                    }
-
-                                    for paragraph in group.text_paragraphs: Text {
-                                        text: paragraph;
-                                        font-family: Theme.font-mono;
-                                        font-size: 10px;
-                                        color: Theme.text-dim;
-                                        wrap: word-wrap;
-                                    }
-                                }
+                            for paragraph in group.text_paragraphs: Text {
+                                text: paragraph;
+                                font-family: Theme.font-mono;
+                                font-size: 10px;
+                                color: Theme.text-dim;
+                                wrap: word-wrap;
                             }
                         }
                     }
@@ -472,7 +535,7 @@ export component AboutDialog inherits Rectangle {
 
             AppButton {
                 text: "Close";
-                primary: true;
+                primary: false;
                 clicked => {
                     GlobalAppState.active-dialog = DialogType.none;
                     root.current-tab = 0;
