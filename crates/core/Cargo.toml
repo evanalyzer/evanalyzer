@@ -21,7 +21,7 @@ kornia-apriltag = { workspace = true }
 zune-core = "=0.5.3"
 image = { workspace = true }
 log = { workspace = true }
-jni = {version = "0.22.4", features = ["invocation"]}
+bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "flatten-pyramid" }
 quick-xml = { workspace = true }
 ndarray = { workspace = true }
 rayon = { workspace = true }

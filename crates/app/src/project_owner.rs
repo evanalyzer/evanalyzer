@@ -165,15 +165,22 @@ impl ProjectOwner {
 /// A pool of independent readers open on the same image path (sized by
 /// [`recommended_reader_pool_size`], which balances cores against available
 /// RAM), so different channels/Z-slices can be read truly in parallel
-/// instead of serializing through one `IFormatReader` (see
-/// `BioFormatsWrapper.java`'s `synchronized(formatReader)` block - one
-/// reader is safe, not concurrent).
+/// instead of serializing through one reader's internal `Mutex` (see
+/// `evanalyzer_core::ImageReader`) - one reader is safe, not concurrent.
 ///
-/// Reader #1 pays the full `setId()` cost (BioFormats parses the file's
-/// structure). The BioFormats wrapper wraps every reader in a `Memoizer`,
-/// which caches that parsed structure to disk (a `.bfmemo` file next to the
-/// image); every reader built after #1 reads that cache instead of
-/// re-parsing, so building the rest of the pool is cheap.
+/// Every reader in the pool independently opens and parses the file -
+/// building a full pool is `N` times the cost of opening one reader, not
+/// "one full parse plus N-1 cheap reopens".
+///
+/// Deliberately not using `bioformats::Memoizer` here: unlike Java
+/// Bio-Formats' `Memoizer` (which deep-clones the whole reader's internal
+/// parsed state, e.g. TIFF IFD offset tables), this crate's `Memoizer` only
+/// caches the lightweight `ImageMetadata`/`OmeMetadata` summary to disk. Its
+/// `set_resolution` unconditionally forces a full real reopen regardless of
+/// cache state - and every pool member needs a working resolution/pixel
+/// read, not just cached summary fields - so wrapping pool members in it
+/// would add a `.bfmemo` file next to every opened image for no actual
+/// savings on this specific path.
 pub struct ReaderPool {
     path: PathBuf,
     readers: Vec<Arc<ImageReader>>,

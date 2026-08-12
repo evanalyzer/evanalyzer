@@ -345,19 +345,6 @@ fn run(owner: ProjectOwner) -> Result<(), slint::PlatformError> {
     let results_ui = ResultsWindow::new()?;
     let results_ui_handle = results_ui.as_weak();
 
-    // Warm up the JVM (used to bridge to Bio-Formats for image reading) on a
-    // background thread rather than blocking startup on it - JVM cold start
-    // plus classloading is slow and nobody needs it before the window is even
-    // shown. `ImageReader::new` also starts it lazily on first actual use (see
-    // `ensure_java_wrapper`), so this is a pure head start, not a requirement:
-    // if the user opens an image before this thread finishes, that call just
-    // waits on the same init instead of failing.
-    std::thread::spawn(|| {
-        if let Err(e) = evanalyzer_core::init(evanalyzer_core::CoreConfig::default()) {
-            log::warn!("Background JVM warmup failed (will retry on first image read): {e}");
-        }
-    });
-
     // Load and apply settings
     load_about_dialog_information(&ui);
     load_user_settings(&ui, &results_ui);

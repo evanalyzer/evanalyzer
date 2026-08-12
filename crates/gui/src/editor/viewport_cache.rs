@@ -541,7 +541,7 @@ impl ViewportCache {
 
     /// Create a new image reader or use an existing if the image is the same
     ///
-    /// This creates an image reader (Java wrapper).
+    /// This creates an image reader.
 
     #[inline(always)]
     fn calc_draw_pos(

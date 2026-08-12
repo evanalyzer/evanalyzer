@@ -99,7 +99,7 @@ The workspace is organised into focused crates:
 
 | Crate | Description |
 |---|---|
-| `evanalyzer_core` | Image I/O (Bio-Formats via JVM), processing algorithms, object model, pipeline execution |
+| `evanalyzer_core` | Image I/O (Bio-Formats, native Rust), processing algorithms, object model, pipeline execution |
 | `evanalyzer_cfg` | Project settings, serialisation to JSON, pipeline command configuration |
 | `evanalyzer_app` | Application handle, shared project state |
 | `evanalyzer_gui` | Slint-based desktop GUI — viewport, histogram, object tools, classification panel |
@@ -138,7 +138,6 @@ The workspace is organised into focused crates:
 ## Requirements
 
 - **Rust** 1.80 or later (2024 edition)
-- **Java JDK** 11 or later — required for Bio-Formats image reading
 - **Linux** system libraries (for the GUI):
   ```sh
   apt-get install libinput10 libxkbcommon0 libfontconfig1 libgbm1
@@ -156,9 +155,8 @@ The workspace is organised into focused crates:
 | Disk | Enough for the results database (`.evadb`) per run, plus the input images | — |
 
 EVAnalyzer checks how much RAM is actually free at startup and scales itself
-to fit: the embedded JVM (used only for Bio-Formats image reading) gets a
-heap sized from that, and the number of images/tiles analyzed in parallel is
-capped accordingly — so on a constrained machine it automatically falls back
+to fit: the number of images/tiles analyzed in parallel is capped
+accordingly — so on a constrained machine it automatically falls back
 to fewer parallel workers instead of running out of memory. More RAM and CPU
 cores let it analyze more images/tiles concurrently, but there's no manual
 tuning required to stay within what the machine actually has available.
@@ -167,7 +165,7 @@ tuning required to stay within what the machine actually has available.
 
 ## Installing a release
 
-Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies (libtorch, DuckDB), the bundled Java runtime and Bio-Formats all ship **inside the archive, next to the binary**, so there is nothing else to install.
+Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies (libtorch, DuckDB) ship **inside the archive, next to the binary**, so there is nothing else to install.
 
 ### Linux x86-64 — `evanalyzer-linux-x86_64.tar.gz`
 

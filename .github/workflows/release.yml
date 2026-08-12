@@ -47,16 +47,13 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist/java dist/templates
+          mkdir -p dist/templates
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
           # libtorch is dynamically linked; ship every shared object next to the
           # binary so the $ORIGIN rpath (see .cargo/config.toml) finds them. The
           # glob must be *.so* (not *.so) to include versioned deps like
           # libgomp-<hash>.so.1 that libtorch_cpu.so requires.
           cp libs/libtorch/lib/*.so*                               dist/ 2>/dev/null || true
-          unzip -q libs/jre_linux.zip -d dist/java/jre_linux
-          cp crates/core/java/src/bioformats.jar                   dist/java/
-          cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
           tar -czf evanalyzer-linux-x86_64.tar.gz -C dist .
 
@@ -140,13 +137,10 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist/java dist/templates
+          mkdir -p dist/templates
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
           cp libs/libtorch/lib/*.dll                           dist/
-          unzip -q libs/jre_win.zip -d dist/java/jre_win
-          cp crates/core/java/src/bioformats.jar                   dist/java/
-          cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
           (cd dist && zip -r ../evanalyzer-windows-x86_64.zip .)
 
@@ -192,16 +186,13 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist/java dist/templates
+          mkdir -p dist/templates
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
           # CUDA libtorch ships its runtime as versioned objects (libcudart.so.12,
           # libcublas.so.12, libcudnn*.so.9, libnccl.so.2, libgomp-<hash>.so.1, …),
           # so the glob must be *.so* to catch the .so.N files - a plain *.so would
           # ship none of the CUDA libs and the binary would fail to start.
           cp libs/libtorch/lib/*.so*                               dist/ 2>/dev/null || true
-          unzip -q libs/jre_linux.zip -d dist/java/jre_linux
-          cp crates/core/java/src/bioformats.jar                   dist/java/
-          cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
           # The CUDA runtime is multiple GB even compressed, so pack with 7-Zip
           # at maximum compression (-mx=9) and split into <2 GiB volumes
@@ -291,13 +282,10 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist/java dist/templates
+          mkdir -p dist/templates
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
           cp libs/libtorch/lib/*.dll                           dist/
-          unzip -q libs/jre_win.zip -d dist/java/jre_win
-          cp crates/core/java/src/bioformats.jar                   dist/java/
-          cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
           # The CUDA runtime DLLs are multiple GB even compressed, so pack with
           # 7-Zip at maximum compression (-mx=9) and split into <2 GiB volumes
@@ -321,12 +309,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: macos-arm64
-
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
 
       - name: Set version
         run: |
@@ -358,14 +340,11 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          mkdir -p dist/java dist/templates
+          mkdir -p dist/templates
           cp target/aarch64-apple-darwin/release/evanalyzer       dist/
           # Ship the libtorch + DuckDB dylibs flat next to the binary.
           cp libs/libtorch/lib/*.dylib                             dist/ 2>/dev/null || true
           cp libs/libduckdb-osx-universal/*.dylib                  dist/ 2>/dev/null || true
-          unzip -q libs/jre_macos_arm.zip -d dist/java/jre_macos_arm
-          cp crates/core/java/src/bioformats.jar                   dist/java/
-          cp crates/core/java/BioFormatsWrapper.class              dist/java/
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
 
           # ---- Make the bundle relocatable (adapted from the legacy mac packer) ----
@@ -414,8 +393,7 @@ jobs:
                  ./evanalyzer
 
           Keep every file in this folder together - the bundled libraries
-          (*.dylib) and the Java runtime are resolved relative to the
-          `evanalyzer` binary.
+          (*.dylib) are resolved relative to the `evanalyzer` binary.
           EOF
 
           tar -czf evanalyzer-macos-arm64.tar.gz -C dist .
