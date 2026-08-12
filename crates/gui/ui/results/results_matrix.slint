@@ -530,6 +530,32 @@ export component ResultsMatrix inherits Rectangle {
                                     overflow: elide;
                                 }
                             }
+
+                            // Well view: this exact image is user-disabled -
+                            // a small cross in the corner, on top of
+                            // whatever else the cell shows.
+                            if cell.disabled: Image {
+                                x: parent.width - self.width - 3px;
+                                y: 3px;
+                                width: 11px;
+                                height: 11px;
+                                source: @image-url("../icons/regular-black/x.svg");
+                                colorize: Theme.err;
+                            }
+
+                            // Plate view: at least one image in this well is
+                            // disabled, even though the well's aggregate
+                            // still reflects its other, enabled images - a
+                            // small dot rather than the well view's full
+                            // cross, since it's only a partial/summary flag.
+                            if cell.has_disabled_images: Rectangle {
+                                x: parent.width - self.width - 4px;
+                                y: 4px;
+                                width: 7px;
+                                height: 7px;
+                                border-radius: self.width / 2;
+                                background: Theme.err;
+                            }
                         }
                     }
                 }

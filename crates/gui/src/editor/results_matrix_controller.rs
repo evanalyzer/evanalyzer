@@ -148,6 +148,7 @@ impl ResultsMatrixController {
                 group: i.group.clone(),
                 group_header: i.group_header,
                 group_all_checked: i.group_all_checked,
+                disabled: i.disabled,
             })
             .collect();
         state.set_filter_image_items(slint::ModelRc::new(slint::VecModel::from(items.clone())));
@@ -371,7 +372,7 @@ impl ResultsMatrixController {
                 &plate.well_image_order,
             ) {
                 Some(result) => {
-                    let plotted: Vec<(String, Option<f64>, usize, usize)> = result
+                    let plotted: Vec<(String, Option<f64>, usize, usize, bool)> = result
                         .cells
                         .iter()
                         .map(|c| {
@@ -381,6 +382,7 @@ impl ResultsMatrixController {
                                 cell_value(occupied, is_object_count, c.count, c.value),
                                 c.count,
                                 c.coloc_count,
+                                c.disabled,
                             )
                         })
                         .collect();
@@ -388,8 +390,21 @@ impl ResultsMatrixController {
                     let (lo, hi) = resolve_range(&values, range_auto, range_min, range_max);
                     let cells: Vec<ResultsMatrixCell> = plotted
                         .into_iter()
-                        .map(|(label, value, count, coloc_count)| {
-                            matrix_cell(label, value, count, coloc_count, lo, hi, scheme)
+                        .map(|(label, value, count, coloc_count, disabled)| {
+                            // Well-view cell is exactly one image - there's no
+                            // separate "well contains a disabled image" summary
+                            // to show alongside `disabled` itself.
+                            matrix_cell(
+                                label,
+                                value,
+                                count,
+                                coloc_count,
+                                disabled,
+                                false,
+                                lo,
+                                hi,
+                                scheme,
+                            )
                         })
                         .collect();
                     Self::push_grid(
@@ -492,6 +507,14 @@ impl ResultsMatrixController {
                         cell_value(occupied, is_object_count, c.count, c.value),
                         c.count,
                         c.coloc_count,
+                        // A well aggregates multiple images - it has no single
+                        // well-defined "disabled" state of its own (unlike a
+                        // well-view cell, which is exactly one image). Plate
+                        // cells never show the crossed-out styling; instead
+                        // they surface `c.has_disabled_images` as a weaker
+                        // summary dot.
+                        false,
+                        c.has_disabled_images,
                         lo,
                         hi,
                         scheme,
@@ -728,11 +751,14 @@ fn count_line(count: usize, coloc_count: usize) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn matrix_cell(
     label: String,
     value: Option<f64>,
     count: usize,
     coloc_count: usize,
+    disabled: bool,
+    has_disabled_images: bool,
     range_lo: f64,
     range_hi: f64,
     scheme: HeatmapColorScheme,
@@ -767,6 +793,8 @@ fn matrix_cell(
                 color: slint::Color::from_rgb_u8(r, g, b),
                 has_value: true,
                 occupied: true,
+                disabled,
+                has_disabled_images,
             }
         }
         None => ResultsMatrixCell {
@@ -776,6 +804,8 @@ fn matrix_cell(
             color: slint::Color::from_rgb_u8(0, 0, 0),
             has_value: false,
             occupied,
+            disabled,
+            has_disabled_images,
         },
     }
 }
@@ -884,6 +914,8 @@ mod tests {
             Some(42.567),
             12,
             3,
+            false,
+            false,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -908,6 +940,8 @@ mod tests {
                 Some(50.0),
                 1,
                 0,
+                false,
+                false,
                 50.0, // range_lo == range_hi == the cell's own value
                 50.0,
                 HeatmapColorScheme::Grayscale,
@@ -928,6 +962,8 @@ mod tests {
             Some(1.0),
             12,
             0,
+            false,
+            false,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -955,6 +991,8 @@ mod tests {
             Some(0.853),
             1,
             0,
+            false,
+            false,
             0.0,
             1.0,
             HeatmapColorScheme::Grayscale,
@@ -1001,6 +1039,8 @@ mod tests {
                 Some(source),
                 1,
                 0,
+                false,
+                false,
                 source.min(0.0),
                 source.max(1.0),
                 HeatmapColorScheme::Viridis,
@@ -1027,6 +1067,8 @@ mod tests {
             None,
             0,
             0,
+            false,
+            false,
             0.0,
             100.0,
             HeatmapColorScheme::Viridis,
@@ -1050,6 +1092,8 @@ mod tests {
             None,
             0,
             0,
+            false,
+            false,
             0.0,
             100.0,
             HeatmapColorScheme::Viridis,
@@ -1070,6 +1114,8 @@ mod tests {
             Some(-50.0),
             1,
             0,
+            false,
+            false,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -1079,6 +1125,8 @@ mod tests {
             Some(0.0),
             1,
             0,
+            false,
+            false,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -1093,6 +1141,8 @@ mod tests {
             Some(500.0),
             1,
             0,
+            false,
+            false,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -1102,6 +1152,8 @@ mod tests {
             Some(100.0),
             1,
             0,
+            false,
+            false,
             0.0,
             100.0,
             HeatmapColorScheme::Grayscale,
@@ -1228,8 +1280,9 @@ mod tests {
             ImageRow {
                 image_name: name.into(),
                 image_rel_path: name.into(),
-                status: "ok".into(),
+                successful: true,
                 error_message: None,
+                disabled: false,
             }
         }
 
@@ -1278,6 +1331,8 @@ mod tests {
                     cell_value(occupied, is_object_count, c.count, c.value),
                     c.count,
                     c.coloc_count,
+                    false,
+                    c.has_disabled_images,
                     lo,
                     hi,
                     HeatmapColorScheme::Viridis,
@@ -1344,8 +1399,9 @@ mod tests {
             ImageRow {
                 image_name: name.into(),
                 image_rel_path: name.into(),
-                status: "ok".into(),
+                successful: true,
                 error_message: None,
+                disabled: false,
             }
         }
 
@@ -1436,8 +1492,9 @@ mod tests {
             ImageRow {
                 image_name: name.into(),
                 image_rel_path: name.into(),
-                status: "ok".into(),
+                successful: true,
                 error_message: None,
+                disabled: false,
             }
         }
 
@@ -1468,7 +1525,7 @@ mod tests {
         .expect("well has sub-position data");
 
         let is_object_count = false;
-        let plotted: Vec<(String, Option<f64>, usize, usize)> = result
+        let plotted: Vec<(String, Option<f64>, usize, usize, bool)> = result
             .cells
             .iter()
             .map(|c| {
@@ -1478,6 +1535,7 @@ mod tests {
                     cell_value(occupied, is_object_count, c.count, c.value),
                     c.count,
                     c.coloc_count,
+                    c.disabled,
                 )
             })
             .collect();
@@ -1485,12 +1543,14 @@ mod tests {
         let (lo, hi) = resolve_range(&values, true, 0.0, 0.0);
         let cells: Vec<ResultsMatrixCell> = plotted
             .into_iter()
-            .map(|(label, value, count, coloc_count)| {
+            .map(|(label, value, count, coloc_count, disabled)| {
                 matrix_cell(
                     label,
                     value,
                     count,
                     coloc_count,
+                    disabled,
+                    false,
                     lo,
                     hi,
                     HeatmapColorScheme::Viridis,
