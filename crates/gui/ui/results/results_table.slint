@@ -41,6 +41,11 @@ export struct FilterItem {
     // sharing this `group` is currently checked, for the header's own
     // checkbox visual.
     group_all_checked: bool,
+    // Image filter popup only (always false for class/coloc/column items):
+    // this image is user-disabled - excluded from exports by default and
+    // shown crossed out in the Matrix view. Independent of `checked`, which
+    // only controls the current view's filter.
+    disabled: bool,
 }
 
 // One queued file in the export dialog's "combinations to export" list: a
@@ -130,6 +135,16 @@ export struct ResultsMatrixCell {
     // zero-object placeholder) — used to grey out and disable drill-down only
     // for a truly empty, unoccupied slot.
     occupied: bool,
+    // Well view only (always false for a plate-view cell, which can
+    // aggregate several images into one well with no single disabled state
+    // of its own) — this field-of-view image is user-disabled. Shown
+    // crossed out in red regardless of `has_value`/`occupied`.
+    disabled: bool,
+    // Plate view only (always false for a well-view cell) — at least one of
+    // this well's images is user-disabled. Shown as a small red dot rather
+    // than `disabled`'s full cross-out, since a plate cell can still
+    // aggregate other, enabled images.
+    has_disabled_images: bool,
 }
 
 export global ResultsState {
@@ -232,6 +247,10 @@ export global ResultsState {
     callback column_width_changed(string, float);
 
     callback image_filter_label_toggled(string);
+    // Flips whether this image is excluded from exports/shown crossed out
+    // in Matrix - independent of image_filter_label_toggled, which only
+    // controls the current view's filter.
+    callback image_disable_toggled(string);
     callback image_filter_search_changed(string);
     callback image_select_all();
     callback image_clear_all();
@@ -638,6 +657,10 @@ component ResultsHeaderCell inherits Rectangle {
     in property <bool> filter-active:        false;
     in property <bool> all-popup-checked:    true;
     in-out property <[FilterItem]> popup-items: [];
+    // Only the Image column's popup sets this: shows a per-row "disable this
+    // image" toggle instead of the plain checkbox-only row every other
+    // filter popup (class/coloc/column) uses.
+    in property <bool> show-disable-toggle: false;
     // Controls layout collapse — set to false for hidden columns.
     // Using a custom in-property so the internal bindings below can reference it;
     // external assignment to built-in min-width cannot override an internal binding.
@@ -649,6 +672,7 @@ component ResultsHeaderCell inherits Rectangle {
     property <bool> popup-open: false;
     callback clicked;
     callback filter-label-toggled(string);
+    callback filter-disable-toggled(string);
     callback filter-search-changed(string);
     callback filter-select-all();
     callback filter-clear-all();
@@ -951,10 +975,25 @@ component ResultsHeaderCell inherits Rectangle {
                                         text: item.label;
                                         font-size: 11px;
                                         font-family: Theme.font-mono;
-                                        color: item.checked ? Theme.text-dim : Theme.text-mute;
+                                        color: item.disabled ? Theme.err : (item.checked ? Theme.text-dim : Theme.text-mute);
                                         vertical-alignment: center;
                                         overflow: elide;
                                         horizontal-stretch: 1;
+                                    }
+
+                                    if root.show-disable-toggle: disable-ta := TouchArea {
+                                        width: 18px;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.filter-disable-toggled(item.label);
+                                        }
+
+                                        Image {
+                                            source: @image-url("../icons/regular-black/prohibit.svg");
+                                            width: 13px;
+                                            height: 13px;
+                                            colorize: item.disabled ? Theme.err : (disable-ta.has-hover ? Theme.text-dim : Theme.text-faint);
+                                        }
                                     }
                                 }
                             }
@@ -1137,6 +1176,7 @@ export component ResultsTable inherits Rectangle {
                     filter-active: is-image-col ? ResultsState.filter_image_active : (is-class-col ? ResultsState.filter_class_active : ResultsState.filter_coloc_active);
                     popup-items: col.filterable ? (is-image-col ? ResultsState.filter_image_popup : (is-class-col ? ResultsState.filter_class_popup : ResultsState.filter_coloc_popup)) : [];
                     all-popup-checked: is-image-col ? ResultsState.filter_image_all_popup_checked : (is-class-col ? ResultsState.filter_class_all_popup_checked : ResultsState.filter_coloc_all_popup_checked);
+                    show-disable-toggle: is-image-col;
 
                     clicked => {
                         if (ResultsState.sort_column_id == col.id) {
@@ -1156,6 +1196,11 @@ export component ResultsTable inherits Rectangle {
                         }
                         if (col.id == "colocalized") {
                             ResultsState.coloc_filter_label_toggled(lbl);
+                        }
+                    }
+                    filter-disable-toggled(lbl) => {
+                        if (is-image-col) {
+                            ResultsState.image_disable_toggled(lbl);
                         }
                     }
                     filter-search-changed(txt) => {
