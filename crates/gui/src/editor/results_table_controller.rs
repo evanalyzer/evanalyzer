@@ -7,8 +7,8 @@ use crate::{
 };
 use evanalyzer_app::result::{
     AggFunc, ColorBy, ColumnSpec, DEFAULT_WINDOW_PAGES, DatabaseFilter, EvictEdge, GroupBy,
-    GroupConfig, HeatmapColorScheme, HeatmapMetric, HeatmapRange, ObjectRow, PageRowCounts,
-    RenderedChart, ResultsExporter, ResultsLoader, RowWindow, aggregate_objects_sql,
+    GroupConfig, HeatmapColorScheme, HeatmapMetric, HeatmapRange, ImageRow, ObjectRow,
+    PageRowCounts, RenderedChart, ResultsExporter, ResultsLoader, RowWindow, aggregate_objects_sql,
     build_coloc_detail_column_specs, build_column_specs, coloc_filter_label_any,
     coloc_filter_label_no, coloc_filter_label_with, coloc_partner_ids, compute_heatmap,
     compute_histogram, compute_scatter, discover_channels, discover_coloc_detail_columns,
@@ -197,6 +197,7 @@ impl ResultsTableController {
         }
 
         state.on_image_filter_label_toggled(cb!(toggle_image_label, SharedString));
+        state.on_image_disable_toggled(cb!(toggle_image_disabled, SharedString));
         state.on_image_filter_search_changed(cb!(image_search_changed, SharedString));
         state.on_image_select_all(cb!(image_select_all));
         state.on_image_clear_all(cb!(image_clear_all));
@@ -623,21 +624,26 @@ impl ResultsTableController {
                         group: SharedString::new(),
                         group_header: false,
                         group_all_checked: false,
+                        disabled: false,
                     })
                     .collect();
                 apply_export_class_checklist(&state, items, "");
 
                 // Same seeding for the image checklist, from the table's own
-                // Image column filter labels.
+                // Image column filter labels - except a disabled image
+                // starts unchecked (excluded from the export by default,
+                // still overridable by re-checking it) rather than checked
+                // like everything else.
                 let image_labels = model_to_vec(&state.get_filter_image_items());
                 let image_items: Vec<FilterItem> = image_labels
                     .into_iter()
                     .map(|i| FilterItem {
+                        checked: !i.disabled,
                         label: i.label,
-                        checked: true,
                         group: SharedString::new(),
                         group_header: false,
                         group_all_checked: false,
+                        disabled: i.disabled,
                     })
                     .collect();
                 apply_export_image_checklist(&state, image_items, "");
@@ -1852,7 +1858,9 @@ impl ResultsTableController {
                 page_size: PAGE_SIZE,
                 ..Default::default()
             });
-            let img_names = loader.get_image_names();
+            // `get_images` (not `get_image_names`) so the checklist can carry
+            // each image's `disabled` state from the start.
+            let images = loader.get_images();
             // The registry snapshot written into the file itself (see
             // `evanalyzer_core::storage::duckdb`'s `classes` table), not the
             // live project's current classification settings (which can
@@ -1877,8 +1885,8 @@ impl ResultsTableController {
             let t_range = loader.get_t_stack_range().unwrap_or(None);
             let z_range = loader.get_z_stack_range().unwrap_or(None);
 
-            match (first_page, img_names, cls_names, coloc_partner_classes) {
-                (Ok(objects), Ok(img_names), Ok(cls_names), Ok(coloc_partner_classes)) => {
+            match (first_page, images, cls_names, coloc_partner_classes) {
+                (Ok(objects), Ok(images), Ok(cls_names), Ok(coloc_partner_classes)) => {
                     let channels = discover_channels(&objects);
                     let specs = build_column_specs(&channels, &coloc_partner_classes);
                     let all_loaded = objects.len() < PAGE_SIZE;
@@ -1924,6 +1932,7 @@ impl ResultsTableController {
                                         group: column_group(&c.id).into(),
                                         group_header: false,
                                         group_all_checked: false,
+                                        disabled: false,
                                     })
                                     .collect(),
                             );
@@ -1941,7 +1950,7 @@ impl ResultsTableController {
                             )));
                             state.set_column_popup_all_checked(true);
 
-                            let image_items = names_to_filter_items(&img_names);
+                            let image_items = images_to_filter_items(&images);
                             state.set_filter_image_items(slint::ModelRc::new(
                                 slint::VecModel::from(image_items.clone()),
                             ));
@@ -2303,6 +2312,7 @@ impl ResultsTableController {
                             group: column_group(&c.id).into(),
                             group_header: false,
                             group_all_checked: false,
+                            disabled: false,
                         })
                         .collect(),
                 );
@@ -2894,6 +2904,48 @@ impl ResultsTableController {
         state.set_filter_image_all_popup_checked(all_checked(&popup));
         state.set_filter_image_items(to_model(items));
         state.set_filter_image_popup(to_model(popup));
+    }
+
+    /// Flips whether an image is excluded from exports/shown crossed out in
+    /// Matrix. Updates the checklist immediately (so the click feels
+    /// instant) and persists to the `.evadb` file on a background thread -
+    /// see `ResultsLoader::set_image_disabled`'s doc comment for the
+    /// concurrency caveat. A failed write is logged, not surfaced to the
+    /// user: the current session's checklist state above is already
+    /// correct either way, a failure here only means the toggle won't
+    /// survive reopening the file later.
+    fn toggle_image_disabled(self: &Arc<Self>, label: SharedString) {
+        let Some(window) = self.ui.upgrade() else {
+            return;
+        };
+        let state = window.global::<ResultsState>();
+        let items = toggle_disabled_by_label(
+            &model_to_vec(&state.get_filter_image_items()),
+            label.as_str(),
+        );
+        let popup = toggle_disabled_by_label(
+            &model_to_vec(&state.get_filter_image_popup()),
+            label.as_str(),
+        );
+        let new_disabled = items
+            .iter()
+            .find(|i| i.label == label)
+            .map(|i| i.disabled)
+            .unwrap_or(false);
+        state.set_filter_image_items(to_model(items));
+        state.set_filter_image_popup(to_model(popup));
+
+        let this = Arc::clone(self);
+        std::thread::spawn(move || {
+            let Some(path) = this.path.lock().unwrap().clone() else {
+                return;
+            };
+            if let Err(e) =
+                ResultsLoader::new(&path).set_image_disabled(label.as_str(), new_disabled)
+            {
+                warn!("failed to persist disabled={new_disabled} for image {label}: {e:?}");
+            }
+        });
     }
 
     fn image_search_changed(&self, search: SharedString) {
@@ -3666,6 +3718,7 @@ fn column_items_from_specs(specs: &[ColumnSpec]) -> Vec<FilterItem> {
             group: export_column_group(&c.id).into(),
             group_header: false,
             group_all_checked: false,
+            disabled: false,
         })
         .collect();
     mark_group_headers(items)
@@ -3687,6 +3740,7 @@ fn grouped_column_items(base_specs: &[ColumnSpec]) -> Vec<FilterItem> {
         group: SharedString::new(),
         group_header: false,
         group_all_checked: false,
+        disabled: false,
     }];
     items.extend(mark_group_headers(
         base_specs
@@ -3697,6 +3751,7 @@ fn grouped_column_items(base_specs: &[ColumnSpec]) -> Vec<FilterItem> {
                 group: column_group(&c.id).into(),
                 group_header: false,
                 group_all_checked: false,
+                disabled: false,
             })
             .collect(),
     ));
@@ -4076,6 +4131,21 @@ fn toggle_item_by_label(items: &[FilterItem], label: &str) -> Vec<FilterItem> {
         .collect()
 }
 
+/// Image filter popup only - flips `disabled`, independent of `checked`
+/// (see `FilterItem.disabled`'s doc comment).
+fn toggle_disabled_by_label(items: &[FilterItem], label: &str) -> Vec<FilterItem> {
+    items
+        .iter()
+        .map(|item| {
+            let mut item = item.clone();
+            if item.label.as_str() == label {
+                item.disabled = !item.disabled;
+            }
+            item
+        })
+        .collect()
+}
+
 fn sync_popup_checked(items: &[FilterItem], popup: &[FilterItem]) -> Vec<FilterItem> {
     let lookup: BTreeMap<&str, bool> = items
         .iter()
@@ -4257,6 +4327,24 @@ fn names_to_filter_items(names: &[String]) -> Vec<FilterItem> {
             group: SharedString::new(),
             group_header: false,
             group_all_checked: false,
+            disabled: false,
+        })
+        .collect()
+}
+
+/// Like `names_to_filter_items`, but for the Image column specifically -
+/// carries each image's real `disabled` state (see `ImageRow::disabled`)
+/// instead of always `false`.
+fn images_to_filter_items(images: &[ImageRow]) -> Vec<FilterItem> {
+    images
+        .iter()
+        .map(|i| FilterItem {
+            label: i.image_name.as_str().into(),
+            checked: true,
+            group: SharedString::new(),
+            group_header: false,
+            group_all_checked: false,
+            disabled: i.disabled,
         })
         .collect()
 }
@@ -4870,6 +4958,7 @@ mod tests {
             group: SharedString::new(),
             group_header: false,
             group_all_checked: false,
+            disabled: false,
         }
     }
 
@@ -4981,6 +5070,7 @@ mod tests {
                 group: "Intensity".into(),
                 group_header: false,
                 group_all_checked: false,
+                disabled: false,
             })
             .collect()
     }
@@ -5019,6 +5109,7 @@ mod tests {
             group: "Coloc ClassA".into(),
             group_header: false,
             group_all_checked: false,
+            disabled: false,
         });
         let items = apply_intensity_preset(items, "none");
         assert!(
@@ -5034,6 +5125,7 @@ mod tests {
             group: SharedString::from(group),
             group_header: false,
             group_all_checked: false,
+            disabled: false,
         }
     }
 
@@ -5286,6 +5378,39 @@ mod tests {
             state.get_filter_image_active(),
             "one unchecked item makes the filter active"
         );
+    }
+
+    #[test]
+    fn attach_callbacks_image_disable_toggled_flips_disabled_independently_of_checked() {
+        let (_ui, results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(results_ui.as_weak());
+        controller.attach_callbacks();
+        let state = results_ui.global::<ResultsState>();
+        state.set_filter_image_items(to_model(vec![plain_item("a", true), plain_item("b", true)]));
+        state.set_filter_image_popup(to_model(vec![plain_item("a", true), plain_item("b", true)]));
+
+        state.invoke_image_disable_toggled("a".into());
+
+        let items = model_to_vec(&state.get_filter_image_items());
+        let a = items.iter().find(|i| i.label == "a").unwrap();
+        let b = items.iter().find(|i| i.label == "b").unwrap();
+        assert!(a.disabled, "a must now be disabled");
+        assert!(
+            a.checked,
+            "disabling must not touch the unrelated checked flag"
+        );
+        assert!(!b.disabled, "b must be untouched");
+
+        let popup = model_to_vec(&state.get_filter_image_popup());
+        assert!(
+            popup.iter().find(|i| i.label == "a").unwrap().disabled,
+            "the popup copy must reflect the toggle too"
+        );
+
+        // Toggling again must flip it back off.
+        state.invoke_image_disable_toggled("a".into());
+        let items = model_to_vec(&state.get_filter_image_items());
+        assert!(!items.iter().find(|i| i.label == "a").unwrap().disabled);
     }
 
     #[test]

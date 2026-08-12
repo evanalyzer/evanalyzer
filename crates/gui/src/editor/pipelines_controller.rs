@@ -2481,6 +2481,31 @@ mod tests {
     }
 
     #[test]
+    fn map_cfg_param_type_maps_every_variant_to_its_slint_counterpart() {
+        let cases = [
+            (CfgParamType::Number, ParamType::Number),
+            (CfgParamType::Text, ParamType::Text),
+            (CfgParamType::Dropdown, ParamType::Dropdown),
+            (CfgParamType::Toggle, ParamType::Toggle),
+            (CfgParamType::Slider, ParamType::Slider),
+            (CfgParamType::Spinner, ParamType::Spinner),
+            (CfgParamType::Group, ParamType::Group),
+            (CfgParamType::ObjClass, ParamType::ObjClass),
+            (CfgParamType::SegClass, ParamType::SegClass),
+            (CfgParamType::MultiObjClass, ParamType::MultiObjClass),
+            (CfgParamType::MultiSegClass, ParamType::MultiSegClass),
+            (CfgParamType::PixelUnits, ParamType::PixelUnits),
+            (CfgParamType::SizeUnits, ParamType::SizeUnits),
+            (CfgParamType::Label, ParamType::Label),
+            (CfgParamType::FilePath, ParamType::FilePath),
+        ];
+        for (input, expected) in cases {
+            let label = format!("{input:?}");
+            assert_eq!(map_cfg_param_type(input), expected, "{label}");
+        }
+    }
+
+    #[test]
     fn to_command_def_maps_every_built_in_category() {
         for meta in all_command_meta() {
             let def = to_command_def(&meta);
@@ -2501,6 +2526,370 @@ mod tests {
                 meta.id, meta.name
             );
         }
+    }
+
+    // -- reconcile_*_classifier_mapping ----------------------------------------------
+
+    #[test]
+    fn reconcile_pixel_classifier_mapping_clears_the_mapping_when_model_path_is_empty() {
+        let mut settings = PixelClassifierSettings {
+            model_path: PathBuf::new(),
+            segmentation_mapping: vec![SegmentationMappingSettings {
+                segmentation_class: SegmentationClass(1),
+                object_class_id: SegmentationClass(2),
+            }],
+        };
+
+        reconcile_pixel_classifier_mapping(&mut settings);
+
+        assert!(
+            settings.segmentation_mapping.is_empty(),
+            "an empty model path has no classes to map to"
+        );
+    }
+
+    #[test]
+    fn reconcile_pixel_classifier_mapping_clears_the_mapping_when_the_model_file_does_not_exist() {
+        let mut settings = PixelClassifierSettings {
+            model_path: PathBuf::from("/nonexistent/model.evamodel"),
+            segmentation_mapping: vec![SegmentationMappingSettings {
+                segmentation_class: SegmentationClass(1),
+                object_class_id: SegmentationClass(2),
+            }],
+        };
+
+        reconcile_pixel_classifier_mapping(&mut settings);
+
+        assert!(settings.segmentation_mapping.is_empty());
+    }
+
+    #[test]
+    fn reconcile_ai_object_classifier_mapping_clears_the_mapping_when_model_path_is_empty() {
+        let mut settings = AiObjectClassifierSettings {
+            segmentation_mapping: vec![ClassificationMappingSettings {
+                object_class: ObjectClass::Valid(1),
+                output_class: ObjectClass::Valid(2),
+            }],
+            ..Default::default()
+        };
+
+        reconcile_ai_object_classifier_mapping(&mut settings);
+
+        assert!(settings.segmentation_mapping.is_empty());
+    }
+
+    // -- format_classifier_model_info --------------------------------------------
+
+    fn saved_classifier_with(
+        classifier: AiLearningClassifierSettings,
+        metadata: evanalyzer_cfg::settings::meta_data::MetaData,
+    ) -> evanalyzer_core::SavedClassifier {
+        use evanalyzer_cfg::settings::ai_learning_settings::{
+            AiLearningBackendSettings, AiLearningSettings, RandomForestSettings,
+        };
+        let model = evanalyzer_core::ai_learning::model::random_forest::fit_random_forest(
+            &[vec![0.0], vec![1.0]],
+            &[0, 1],
+            &RandomForestSettings::default(),
+        )
+        .expect("fitting a two-row random forest never fails");
+        evanalyzer_core::SavedClassifier {
+            version: evanalyzer_core::ai_learning::model::CURRENT_SAVED_CLASSIFIER_VERSION,
+            classifier: model,
+            settings: AiLearningSettings {
+                schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
+                metadata,
+                backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
+                classifier,
+            },
+        }
+    }
+
+    #[test]
+    fn format_classifier_model_info_lists_pixel_classes_with_their_ids() {
+        use evanalyzer_cfg::core_types::SegmentationClass;
+        let saved = saved_classifier_with(
+            AiLearningClassifierSettings::Pixel {
+                feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
+                    channels: vec![],
+                },
+                class_labels: vec![
+                    PixelClassLabel {
+                        class: SegmentationClass(1),
+                        name: "Nucleus".into(),
+                    },
+                    PixelClassLabel {
+                        class: SegmentationClass(2),
+                        name: "Background".into(),
+                    },
+                ],
+            },
+            evanalyzer_cfg::settings::meta_data::MetaData {
+                name: "My Pixel Model".into(),
+                ..Default::default()
+            },
+        );
+
+        let info = format_classifier_model_info(&saved);
+
+        assert!(info.starts_with("My Pixel Model\n"));
+        assert!(info.contains("Classes:"));
+        assert!(info.contains(&format!("- Nucleus (id {})", SegmentationClass(1).as_u32())));
+        assert!(info.contains(&format!(
+            "- Background (id {})",
+            SegmentationClass(2).as_u32()
+        )));
+    }
+
+    #[test]
+    fn format_classifier_model_info_lists_object_classes_and_falls_back_to_unset() {
+        let saved = saved_classifier_with(
+            AiLearningClassifierSettings::Object {
+                feature_spec: evanalyzer_cfg::settings::ai_learning_object_settings::AiLearningObjectFeatureSettings {
+                    metrics: vec![],
+                },
+                class_labels: vec![ObjectClassLabel {
+                    class: ObjectClass::Unset,
+                    name: "Unassigned".into(),
+                }],
+            },
+            evanalyzer_cfg::settings::meta_data::MetaData {
+                name: "My Object Model".into(),
+                ..Default::default()
+            },
+        );
+
+        let info = format_classifier_model_info(&saved);
+
+        assert!(info.contains("- Unassigned (id unset)"));
+    }
+
+    #[test]
+    fn format_classifier_model_info_includes_description_and_author_when_present() {
+        let saved = saved_classifier_with(
+            AiLearningClassifierSettings::Pixel {
+                feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
+                    channels: vec![],
+                },
+                class_labels: vec![],
+            },
+            evanalyzer_cfg::settings::meta_data::MetaData {
+                name: "Model".into(),
+                short_description: "A short summary".into(),
+                description: "A longer description.".into(),
+                author_first_name: "Ada".into(),
+                author_last_name: "Lovelace".into(),
+                ..Default::default()
+            },
+        );
+
+        let info = format_classifier_model_info(&saved);
+
+        assert!(info.contains("A short summary"));
+        assert!(info.contains("A longer description."));
+        assert!(info.contains("Author: Ada Lovelace"));
+    }
+
+    #[test]
+    fn format_classifier_model_info_omits_the_author_line_when_both_names_are_empty() {
+        let saved = saved_classifier_with(
+            AiLearningClassifierSettings::Pixel {
+                feature_spec: evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings {
+                    channels: vec![],
+                },
+                class_labels: vec![],
+            },
+            evanalyzer_cfg::settings::meta_data::MetaData {
+                name: "Model".into(),
+                ..Default::default()
+            },
+        );
+
+        let info = format_classifier_model_info(&saved);
+
+        assert!(!info.contains("Author:"));
+    }
+
+    // -- modify_group_item --------------------------------------------------------
+
+    #[test]
+    fn modify_group_item_add_appends_a_clone_of_the_last_entry() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ThresholdEntrySettings, ThresholdSettings,
+        };
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        {
+            let mut project = ui_state.get_project_write();
+            project.add_pipeline(PipelineSettings {
+                id: PipelineId(1),
+                name: Some("Pipeline 1".into()),
+                image_source: ImageAddress::Channel(0),
+                enabled: true,
+                steps: vec![PipelineStepSettings {
+                    enabled: true,
+                    command: PipelineCommand::Threshold(ThresholdSettings {
+                        thresholds: vec![ThresholdEntrySettings {
+                            min_threshold: 0.5,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                }],
+            });
+        }
+
+        controller.modify_group_item(1, 0, "thresholds", true, None);
+
+        let project = ui_state.get_project();
+        let PipelineCommand::Threshold(settings) = &project.pipelines[0].steps[0].command else {
+            panic!("expected a Threshold command");
+        };
+        assert_eq!(settings.thresholds.len(), 2);
+        assert_eq!(
+            settings.thresholds[1].min_threshold, 0.5,
+            "the new entry must clone the last existing one, not reset to default"
+        );
+    }
+
+    #[test]
+    fn modify_group_item_remove_drops_the_entry_at_the_given_index() {
+        use evanalyzer_cfg::settings::pipeline_command_settings::{
+            ThresholdEntrySettings, ThresholdSettings,
+        };
+        let (ui, _results_ui) = test_ui_windows();
+        let (ui_state, controller) = make_controller(ui.as_weak());
+        {
+            let mut project = ui_state.get_project_write();
+            project.add_pipeline(PipelineSettings {
+                id: PipelineId(1),
+                name: Some("Pipeline 1".into()),
+                image_source: ImageAddress::Channel(0),
+                enabled: true,
+                steps: vec![PipelineStepSettings {
+                    enabled: true,
+                    command: PipelineCommand::Threshold(ThresholdSettings {
+                        thresholds: vec![
+                            ThresholdEntrySettings {
+                                min_threshold: 0.1,
+                                ..Default::default()
+                            },
+                            ThresholdEntrySettings {
+                                min_threshold: 0.9,
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }),
+                }],
+            });
+        }
+
+        controller.modify_group_item(1, 0, "thresholds", false, Some(0));
+
+        let project = ui_state.get_project();
+        let PipelineCommand::Threshold(settings) = &project.pipelines[0].steps[0].command else {
+            panic!("expected a Threshold command");
+        };
+        assert_eq!(settings.thresholds.len(), 1);
+        assert_eq!(settings.thresholds[0].min_threshold, 0.9);
+    }
+
+    // -- apply_picker_filter --------------------------------------------------------
+
+    #[test]
+    fn apply_picker_filter_with_an_empty_query_shows_every_built_in_command_by_category() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+
+        controller.apply_picker_filter(&ui, "", false);
+
+        let picker = ui.global::<CommandPickerState>();
+        let expected_pre = all_command_meta()
+            .iter()
+            .filter(|m| matches!(m.category, CommandCategory::Preprocess))
+            .count() as i32;
+        assert_eq!(picker.get_cat_count_pre(), expected_pre);
+        assert_eq!(
+            picker.get_total_shown(),
+            picker.get_cat_count_pre()
+                + picker.get_cat_count_seg()
+                + picker.get_cat_count_obj()
+                + picker.get_cat_count_mea()
+                + picker.get_cat_count_cls(),
+        );
+    }
+
+    #[test]
+    fn apply_picker_filter_by_text_query_matches_name_or_summary_case_insensitively() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        let meta = all_command_meta()
+            .into_iter()
+            .find(|m| matches!(m.category, CommandCategory::Segment))
+            .expect("at least one built-in Segment command exists");
+
+        controller.apply_picker_filter(&ui, &meta.name.to_uppercase(), false);
+
+        let picker = ui.global::<CommandPickerState>();
+        assert!(
+            picker
+                .get_shown_segment()
+                .iter()
+                .any(|c| c.name.as_str() == meta.name),
+            "an upper-cased query must still match the command's (lower-cased) name"
+        );
+    }
+
+    #[test]
+    fn apply_picker_filter_with_no_query_match_shows_nothing() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+
+        controller.apply_picker_filter(&ui, "no-such-command-exists-xyz", false);
+
+        let picker = ui.global::<CommandPickerState>();
+        assert_eq!(picker.get_total_shown(), 0);
+        assert_eq!(picker.get_cat_count_pre(), 0);
+    }
+
+    #[test]
+    fn apply_picker_filter_restricts_to_the_active_category_chips() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        ui.global::<CommandPickerState>().set_fcat_seg(true);
+
+        controller.apply_picker_filter(&ui, "", false);
+
+        let picker = ui.global::<CommandPickerState>();
+        assert_eq!(picker.get_cat_count_pre(), 0, "Preprocess chip is inactive");
+        assert!(
+            picker.get_cat_count_seg() > 0,
+            "Segment chip is active and there are built-in Segment commands"
+        );
+        assert_eq!(
+            picker.get_total_shown(),
+            picker.get_cat_count_seg(),
+            "only the active category contributes to the total while a chip is set"
+        );
+    }
+
+    #[test]
+    fn apply_picker_filter_favorites_mode_shows_only_matching_templates() {
+        let (ui, _results_ui) = test_ui_windows();
+        let (_ui_state, controller) = make_controller(ui.as_weak());
+        *controller.pipeline_templates.lock().unwrap() =
+            vec![template("Only", vec![]), template("Other", vec![])];
+
+        controller.apply_picker_filter(&ui, "Only", true);
+
+        let picker = ui.global::<CommandPickerState>();
+        assert_eq!(
+            picker.get_total_shown(),
+            1,
+            "favorites mode counts only matching templates, not built-in commands"
+        );
+        assert_eq!(picker.get_shown_templates().row_count(), 1);
     }
 
     // -- attach_callbacks (live AppWindow) -----------------------------------------

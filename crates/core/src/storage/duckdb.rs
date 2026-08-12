@@ -183,15 +183,28 @@ CREATE TABLE IF NOT EXISTS coloc_stats (
 -- objects\", \"how many colocalize with ClassB\"), which this table can't
 -- express and callers should instead derive live from `objects`.
 --
--- `status`/`error_message`: an image is always finalized here even when a
--- tile or plane failed to export (so it still shows up rather than
--- vanishing), but that means `status` is the only way to tell a genuinely
--- complete image from one that has silently incomplete/missing object data.
+-- `successful`/`error_message`: an image is always finalized here even when
+-- a tile or plane failed to export (so it still shows up rather than
+-- vanishing), but that means `successful` is the only way to tell a
+-- genuinely complete image from one that has silently incomplete/missing
+-- object data. Was `status VARCHAR` ('ok'/'error') until this rename - only
+-- ever those two values in practice, driven straight off `Option<&str>` in
+-- `finalize_image`, so a bool is both smaller and matches how it's actually
+-- used; a `.evadb` written before the rename gets migrated on first
+-- read/write (see `ensure_successful_column`).
+--
+-- `disabled`: user-driven, set well after analysis (see
+-- `DuckDbReader::set_image_disabled`), not written by the pipeline itself -
+-- distinct from `successful`, which the pipeline sets once and never
+-- revisits. A `.evadb` written before this column existed gets it added
+-- lazily on first read/write (see `ensure_disabled_column`), so this
+-- default only matters for files created from this DDL directly.
 CREATE TABLE IF NOT EXISTS images (
     image_name      VARCHAR NOT NULL,
     image_rel_path  VARCHAR NOT NULL PRIMARY KEY,
-    status          VARCHAR NOT NULL DEFAULT 'ok',
-    error_message   VARCHAR
+    successful      BOOLEAN NOT NULL DEFAULT true,
+    error_message   VARCHAR,
+    disabled        BOOLEAN NOT NULL DEFAULT false
 );
 
 -- Snapshot of the project's object-classification registry at the moment
@@ -526,9 +539,10 @@ impl PipelineResultExporter for DuckDbExporter {
     /// Records that this image was processed, regardless of whether it
     /// produced any objects - and regardless of whether `error` is set, so a
     /// partially-failed image still shows up rather than vanishing entirely.
-    /// `error` is persisted into `status`/`error_message` so that partial
-    /// failure is still visible instead of looking identical to success.
-    /// Called once per image, after every `export()` call for it has returned.
+    /// `error` is persisted into `successful`/`error_message` so that
+    /// partial failure is still visible instead of looking identical to
+    /// success. Called once per image, after every `export()` call for it
+    /// has returned.
     fn finalize_image(
         &self,
         image_rel_path: &Path,
@@ -537,11 +551,11 @@ impl PipelineResultExporter for DuckDbExporter {
         let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
         let image_rel = image_rel_path.display().to_string();
         let image_name = image_display_name(image_rel_path);
-        let status = if error.is_some() { "error" } else { "ok" };
+        let successful = error.is_none();
 
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path, status, error_message) VALUES (?, ?, ?, ?)",
-            params![image_name, image_rel, status, error],
+            "INSERT INTO images (image_name, image_rel_path, successful, error_message) VALUES (?, ?, ?, ?)",
+            params![image_name, image_rel, successful, error],
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())
@@ -558,12 +572,16 @@ impl PipelineResultExporter for DuckDbExporter {
 pub struct ImageRow {
     pub image_name: String,
     pub image_rel_path: String,
-    /// `"ok"` if every tile/plane for this image exported successfully,
-    /// `"error"` if it was finalized despite a failure partway through -
+    /// `true` if every tile/plane for this image exported successfully,
+    /// `false` if it was finalized despite a failure partway through -
     /// see `error_message` for details, and `DuckDbExporter::finalize_image`
     /// for why a failed image still gets a row here rather than none at all.
-    pub status: String,
+    pub successful: bool,
     pub error_message: Option<String>,
+    /// User-toggled via `DuckDbReader::set_image_disabled` - excluded from
+    /// exports by default and shown crossed out in the Matrix view. Not set
+    /// by the analysis pipeline itself (see `successful` for that).
+    pub disabled: bool,
 }
 
 /// Flat DTO for a row in the `classes` table: one per registered class in
@@ -997,6 +1015,62 @@ fn build_where_clause(filter: &ObjectFilter) -> String {
     where_clause_from(&filter_conditions(filter))
 }
 
+/// Adds the `images.disabled` column to a `.evadb` written before that
+/// column existed. A no-op (DuckDB `ADD COLUMN IF NOT EXISTS` is a cheap
+/// metadata-only check, not a data rewrite) once the column is already
+/// there, which is always true for a file created from the current
+/// `CREATE_TABLES` DDL - so this only ever does real work once per
+/// pre-existing file, the first time it's touched by this feature.
+///
+/// No `NOT NULL` here (unlike `CREATE_TABLES`'s copy of this column) -
+/// DuckDB's `ALTER TABLE ADD COLUMN` doesn't support column constraints,
+/// only `DEFAULT` (confirmed against the pinned duckdb crate version:
+/// `NOT NULL` here fails with "Adding columns with constraints not yet
+/// supported"). The `DEFAULT` alone is enough in practice: it backfills
+/// every existing row and applies to any future insert that omits the
+/// column, so nothing in this codebase ever produces a real `NULL` here -
+/// `get_images()` reading it straight into `bool` (not `Option<bool>`)
+/// relies on that, not on the database enforcing it.
+fn ensure_disabled_column(conn: &Connection) -> Result<(), InternalErrors> {
+    conn.execute_batch(
+        "ALTER TABLE images ADD COLUMN IF NOT EXISTS disabled BOOLEAN DEFAULT false;",
+    )
+    .map_err(|e| InternalErrors::Io(e.to_string()))
+}
+
+/// Migrates a `.evadb` from the old `status VARCHAR` ("ok"/"error") column
+/// to the current `successful BOOLEAN` one: adds `successful` (a no-op if
+/// already there, same reasoning as `ensure_disabled_column`), and - only
+/// the first time, only if the legacy `status` column is still present -
+/// backfills it from `status` and drops `status`. Checking for `status` via
+/// `information_schema.columns` rather than just trying the backfill and
+/// swallowing a "column does not exist" error keeps this from depending on
+/// DuckDB's exact error message wording.
+fn ensure_successful_column(conn: &Connection) -> Result<(), InternalErrors> {
+    let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+    conn.execute_batch(
+        "ALTER TABLE images ADD COLUMN IF NOT EXISTS successful BOOLEAN DEFAULT true;",
+    )
+    .map_err(err)?;
+
+    let has_legacy_status: bool = conn
+        .query_row(
+            "SELECT count(*) > 0 FROM information_schema.columns \
+             WHERE table_name = 'images' AND column_name = 'status'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(err)?;
+    if has_legacy_status {
+        conn.execute_batch(
+            "UPDATE images SET successful = (status = 'ok'); \
+             ALTER TABLE images DROP COLUMN status;",
+        )
+        .map_err(err)?;
+    }
+    Ok(())
+}
+
 /// Opens a result file written by [`DuckDbExporter`] for reading.
 pub struct DuckDbReader {
     conn: Connection,
@@ -1395,23 +1469,61 @@ impl DuckDbReader {
     /// occupied even when it has nothing to aggregate.
     pub fn get_images(&self) -> Result<Vec<ImageRow>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        ensure_disabled_column(&self.conn)?;
+        ensure_successful_column(&self.conn)?;
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT image_name, image_rel_path, status, error_message FROM images ORDER BY image_rel_path",
+                "SELECT image_name, image_rel_path, successful, error_message, disabled FROM images ORDER BY image_rel_path",
             )
             .map_err(err)?;
         stmt.query_map([], |row| {
             Ok(ImageRow {
                 image_name: row.get(0)?,
                 image_rel_path: row.get(1)?,
-                status: row.get(2)?,
+                successful: row.get(2)?,
                 error_message: row.get(3)?,
+                disabled: row.get(4)?,
             })
         })
         .map_err(err)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(err)
+    }
+
+    /// Marks `image_rel_path` disabled/enabled - excluded from exports by
+    /// default and shown crossed out in the Matrix view (see
+    /// `ImageRow::disabled`).
+    ///
+    /// This is the one write path against an already-finalized results
+    /// file: every other `DuckDbReader` method only reads. `.evadb` files
+    /// are otherwise append-only, written once by the analysis pipeline and
+    /// never touched again, so this - unlike every read method here - can
+    /// race a concurrent reader/writer holding its own connection to the
+    /// same file (DuckDB is single-writer per file). Callers should treat a
+    /// failure here as "the toggle didn't stick, tell the user and let them
+    /// retry" rather than a hard error.
+    /// Matches on `image_name` (the bare filename), not `image_rel_path`
+    /// (the real primary key) - consistent with every other image-identity
+    /// lookup in this codebase (e.g. `filter_conditions`' own `image_name IN
+    /// (...)` for `ObjectFilter.image_filter`), which already accepts that
+    /// two images sharing a bare filename in different folders can't be
+    /// told apart this way. Fixing that would mean plumbing
+    /// `image_rel_path` through the image filter checklist too, not just
+    /// this one call - out of scope for now.
+    pub fn set_image_disabled(
+        &self,
+        image_name: &str,
+        disabled: bool,
+    ) -> Result<(), InternalErrors> {
+        ensure_disabled_column(&self.conn)?;
+        self.conn
+            .execute(
+                "UPDATE images SET disabled = ? WHERE image_name = ?",
+                params![disabled, image_name],
+            )
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        Ok(())
     }
 
     /// Returns all distinct partner-class labels appearing as keys in any object's
@@ -1598,7 +1710,7 @@ mod tests {
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].image_name, "empty.tif");
         assert_eq!(images[0].image_rel_path, "empty.tif");
-        assert_eq!(images[0].status, "ok");
+        assert!(images[0].successful);
         assert_eq!(images[0].error_message, None);
 
         // The Table view's image filter must also see it, not just get_images().
@@ -1623,7 +1735,7 @@ mod tests {
 
         let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
         // A partially-failed image must still show up (see the finalize_image
-        // doc comment) - but as "error", not indistinguishable from success.
+        // doc comment) - but as unsuccessful, not indistinguishable from success.
         exporter
             .finalize_image(Path::new("broken.tif"), Some("tile 3: decode failed"))
             .expect("finalize_image failed");
@@ -1632,7 +1744,7 @@ mod tests {
         let reader = DuckDbReader::open(&path).expect("reader open failed");
         let images = reader.get_images().expect("get_images failed");
         assert_eq!(images.len(), 1, "the failed image must still be recorded");
-        assert_eq!(images[0].status, "error");
+        assert!(!images[0].successful);
         assert_eq!(
             images[0].error_message.as_deref(),
             Some("tile 3: decode failed")
@@ -1721,6 +1833,154 @@ mod tests {
             names,
             vec!["empty.tif".to_string(), "has_objects.tif".to_string()]
         );
+    }
+
+    #[test]
+    fn set_image_disabled_persists_and_round_trips_through_get_images() {
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+        exporter
+            .finalize_image(Path::new("a.tif"), None)
+            .expect("finalize_image failed");
+        exporter
+            .finalize_image(Path::new("b.tif"), None)
+            .expect("finalize_image failed");
+        drop(exporter);
+
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let images = reader.get_images().expect("get_images failed");
+        assert!(
+            images.iter().all(|i| !i.disabled),
+            "a freshly finalized image must default to not disabled"
+        );
+
+        reader
+            .set_image_disabled("a.tif", true)
+            .expect("set_image_disabled failed");
+
+        // A fresh reader/connection - not the same one that wrote the
+        // toggle - to actually prove the write reached disk.
+        let reader = DuckDbReader::open(&path).expect("reader re-open failed");
+        let images = reader.get_images().expect("get_images failed");
+        let a = images.iter().find(|i| i.image_name == "a.tif").unwrap();
+        let b = images.iter().find(|i| i.image_name == "b.tif").unwrap();
+        assert!(a.disabled, "a.tif must be disabled");
+        assert!(!b.disabled, "b.tif must be untouched");
+
+        // Toggling back off must also stick.
+        reader
+            .set_image_disabled("a.tif", false)
+            .expect("set_image_disabled failed");
+        let images = DuckDbReader::open(&path)
+            .expect("reader re-open failed")
+            .get_images()
+            .expect("get_images failed");
+        assert!(
+            images.iter().all(|i| !i.disabled),
+            "re-enabling must also persist"
+        );
+    }
+
+    #[test]
+    fn set_image_disabled_migrates_a_file_written_before_the_column_existed() {
+        // Hand-builds the *old* `images` schema (no `disabled` column) to
+        // stand in for a `.evadb` written before this feature existed -
+        // `DuckDbExporter::new` always creates the current schema, so it
+        // can't produce this fixture itself.
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("legacy.duckdb");
+        {
+            let conn = Connection::open(&path).expect("open failed");
+            conn.execute_batch(
+                "CREATE TABLE images (
+                    image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
+                    status VARCHAR NOT NULL DEFAULT 'ok', error_message VARCHAR
+                );
+                INSERT INTO images (image_name, image_rel_path, status, error_message)
+                VALUES ('legacy.tif', 'legacy.tif', 'ok', NULL);",
+            )
+            .expect("legacy schema setup failed");
+        }
+
+        // Reading an un-migrated file must still work, defaulting to false -
+        // and this same legacy fixture (`status = 'ok'`) also exercises the
+        // `status` -> `successful` migration (see the dedicated test below
+        // for the full backfill/column-drop behavior).
+        let reader = DuckDbReader::open(&path).expect("reader open failed");
+        let images = reader.get_images().expect("get_images failed");
+        assert_eq!(images.len(), 1);
+        assert!(!images[0].disabled);
+        assert!(images[0].successful);
+
+        // And writing to one must add the column on the fly rather than
+        // erroring on "no such column".
+        reader
+            .set_image_disabled("legacy.tif", true)
+            .expect("set_image_disabled must migrate the legacy file, not fail");
+        let images = DuckDbReader::open(&path)
+            .expect("reader re-open failed")
+            .get_images()
+            .expect("get_images failed");
+        assert!(images[0].disabled);
+    }
+
+    #[test]
+    fn get_images_migrates_the_legacy_status_column_to_successful() {
+        // Hand-builds the *old* `images` schema (`status VARCHAR`, no
+        // `successful`/`disabled` columns) - one row of each status, to
+        // verify the backfill maps both values correctly, not just the
+        // default.
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("legacy.duckdb");
+        {
+            let conn = Connection::open(&path).expect("open failed");
+            conn.execute_batch(
+                "CREATE TABLE images (
+                    image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
+                    status VARCHAR NOT NULL DEFAULT 'ok', error_message VARCHAR
+                );
+                INSERT INTO images (image_name, image_rel_path, status, error_message)
+                VALUES ('ok.tif', 'ok.tif', 'ok', NULL);
+                INSERT INTO images (image_name, image_rel_path, status, error_message)
+                VALUES ('broken.tif', 'broken.tif', 'error', 'tile 3: decode failed');",
+            )
+            .expect("legacy schema setup failed");
+        }
+
+        let images = DuckDbReader::open(&path)
+            .expect("reader open failed")
+            .get_images()
+            .expect("get_images failed");
+        let ok = images.iter().find(|i| i.image_name == "ok.tif").unwrap();
+        let broken = images
+            .iter()
+            .find(|i| i.image_name == "broken.tif")
+            .unwrap();
+        assert!(ok.successful, "'ok' must backfill to successful = true");
+        assert!(
+            !broken.successful,
+            "'error' must backfill to successful = false"
+        );
+        assert_eq!(
+            broken.error_message.as_deref(),
+            Some("tile 3: decode failed")
+        );
+
+        // The legacy column must actually be dropped, not just shadowed -
+        // otherwise every future open would re-run the (harmless but
+        // pointless) backfill forever.
+        let conn = Connection::open(&path).expect("re-open failed");
+        let has_status: bool = conn
+            .query_row(
+                "SELECT count(*) > 0 FROM information_schema.columns \
+                 WHERE table_name = 'images' AND column_name = 'status'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("introspection query failed");
+        assert!(!has_status, "the legacy `status` column must be dropped");
     }
 
     #[test]

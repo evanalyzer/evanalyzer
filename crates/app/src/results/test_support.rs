@@ -48,7 +48,8 @@ fn create_schema(conn: &duckdb::Connection) {
         );
         CREATE TABLE images (
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
-            status VARCHAR NOT NULL DEFAULT 'ok', error_message VARCHAR
+            successful BOOLEAN NOT NULL DEFAULT true, error_message VARCHAR,
+            disabled BOOLEAN NOT NULL DEFAULT false
         );
         CREATE TABLE classes (
             class_id INTEGER NOT NULL PRIMARY KEY, name VARCHAR NOT NULL

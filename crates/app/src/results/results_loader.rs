@@ -1338,6 +1338,18 @@ impl ResultsLoader {
         DuckDbReader::open(&self.path)?.get_class_names()
     }
 
+    /// Marks the image named `image_name` disabled/enabled - see
+    /// `DuckDbReader::set_image_disabled` for what that means, why it's
+    /// keyed on the bare name rather than the relative path, and the
+    /// concurrency caveat (this is the results file's one write path).
+    pub fn set_image_disabled(
+        &self,
+        image_name: &str,
+        disabled: bool,
+    ) -> Result<(), InternalErrors> {
+        DuckDbReader::open(&self.path)?.set_image_disabled(image_name, disabled)
+    }
+
     /// Every registered class (id + name) as of when this file was written -
     /// see `evanalyzer_core::storage::duckdb`'s `classes` table. The
     /// authoritative source for the results view's class names/filter,

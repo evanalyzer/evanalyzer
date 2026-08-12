@@ -27,6 +27,13 @@ pub struct PlateCell {
     pub count: usize,
     /// Objects in this well with at least one colocalization partner.
     pub coloc_count: usize,
+    /// True if *any* image belonging to this well is user-disabled - unlike
+    /// [`WellCell::disabled`], a plate cell can aggregate several images, so
+    /// there's no single "this cell is disabled" state, only "disabled
+    /// images contributed to (or were excluded from) this well's
+    /// aggregate". The caller renders this as a weaker, summary indicator
+    /// (e.g. a small dot) rather than `WellCell`'s full cross-out.
+    pub has_disabled_images: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,6 +73,12 @@ pub struct WellCell {
     pub count: usize,
     /// Objects in this field of view with at least one colocalization partner.
     pub coloc_count: usize,
+    /// User-disabled via `ResultsLoader::set_image_disabled` - the caller
+    /// renders this crossed out rather than by its `value`/`count`, which
+    /// are still that image's real data (disabling doesn't discard it, it
+    /// only excludes the image from exports - see `ImageRow::disabled`).
+    /// Always `false` for a genuinely empty placeholder (`image_name: ""`).
+    pub disabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +105,7 @@ fn empty_plate_cell() -> PlateCell {
         value: None,
         count: 0,
         coloc_count: 0,
+        has_disabled_images: false,
     }
 }
 
@@ -101,6 +115,7 @@ fn empty_well_cell() -> WellCell {
         value: None,
         count: 0,
         coloc_count: 0,
+        disabled: false,
     }
 }
 
@@ -199,6 +214,30 @@ pub fn compute_plate_matrix(
     plate_rows: usize,
     plate_cols: usize,
 ) -> PlateMatrixResult {
+    // A disabled image's own objects never contribute to any aggregate -
+    // excluded here (before grouping/aggregating), not just at display
+    // time. The `all_images` placeholder pass further down still places an
+    // occupied-but-valueless cell for it, so it stays visible rather than
+    // vanishing from the grid; only shared with another (enabled) image's
+    // well/group does that group's aggregate now reflect just the enabled
+    // contribution.
+    let disabled_images: HashSet<&str> = all_images
+        .iter()
+        .filter(|i| i.disabled)
+        .map(|i| i.image_name.as_str())
+        .collect();
+    let filtered_objects: Vec<ObjectRow>;
+    let objects: &[ObjectRow] = if disabled_images.is_empty() {
+        objects
+    } else {
+        filtered_objects = objects
+            .iter()
+            .filter(|o| !disabled_images.contains(o.image_name.as_str()))
+            .cloned()
+            .collect();
+        &filtered_objects
+    };
+
     let config = GroupConfig {
         group_by,
         regex: regex.to_string(),
@@ -215,6 +254,23 @@ pub fn compute_plate_matrix(
     let re = (group_by == GroupBy::Regex)
         .then(|| regex::Regex::new(regex).ok())
         .flatten();
+
+    // Which well/group labels have at least one disabled image, regardless
+    // of whether that image contributed any (surviving) objects - so the
+    // indicator still shows up on a well whose only image is disabled.
+    let mut disabled_labels: HashSet<String> = HashSet::new();
+    for image in all_images {
+        if image.disabled
+            && let Some(label) = group_key_for(
+                &image.image_name,
+                &image.image_rel_path,
+                group_by,
+                re.as_ref(),
+            )
+        {
+            disabled_labels.insert(label);
+        }
+    }
 
     // Per-well count of objects with >=1 colocalization partner, tallied
     // straight from `objects` — `aggregate_rows`'s grouping engine has no
@@ -276,6 +332,7 @@ pub fn compute_plate_matrix(
             value,
             count,
             coloc_count,
+            has_disabled_images: disabled_labels.contains(&label),
         };
         present_labels.insert(label.clone());
         place(
@@ -308,6 +365,7 @@ pub fn compute_plate_matrix(
             value: None,
             count: 0,
             coloc_count: 0,
+            has_disabled_images: disabled_labels.contains(&label),
         };
         place(
             &label,
@@ -372,9 +430,21 @@ pub fn compute_well_matrix(
         return None; // no group(4) present - no sub-position data
     }
 
+    // A disabled image's own objects never contribute to any aggregate -
+    // excluded here (before grouping/aggregating), not just at display
+    // time - but the image itself still gets its acquisition-order slot
+    // via `well_images` below (unfiltered), occupied but valueless, so it
+    // stays visible rather than vanishing from the grid.
+    let disabled_images: HashSet<&str> = all_images
+        .iter()
+        .filter(|i| i.disabled)
+        .map(|i| i.image_name.as_str())
+        .collect();
+
     let well_objects: Vec<ObjectRow> = objects
         .iter()
         .filter(|o| group_key(o, GroupBy::Regex, Some(&re)).as_deref() == Some(well_label))
+        .filter(|o| !disabled_images.contains(o.image_name.as_str()))
         .cloned()
         .collect();
     let well_images: Vec<&ImageRow> = all_images
@@ -409,6 +479,10 @@ pub fn compute_well_matrix(
             *coloc_counts.entry(object.image_name.clone()).or_default() += 1;
         }
     }
+    let disabled_by_image: HashMap<String, bool> = all_images
+        .iter()
+        .map(|i| (i.image_name.clone(), i.disabled))
+        .collect();
 
     let total = well_rows * well_cols;
     let mut cells: Vec<WellCell> = (0..total).map(|_| empty_well_cell()).collect();
@@ -434,12 +508,14 @@ pub fn compute_well_matrix(
             continue;
         }
         let coloc_count = coloc_counts.get(&image_name).copied().unwrap_or(0);
+        let disabled = disabled_by_image.get(&image_name).copied().unwrap_or(false);
         present_images.insert(image_name.clone());
         cells[idx] = WellCell {
             image_name,
             value,
             count,
             coloc_count,
+            disabled,
         };
         placed_any = true;
     }
@@ -467,6 +543,7 @@ pub fn compute_well_matrix(
             value: None,
             count: 0,
             coloc_count: 0,
+            disabled: image.disabled,
         };
         placed_any = true;
     }
@@ -593,8 +670,16 @@ mod tests {
         ImageRow {
             image_name: image_name.into(),
             image_rel_path: image_rel_path.into(),
-            status: "ok".into(),
+            successful: true,
             error_message: None,
+            disabled: false,
+        }
+    }
+
+    fn disabled_image(image_name: &str, image_rel_path: &str) -> ImageRow {
+        ImageRow {
+            disabled: true,
+            ..image(image_name, image_rel_path)
         }
     }
 
@@ -813,6 +898,88 @@ mod tests {
     }
 
     #[test]
+    fn plate_matrix_excludes_a_disabled_images_objects_from_its_wells_aggregate() {
+        // Two field-of-view images sharing well "A14" - one disabled. The
+        // well must still be occupied (present, colored) but its average
+        // must reflect only the enabled image's object, not both.
+        let objects = vec![obj("A14_01.tif", "", 10), obj("A14_02.tif", "", 30)];
+        let all_images = vec![
+            disabled_image("A14_01.tif", "A14_01.tif"),
+            image("A14_02.tif", "A14_02.tif"),
+        ];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let result = compute_plate_matrix(
+            &objects,
+            &all_images,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &area_col(),
+            8,
+            24,
+        );
+
+        let a14 = &result.cells[13]; // row 0 ('A'), col 13 (14-1)
+        assert_eq!(a14.label, "A14", "the well must still be occupied");
+        assert_eq!(
+            a14.value,
+            Some(30.0),
+            "only the enabled image's object may count toward the average"
+        );
+        assert_eq!(
+            a14.count, 1,
+            "the disabled image's object must not be counted"
+        );
+        assert!(
+            a14.has_disabled_images,
+            "the well contains a disabled image, even though its aggregate excludes it"
+        );
+    }
+
+    #[test]
+    fn plate_matrix_has_disabled_images_is_false_for_a_well_with_no_disabled_images() {
+        let objects = vec![obj("A14_01.tif", "", 10)];
+        let all_images = vec![image("A14_01.tif", "A14_01.tif")];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let result = compute_plate_matrix(
+            &objects,
+            &all_images,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &area_col(),
+            8,
+            24,
+        );
+
+        let a14 = &result.cells[13];
+        assert!(!a14.has_disabled_images);
+    }
+
+    #[test]
+    fn plate_matrix_has_disabled_images_is_true_for_an_occupied_but_empty_placeholder_well() {
+        // A disabled image that produced zero objects still lands as an
+        // occupied-but-empty placeholder cell (see the `all_images` pass) -
+        // that cell must still surface `has_disabled_images`.
+        let all_images = vec![disabled_image("A14_01.tif", "A14_01.tif")];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let result = compute_plate_matrix(
+            &[],
+            &all_images,
+            GroupBy::Regex,
+            regex,
+            AggFunc::Avg,
+            &area_col(),
+            8,
+            24,
+        );
+
+        let a14 = &result.cells[13];
+        assert_eq!(a14.label, "A14");
+        assert!(a14.has_disabled_images);
+    }
+
+    #[test]
     fn plate_matrix_coloc_count_counts_only_objects_with_a_colocalization_partner() {
         let objects = vec![
             obj_with_coloc(
@@ -945,6 +1112,97 @@ mod tests {
             "an image with zero objects must still occupy its acquisition-order slot"
         );
         assert_eq!(result.cells[1].count, 0);
+    }
+
+    #[test]
+    fn well_matrix_marks_a_cell_disabled_and_excludes_it_from_the_aggregate() {
+        // A disabled image's cell must still be shown (occupied, its slot
+        // filled, `disabled: true`) but its real object data must never
+        // count toward the aggregate - `value`/`count` come back empty,
+        // exactly like a genuine zero-object image, even though this image
+        // actually has objects.
+        let objects = vec![obj("my_file_01_A14_01.tif", "", 10)];
+        let all_images = vec![disabled_image(
+            "my_file_01_A14_01.tif",
+            "my_file_01_A14_01.tif",
+        )];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let result = compute_well_matrix(
+            &objects,
+            &all_images,
+            regex,
+            "A14",
+            AggFunc::Avg,
+            &area_col(),
+            1,
+            1,
+            &[1],
+        )
+        .expect("well has sub-position data");
+
+        assert_eq!(
+            result.cells[0].image_name, "my_file_01_A14_01.tif",
+            "the disabled image must still occupy its slot"
+        );
+        assert!(result.cells[0].disabled, "the cell must be marked disabled");
+        assert_eq!(
+            result.cells[0].value, None,
+            "a disabled image's objects must never contribute to the aggregate"
+        );
+        assert_eq!(result.cells[0].count, 0);
+    }
+
+    #[test]
+    fn well_matrix_excludes_a_disabled_images_objects_but_keeps_an_enabled_images_in_the_same_well()
+    {
+        // Two field-of-view images in the same well, only one disabled -
+        // the well's grid must show both slots, but only the enabled
+        // image's data survives into its own cell. Aggregation is per
+        // field-of-view (`GroupBy::Image`) here, so the disabled image's
+        // exclusion doesn't change the enabled one's own value - this
+        // guards against a filter that accidentally drops too much (e.g.
+        // the whole well) rather than just the one disabled image.
+        let objects = vec![
+            obj("my_file_01_A14_01.tif", "", 10),
+            obj("my_file_01_A14_02.tif", "", 20),
+        ];
+        let all_images = vec![
+            disabled_image("my_file_01_A14_01.tif", "my_file_01_A14_01.tif"),
+            image("my_file_01_A14_02.tif", "my_file_01_A14_02.tif"),
+        ];
+        let regex = r"((.)([0-9]+))_([0-9]+)";
+        let result = compute_well_matrix(
+            &objects,
+            &all_images,
+            regex,
+            "A14",
+            AggFunc::Avg,
+            &area_col(),
+            1,
+            2,
+            &[1, 2],
+        )
+        .expect("well has sub-position data");
+
+        let disabled_cell = result
+            .cells
+            .iter()
+            .find(|c| c.image_name == "my_file_01_A14_01.tif")
+            .unwrap();
+        assert!(disabled_cell.disabled);
+        assert_eq!(disabled_cell.value, None);
+
+        let enabled_cell = result
+            .cells
+            .iter()
+            .find(|c| c.image_name == "my_file_01_A14_02.tif")
+            .unwrap();
+        assert!(!enabled_cell.disabled);
+        assert_eq!(
+            enabled_cell.value,
+            Some(20.0),
+            "the enabled image's own data must be unaffected by its neighbor being disabled"
+        );
     }
 
     #[test]
