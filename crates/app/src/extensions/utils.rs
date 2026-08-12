@@ -117,7 +117,12 @@ pub fn wavelength_to_rgb_u32(wavelength: f32) -> u32 {
 }
 
 /// Converts a wavelength in nm to an RGB [f32; 3] color.
-/// Returns [0.0, 0.0, 0.0] if the wavelength is outside the visible spectrum.
+///
+/// A wavelength outside the visible spectrum (or within it but near an edge,
+/// e.g. deep violet/infrared) is clamped into the fully-saturated plateau
+/// (420-700nm, where `factor` below is 1.0) rather than left to fade toward
+/// black - a channel with an out-of-range emission wavelength should still
+/// render as a clearly visible violet/red, not dim to invisible.
 pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
     let (mut r, mut g, mut b) = (0.0, 0.0, 0.0);
 
@@ -126,6 +131,8 @@ pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
     if wavelength <= 1.0 {
         return [1.0, 1.0, 1.0];
     }
+
+    let wavelength = wavelength.clamp(420.0, 700.0);
 
     // Pure red
     if wavelength == 635.0 {
@@ -162,19 +169,11 @@ pub fn wavelength_to_rgb_float(wavelength: f32) -> [f32; 3] {
         r = 1.0;
     }
 
-    // Factor for intensity fade-out at the edges of the spectrum
-    let factor = if (380.0..420.0).contains(&wavelength) {
-        0.3 + 0.7 * (wavelength - 380.0) / (420.0 - 380.0)
-    } else if (420.0..701.0).contains(&wavelength) {
-        1.0
-    } else if (701.0..781.0).contains(&wavelength) {
-        0.3 + 0.7 * (780.0 - wavelength) / (780.0 - 700.0)
-    } else {
-        0.0
-    };
-
-    // Apply intensity factor
-    [r * factor, g * factor, b * factor]
+    // No fade-out factor needed here: `wavelength` was clamped to
+    // 420.0..=700.0 above, which is exactly the plateau the original
+    // fade-out curve used for full (1.0) intensity - every value reaching
+    // this point is already fully saturated.
+    [r, g, b]
 }
 
 #[cfg(test)]
@@ -446,9 +445,38 @@ mod tests {
     }
 
     #[test]
-    fn wavelength_outside_the_visible_spectrum_is_black() {
-        assert_eq!(wavelength_to_rgb_float(300.0), [0.0, 0.0, 0.0]);
-        assert_eq!(wavelength_to_rgb_float(800.0), [0.0, 0.0, 0.0]);
+    fn wavelength_outside_the_visible_spectrum_clamps_to_a_visible_edge_color_instead_of_black() {
+        // Too far UV clamps to the same color as 420nm (the start of the
+        // fully-saturated plateau) - visibly violet-blue, not black.
+        assert_eq!(
+            wavelength_to_rgb_float(300.0),
+            wavelength_to_rgb_float(420.0)
+        );
+        assert_ne!(wavelength_to_rgb_float(300.0), [0.0, 0.0, 0.0]);
+
+        // Too far infrared clamps to the same color as 700nm (the end of
+        // the plateau) - visibly red, not black.
+        assert_eq!(
+            wavelength_to_rgb_float(800.0),
+            wavelength_to_rgb_float(700.0)
+        );
+        assert_eq!(wavelength_to_rgb_float(800.0), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn wavelength_near_the_visible_edges_is_fully_saturated_not_dimmed() {
+        // Previously these faded toward black approaching 380nm/780nm; now
+        // every in-spectrum wavelength is clamped into the 420-700nm
+        // full-intensity plateau, so even a near-edge wavelength like
+        // 390nm or 770nm renders at full brightness rather than dim.
+        assert_eq!(
+            wavelength_to_rgb_float(390.0),
+            wavelength_to_rgb_float(420.0)
+        );
+        assert_eq!(
+            wavelength_to_rgb_float(770.0),
+            wavelength_to_rgb_float(700.0)
+        );
     }
 
     #[test]
