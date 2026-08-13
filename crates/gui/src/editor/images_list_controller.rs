@@ -49,6 +49,17 @@ impl ImagesListController {
 
     /// A new image has been selected. We update the project state accordingly.
     /// This method is called when the user selects a new image from the UI.
+    ///
+    /// # Threading
+    /// `is_part_of_root`'s branch opens (or reuses a cached) `ImageReader` on
+    /// `image_path` via `sync_image_meta_to_slint` - for a large/slow-to-parse
+    /// file this can take the better part of a second (see
+    /// `evanalyzer_core::image::image_reader`'s own timing logs). Since this
+    /// method is called directly from the `on_image_selected` Slint callback
+    /// (i.e. on the UI/event-loop thread), that work is dispatched to a
+    /// background thread - exactly like `scan_image_root_for_images` already
+    /// does for the same call - so selecting an image doesn't freeze the UI
+    /// for as long as the file takes to open.
     pub fn open_new_image(self: &Arc<Self>, image_path: &PathBuf) {
         let (is_part_of_root, parent_dir) = {
             let project = self.app_state.get_project();
@@ -66,22 +77,32 @@ impl ImagesListController {
                 let mut project = self.app_state.get_project_write();
                 project.set_current_image_path(image_path);
             } // write lock dropped before sync calls that re-acquire it
-            if self
-                .image_meta_controller
-                .sync_image_meta_to_slint()
-                .is_err()
-            {
-                warn!("Failed to sync image meta to slint!");
-            }
-            self.object_list_controller.sync_objects_to_slint();
-            self.set_selected_image_index_in_slint_images_list(image_path.clone(), true);
-            self.viewport_controller.trigger_new_image_redraw();
-            // Remove possible existing markers and the results-table object highlight
-            if let Some(ui) = self.ui.upgrade() {
-                let object_state = ui.global::<ViewportObjectState>();
-                object_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
-                object_state.set_object_highlight(ObjectHighlightBox::default());
-            }
+
+            let manager = self.clone();
+            let image_path = image_path.clone();
+            std::thread::spawn(move || {
+                if manager
+                    .image_meta_controller
+                    .sync_image_meta_to_slint()
+                    .is_err()
+                {
+                    warn!("Failed to sync image meta to slint!");
+                }
+                manager.object_list_controller.sync_objects_to_slint();
+                manager.set_selected_image_index_in_slint_images_list(image_path, true);
+                manager.viewport_controller.trigger_new_image_redraw();
+                // Remove possible existing markers and the results-table
+                // object highlight - dispatched through the event loop since
+                // this now runs off the UI thread.
+                let ui_weak = manager.ui.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        let object_state = ui.global::<ViewportObjectState>();
+                        object_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
+                        object_state.set_object_highlight(ObjectHighlightBox::default());
+                    }
+                });
+            });
         } else if let Some(parent) = parent_dir {
             self.change_image_root(&parent, Some(image_path));
         }
