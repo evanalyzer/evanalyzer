@@ -259,6 +259,14 @@ impl ImageReader {
             )));
         }
 
+        let total_start = Instant::now();
+
+        // The real per-format parse (TIFF IFD walk, OME-XML, proprietary
+        // tile-table parsing, etc.) happens in here - for most formats this
+        // dominates `ImageReader::new`'s total cost, not the metadata walk
+        // below, so it's timed separately rather than folded into one
+        // combined number that would hide which half is actually slow.
+        let open_start = Instant::now();
         let raw = bioformats::registry::open_reader_boxed(path)
             .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
         let mut inner: Box<dyn FormatReader> = match mode {
@@ -269,11 +277,20 @@ impl ImageReader {
             // anything until then.
             ReadMode::SplitChannels => Box::new(bioformats::ChannelSeparator::new(raw)),
         };
+        let open_duration = open_start.elapsed();
 
-        let start = Instant::now();
+        let meta_start = Instant::now();
         let image_meta = build_image_meta(inner.as_mut(), path)?;
-        let duration = start.elapsed();
-        info!("Executed ReadImageMeta in {:?}", duration);
+        let meta_duration = meta_start.elapsed();
+
+        let total_duration = total_start.elapsed();
+        info!(
+            "Opened {} in {:?} (format parse: {:?}, metadata walk: {:?})",
+            path.display(),
+            total_duration,
+            open_duration,
+            meta_duration
+        );
 
         Ok(Self {
             inner: Mutex::new(inner),

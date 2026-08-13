@@ -21,7 +21,8 @@ kornia-apriltag = { workspace = true }
 zune-core = "=0.5.3"
 image = { workspace = true }
 log = { workspace = true }
-bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "flatten-pyramid" }
+# cargo update -p bioformats
+bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "merged" }
 quick-xml = { workspace = true }
 ndarray = { workspace = true }
 rayon = { workspace = true }
