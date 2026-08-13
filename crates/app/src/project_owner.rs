@@ -133,7 +133,6 @@ impl ProjectOwner {
     pub fn handle(&self) -> AppHandle {
         AppHandle {
             project: Arc::clone(&self.project),
-            reader: Arc::new(Mutex::new(None)),
             reader_pool: Arc::new(Mutex::new(None)),
         }
     }
@@ -166,28 +165,28 @@ impl ProjectOwner {
 /// A pool of independent readers open on the same image path, so different
 /// channels/Z-slices can be read truly in parallel instead of serializing
 /// through one reader's internal `Mutex` (see `evanalyzer_core::ImageReader`)
-/// - one reader is safe, not concurrent.
+/// - one reader is safe, not concurrent. This is also `AppHandle`'s *only*
+/// reader cache - `get_or_create_reader` is a thin wrapper returning
+/// `pool[0]`, not a separate cache - see that method's doc comment for why.
 ///
-/// `pool[0]` is always the same reader instance as `AppHandle`'s single-reader
-/// cache (see `get_or_create_reader`), reused rather than independently
-/// reopened - opening it was already unavoidable to answer "how many
-/// channels does this image have", so it isn't wasted extra parse work, and
-/// it means metadata sync and pool construction race for the same underlying
-/// open instead of each paying for their own.
+/// Built as the primary reader (unavoidable - channel count can only be
+/// learned from a full parse) plus exactly `channel_count - 1` more, capped
+/// to [`recommended_reader_pool_size`] and built in parallel - never more
+/// readers than the image actually has channels.
 ///
-/// The rest of the pool (`pool[1..]`) is capped to the image's actual
-/// channel count (`nr_c_stacks`, from `pool[0]`'s already-parsed
-/// `image_meta`), not blindly built up to [`recommended_reader_pool_size`] -
-/// building more readers than a read could ever use is real, measurable
-/// waste on a large file (confirmed: 8 readers in parallel took ~1.1s on an
-/// 811 MB 3-channel ND2 file, vs. ~0.6s building only the 3 actually needed).
-/// An earlier attempt at this same capping - build one *extra* bootstrap
-/// reader first purely to learn the channel count, on top of the
-/// already-existing single-reader cache - measured *worse* (~1.3s) because
-/// that bootstrap reader's parse was pure serial overhead with nothing else
-/// overlapping it. Reusing the single-reader cache instead of adding a
-/// second bootstrap reader avoids that: the channel-count-discovery cost is
-/// work this path needed anyway.
+/// A blind batch of `recommended_reader_pool_size` readers, trimmed to real
+/// channel count only *after* building all of them, was tried and reverted:
+/// it keeps wall time close to one parse *only* when I/O has enough spare
+/// bandwidth to run all of them without contention. Measured on real
+/// hardware it did not - building 8 readers for a 2-channel file took
+/// ~1.0-1.1s wall time (bottlenecked by the slowest of 8 concurrently-
+/// contending reads, most of them immediately discarded), and directly
+/// stalled the render worker's first read of a newly opened image for that
+/// same ~1s, visible as `read` jumping from microseconds to over a second
+/// in `viewport_worker.rs`'s own timing log. Building only what's needed
+/// bounds worst-case latency to roughly two sequential parses, predictably,
+/// regardless of storage speed - unlike the blind-batch approach, whose
+/// downside has no such bound on slower storage.
 ///
 /// Deliberately not using `bioformats::Memoizer` here: unlike Java
 /// Bio-Formats' `Memoizer` (which deep-clones the whole reader's internal
@@ -216,11 +215,12 @@ pub struct AppHandle {
     /// Shared reference to the project - same Arc as ProjectOwner
     project: Arc<RwLock<ProjectWithRuntime>>,
 
-    /// Per-handle image reader cache
-    reader: Arc<Mutex<Option<Arc<ImageReader>>>>,
-
-    /// Per-handle reader pool cache, for callers that need to read multiple
-    /// channels/Z-slices in parallel (see `ReaderPool`).
+    /// Per-handle reader pool cache - the only reader cache `AppHandle` has,
+    /// used both by callers that want a single reader (`get_or_create_reader`
+    /// returns `pool[0]`) and callers that read multiple channels/Z-slices in
+    /// parallel (`get_or_create_reader_pool`, see [`ReaderPool`]). A single
+    /// shared cache guarantees a given image path is only ever parsed once
+    /// per selection, however many callers ask for it concurrently.
     reader_pool: Arc<Mutex<Option<Arc<ReaderPool>>>>,
 }
 
@@ -263,36 +263,28 @@ impl AppHandle {
         Ok((warnings, legacy_image_folder))
     }
 
-    /// Returns or creates an image reader for the given path.
-    /// Reuses the existing reader if the path has not changed.
+    /// Returns or creates an image reader for the given path. Thin wrapper
+    /// around [`Self::get_or_create_reader_pool`], returning `pool[0]` -
+    /// see that method's doc comment and [`ReaderPool`]'s for why this isn't
+    /// a separate cache: a single caller needing just one reader still goes
+    /// through the same single build/cache as pool callers, so a given path
+    /// is never parsed more than once per selection regardless of how many
+    /// callers ask for it, and simultaneously.
     pub fn get_or_create_reader(
         &self,
         new_path: &PathBuf,
     ) -> Result<Arc<ImageReader>, InternalErrors> {
-        let mut reader_lock = self.reader.lock().unwrap();
-        if let Some(ref r) = *reader_lock {
-            if r.get_current_image_path() == new_path {
-                return Ok(Arc::clone(r));
-            }
-        }
-        let start = std::time::Instant::now();
-        let new_reader = Arc::new(ImageReader::new(new_path, ReadMode::SplitChannels)?);
-        log::info!(
-            "Opened single reader for {} in {:?}",
-            new_path.display(),
-            start.elapsed()
-        );
-        *reader_lock = Some(Arc::clone(&new_reader));
-        Ok(new_reader)
+        let pool = self.get_or_create_reader_pool(new_path)?;
+        Ok(Arc::clone(&pool.readers()[0]))
     }
 
-    /// Returns or creates a small pool of readers for the given path, for
-    /// callers that read multiple channels/Z-slices in parallel (see
-    /// [`ReaderPool`]). Reuses the existing pool if the path has not
-    /// changed. Independent from [`Self::get_or_create_reader`]'s
-    /// single-reader cache - a small amount of redundancy (both may end up
-    /// holding an extra reader instance open on the same path) in exchange
-    /// for not cross-wiring the two caches.
+    /// Returns or creates a pool of readers for the given path, for callers
+    /// that read multiple channels/Z-slices in parallel, or just want a
+    /// single reader (see [`Self::get_or_create_reader`]). Reuses the
+    /// existing pool if the path has not changed. See [`ReaderPool`]'s doc
+    /// comment for why this builds exactly as many readers as the image
+    /// needs (primary first, then the rest capped to real channel count),
+    /// rather than a blind batch up to the hardware-recommended max.
     pub fn get_or_create_reader_pool(
         &self,
         new_path: &PathBuf,
@@ -306,12 +298,11 @@ impl AppHandle {
 
         let start = std::time::Instant::now();
 
-        // `pool[0]` reuses the single-reader cache instead of an extra
-        // independent open (see `ReaderPool`'s doc comment) - this also
-        // means metadata-sync callers (`get_or_create_reader`) and pool
-        // callers converge on the same underlying parse rather than each
-        // paying for their own, whichever asks first does the real work.
-        let primary = self.get_or_create_reader(new_path)?;
+        // The primary reader's parse is unavoidable up front - channel
+        // count (needed to size the rest of the pool) can only be learned
+        // from a full parse, there's no cheaper way to ask a format "how
+        // many channels do you have".
+        let primary = Arc::new(ImageReader::new(new_path, ReadMode::SplitChannels)?);
         let channel_count = primary
             .get_image_meta()
             .series
@@ -339,6 +330,7 @@ impl AppHandle {
         } else {
             vec![primary]
         };
+
         log::info!(
             "Built reader pool of {size} (channel count {channel_count}) for {} in {:?}",
             new_path.display(),
