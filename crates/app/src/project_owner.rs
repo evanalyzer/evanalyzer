@@ -5,6 +5,7 @@ use evanalyzer_cfg::{
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
 };
 use evanalyzer_core::{ImageReader, ReadMode, recommended_reader_pool_size};
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::{
     ops::{Deref, DerefMut},
@@ -168,9 +169,11 @@ impl ProjectOwner {
 /// instead of serializing through one reader's internal `Mutex` (see
 /// `evanalyzer_core::ImageReader`) - one reader is safe, not concurrent.
 ///
-/// Every reader in the pool independently opens and parses the file -
-/// building a full pool is `N` times the cost of opening one reader, not
-/// "one full parse plus N-1 cheap reopens".
+/// Every reader in the pool independently opens and parses the file - it's
+/// `N` times the *total* parse work of opening one reader, not "one full
+/// parse plus N-1 cheap reopens" - but built in parallel (see
+/// `get_or_create_reader_pool`), so wall-clock construction time is closer
+/// to one parse than to `N` sequential ones, given enough cores.
 ///
 /// Deliberately not using `bioformats::Memoizer` here: unlike Java
 /// Bio-Formats' `Memoizer` (which deep-clones the whole reader's internal
@@ -282,18 +285,19 @@ impl AppHandle {
         }
 
         let size = recommended_reader_pool_size();
-        let mut readers = Vec::with_capacity(size);
-        // Built sequentially and in this order: the first call pays the
-        // full BioFormats parse cost and populates the Memoizer cache, so
-        // every reader after it is cheap to construct (see `ReaderPool`'s
-        // docs). Building them concurrently would risk every reader racing
-        // to populate that cache at once, for no benefit.
-        for _ in 0..size {
-            readers.push(Arc::new(ImageReader::new(
-                new_path,
-                ReadMode::SplitChannels,
-            )?));
-        }
+        // Built in parallel: every reader independently pays the full parse
+        // cost (see `ReaderPool`'s own doc comment - there's no Memoizer
+        // cache here to populate or race on, unlike the old Java-backed
+        // reader), so building them one at a time would serialize N full
+        // opens back to back instead of overlapping them. Concurrent
+        // construction of independent readers on the same path is already
+        // relied on elsewhere (see
+        // `concurrent_readers_on_independent_threads_produce_consistent_results`
+        // in `evanalyzer_core::image::image_reader`'s own tests).
+        let readers: Vec<Arc<ImageReader>> = (0..size)
+            .into_par_iter()
+            .map(|_| ImageReader::new(new_path, ReadMode::SplitChannels).map(Arc::new))
+            .collect::<Result<Vec<_>, InternalErrors>>()?;
 
         let pool = Arc::new(ReaderPool {
             path: new_path.clone(),
