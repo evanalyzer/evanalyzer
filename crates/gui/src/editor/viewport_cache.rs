@@ -36,7 +36,7 @@ pub struct ReadContext {
     pub res_idx: i32,
     pub image_w: usize,
     pub image_h: usize,
-    pub bit_depth: u8,
+    pub bit_depth: u16,
     pub _nr_color_channels: u8,
     pub viewport_width: f32,
     pub viewport_height: f32,

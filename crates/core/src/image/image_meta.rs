@@ -10,7 +10,7 @@ pub struct ChannelInfo {
 
 #[derive(Default, Clone)]
 pub struct PyramidInfo {
-    pub nr_bits: u8,
+    pub nr_bits: u16,
     pub color_channels: u8, // Is either 1, 3 or 4
     pub is_rgb: bool,
     pub width: u64,

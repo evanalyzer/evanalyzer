@@ -192,7 +192,7 @@ pub(crate) fn build_image_meta(
             info.resolutions.insert(
                 res as i32,
                 PyramidInfo {
-                    nr_bits: m.bits_per_pixel,
+                    nr_bits: m.bits_per_pixel as u16,
                     color_channels: rgb_channel_count(m) as u8,
                     is_rgb: m.is_rgb,
                     width: m.size_x as u64,

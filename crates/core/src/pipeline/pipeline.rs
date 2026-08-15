@@ -46,7 +46,7 @@ pub struct PipelineImageMeta {
     /// True if this is a RGB image
     pub is_rgb: bool,
     /// Image bit depth: 8, 16, 32
-    pub nr_of_bits: u8,
+    pub nr_of_bits: u16,
     /// Sizes of the image pixels in nm
     pub pixel_sizes: PixelSizes,
 }

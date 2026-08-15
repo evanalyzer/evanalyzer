@@ -74,7 +74,7 @@ pub enum ProgressEvent {
         tile_height: usize,
         /// Original image bit depth (e.g. 8, 12, 16) — used for the
         /// pixel-value HUD so values are scaled to the real range.
-        nr_bits: u8,
+        nr_bits: u16,
         /// The channel the breakpointed pipeline actually started from
         /// (`ImageAddress::Channel(n)`), so the UI can look up *that*
         /// channel's histogram/LUT settings instead of guessing. `None`
@@ -1176,7 +1176,7 @@ impl<'a> JobExecutor {
         full_image_width: ImageSize,
         is_rgb: bool,
         image_rel_path: &PathBuf,
-        nr_of_bits: u8,
+        nr_of_bits: u16,
         pixel_sizes: PixelSizes,
     ) -> Result<PipelineCache, InternalErrors> {
         let loaded_channels = image_reader.read_image_tile_combined(

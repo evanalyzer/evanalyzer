@@ -819,7 +819,7 @@ fn decode_image(
     is_interleaved: bool,
     is_little_endian: bool,
     image_size: ImageSize,
-    nr_bits: u8,
+    nr_bits: u16,
     color_channels: u8,
     image_tile: ImageTile,
     plane: ImagePlane,
@@ -912,7 +912,7 @@ fn decode_image(
 /// avoid the 8-byte stack-buffer allocation that read_le/read_be would do.
 fn decode_samples_parallel(
     buffer: &[u8],
-    nr_bits: u8,
+    nr_bits: u16,
     is_little_endian: bool,
     inv_divisor: f32,
 ) -> Vec<f32> {
@@ -951,7 +951,7 @@ fn decode_samples_parallel(
 fn sample_f32(
     buffer: &[u8],
     byte_offset: usize,
-    nr_bits: u8,
+    nr_bits: u16,
     is_little_endian: bool,
     inv_divisor: f32,
 ) -> f32 {
@@ -988,7 +988,7 @@ fn sample_f32(
 /// replaces already was.
 fn decode_planar_to_interleaved(
     buffer: &[u8],
-    nr_bits: u8,
+    nr_bits: u16,
     is_little_endian: bool,
     inv_divisor: f32,
     source_planes: usize,

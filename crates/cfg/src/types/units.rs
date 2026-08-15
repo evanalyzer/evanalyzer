@@ -16,7 +16,7 @@ impl PixelUnits {
     /// Convert a value in this unit to a normalized [0.0, 1.0] relative value.
     /// `nr_of_bits` is used only for `Bit` (8 → max 255, 16 → max 65535).
     #[allow(dead_code)]
-    pub fn to_relative(self, value: f32, nr_of_bits: u8) -> f32 {
+    pub fn to_relative(self, value: f32, nr_of_bits: u16) -> f32 {
         match self {
             PixelUnits::Relative => value,
             PixelUnits::Percent => value / 100.0,

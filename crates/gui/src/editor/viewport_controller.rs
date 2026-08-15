@@ -61,7 +61,7 @@ pub struct BreakpointChannelData {
     pub tile_height: usize,
     /// Original image bit depth — forwarded to `ReadContext.bit_depth` so the
     /// pixel-value HUD scales values correctly (e.g. ×65535 for 16-bit).
-    pub nr_bits: u8,
+    pub nr_bits: u16,
     /// The channel the breakpointed pipeline actually started from, so
     /// rendering can look up *that* channel's histogram/LUT settings
     /// instead of an unrelated one. `None` when the pipeline didn't start
@@ -362,7 +362,7 @@ impl ViewportController {
         tile_offset_y: usize,
         tile_width: usize,
         tile_height: usize,
-        nr_bits: u8,
+        nr_bits: u16,
         channel_idx: Option<i32>,
     ) {
         {
