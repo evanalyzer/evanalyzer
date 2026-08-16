@@ -133,8 +133,10 @@ impl ImagesListController {
                 // mirroring how `sync_image_meta_to_slint` and the pixel
                 // read path already re-read the current path fresh rather
                 // than trusting a value captured at spawn time.
-                if let Some(current_path) =
-                    manager.app_state.get_project().get_current_image_path_cloned()
+                if let Some(current_path) = manager
+                    .app_state
+                    .get_project()
+                    .get_current_image_path_cloned()
                 {
                     manager.set_selected_image_index_in_slint_images_list(current_path, true);
                 }

@@ -237,8 +237,9 @@ pub enum ReadMode {
 /// A high-performance image reader that interfaces with Bio-Formats via JNI.
 ///
 /// `ImageReader` manages the lifecycle of a `bioformats` format reader
-/// instance (auto-detected from the file's content/extension - see
-/// `bioformats::registry::open_reader_boxed`).
+/// instance (auto-detected from the file's content/extension via
+/// `bioformats::registry::ImageReader`'s two-phase construct/configure/
+/// `set_id` calling convention, mirroring Java `IFormatReader`).
 impl ImageReader {
     /// Creates a new `ImageReader` instance and opens the underlying file.
     ///
@@ -267,7 +268,19 @@ impl ImageReader {
         // below, so it's timed separately rather than folded into one
         // combined number that would hide which half is actually slow.
         let open_start = Instant::now();
-        let raw = bioformats::registry::open_reader_boxed(path)
+        // Java `IFormatReader`'s `setFlattenedResolutions(false)` equivalent:
+        // pyramid levels stay grouped as one series' resolutions instead of
+        // being flattened into separate series - see
+        // docs/bioformats_rs_missing_flattened_resolutions_toggle.md. Must be
+        // set before `set_id`, hence the two-phase construct/configure/set_id
+        // calling convention instead of the old one-shot `open_reader_boxed`.
+        let mut detector = bioformats::registry::ImageReader::new();
+        detector.set_flattened_resolutions(false);
+        detector
+            .set_id(path)
+            .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
+        let raw = detector
+            .into_inner()
             .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
         let mut inner: Box<dyn FormatReader> = match mode {
             ReadMode::Default => raw,

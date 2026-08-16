@@ -842,7 +842,7 @@ dependencies = [
 [[package]]
 name = "bioformats"
 version = "0.1.9"
-source = "git+https://github.com/joda01/bioformats-rs?branch=merged#af137ec2327bb9c900860df777b7ea9b86ae762f"
+source = "git+https://github.com/joda01/bioformats-rs?branch=flatten#11f884bd999348c681c80c659aa2c7e4c3da8ed2"
 dependencies = [
  "bincode 1.3.3",
  "byteorder",
@@ -853,11 +853,10 @@ dependencies = [
  "hdf5-pure-rust",
  "image 0.25.10",
  "jpeg-decoder",
- "jpeg2k",
  "jpegxr-pure-rs",
  "log",
  "mdbtools-pure-rs",
- "openjp2",
+ "openjpeg2-pure-rs",
  "quick-xml 0.40.1",
  "rusqlite",
  "serde",
@@ -4601,18 +4600,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jpeg2k"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be2982db6b9f254c9df44d89bcfdc758924d538f576d9649f5b10008150f2a60"
-dependencies = [
- "anyhow",
- "log",
- "openjp2",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "jpegxr-pure-rs"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6009,18 +5996,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "openjp2"
-version = "0.6.1"
+name = "openjpeg2-pure-rs"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8940f4ff209130c7b374730e83cc7e31062706520e3960001e7eedc982bc554"
-dependencies = [
- "bitflags 1.3.2",
- "byteorder",
- "libc",
- "log",
- "smallvec",
- "sprintf",
-]
+checksum = "70cbec9906e23f99197f321718ce1f7e2fccd455e45c5b3f7d2bf5d7b635f192"
 
 [[package]]
 name = "option-ext"
@@ -7895,12 +7874,6 @@ dependencies = [
  "serde",
  "unicode-segmentation",
 ]
-
-[[package]]
-name = "sprintf"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c0cdea5a20a06e7c57f627094e7b1618e5665592cd88f2d45fa4014e348db58"
 
 [[package]]
 name = "stable_deref_trait"
