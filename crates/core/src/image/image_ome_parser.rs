@@ -399,6 +399,8 @@ mod tests {
     ///    data is present, just under its own `cellsens.ets.channel_name.N`/
     ///    `cellsens.ets.channel_wavelength.N` `series_metadata` keys.
     #[test]
+    #[ignore = "requires tests/G7_03.vsi, a real VSI fixture too large to commit to git \
+                (see .gitignore) - run locally with `cargo test -- --ignored` when present"]
     fn build_image_meta_populates_every_channel_even_when_ome_metadata_under_reports_them() {
         let path = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),

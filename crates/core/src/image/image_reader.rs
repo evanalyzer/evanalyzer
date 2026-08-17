@@ -1862,6 +1862,8 @@ mod tests {
     /// tried to read them. Reads every channel of both series to prove the
     /// fix holds for the whole file, not just series 0's metadata shape.
     #[test]
+    #[ignore = "requires tests/G7_03.vsi, a real VSI fixture too large to commit to git \
+                (see .gitignore) - run locally with `cargo test -- --ignored` when present"]
     fn every_declared_channel_reads_successfully_even_when_ome_metadata_under_reports_them() {
         let path: PathBuf = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/G7_03.vsi").into();
         let reader = ImageReader::new(&path, ReadMode::Default).unwrap();
