@@ -14,8 +14,8 @@
 [![License: AGPL-3.0 for non-commercial | Commercial license available](https://img.shields.io/badge/License-AGPL--3.0_%7C_Commercial-blue)](#license)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange?logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](#installing-a-release)
-
-
+<a href="https://slint.dev"><img src="docs/MadeWithSlint-logo-light.svg#gh-light-mode-only" height="40" alt="Made with Slint"></a>
+<a href="https://slint.dev"><img src="docs/MadeWithSlint-logo-dark.svg#gh-dark-mode-only" height="40" alt="Made with Slint"></a>
 
 **A high-performance bioimage analysis desktop application written in Rust.**
 

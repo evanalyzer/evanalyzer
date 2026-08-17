@@ -1,4 +1,4 @@
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, AboutSlint } from "std-widgets.slint";
 import { GlobalAppState, DialogType, AppInfoState } from "../state.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
@@ -367,6 +367,15 @@ export component AboutDialog inherits Rectangle {
 
                     Rectangle {
                         vertical-stretch: 1;
+                    }
+
+                    // Attribution required by the Slint Royalty-free License
+                    // (https://slint.dev/agreements/slint-royalty-free-license.pdf, section 2).
+                    Rectangle {
+                        height: 100px;
+                        clip: true;
+
+                        AboutSlint { }
                     }
 
                     Text {
