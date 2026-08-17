@@ -527,6 +527,7 @@ For commercial licensing enquiries, please open an issue or contact the maintain
 ## Acknowledgements
 
 - [Bio-Formats](https://www.openmicroscopy.org/bio-formats/) — Open Microscopy Environment
+- [Bio-Formats-Rust](https://www.henlab.org/) — Johan Henriksson and his lab for porting Bioformats to Rust
 - [Slint](https://slint.dev/) — cross-platform UI toolkit for Rust
 - [Kornia-rs](https://github.com/kornia/kornia-rs) — computer vision primitives in Rust
 - [Skia](https://skia.org/) — 2D graphics renderer
