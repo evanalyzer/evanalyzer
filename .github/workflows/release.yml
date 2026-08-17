@@ -193,6 +193,22 @@ jobs:
           # so the glob must be *.so* to catch the .so.N files - a plain *.so would
           # ship none of the CUDA libs and the binary would fail to start.
           cp libs/libtorch/lib/*.so*                               dist/ 2>/dev/null || true
+          # Drop LibTorch components this app never reaches regardless of
+          # which model is loaded (Python bindings, distributed/profiling/
+          # GPUDirect libs, PyTorch's own test fixtures, the Android
+          # backend) - see .github/NOT_SHIP_LIST.txt for why each entry is
+          # safe. Deliberately conservative: cuDNN's dlopen'd plugins and
+          # anything TorchScript's automatic op fusion could reach are kept.
+          # Patterns must stay unquoted so the shell glob-expands them (most
+          # entries carry a version hash, e.g. libnvshmem_host-<hash>.so.3);
+          # the -e guard skips a pattern that matched nothing instead of
+          # trying to rm a literal, non-existent "*" filename.
+          while IFS= read -r pattern; do
+            case "$pattern" in ""|"#"*) continue ;; esac
+            for f in dist/$pattern; do
+              [ -e "$f" ] && rm -f "$f"
+            done
+          done < .github/NOT_SHIP_LIST.txt
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
           # The CUDA runtime is multiple GB even compressed, so pack with 7-Zip
           # at maximum compression (-mx=9) and split into <2 GiB volumes
@@ -286,6 +302,19 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
           cp libs/libtorch/lib/*.dll                           dist/
+          # Drop LibTorch components this app never reaches regardless of
+          # which model is loaded - see .github/NOT_SHIP_LIST.txt for why
+          # each entry is safe (and what's deliberately kept: cuDNN's
+          # dlopen'd plugins, anything TorchScript's automatic op fusion
+          # could reach). Patterns must stay unquoted so the shell
+          # glob-expands them; the -e guard skips a pattern that matched
+          # nothing instead of trying to rm a literal "*" filename.
+          while IFS= read -r pattern; do
+            case "$pattern" in ""|"#"*) continue ;; esac
+            for f in dist/$pattern; do
+              [ -e "$f" ] && rm -f "$f"
+            done
+          done < .github/NOT_SHIP_LIST.txt
           cp templates/*.evapipe templates/*.evapt                 dist/templates/
           # The CUDA runtime DLLs are multiple GB even compressed, so pack with
           # 7-Zip at maximum compression (-mx=9) and split into <2 GiB volumes
