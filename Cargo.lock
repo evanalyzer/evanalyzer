@@ -2769,7 +2769,6 @@ dependencies = [
  "macros",
  "ndarray 0.17.2",
  "petname",
- "quick-xml 0.41.0",
  "rayon",
  "serde",
  "serde_json",
@@ -2817,7 +2816,6 @@ dependencies = [
 name = "evanalyzer_llm"
 version = "0.1.0"
 dependencies = [
- "burn",
  "candle-core",
  "candle-transformers",
  "evanalyzer_app",

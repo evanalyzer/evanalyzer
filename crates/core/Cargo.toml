@@ -24,7 +24,6 @@ log = { workspace = true }
 # cargo update -p bioformats
 #bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "flatten" }
 bioformats = { git = "https://github.com/henriksson-lab/bioformats-rs", branch = "main" }
-quick-xml = { workspace = true }
 ndarray = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true, features = ["derive","rc"] }
@@ -51,6 +50,10 @@ approx = "0.5"
 env_logger = { workspace = true }
 tempfile = { workspace = true }
 
+[package.metadata.cargo-machete]
+# zune-core is a deliberate version pin (see comment above), not a real
+# dependency of our own code - see the comment on the `zune-core` line above.
+ignored = ["zune-core"]
 
 [lib]
 name = "evanalyzer_core"
