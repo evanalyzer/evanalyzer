@@ -22,8 +22,8 @@ zune-core = "=0.5.3"
 image = { workspace = true }
 log = { workspace = true }
 # cargo update -p bioformats
-bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "flatten" }
-#bioformats = { git = "https://github.com/henriksson-lab/bioformats-rs", branch = "main" }
+#bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "flatten" }
+bioformats = { git = "https://github.com/henriksson-lab/bioformats-rs", branch = "main" }
 quick-xml = { workspace = true }
 ndarray = { workspace = true }
 rayon = { workspace = true }

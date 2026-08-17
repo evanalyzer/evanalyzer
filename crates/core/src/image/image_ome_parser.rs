@@ -1,6 +1,7 @@
 use crate::image::image_meta::{
     ChannelInfo, ImageInfo, ImageMeta, Objective, PixelSizes, PyramidInfo,
 };
+use crate::image::image_reader::ReadMode;
 use bioformats::common::metadata::{ImageMetadata, MetadataValue};
 use bioformats::common::reader::FormatReader;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -80,6 +81,7 @@ fn metadata_f64(series_metadata: &HashMap<String, MetadataValue>, key: &str) -> 
 pub(crate) fn build_image_meta(
     reader: &mut dyn FormatReader,
     path: &Path,
+    read_mode: ReadMode,
 ) -> Result<ImageMeta, InternalErrors> {
     let mut meta = ImageMeta {
         name: path
@@ -189,27 +191,60 @@ pub(crate) fn build_image_meta(
         for res in 0..resolution_count {
             reader.set_resolution(res).map_err(bf_err)?;
             let m = reader.metadata();
-            info.resolutions.insert(
-                res as i32,
-                PyramidInfo {
-                    nr_bits: m.bits_per_pixel as u16,
-                    color_channels: rgb_channel_count(m) as u8,
-                    is_rgb: m.is_rgb,
-                    width: m.size_x as u64,
-                    height: m.size_y as u64,
-                    // `bioformats` handles its own internal tiling
-                    // transparently (`open_bytes_region` accepts an
-                    // arbitrary region, not a fixed native tile) - unlike
-                    // the old Java wrapper's `getOptimalTileWidth/Height`,
-                    // there is no native tile size to report here, and
-                    // nothing downstream reads it as more than a display
-                    // value, so it's just the resolution's own dimensions.
-                    tile_width: m.size_x as u64,
-                    tile_height: m.size_y as u64,
-                    is_interleaved: m.is_interleaved,
-                    is_little_endian: m.is_little_endian,
-                },
-            );
+            let mut pyramid_info = PyramidInfo {
+                nr_bits: m.bits_per_pixel as u16,
+                color_channels: rgb_channel_count(m) as u8,
+                is_rgb: m.is_rgb,
+                width: m.size_x as u64,
+                height: m.size_y as u64,
+                // `bioformats` handles its own internal tiling
+                // transparently (`open_bytes_region` accepts an
+                // arbitrary region, not a fixed native tile) - unlike
+                // the old Java wrapper's `getOptimalTileWidth/Height`,
+                // there is no native tile size to report here, and
+                // nothing downstream reads it as more than a display
+                // value, so it's just the resolution's own dimensions.
+                tile_width: m.size_x as u64,
+                tile_height: m.size_y as u64,
+                is_interleaved: m.is_interleaved,
+                is_little_endian: m.is_little_endian,
+            };
+
+            // `ReadMode::SplitChannels` reports each RGB sample as its own
+            // single-component channel, so `is_rgb` reads `false` by the
+            // time it gets here - Bio-Formats' `ChannelSeparator` has the
+            // identical limitation in Java, which the old Java-backed
+            // version of this parser worked around with this exact
+            // signature (see git history, pre-port `image_ome_parser.rs`:
+            // "TODO: This is a trick to find RGB images if we use split
+            // channel"). Ported as-is for parity, imprecision included -
+            // it can't perfectly distinguish a split RGB image from a
+            // genuine 3-channel 8-bit non-interleaved fluorescence image,
+            // same as the Java-era heuristic couldn't - which is exactly
+            // why the old code (and this) only ever applies it in
+            // `SplitChannels` mode: a plain `ReadMode::Default` open of a
+            // genuine 3-channel fluorescence file must never be
+            // reclassified as RGB just because it happens to match this
+            // shape (see `build_image_meta_reads_series_channel_and_resolution_shape_from_a_real_file`,
+            // a real non-RGB 3-channel 8-bit fixture that does).
+            if read_mode == ReadMode::SplitChannels
+                && pyramid_info.color_channels == 1
+                && !pyramid_info.is_interleaved
+                && info.nr_c_stacks == 3
+                && pyramid_info.nr_bits == 8
+            {
+                pyramid_info.is_rgb = true;
+                const RGB_NAMES: [&str; 3] = ["Red", "Green", "Blue"];
+                const RGB_EMISSION_NM: [f32; 3] = [635.0, 532.0, 450.0];
+                for i in 0..3 {
+                    if let Some(channel) = info.channels.get_mut(&i) {
+                        channel.name = RGB_NAMES[i as usize].to_string();
+                        channel.emission_wave_length = RGB_EMISSION_NM[i as usize];
+                    }
+                }
+            }
+
+            info.resolutions.insert(res as i32, pyramid_info);
         }
         // `set_series` always resets the active resolution back to 0 (see
         // e.g. the TIFF reader), but reset explicitly here too so a series
@@ -314,7 +349,7 @@ mod tests {
         let mut reader =
             bioformats::registry::open_reader_boxed(&path).expect("real fixture must open");
 
-        let image_meta = build_image_meta(reader.as_mut(), &path).unwrap();
+        let image_meta = build_image_meta(reader.as_mut(), &path, ReadMode::Default).unwrap();
 
         assert_eq!(image_meta.name, "multi-channel-4D-series.ome.tif");
         assert_eq!(image_meta.series.len(), 1);
@@ -372,7 +407,7 @@ mod tests {
         let mut reader =
             bioformats::registry::open_reader_boxed(&path).expect("real fixture must open");
 
-        let image_meta = build_image_meta(reader.as_mut(), &path).unwrap();
+        let image_meta = build_image_meta(reader.as_mut(), &path, ReadMode::Default).unwrap();
 
         let series = image_meta.series.get(&0).expect("series 0 must exist");
         assert_eq!(series.nr_c_stacks, 3);
@@ -406,7 +441,7 @@ mod tests {
         let mut reader =
             bioformats::registry::open_reader_boxed(&path).expect("real fixture must open");
 
-        build_image_meta(reader.as_mut(), &path).unwrap();
+        build_image_meta(reader.as_mut(), &path, ReadMode::Default).unwrap();
 
         assert_eq!(reader.resolution(), 0);
     }

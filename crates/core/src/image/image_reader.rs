@@ -228,7 +228,7 @@ pub struct ImageReader {
     pub(crate) current_path: PathBuf,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum ReadMode {
     Default,
     SplitChannels, // Split RGB channels of an image to three individual channels
@@ -275,7 +275,9 @@ impl ImageReader {
         // set before `set_id`, hence the two-phase construct/configure/set_id
         // calling convention instead of the old one-shot `open_reader_boxed`.
         let mut detector = bioformats::registry::ImageReader::new();
-        detector.set_flattened_resolutions(false);
+        detector
+            .set_flattened_resolutions(false)
+            .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
         detector
             .set_id(path)
             .map_err(|e| InternalErrors::ImageReadError(e.to_string()))?;
@@ -293,7 +295,7 @@ impl ImageReader {
         let open_duration = open_start.elapsed();
 
         let meta_start = Instant::now();
-        let image_meta = build_image_meta(inner.as_mut(), path)?;
+        let image_meta = build_image_meta(inner.as_mut(), path, mode)?;
         let meta_duration = meta_start.elapsed();
 
         let total_duration = total_start.elapsed();
