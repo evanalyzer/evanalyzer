@@ -12,12 +12,9 @@ accepted = [
     "MPL-2.0",
     "Unlicense",
     "CDLA-Permissive-2.0",
-    "GPL-3.0-only",
-    "GPL-2.0-or-later",
     "IJG",
     "NCSA",
-    "bzip2-1.0.6",
-    "LGPL-2.0-or-later"
+    "bzip2-1.0.6"
 ]
 
 # evanalyzer's own workspace crates are all `publish = false` (see the
@@ -27,3 +24,48 @@ accepted = [
 # Rebuild about: cargo about generate about.hbs -o crates/gui/src/generated/third_party_licenses.json
 [private]
 ignore = true
+
+# Copyleft licenses are deliberately *not* in the global `accepted` list above,
+# so a new dependency pulling in GPL/LGPL fails the build by default instead
+# of silently being allowed. Each crate below is a known, reviewed exception -
+# `accepted` here is additive to the global list, scoped to just this crate
+# (see https://embarkstudios.github.io/cargo-about/cli/generate/config.html).
+
+# Slint is used under its Royalty-free License (not GPL) - see
+# https://slint.dev/agreements/slint-royalty-free-license.pdf - but its own
+# Cargo.toml still declares "GPL-3.0-only OR LicenseRef-..." so cargo-about
+# needs GPL-3.0-only accepted to resolve it.
+[i-slint-backend-selector]
+accepted = ["GPL-3.0-only"]
+[i-slint-backend-testing]
+accepted = ["GPL-3.0-only"]
+[i-slint-backend-winit]
+accepted = ["GPL-3.0-only"]
+[i-slint-common]
+accepted = ["GPL-3.0-only"]
+[i-slint-compiler]
+accepted = ["GPL-3.0-only"]
+[i-slint-core]
+accepted = ["GPL-3.0-only"]
+[i-slint-core-macros]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-femtovg]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-skia]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-software]
+accepted = ["GPL-3.0-only"]
+[slint]
+accepted = ["GPL-3.0-only"]
+[slint-build]
+accepted = ["GPL-3.0-only"]
+[slint-macros]
+accepted = ["GPL-3.0-only"]
+
+# Pulled in via bioformats (see crates/core/Cargo.toml) - both are slated for
+# removal on the `bioformats-replace` branch, at which point these two
+# exceptions (and their crates) go away together.
+[bioformats]
+accepted = ["GPL-2.0-or-later"]
+[mdbtools-pure-rs]
+accepted = ["LGPL-2.0-or-later"]
