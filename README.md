@@ -512,7 +512,7 @@ Contributions are welcome. Please open an issue before submitting large changes 
 
 ## License
 
-EVAnalyzer is dual-licensed:
+EVAnalyzer's source code is licensed under the AGPL-3.0. However, the copyright owner grants free use only for academic and non-commercial purposes; commercial use requires a separate commercial license.
 
 | Use case | License |
 |---|---|

@@ -1,6 +1,7 @@
 accepted = [
     "Apache-2.0",
     "MIT",
+    "MIT-0",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
@@ -12,13 +13,17 @@ accepted = [
     "Unlicense",
     "CDLA-Permissive-2.0",
     "GPL-3.0-only",
+    "GPL-2.0-or-later",
     "IJG",
     "NCSA",
+    "bzip2-1.0.6",
+    "LGPL-2.0-or-later"
 ]
 
 # evanalyzer's own workspace crates are all `publish = false` (see the
 # `[workspace.package]` entry in the root Cargo.toml) - they're internal
 # application crates, not published anywhere. This listing is meant to cover
 # third-party dependencies only, so keep our own AGPL-3.0 crates out of it.
+# Rebuild about: cargo about generate about.hbs -o crates/gui/src/generated/third_party_licenses.json
 [private]
 ignore = true
