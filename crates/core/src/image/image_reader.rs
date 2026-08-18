@@ -30,16 +30,16 @@ use std::time::Instant;
 /// by bioformats-rs at all, kept for backwards compatibility either way.
 #[cfg(feature = "bioformats-gpl")]
 pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
-    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "ics", "top", "img", "raw", "ch5",
-    "std", "avi", "cif", "arf", "sld", //
+    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "ics", "top", "img", "raw", "ch5", "std",
+    "avi", "cif", "arf", "sld", //
     "vsi", "czi", "nd2", "lif", "lei", "fli", "scn", "sxm", "lim", "oir", "stk", "nd", "bip",
     "msr", "dm3", "dm4", "cr2", "dib", "ims", "pic", "1sc", "spc", "sif", "aim", "svs",
 ];
 
 #[cfg(not(feature = "bioformats-gpl"))]
 pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
-    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "ics", "top", "img", "raw", "ch5",
-    "std", "avi", "cif", "arf", "sld",
+    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "ics", "top", "img", "raw", "ch5", "std",
+    "avi", "cif", "arf", "sld",
 ];
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
