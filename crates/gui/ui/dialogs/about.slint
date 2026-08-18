@@ -1,4 +1,4 @@
-import { ScrollView, AboutSlint } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { GlobalAppState, DialogType, AppInfoState } from "../state.slint";
 import { Theme } from "../style.slint";
 import { AppButton } from "../components/app_button.slint";
@@ -118,6 +118,35 @@ component InfoStat inherits Rectangle {
             color: root.value_color;
             horizontal-alignment: center;
         }
+    }
+}
+
+// Small clickable attribution mark for a third-party library whose license
+// requires displaying its logo (currently just Slint's Royalty-free License
+// - https://slint.dev/agreements/slint-royalty-free-license.pdf, section 2 -
+// but written to take more than one as they come up). Sized explicitly
+// per-instance rather than auto-fit from the source image, since each logo
+// asset has its own aspect ratio.
+component AttributionLogo inherits Rectangle {
+    in property <image> logo-dark;
+    in property <image> logo-light;
+    in property <string> url;
+    in property <length> logo-width: 48px;
+    in property <length> logo-height: 20px;
+
+    width: root.logo-width;
+    height: root.logo-height;
+
+    Image {
+        source: Theme.dark-mode ? root.logo-dark : root.logo-light;
+        width: parent.width;
+        height: parent.height;
+        image-fit: contain;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Platform.open-url(root.url); }
     }
 }
 
@@ -256,7 +285,7 @@ export component AboutDialog inherits Rectangle {
                     spacing: 3px;
 
                     Text {
-                        text: "EVAnalyzer";
+                        text: "EVA";
                         font-size: 22px;
                         font-weight: 800;
                         color: Theme.text;
@@ -335,7 +364,7 @@ export component AboutDialog inherits Rectangle {
                     padding-top: 6px;
 
                     Text {
-                        text: "EVAnalyzer " + AppInfoState.version + " is an application for high throughput image processing.";
+                        text: "Enhanced Visual Analazer " + AppInfoState.version + " is an application for high throughput image processing.";
                         font-size: 13px;
                         color: Theme.text-dim;
                         wrap: word-wrap;
@@ -367,15 +396,6 @@ export component AboutDialog inherits Rectangle {
 
                     Rectangle {
                         vertical-stretch: 1;
-                    }
-
-                    // Attribution required by the Slint Royalty-free License
-                    // (https://slint.dev/agreements/slint-royalty-free-license.pdf, section 2).
-                    Rectangle {
-                        height: 100px;
-                        clip: true;
-
-                        AboutSlint { }
                     }
 
                     Text {
@@ -499,6 +519,26 @@ export component AboutDialog inherits Rectangle {
                                 font-size: 10px;
                                 color: Theme.text-dim;
                                 wrap: word-wrap;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 10px;
+                        }
+
+                        // Logos of third-party libraries whose license requires
+                        // displaying them (just Slint for now).
+                        HorizontalLayout {
+                            height: 20px;
+                            alignment: start;
+                            spacing: 12px;
+
+                            AttributionLogo {
+                                logo-dark: @image-url("../icons/madewithslint-dark.svg");
+                                logo-light: @image-url("../icons/madewithslint-light.svg");
+                                url: "https://slint.dev";
+                                logo-width: 48px;
+                                logo-height: 20px;
                             }
                         }
 
