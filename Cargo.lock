@@ -842,7 +842,7 @@ dependencies = [
 [[package]]
 name = "bioformats"
 version = "0.1.9"
-source = "git+https://github.com/henriksson-lab/bioformats-rs?branch=main#11d60c3193111b5772d0f23facfa75969a591bdd"
+source = "git+https://github.com/henriksson-lab/bioformats-rs?rev=cd99301e10fec890f940ddd969c7ceb071f45751#cd99301e10fec890f940ddd969c7ceb071f45751"
 dependencies = [
  "bincode 1.3.3",
  "byteorder",
@@ -9073,7 +9073,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

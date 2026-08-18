@@ -14,11 +14,32 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// File extensions `ImageReader` can open - reflects whichever bioformats
+/// readers are actually compiled in, so this shrinks when the workspace is
+/// built without the `bioformats-gpl` feature (see the `evanalyzer_core`
+/// comment in the root Cargo.toml). Two full `#[cfg]`-gated definitions
+/// rather than one list with per-element `#[cfg]`, since attributes on
+/// individual array-literal elements aren't stable Rust.
+///
+/// The extensions after the `//` split below are ones bioformats only
+/// handles via its GPL-2.0-or-later readers (per bioformats-rs' README
+/// "License" columns and its `src/formats/gpl/` module split) - best-effort
+/// classification, not verified against every registry dispatch path. The
+/// ones before the split are either handled by an always-available
+/// BSD-2-Clause reader, or ("btif", "btiff", "std") not currently registered
+/// by bioformats-rs at all, kept for backwards compatibility either way.
+#[cfg(feature = "bioformats-gpl")]
 pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
-    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "vsi", "ics", "czi", "nd2", "lif", "lei",
-    "fli", "scn", "sxm", "lim", "oir", "top", "stk", "nd", "bip", "fli", "msr", "dm3", "dm4",
-    "img", "cr2", "ch5", "dib", "ims", "pic", "raw", "1sc", "std", "spc", "avi", "cif", "sif",
-    "aim", "svs", "arf", "sld",
+    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "ics", "top", "img", "raw", "ch5",
+    "std", "avi", "cif", "arf", "sld", //
+    "vsi", "czi", "nd2", "lif", "lei", "fli", "scn", "sxm", "lim", "oir", "stk", "nd", "bip",
+    "msr", "dm3", "dm4", "cr2", "dib", "ims", "pic", "1sc", "spc", "sif", "aim", "svs",
+];
+
+#[cfg(not(feature = "bioformats-gpl"))]
+pub const SUPPORTED_IMAGE_FORMATS: &[&str] = &[
+    "tif", "tiff", "btif", "btiff", "btf", "jpg", "jpeg", "ics", "top", "img", "raw", "ch5",
+    "std", "avi", "cif", "arf", "sld",
 ];
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]

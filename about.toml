@@ -62,10 +62,18 @@ accepted = ["GPL-3.0-only"]
 [slint-macros]
 accepted = ["GPL-3.0-only"]
 
-# Pulled in via bioformats (see crates/core/Cargo.toml) - both are slated for
-# removal on the `bioformats-replace` branch, at which point these two
-# exceptions (and their crates) go away together.
+# bioformats declares itself GPL-2.0-or-later unconditionally in its own
+# Cargo.toml `license` field, even though its GPL-derived readers (CZI, ND2,
+# LIF, LSM, ...) are gated behind its own "gpl" Cargo feature, wired through
+# our `bioformats-gpl` feature (see crates/core/Cargo.toml and the
+# `evanalyzer_core` comment in the root Cargo.toml). Cargo has no per-feature
+# license field, so this exception is needed regardless of whether
+# `bioformats-gpl` is actually enabled in a given build - cargo-about reads
+# declared crate metadata, not which features got compiled in.
 [bioformats]
 accepted = ["GPL-2.0-or-later"]
+# mdbtools-pure-rs is an *unconditional* dependency of bioformats (not gated
+# behind its "gpl" feature), so disabling `bioformats-gpl` does not remove
+# this one.
 [mdbtools-pure-rs]
 accepted = ["LGPL-2.0-or-later"]

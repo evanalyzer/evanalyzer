@@ -513,10 +513,10 @@ Contributions are welcome. Please open an issue before submitting large changes 
 
 EVAnalyzer's source code is licensed under the AGPL-3.0. However, the copyright owner grants free use only for academic and non-commercial purposes; commercial use requires a separate commercial license.
 
-| Use case | License |
-|---|---|
-| Personal, academic, and non-commercial use | [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0) — free, source must remain open |
-| Commercial use | [PolyForm Commercial License](LICENSE-COMMERCIAL) — contact us for terms |
+| Use case                                   | License |
+|---                                         |---|
+| Personal, academic, and non-commercial use | [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0) — free, source must remain open                      |
+| Commercial use                             | [PolyForm Commercial License](LICENSE-COMMERCIAL) — contact us for terms |
 
 If you integrate EVAnalyzer into a commercial product or service, or distribute it as part of a commercial offering, a commercial license is required.  
 For commercial licensing enquiries, please open an issue or contact the maintainer directly.
