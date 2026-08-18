@@ -467,7 +467,7 @@ The About dialog's "Licenses" tab lists every third-party crate and its license 
 
 ```sh
 cargo install cargo-about --features cli
-cargo about generate about.hbs -o crates/gui/src/generated/third_party_licenses.json
+cargo about generate docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
 ```
 
 Config is in `about.toml` at the repo root (accepted SPDX licenses); the workspace's own crates are excluded via `publish = false` + `about.toml`'s `[private]` section, so the listing only ever covers actual third-party dependencies.
