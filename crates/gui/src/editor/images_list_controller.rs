@@ -49,6 +49,17 @@ impl ImagesListController {
 
     /// A new image has been selected. We update the project state accordingly.
     /// This method is called when the user selects a new image from the UI.
+    ///
+    /// # Threading
+    /// `is_part_of_root`'s branch opens (or reuses a cached) `ImageReader` on
+    /// `image_path` via `sync_image_meta_to_slint` - for a large/slow-to-parse
+    /// file this can take the better part of a second (see
+    /// `evanalyzer_core::image::image_reader`'s own timing logs). Since this
+    /// method is called directly from the `on_image_selected` Slint callback
+    /// (i.e. on the UI/event-loop thread), that work is dispatched to a
+    /// background thread - exactly like `scan_image_root_for_images` already
+    /// does for the same call - so selecting an image doesn't freeze the UI
+    /// for as long as the file takes to open.
     pub fn open_new_image(self: &Arc<Self>, image_path: &PathBuf) {
         let (is_part_of_root, parent_dir) = {
             let project = self.app_state.get_project();
@@ -66,22 +77,70 @@ impl ImagesListController {
                 let mut project = self.app_state.get_project_write();
                 project.set_current_image_path(image_path);
             } // write lock dropped before sync calls that re-acquire it
-            if self
-                .image_meta_controller
-                .sync_image_meta_to_slint()
-                .is_err()
-            {
-                warn!("Failed to sync image meta to slint!");
-            }
-            self.object_list_controller.sync_objects_to_slint();
-            self.set_selected_image_index_in_slint_images_list(image_path.clone(), true);
-            self.viewport_controller.trigger_new_image_redraw();
-            // Remove possible existing markers and the results-table object highlight
-            if let Some(ui) = self.ui.upgrade() {
-                let object_state = ui.global::<ViewportObjectState>();
-                object_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
-                object_state.set_object_highlight(ObjectHighlightBox::default());
-            }
+
+            // Remove possible existing markers and the results-table object
+            // highlight now, queued onto the event loop immediately - not
+            // after the slow work spawned below. `open_new_image` is called
+            // both directly from UI callbacks and from background threads
+            // (e.g. `project_controller.rs`'s "open file" flow), so this
+            // can't safely touch Slint state directly; it must always go
+            // through `invoke_from_event_loop`. Queuing it here, before the
+            // slow reader-open thread even starts, matters because
+            // `open_image_and_highlight_object` calls this method and then
+            // immediately queues its own highlight-set afterward (see that
+            // method) - relying on `invoke_from_event_loop` running queued
+            // closures in the order they were queued for its highlight to
+            // survive this clear. If this were queued only after the
+            // (500ms+) reader-open below instead, it would run *after* that
+            // later highlight-set and silently erase it.
+            let ui_weak = self.ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let object_state = ui.global::<ViewportObjectState>();
+                    object_state.set_markers(slint::ModelRc::new(slint::VecModel::default()));
+                    object_state.set_object_highlight(ObjectHighlightBox::default());
+                }
+            });
+
+            let manager = self.clone();
+            std::thread::spawn(move || {
+                // Fired first, before the (slow) metadata sync below:
+                // `trigger_new_image_redraw` only enqueues worker tasks
+                // (`dispatch_worker_task`) and returns immediately, it
+                // doesn't block on the reads themselves. Those worker
+                // threads call `get_or_create_reader_pool`, which now reuses
+                // the same single-reader cache `sync_image_meta_to_slint`
+                // below is about to populate (see `ReaderPool`'s doc comment
+                // in `project_owner.rs`) - calling it first lets that reader
+                // open race for the shared cache concurrently with metadata
+                // sync instead of only starting once metadata sync (and the
+                // two calls after it) have already finished.
+                manager.viewport_controller.trigger_new_image_redraw();
+                if manager
+                    .image_meta_controller
+                    .sync_image_meta_to_slint()
+                    .is_err()
+                {
+                    warn!("Failed to sync image meta to slint!");
+                }
+                manager.object_list_controller.sync_objects_to_slint();
+                // Re-read the current path instead of using the path this
+                // thread was spawned for: if a newer `open_new_image` call
+                // has since superseded it (fast repeated selection), this
+                // keeps the list's selected/scrolled-to row in sync with
+                // what's actually current instead of reverting to a stale
+                // selection once this slower call finally catches up -
+                // mirroring how `sync_image_meta_to_slint` and the pixel
+                // read path already re-read the current path fresh rather
+                // than trusting a value captured at spawn time.
+                if let Some(current_path) = manager
+                    .app_state
+                    .get_project()
+                    .get_current_image_path_cloned()
+                {
+                    manager.set_selected_image_index_in_slint_images_list(current_path, true);
+                }
+            });
         } else if let Some(parent) = parent_dir {
             self.change_image_root(&parent, Some(image_path));
         }
@@ -119,7 +178,12 @@ impl ImagesListController {
     ) {
         self.open_new_image_from_rel_path(rel_path);
 
-        // `open_new_image` clears any previous highlight, so set ours afterwards.
+        // `open_new_image` queues a marker/highlight clear onto the event
+        // loop as soon as it's called (see its doc comment). Queuing ours
+        // here too, rather than setting it directly, relies on
+        // `invoke_from_event_loop` running queued closures in the order
+        // they were queued: this is queued strictly after that clear, so it
+        // runs after it instead of racing (and possibly losing to) it.
         let [xmin, ymin, xmax, ymax] = bbox_px;
         let highlight = ObjectHighlightBox {
             x_px: xmin as f32,
@@ -129,10 +193,13 @@ impl ImagesListController {
             h_px: (ymax.saturating_sub(ymin) + 1) as f32,
             active: true,
         };
-        if let Some(ui) = self.ui.upgrade() {
-            ui.global::<ViewportObjectState>()
-                .set_object_highlight(highlight);
-        }
+        let ui_weak = self.ui.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.global::<ViewportObjectState>()
+                    .set_object_highlight(highlight);
+            }
+        });
     }
 
     /// Updates the project's root image directory and initiates a background scan for new images.

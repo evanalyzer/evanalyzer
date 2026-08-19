@@ -6,22 +6,16 @@ mod algos;
 mod converters;
 mod extlibs;
 mod image;
-mod init;
 mod job;
 mod object;
 mod pipeline;
 mod resources;
 mod storage;
 
-// Init function which must be called once
-pub use crate::init::CoreConfig;
-pub use crate::init::init;
-
-// System resource sizing (JVM heap, parallelism) based on available RAM
+// System resource sizing (parallelism, reader pool size) based on available RAM
 pub use crate::resources::SystemDiagnostics;
 pub use crate::resources::cpu_ram_diagnostics;
 pub use crate::resources::cuda_is_available;
-pub use crate::resources::recommended_jvm_heap_bytes;
 pub use crate::resources::recommended_parallelism;
 pub use crate::resources::recommended_reader_pool_size;
 pub use crate::resources::system_diagnostics;
@@ -43,7 +37,6 @@ pub use crate::image::PyramidInfo;
 pub use crate::image::ReadMode;
 pub use crate::image::SUPPORTED_IMAGE_FORMATS;
 pub use crate::image::ZProjection;
-pub use crate::image::init_java_wrapper;
 
 // Object
 pub use crate::object::Object;

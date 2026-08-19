@@ -705,7 +705,7 @@ mod tests {
 
     // -- PixelTrainingJob::run (real image I/O) ---------------------------
     //
-    // Everything above deliberately avoids touching the filesystem/JVM (see
+    // Everything above deliberately avoids touching the filesystem (see
     // this section's sibling above). This one real end-to-end run - reading
     // an actual fixture through Bio-Formats, tiling it, computing features,
     // and fitting a classifier - is what exercises the rest of `run`'s body
@@ -739,8 +739,6 @@ mod tests {
 
     #[test]
     fn run_trains_end_to_end_against_a_real_image_fixture() {
-        crate::init_java_wrapper(1_000_000_000).unwrap();
-
         let fixture = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/multi-channel-4D-series.ome.tif"

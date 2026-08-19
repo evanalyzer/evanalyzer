@@ -29,6 +29,11 @@ pub(crate) struct ViewportImageController {
     /// so the two don't cancel each other.
     pub(crate) pixel_info_throttle_timer: Timer,
     pub(crate) last_pixel_info_sync: Mutex<Instant>,
+    /// Trailing timer for the immediate low-res redraw throttle (see
+    /// `trigger_redraw_low_res_throttled`) - separate from the other timers
+    /// here so none of them cancel each other.
+    pub(crate) low_res_throttle_timer: Timer,
+    pub(crate) last_low_res_redraw: Mutex<Instant>,
     pub(crate) viewport_controller: Arc<ViewportController>,
     pub(crate) viewport_cache: Arc<ViewportCache>,
     pub(crate) histogram_controller: Arc<HistogramController>,
@@ -51,6 +56,8 @@ impl ViewportImageController {
             redraw_debounce_timer: Timer::default(),
             pixel_info_throttle_timer: Timer::default(),
             last_pixel_info_sync: Mutex::new(Instant::now()),
+            low_res_throttle_timer: Timer::default(),
+            last_low_res_redraw: Mutex::new(Instant::now()),
             viewport_controller,
             viewport_cache,
             histogram_controller,
@@ -220,6 +227,54 @@ impl ViewportImageController {
         Ok(())
     }
 
+    /// Rate limit for [`Self::trigger_redraw_low_res_throttled`]. A per-move
+    /// cap is still needed regardless of per-frame cost, since raw mouse-move
+    /// events fire at the input device's full poll rate (125-1000 Hz) - but
+    /// on non-Windows (see `viewport_worker.rs`'s STEP 7b: the expensive
+    /// viewport-sized CPU composite that used to dominate this cost is now
+    /// skipped entirely there, letting Skia scale the small native tile on
+    /// the GPU instead), a real frame now costs ~1-2ms, not 12-25ms - so this
+    /// is set to 60/sec (matching a typical display refresh rate) rather than
+    /// [`Self::PIXEL_INFO_THROTTLE`]'s more conservative ~30/sec.
+    const LOW_RES_REDRAW_THROTTLE: Duration = Duration::from_millis(16);
+
+    /// Throttled entry point for the "immediate" low-res redraw fired on
+    /// every pan/zoom event - see [`Self::LOW_RES_REDRAW_THROTTLE`] for why
+    /// this exists. Same leading+trailing-edge shape as
+    /// `sync_pixel_info_throttled`: runs immediately if nothing has run in
+    /// the last throttle window (so the first move still feels instant),
+    /// otherwise coalesces further events into a single trailing redraw once
+    /// the window elapses, so a fast drag doesn't leave a stale frame once
+    /// it stops.
+    fn trigger_redraw_low_res_throttled(self: &Arc<Self>) {
+        let now = Instant::now();
+        let should_run_now = {
+            let mut last = self.last_low_res_redraw.lock().expect("Poisoned");
+            if now.duration_since(*last) >= Self::LOW_RES_REDRAW_THROTTLE {
+                *last = now;
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_run_now {
+            self.low_res_throttle_timer.stop();
+            self.viewport_controller.trigger_redraw_low_res();
+        } else {
+            let self_in = self.clone();
+            self.low_res_throttle_timer.stop();
+            self.low_res_throttle_timer.start(
+                TimerMode::SingleShot,
+                Self::LOW_RES_REDRAW_THROTTLE,
+                move || {
+                    *self_in.last_low_res_redraw.lock().expect("Poisoned") = Instant::now();
+                    self_in.viewport_controller.trigger_redraw_low_res();
+                },
+            );
+        }
+    }
+
     pub fn update_viewport_zoom_in_viewport_state(
         self: &Arc<Self>,
         zoom: f32,
@@ -238,8 +293,10 @@ impl ViewportImageController {
         }
         self.viewport_controller.sync_scale_bar_to_slint();
 
-        // Trigger Low-Res IMMEDIATELY for smoothness
-        self.viewport_controller.trigger_redraw_low_res();
+        // Trigger Low-Res for smoothness, throttled - see
+        // `trigger_redraw_low_res_throttled`'s doc comment for why this
+        // can't safely run unthrottled on a large viewport.
+        self.trigger_redraw_low_res_throttled();
 
         // Debounce the High-Res update
         self.redraw_debounce_timer.stop(); // Cancel any existing pending high-res task
@@ -272,8 +329,10 @@ impl ViewportImageController {
             state.offset_x = offset_x;
             state.offset_y = offset_y;
         }
-        // Trigger Low-Res IMMEDIATELY for smoothness
-        self.viewport_controller.trigger_redraw_low_res();
+        // Trigger Low-Res for smoothness, throttled - see
+        // `trigger_redraw_low_res_throttled`'s doc comment for why this
+        // can't safely run unthrottled on a large viewport.
+        self.trigger_redraw_low_res_throttled();
 
         // Debounce the High-Res update
         self.redraw_debounce_timer.stop(); // Cancel any existing pending high-res task

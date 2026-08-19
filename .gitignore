@@ -12,15 +12,15 @@ lcov.info
 /libs/*
 !/libs/.gitkeep
 !/libs/*.sh
-/crates/core/java
 docs/old
 docs/threshold
 docs/blur
 docs/rolling_ball
 docs/watershed
 
-# Bio-Formats Memoizer cache files, written next to whatever image was
-# opened (including test fixtures under crates/core/tests/).
+# `bioformats::Memoizer` cache files (not currently wired up anywhere in this
+# app, but can still appear from local experimentation against the crate) -
+# written next to whatever image was opened.
 *.bfmemo
 
 # `cargo cyclonedx` (see README's "SBOM" section) writes one *.cdx.json next
@@ -39,3 +39,6 @@ docs/watershed
 /evanalyzer-*.tar.gz
 /evanalyzer-*.zip
 /evanalyzer-*.7z.*
+tests/G7_03.vsi
+tests/_G7_03_/stack1/frame_t_0.ets
+tests/IPOD detection test.nd2

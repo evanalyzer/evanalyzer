@@ -2475,10 +2475,10 @@ mod tests {
         assert_eq!(project.get_selected_series_idx(), 1);
     }
 
-    // -- add_image_and_read_meta (JVM-free branch only) ----------------------
+    // -- add_image_and_read_meta (reader-free branch only) --------------------
 
     #[test]
-    fn add_image_and_read_meta_rejects_an_unsupported_extension_without_touching_the_jvm() {
+    fn add_image_and_read_meta_rejects_an_unsupported_extension_without_opening_a_reader() {
         let mut project = ProjectWithRuntime::default();
         let action = project.add_image_and_read_meta(Path::new("notes.txt"));
         assert_eq!(action, ProjectAction::Failure("Unsupported device".into()));

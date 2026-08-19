@@ -19,20 +19,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_module("winit", LevelFilter::Off)
         .filter_module("glow", LevelFilter::Off)
         .filter_module("zbus", LevelFilter::Off)
-        .filter_module("tracing::span", LevelFilter::Off)
-        .filter_module("jni::wrapper::java_vm::vm", LevelFilter::Off);
+        .filter_module("tracing::span", LevelFilter::Off);
 
     if let Ok(rust_log) = std::env::var("RUST_LOG") {
         builder.parse_filters(&rust_log);
     }
     builder.init();
-
-    // No eager JVM init here: it's started lazily on first actual image read
-    // (see `ensure_java_wrapper` in evanalyzer_core), so `--help` and other
-    // JVM-free invocations aren't stuck waiting on it, and the GUI's window
-    // shows up without blocking on it either - see `evanalyzer_gui::run`,
-    // which warms it up on a background thread right after creating the
-    // window instead.
 
     let args = parse_args();
 

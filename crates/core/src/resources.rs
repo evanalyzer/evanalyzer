@@ -1,8 +1,8 @@
 //! # resources
 //!
-//! Sizes the embedded JVM heap and caps pipeline parallelism based on how much
-//! system RAM is actually free, instead of fixed constants that can over-commit
-//! on small machines (JVM heap OOM) or under-use big ones.
+//! Caps pipeline parallelism and reader-pool size based on how much system
+//! RAM is actually free, instead of fixed constants that can over-commit on
+//! small machines (OOM) or under-use big ones.
 //!
 //! **Author:** Joachim Danmayr
 //! **Date:** 2026-06-28
@@ -13,16 +13,6 @@
 
 use sysinfo::System;
 
-/// Floor for the JVM heap: below this, Bio-Formats itself struggles to load
-/// even moderately sized images.
-const MIN_JVM_HEAP_BYTES: u64 = 512 * 1024 * 1024;
-/// Ceiling for the JVM heap: the JVM is only used as a thin bridge to
-/// Bio-Formats for reading image tiles, so it never needs a large heap even
-/// on machines with a lot of RAM - leave that RAM for the Rust-side pipeline.
-const MAX_JVM_HEAP_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-/// Share of currently available RAM the JVM heap is allowed to claim.
-const JVM_HEAP_RAM_FRACTION: f64 = 0.125;
-
 /// Rough estimate of the peak RAM one parallel worker (one whole image, or
 /// one tile when previewing a single whole-slide image) can need: loaded
 /// channel planes, pipeline intermediate/scratch buffers and object masks for a
@@ -30,20 +20,19 @@ const JVM_HEAP_RAM_FRACTION: f64 = 0.125;
 /// over-committing on low-RAM machines, not a measured per-pipeline bound.
 const ESTIMATED_RAM_PER_WORKER_BYTES: u64 = 1_500_000_000;
 
-/// Rough estimate of the peak RAM one pooled BioFormats reader can hold:
-/// parsed OME metadata/tile index (plus, if memoized, the deserialized
-/// `.bfmemo` state) and headroom for one in-flight tile buffer. Much lighter
-/// than [`ESTIMATED_RAM_PER_WORKER_BYTES`] - a reader has no pipeline
-/// scratch buffers or object masks - so reader-pool sizing is a separate,
-/// smaller budget from [`recommended_parallelism`]. Heuristic guardrail, not
-/// a measured bound.
+/// Rough estimate of the peak RAM one pooled reader can hold: parsed
+/// metadata/tile index and headroom for one in-flight tile buffer. Much
+/// lighter than [`ESTIMATED_RAM_PER_WORKER_BYTES`] - a reader has no
+/// pipeline scratch buffers or object masks - so reader-pool sizing is a
+/// separate, smaller budget from [`recommended_parallelism`]. Heuristic
+/// guardrail, not a measured bound.
 const ESTIMATED_RAM_PER_READER_BYTES: u64 = 150_000_000;
 
 /// Ceiling on reader-pool size regardless of cores/RAM available. Some
 /// multiplexed formats have dozens of channels; there's no benefit to a
 /// pool bigger than a handful of readers even on a large, idle machine, and
-/// every extra reader is another BioFormats instance's worth of held
-/// metadata plus another potential in-flight tile buffer.
+/// every extra reader is another format reader's worth of held metadata plus
+/// another potential in-flight tile buffer.
 const MAX_READER_POOL_SIZE: usize = 8;
 
 /// Currently available system RAM, in bytes (free memory plus easily
@@ -55,22 +44,12 @@ fn available_memory_bytes() -> u64 {
     sys.available_memory()
 }
 
-/// Recommended JVM heap size, in bytes, based on currently available RAM.
-///
-/// Scales with [`JVM_HEAP_RAM_FRACTION`] of available memory, clamped to
-/// [`MIN_JVM_HEAP_BYTES`]..=[`MAX_JVM_HEAP_BYTES`] so it neither starves on a
-/// constrained machine nor reserves more than the JVM bridge ever needs.
-pub fn recommended_jvm_heap_bytes() -> u64 {
-    let target = (available_memory_bytes() as f64 * JVM_HEAP_RAM_FRACTION) as u64;
-    target.clamp(MIN_JVM_HEAP_BYTES, MAX_JVM_HEAP_BYTES)
-}
-
 /// Recommended number of images/tiles to analyze in parallel.
 ///
 /// Starts from the number of CPU cores (minus one, to leave a core free for
 /// the UI/OS), then caps that down if available RAM can't comfortably support
 /// that many concurrent workers - better to run fewer workers than to hit a
-/// JVM heap or system OOM partway through a batch.
+/// system OOM partway through a batch.
 pub fn recommended_parallelism() -> usize {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).max(1))
@@ -79,10 +58,10 @@ pub fn recommended_parallelism() -> usize {
     cores.min(ram_capped).max(1)
 }
 
-/// Recommended number of independent BioFormats readers to keep pooled for
-/// one open image, so multiple channels/Z-slices can be read in parallel
-/// instead of serializing through a single reader's Java-side lock (see
-/// `ReaderPool` in `evanalyzer_app`).
+/// Recommended number of independent format readers to keep pooled for one
+/// open image, so multiple channels/Z-slices can be read in parallel instead
+/// of serializing through a single reader's `Mutex` (see `ReaderPool` in
+/// `evanalyzer_app`).
 ///
 /// Same shape as [`recommended_parallelism`] - cores (minus one, for the
 /// UI thread, since this pool backs interactive viewport rendering) capped
@@ -152,13 +131,6 @@ pub fn cuda_is_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn recommended_jvm_heap_stays_within_bounds() {
-        let heap = recommended_jvm_heap_bytes();
-        assert!(heap >= MIN_JVM_HEAP_BYTES);
-        assert!(heap <= MAX_JVM_HEAP_BYTES);
-    }
 
     #[test]
     fn recommended_parallelism_is_never_zero() {

@@ -1,12 +1,5 @@
 FROM rust:1.96-trixie AS live
 
-
-# Install the Java Development Kit (JDK)
-# openjdk-21-jdk is the current standard for Trixie
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-21-jdk-headless \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/latest/download/cargo-dist-installer.sh | sh
 
 # Slint debugging
