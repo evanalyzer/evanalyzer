@@ -11,12 +11,13 @@ use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::images_settings::HistogramSettings;
 use evanalyzer_core::{ImageChannel, ImageContainer};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use slint::{Rgb8Pixel, SharedPixelBuffer};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::Instant;
 
 pub struct ViewportWorker {
     pub(crate) app_state: Arc<UiState>,
@@ -85,7 +86,21 @@ impl ViewportWorker {
 
         // Viewport-sized buffer the native tile is composited into before being
         // handed to Slint.  See STEP 7b for why this screen-space step is needed.
-        let mut screen_buffer = SharedPixelBuffer::<Rgb8Pixel>::new(1, 1);
+        // Double-buffered for the same reason `buffer_pool` above is: a
+        // `SharedPixelBuffer` is a ref-counted, copy-on-write `SharedVector`
+        // under the hood, and the buffer sent to Slint last frame
+        // (`pixel_buffer_to_send`) may still be held by the UI thread when
+        // this thread starts the next frame - `make_mut_slice()` on a still-
+        // shared buffer forces a full alloc+copy of the whole (multi-MB,
+        // viewport-sized) buffer before returning, silently adding that cost
+        // to every single frame. Alternating between two buffers makes it
+        // very likely the "other" one has already been released by the time
+        // it's reused.
+        let mut screen_buffer_pool = [
+            SharedPixelBuffer::<Rgb8Pixel>::new(1, 1),
+            SharedPixelBuffer::<Rgb8Pixel>::new(1, 1),
+        ];
+        let mut screen_pool_idx = 0;
 
         let (version_tracker, drawing_task_container, is_low_res) = match scope {
             TaskDispatch::LowRes => (
@@ -119,6 +134,7 @@ impl ViewportWorker {
 
         loop {
             let mut task = wait_for_task(&drawing_task_container);
+            let task_start = Instant::now();
 
             // --- object scope: simple path, no image processing ---
             if scope == TaskDispatch::Objects {
@@ -267,6 +283,8 @@ impl ViewportWorker {
                     &viewport_state,
                 )
             };
+            let read_duration = task_start.elapsed();
+            let step4_7_start = Instant::now();
 
             // Cancel if a newer request came in during the slow disk read
             if version_tracker.load(Ordering::SeqCst) > current_version {
@@ -410,81 +428,138 @@ impl ViewportWorker {
                         is_rgb,
                     )
                 };
+                let step4_7_duration = step4_7_start.elapsed();
 
                 // ------------------------------------------------------------
                 // STEP 7b: Composite into a viewport-sized, screen-space buffer
                 // ------------------------------------------------------------
-                // The native tile buffer (image_w x image_h) would otherwise be
-                // handed to Slint as a single Image element positioned at draw_x
-                // and stretched to zoomed_w/zoomed_h.  When zoomed/panned that
-                // element's origin sits far off-screen (draw_x can be thousands of
-                // px negative) and it is several thousand px wide.  The Slint
-                // SOFTWARE renderer (Windows build) stores scene coordinates as
-                // i16 and samples scaled images with an 8-bit fixed-point step;
-                // the per-step rounding error gets multiplied by the large
-                // off-screen offset, shifting the image by several pixels - and by
-                // a different amount at every zoom level.  The GPU/Skia renderer
-                // (Linux/macOS) does not, which is why this only appears on
-                // Windows.  By resampling the visible region into a viewport-sized
-                // buffer drawn at (0,0) with scale 1:1, the renderer never scales
-                // or offsets a large image, so the picture lines up with the
-                // screen-space object overlay exactly on every platform.
-                let vp_w = prepared.viewport_width.max(1.0) as usize;
-                let vp_h = prepared.viewport_height.max(1.0) as usize;
-                if screen_buffer.width() as usize != vp_w || screen_buffer.height() as usize != vp_h
-                {
-                    screen_buffer = SharedPixelBuffer::new(vp_w as u32, vp_h as u32);
-                }
-                {
-                    let img_w = prepared.image_w;
-                    let img_h = prepared.image_h;
-                    let inv_scale_x = prepared.image_w as f32 / prepared.zoomed_w.max(f32::EPSILON);
-                    let inv_scale_y = prepared.image_h as f32 / prepared.zoomed_h.max(f32::EPSILON);
-                    let draw_x = prepared.draw_x;
-                    let draw_y = prepared.draw_y;
+                // Windows-only workaround. The native tile buffer (image_w x
+                // image_h) would otherwise be handed to Slint as a single
+                // Image element positioned at draw_x and stretched to
+                // zoomed_w/zoomed_h.  When zoomed/panned that element's
+                // origin sits far off-screen (draw_x can be thousands of px
+                // negative) and it is several thousand px wide.  The Slint
+                // SOFTWARE renderer (Windows build) stores scene coordinates
+                // as i16 and samples scaled images with an 8-bit fixed-point
+                // step; the per-step rounding error gets multiplied by the
+                // large off-screen offset, shifting the image by several
+                // pixels - and by a different amount at every zoom level.
+                // The GPU/Skia renderer (Linux/macOS) does not have this bug,
+                // so it skips the workaround entirely below: composing a
+                // *viewport-sized* buffer here means its cost tracks window
+                // size, not the size of the image actually being displayed
+                // (a small zoomed-out image in a huge window still pays for
+                // the whole window) - both the CPU resample and the GPU
+                // texture upload that follows scale with `vp_w * vp_h`.
+                // Skia can scale/position the much smaller native tile
+                // directly on the GPU, which is what `viewport.slint`'s
+                // Image layers (image-fit: fill + explicit width/height)
+                // were already designed to do - so on that path there is no
+                // reason to pre-composite at all.
+                if cfg!(target_os = "windows") {
+                    let vp_w = prepared.viewport_width.max(1.0) as usize;
+                    let vp_h = prepared.viewport_height.max(1.0) as usize;
+                    screen_pool_idx = (screen_pool_idx + 1) % screen_buffer_pool.len();
+                    if screen_buffer_pool[screen_pool_idx].width() as usize != vp_w
+                        || screen_buffer_pool[screen_pool_idx].height() as usize != vp_h
+                    {
+                        screen_buffer_pool[screen_pool_idx] =
+                            SharedPixelBuffer::new(vp_w as u32, vp_h as u32);
+                    }
+                    let composite_start = Instant::now();
+                    let slice_start = Instant::now();
                     let native = buffer_pool[pool_idx].as_slice();
-                    let screen = screen_buffer.make_mut_slice();
-                    let black = Rgb8Pixel { r: 0, g: 0, b: 0 };
-                    // Each output row is independent (nearest-neighbor resample,
-                    // no cross-row state), so this was a ~vp_w*vp_h-iteration
-                    // (up to ~8M for a 4K viewport) serial loop with no reason
-                    // to be single-threaded - split by row and run in parallel,
-                    // matching the `par_chunks_mut` pattern already used above
-                    // in `prepare_image_channels_for_slint`.
-                    use rayon::prelude::*;
-                    screen
-                        .par_chunks_mut(vp_w)
-                        .enumerate()
-                        .for_each(|(sy, row)| {
-                            let ty = (sy as f32 - draw_y) * inv_scale_y;
-                            if ty < 0.0 || ty >= img_h as f32 {
-                                row.fill(black);
-                                return;
-                            }
-                            let ty_i = ty as usize * img_w;
-                            for (sx, out) in row.iter_mut().enumerate() {
-                                let tx = (sx as f32 - draw_x) * inv_scale_x;
-                                *out = if tx >= 0.0 && tx < img_w as f32 {
-                                    native[ty_i + tx as usize]
-                                } else {
-                                    black
-                                };
-                            }
-                        });
+                    let screen = screen_buffer_pool[screen_pool_idx].make_mut_slice();
+                    let slice_duration = slice_start.elapsed();
+                    {
+                        let img_w = prepared.image_w;
+                        let img_h = prepared.image_h;
+                        let inv_scale_x =
+                            prepared.image_w as f32 / prepared.zoomed_w.max(f32::EPSILON);
+                        let inv_scale_y =
+                            prepared.image_h as f32 / prepared.zoomed_h.max(f32::EPSILON);
+                        let draw_x = prepared.draw_x;
+                        let draw_y = prepared.draw_y;
+                        let black = Rgb8Pixel { r: 0, g: 0, b: 0 };
+                        // Each output row is independent (nearest-neighbor
+                        // resample, no cross-row state), so this is split
+                        // across rows and run in parallel, chunked into a
+                        // handful of multi-row groups per thread rather than
+                        // one task per row (measured: one-row chunks added
+                        // enough Rayon per-task scheduling overhead to cost
+                        // 11-25ms/frame on a real ~3000x2000 viewport, on top
+                        // of the actual memory-bound copy).
+                        use rayon::prelude::*;
+                        let rows_per_chunk = (vp_h / (rayon::current_num_threads() * 4)).max(1);
+                        screen
+                            .par_chunks_mut(vp_w * rows_per_chunk)
+                            .enumerate()
+                            .for_each(|(chunk_idx, rows)| {
+                                let base_sy = chunk_idx * rows_per_chunk;
+                                for (row_offset, row) in rows.chunks_mut(vp_w).enumerate() {
+                                    let sy = base_sy + row_offset;
+                                    let ty = (sy as f32 - draw_y) * inv_scale_y;
+                                    if ty < 0.0 || ty >= img_h as f32 {
+                                        row.fill(black);
+                                        continue;
+                                    }
+                                    let ty_i = ty as usize * img_w;
+                                    for (sx, out) in row.iter_mut().enumerate() {
+                                        let tx = (sx as f32 - draw_x) * inv_scale_x;
+                                        *out = if tx >= 0.0 && tx < img_w as f32 {
+                                            native[ty_i + tx as usize]
+                                        } else {
+                                            black
+                                        };
+                                    }
+                                }
+                            });
+                    }
+                    let composite_duration = composite_start.elapsed();
+                    info!(
+                        "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], composite {:?} [make_mut_slice {:?}, resample {:?}] ({}x{} native -> {}x{} viewport, {} threads), total so far {:?}",
+                        if is_low_res { "low-res" } else { "high-res" },
+                        read_duration,
+                        step4_7_duration,
+                        channel_contexts.len(),
+                        composite_duration,
+                        slice_duration,
+                        composite_duration.saturating_sub(slice_duration),
+                        prepared.image_w,
+                        prepared.image_h,
+                        vp_w,
+                        vp_h,
+                        rayon::current_num_threads(),
+                        task_start.elapsed()
+                    );
+
+                    // Display geometry is now screen-space: full viewport at
+                    // (0,0). The logical transform (zoom/offset/full_image)
+                    // in `prepared` is left untouched so sync_zoom, the
+                    // navigator and the pixel-value HUD (which maps via
+                    // active_high_res_data) keep working.
+                    let mut display = prepared.clone();
+                    display.draw_x = 0.0;
+                    display.draw_y = 0.0;
+                    display.zoomed_w = vp_w as f32;
+                    display.zoomed_h = vp_h as f32;
+
+                    pixel_buffer_to_send = Some(screen_buffer_pool[screen_pool_idx].clone());
+                    render_info = Some(display);
+                } else {
+                    info!(
+                        "Viewport frame ({}): read {:?}, render(4-7) {:?} [{} channels], no composite (direct GPU scale, {} threads), total so far {:?}",
+                        if is_low_res { "low-res" } else { "high-res" },
+                        read_duration,
+                        step4_7_duration,
+                        channel_contexts.len(),
+                        rayon::current_num_threads(),
+                        task_start.elapsed()
+                    );
+
+                    pixel_buffer_to_send = Some(buffer_pool[pool_idx].clone());
+                    render_info = Some(prepared.clone());
                 }
-
-                // Display geometry is now screen-space: full viewport at (0,0).
-                // The logical transform (zoom/offset/full_image) in `prepared` is
-                // left untouched so sync_zoom, the navigator and the pixel-value
-                // HUD (which maps via active_high_res_data) keep working.
-                let mut display = prepared.clone();
-                display.draw_x = 0.0;
-                display.draw_y = 0.0;
-                display.zoomed_w = vp_w as f32;
-                display.zoomed_h = vp_h as f32;
-
-                pixel_buffer_to_send = Some(screen_buffer.clone());
-                render_info = Some(display);
 
                 if !is_low_res {
                     svg_hists_to_send = histogram_to_svg_fast(

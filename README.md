@@ -14,8 +14,7 @@
 [![License: AGPL-3.0 for non-commercial | Commercial license available](https://img.shields.io/badge/License-AGPL--3.0_%7C_Commercial-blue)](#license)
 [![Rust](https://img.shields.io/badge/Rust-2024_edition-orange?logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](#installing-a-release)
-
-
+<a href="https://slint.dev"><img src="docs/MadeWithSlint-logo-light.svg#gh-light-mode-only" height="40" alt="Made with Slint"></a>
 
 **A high-performance bioimage analysis desktop application written in Rust.**
 
@@ -99,7 +98,7 @@ The workspace is organised into focused crates:
 
 | Crate | Description |
 |---|---|
-| `evanalyzer_core` | Image I/O (Bio-Formats via JVM), processing algorithms, object model, pipeline execution |
+| `evanalyzer_core` | Image I/O (Bio-Formats, native Rust), processing algorithms, object model, pipeline execution |
 | `evanalyzer_cfg` | Project settings, serialisation to JSON, pipeline command configuration |
 | `evanalyzer_app` | Application handle, shared project state |
 | `evanalyzer_gui` | Slint-based desktop GUI — viewport, histogram, object tools, classification panel |
@@ -138,7 +137,6 @@ The workspace is organised into focused crates:
 ## Requirements
 
 - **Rust** 1.80 or later (2024 edition)
-- **Java JDK** 11 or later — required for Bio-Formats image reading
 - **Linux** system libraries (for the GUI):
   ```sh
   apt-get install libinput10 libxkbcommon0 libfontconfig1 libgbm1
@@ -156,9 +154,8 @@ The workspace is organised into focused crates:
 | Disk | Enough for the results database (`.evadb`) per run, plus the input images | — |
 
 EVAnalyzer checks how much RAM is actually free at startup and scales itself
-to fit: the embedded JVM (used only for Bio-Formats image reading) gets a
-heap sized from that, and the number of images/tiles analyzed in parallel is
-capped accordingly — so on a constrained machine it automatically falls back
+to fit: the number of images/tiles analyzed in parallel is capped
+accordingly — so on a constrained machine it automatically falls back
 to fewer parallel workers instead of running out of memory. More RAM and CPU
 cores let it analyze more images/tiles concurrently, but there's no manual
 tuning required to stay within what the machine actually has available.
@@ -167,7 +164,7 @@ tuning required to stay within what the machine actually has available.
 
 ## Installing a release
 
-Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies (libtorch, DuckDB), the bundled Java runtime and Bio-Formats all ship **inside the archive, next to the binary**, so there is nothing else to install.
+Prebuilt packages are attached to every [GitHub release](https://github.com/evanalyzer/evanalyzer/releases/latest). Download the archive for your platform, extract it, and run the `evanalyzer` binary — the native dependencies (libtorch, DuckDB) ship **inside the archive, next to the binary**, so there is nothing else to install.
 
 ### Linux x86-64 — `evanalyzer-linux-x86_64.tar.gz`
 
@@ -470,7 +467,7 @@ The About dialog's "Licenses" tab lists every third-party crate and its license 
 
 ```sh
 cargo install cargo-about --features cli
-cargo about generate about.hbs -o crates/gui/src/generated/third_party_licenses.json
+cargo about generate docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
 ```
 
 Config is in `about.toml` at the repo root (accepted SPDX licenses); the workspace's own crates are excluded via `publish = false` + `about.toml`'s `[private]` section, so the listing only ever covers actual third-party dependencies.
@@ -514,12 +511,12 @@ Contributions are welcome. Please open an issue before submitting large changes 
 
 ## License
 
-EVAnalyzer is dual-licensed:
+EVAnalyzer's source code is licensed under the AGPL-3.0. However, the copyright owner grants free use only for academic and non-commercial purposes; commercial use requires a separate commercial license.
 
-| Use case | License |
-|---|---|
-| Personal, academic, and non-commercial use | [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0) — free, source must remain open |
-| Commercial use | [PolyForm Commercial License](LICENSE-COMMERCIAL) — contact us for terms |
+| Use case                                   | License |
+|---                                         |---|
+| Personal, academic, and non-commercial use | [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0) — free, source must remain open                      |
+| Commercial use                             | [PolyForm Commercial License](LICENSE-COMMERCIAL) — contact us for terms |
 
 If you integrate EVAnalyzer into a commercial product or service, or distribute it as part of a commercial offering, a commercial license is required.  
 For commercial licensing enquiries, please open an issue or contact the maintainer directly.
@@ -529,6 +526,7 @@ For commercial licensing enquiries, please open an issue or contact the maintain
 ## Acknowledgements
 
 - [Bio-Formats](https://www.openmicroscopy.org/bio-formats/) — Open Microscopy Environment
+- [Bio-Formats-Rust](https://www.henlab.org/) — Johan Henriksson and his lab for porting Bioformats to Rust
 - [Slint](https://slint.dev/) — cross-platform UI toolkit for Rust
 - [Kornia-rs](https://github.com/kornia/kornia-rs) — computer vision primitives in Rust
 - [Skia](https://skia.org/) — 2D graphics renderer

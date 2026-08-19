@@ -15,7 +15,32 @@ use evanalyzer_core::ObjectRow;
 use plotters::coord::ReverseCoordTranslate;
 use plotters::coord::ranged1d::ReversibleRanged;
 use plotters::prelude::*;
+use plotters::style::{FontStyle, register_font};
 use std::path::Path;
+use std::sync::Once;
+
+// Registers the "sans-serif" family used by every `("sans-serif", size)`
+// style below. Plotters' `ab_glyph` backend (unlike its `ttf`/`font-kit`
+// backend) has no OS font database to fall back on, so without this, chart
+// text would silently fail to render. Bundling DejaVu Sans instead of
+// depending on `font-kit` drops the platform-specific font-discovery stack
+// (and, on Windows, the `dwrote` dependency) entirely.
+static FONT_INIT: Once = Once::new();
+
+fn ensure_fonts_registered() {
+    FONT_INIT.call_once(|| {
+        let _ = register_font(
+            "sans-serif",
+            FontStyle::Normal,
+            include_bytes!("../../assets/fonts/DejaVuSans.ttf"),
+        );
+        let _ = register_font(
+            "sans-serif",
+            FontStyle::Bold,
+            include_bytes!("../../assets/fonts/DejaVuSans-Bold.ttf"),
+        );
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Data computation
@@ -719,6 +744,7 @@ fn draw_histogram(
     root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
     data: &HistogramData,
 ) -> Result<Option<ChartHitTester>, InternalErrors> {
+    ensure_fonts_registered();
     root.fill(&WHITE).map_err(to_internal_error)?;
 
     let max_count = data
@@ -867,6 +893,7 @@ fn draw_scatter(
     root: DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
     data: &ScatterData,
 ) -> Result<Option<ChartHitTester>, InternalErrors> {
+    ensure_fonts_registered();
     root.fill(&WHITE).map_err(to_internal_error)?;
 
     let (x_min, x_max) = padded_axis_bounds(data.points.iter().map(|p| p.x));
@@ -1084,6 +1111,7 @@ fn draw_heatmap(
     scheme: HeatmapColorScheme,
     range: HeatmapRange,
 ) -> Result<(Option<ChartHitTester>, (f64, f64)), InternalErrors> {
+    ensure_fonts_registered();
     root.fill(&WHITE).map_err(to_internal_error)?;
 
     let (range_min, range_max) = range.resolve(&data.cells);

@@ -1,6 +1,7 @@
 accepted = [
     "Apache-2.0",
     "MIT",
+    "MIT-0",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
@@ -11,14 +12,68 @@ accepted = [
     "MPL-2.0",
     "Unlicense",
     "CDLA-Permissive-2.0",
-    "GPL-3.0-only",
     "IJG",
     "NCSA",
+    "bzip2-1.0.6"
 ]
 
 # evanalyzer's own workspace crates are all `publish = false` (see the
 # `[workspace.package]` entry in the root Cargo.toml) - they're internal
 # application crates, not published anywhere. This listing is meant to cover
 # third-party dependencies only, so keep our own AGPL-3.0 crates out of it.
+# Rebuild about: cargo about generate docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json
 [private]
 ignore = true
+
+# Copyleft licenses are deliberately *not* in the global `accepted` list above,
+# so a new dependency pulling in GPL/LGPL fails the build by default instead
+# of silently being allowed. Each crate below is a known, reviewed exception -
+# `accepted` here is additive to the global list, scoped to just this crate
+# (see https://embarkstudios.github.io/cargo-about/cli/generate/config.html).
+
+# Slint is used under its Royalty-free License (not GPL) - see
+# https://slint.dev/agreements/slint-royalty-free-license.pdf - but its own
+# Cargo.toml still declares "GPL-3.0-only OR LicenseRef-..." so cargo-about
+# needs GPL-3.0-only accepted to resolve it.
+[i-slint-backend-selector]
+accepted = ["GPL-3.0-only"]
+[i-slint-backend-testing]
+accepted = ["GPL-3.0-only"]
+[i-slint-backend-winit]
+accepted = ["GPL-3.0-only"]
+[i-slint-common]
+accepted = ["GPL-3.0-only"]
+[i-slint-compiler]
+accepted = ["GPL-3.0-only"]
+[i-slint-core]
+accepted = ["GPL-3.0-only"]
+[i-slint-core-macros]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-femtovg]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-skia]
+accepted = ["GPL-3.0-only"]
+[i-slint-renderer-software]
+accepted = ["GPL-3.0-only"]
+[slint]
+accepted = ["GPL-3.0-only"]
+[slint-build]
+accepted = ["GPL-3.0-only"]
+[slint-macros]
+accepted = ["GPL-3.0-only"]
+
+# bioformats declares itself GPL-2.0-or-later unconditionally in its own
+# Cargo.toml `license` field, even though its GPL-derived readers (CZI, ND2,
+# LIF, LSM, ...) are gated behind its own "gpl" Cargo feature, wired through
+# our `bioformats-gpl` feature (see crates/core/Cargo.toml and the
+# `evanalyzer_core` comment in the root Cargo.toml). Cargo has no per-feature
+# license field, so this exception is needed regardless of whether
+# `bioformats-gpl` is actually enabled in a given build - cargo-about reads
+# declared crate metadata, not which features got compiled in.
+[bioformats]
+accepted = ["GPL-2.0-or-later"]
+# mdbtools-pure-rs is an *unconditional* dependency of bioformats (not gated
+# behind its "gpl" feature), so disabling `bioformats-gpl` does not remove
+# this one.
+[mdbtools-pure-rs]
+accepted = ["LGPL-2.0-or-later"]

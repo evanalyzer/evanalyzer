@@ -10,7 +10,6 @@ publish = { workspace = true }
 [dependencies]
 evanalyzer_cfg = { workspace = true }
 evanalyzer_app = { workspace = true }
-burn = { workspace = true}
 schemars  = { workspace = true}
 serde_json  = { workspace = true}
 candle-core = "0.11.0"

@@ -1,12 +1,10 @@
 //! Third-party dependency license data for the About dialog.
 //!
 //! `generated/third_party_licenses.json` is produced by
-//! `cargo about generate about.hbs -o crates/gui/src/generated/third_party_licenses.json`
-//! (config: `about.toml`, template: `about.hbs`, both at the repo root) and
-//! committed to the repo - CI regenerates and commits it on pushes to main
-//! alongside the coverage badge, see `.github/workflows/ci.yml`. It is not
-//! regenerated at build time so a plain `cargo build` never depends on
-//! `cargo-about` being installed.
+//! `cargo about generate docs/about.hbs -o crates/gui/src/generated/third_party_licenses.json`
+//! (config: `about.toml` at the repo root, template: `docs/about.hbs`) and
+//! committed to the repo. It is not regenerated at build time so a plain
+//! `cargo build` never depends on `cargo-about` being installed.
 //!
 //! Grouped by exact license *text*, not just SPDX id: copyright lines differ
 //! crate to crate, so e.g. "MIT" covers many distinct text variants, each

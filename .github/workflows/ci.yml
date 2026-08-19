@@ -48,7 +48,7 @@ jobs:
         with:
           key: linux-x86_64-test
 
-      - name: Download native dependencies (JRE, Bio-Formats, libtorch CPU)
+      - name: Download native dependencies (libtorch CPU)
         # The `ai` (libtorch) feature is force-enabled workspace-wide - see
         # the comment on `evanalyzer_core` in the root Cargo.toml - so a
         # plain `cargo test` needs libtorch present even though this job
@@ -60,14 +60,6 @@ jobs:
 
       - name: Unzip libtorch
         run: unzip -q "libs/libtorch-"*.zip -d libs
-
-      - name: Unzip JRE for tests
-        # evanalyzer_core resolves the bundled JVM relative to the *crate's*
-        # own directory at runtime (crates/core/src/image/java.rs::set_path
-        # hardcodes "java/jre_linux"), and that's also `cargo test`'s working
-        # directory for evanalyzer_core's test binary - unlike release
-        # packaging, which unzips the same archive to dist/java/jre_linux.
-        run: unzip -q libs/jre_linux.zip -d crates/core/java/jre_linux
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov

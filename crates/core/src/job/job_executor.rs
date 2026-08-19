@@ -74,7 +74,7 @@ pub enum ProgressEvent {
         tile_height: usize,
         /// Original image bit depth (e.g. 8, 12, 16) — used for the
         /// pixel-value HUD so values are scaled to the real range.
-        nr_bits: u8,
+        nr_bits: u16,
         /// The channel the breakpointed pipeline actually started from
         /// (`ImageAddress::Channel(n)`), so the UI can look up *that*
         /// channel's histogram/LUT settings instead of guessing. `None`
@@ -1176,7 +1176,7 @@ impl<'a> JobExecutor {
         full_image_width: ImageSize,
         is_rgb: bool,
         image_rel_path: &PathBuf,
-        nr_of_bits: u8,
+        nr_of_bits: u16,
         pixel_sizes: PixelSizes,
     ) -> Result<PipelineCache, InternalErrors> {
         let loaded_channels = image_reader.read_image_tile_combined(
@@ -2086,15 +2086,14 @@ mod execution_order_tests {
 /// End-to-end coverage for `run`/`analyze_image_tiles_parallel`/
 /// `prepare_pipeline_cache` - the paths above only exercise the pure helper
 /// methods (tile math, precedence resolution, execution ordering), never the
-/// actual image-loading-through-DB-export flow. Uses the same real BioFormats
-/// fixture and JVM setup as `image_reader`'s tests.
+/// actual image-loading-through-DB-export flow. Uses the same real image
+/// fixture as `image_reader`'s tests.
 #[cfg(test)]
 mod full_run_integration_tests {
     use super::*;
     use crate::algos::{
         ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod,
     };
-    use crate::init_java_wrapper;
     use crate::pipeline::pipeline::CorePipelineSettings;
     use crate::storage::memory::MemoryExporter;
     use evanalyzer_cfg::core_types::{PixelUnits, SegmentationClass};
@@ -2160,7 +2159,6 @@ mod full_run_integration_tests {
 
     #[test]
     fn run_on_a_real_fixture_image_writes_extracted_objects_through_the_exporter() {
-        init_java_wrapper(1_000_000_000).unwrap();
         let out_objects = Arc::new(Mutex::new(Vec::new()));
         let job = make_single_image_job(out_objects.clone());
 
@@ -2221,7 +2219,6 @@ mod full_run_integration_tests {
 
     #[test]
     fn run_still_processes_the_rest_of_the_batch_after_one_image_fails() {
-        init_java_wrapper(1_000_000_000).unwrap();
         let out_objects = Arc::new(Mutex::new(Vec::new()));
         let valid = PathBuf::from("multi-channel-4D-series.ome.tif");
         let invalid = PathBuf::from("does-not-exist.ome.tif");
@@ -2262,7 +2259,6 @@ mod full_run_integration_tests {
 
     #[test]
     fn count_preview_visible_tiles_matches_the_real_fixture_images_single_tile_grid() {
-        init_java_wrapper(1_000_000_000).unwrap();
         let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
 
         // The fixture image is far smaller than the 4096px base tile size
@@ -2326,7 +2322,6 @@ mod tests {
             Blur, ConnectedComponents, ExtractObjects, ImageSource, SaveImage, Threshold,
             ThresholdEntry, ThresholdMethod,
         },
-        init_java_wrapper,
         pipeline::pipeline::CorePipelineSettings,
     };
 
@@ -2334,8 +2329,6 @@ mod tests {
     fn simple_pipeline() -> Result<(), InternalErrors> {
         ////////////////
         env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
-
-        init_java_wrapper(1000000000).expect("Can not init JAVA");
 
         // First pipeline
         let mut pipeline = Pipeline::new(

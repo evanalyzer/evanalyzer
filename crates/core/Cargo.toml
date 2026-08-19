@@ -9,7 +9,7 @@ publish = { workspace = true }
 [dependencies]
 macros = { path = "./macros" }
 evanalyzer_cfg = { workspace = true }
-kornia-tensor = { version = "0.1.14"}
+kornia-tensor ={ workspace = true }
 kornia-image = { workspace = true }
 kornia-imgproc = { workspace = true }
 kornia-apriltag = { workspace = true }
@@ -21,18 +21,30 @@ kornia-apriltag = { workspace = true }
 zune-core = "=0.5.3"
 image = { workspace = true }
 log = { workspace = true }
-jni = {version = "0.22.4", features = ["invocation"]}
-quick-xml = { workspace = true }
+# Pinned to a specific commit (not `branch = "main"`) for reproducible builds
+# - bump deliberately with `cargo update -p bioformats --precise <rev>`, don't
+# let it float. The "gpl" feature is deliberately *not* listed here; it's
+# wired through our own `bioformats-gpl` feature below instead, so the
+# workspace root can toggle it (see the `evanalyzer_core` comment in the root
+# Cargo.toml).
+bioformats = { git = "https://github.com/henriksson-lab/bioformats-rs", rev = "cd99301e10fec890f940ddd969c7ceb071f45751", features = [
+    "jpegxr",
+    "zarr",
+    "tissuefaxs",
+] }
 ndarray = { workspace = true }
 rayon = { workspace = true }
-serde = { workspace = true, features = ["derive","rc"] }
-indexmap = { workspace = true, features = ["serde","rayon"] }
-bitvec = { workspace = true, features = ["serde", "alloc","atomic","std"] }
+serde = { workspace = true, features = ["derive", "rc"] }
+indexmap = { workspace = true, features = ["serde", "rayon"] }
+bitvec = { workspace = true, features = ["serde", "alloc", "atomic", "std"] }
 csv = { workspace = true }
 duckdb = { workspace = true }
 tch = { version = "0.24.0", optional = true }
 smartcore = { version = "0.5.5", features = ["serde"], optional = true }
-burn = { version = "0.21", default-features = false, features = ["ndarray", "autodiff"], optional = true }
+burn = { version = "0.21", default-features = false, features = [
+    "ndarray",
+    "autodiff",
+], optional = true }
 serde_json = { workspace = true, optional = true }
 petname = "3.1.0"
 chrono = { workspace = true }
@@ -40,6 +52,13 @@ sysinfo = "0.39.6"
 
 [features]
 ai = ["dep:tch", "dep:smartcore", "dep:burn", "dep:serde_json"]
+# Enables bioformats' own "gpl" feature - the GPL-2.0-or-later readers ported
+# from upstream Bio-Formats' `formats-gpl` module (CZI, ND2, LIF, LSM, and
+# others - see bioformats-rs' README for the full list). Disabling this drops
+# those formats but yields a BSD-2-Clause-only bioformats build. Toggle from
+# the workspace root, not here - see the `evanalyzer_core` comment in the
+# root Cargo.toml.
+bioformats-gpl = ["bioformats/gpl"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 duckdb = { workspace = true, features = ["bundled"] }
@@ -49,6 +68,8 @@ approx = "0.5"
 env_logger = { workspace = true }
 tempfile = { workspace = true }
 
+[package.metadata.cargo-machete]
+ignored = ["zune-core"]
 
 [lib]
 name = "evanalyzer_core"

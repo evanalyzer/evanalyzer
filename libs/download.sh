@@ -8,7 +8,7 @@
 #     NOT from our GitHub release, because CUDA libtorch is far larger than the
 #     2 GiB-per-file limit on GitHub release assets - and pytorch.org has no such
 #     limit and is the reproducible upstream source.
-#   * everything else (JRE, Bio-Formats, DuckDB) -> our GitHub "app-deps" release.
+#   * everything else (DuckDB) -> our GitHub "app-deps" release.
 #     These are all small (< 100 MB), so the size limit is a non-issue.
 #
 # Why a script and not build.rs:
@@ -25,8 +25,6 @@
 #
 # The "app-deps" release must contain these (small) assets:
 #   libduckdb-windows-amd64.zip   libduckdb-osx-universal.zip
-#   jre_linux.zip   jre_win.zip   jre_macos_arm.zip
-#   bioformats.jar
 #
 # Overridable via env: EVA_DEPS_REPO, EVA_DEPS_TAG, LIBTORCH_VERSION, CUDA_VARIANT.
 
@@ -41,9 +39,7 @@ CUDA_VARIANT="${CUDA_VARIANT:-cu128}"
 TORCH_BASE="https://download.pytorch.org/libtorch"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LIBS_DIR="${SCRIPT_DIR}"
-JAVA_SRC_DIR="${ROOT_DIR}/crates/core/java/src"
 
 TARGET="${1:-}"
 if [[ -z "${TARGET}" ]]; then
@@ -76,32 +72,24 @@ fetch_libtorch() {
     fetch "${TORCH_BASE}/${flavour}/${url_name}" "${LIBS_DIR}/${filename}"
 }
 
-# Bio-Formats reader: needed for every target (javac compiles against it).
-fetch "${RELEASE_BASE}/bioformats.jar" "${JAVA_SRC_DIR}/bioformats.jar"
-
 case "${TARGET}" in
     linux-cpu)
         fetch_libtorch cpu "libtorch-shared-with-deps-${LIBTORCH_VERSION}+cpu.zip"
-        fetch "${RELEASE_BASE}/jre_linux.zip" "${LIBS_DIR}/jre_linux.zip"
         ;;
     linux-cuda)
         fetch_libtorch "${CUDA_VARIANT}" "libtorch-shared-with-deps-${LIBTORCH_VERSION}+${CUDA_VARIANT}.zip"
-        fetch "${RELEASE_BASE}/jre_linux.zip" "${LIBS_DIR}/jre_linux.zip"
         ;;
     win-cpu)
         fetch_libtorch cpu "libtorch-win-shared-with-deps-${LIBTORCH_VERSION}+cpu.zip"
         fetch "${RELEASE_BASE}/libduckdb-windows-amd64.zip" "${LIBS_DIR}/libduckdb-windows-amd64.zip"
-        fetch "${RELEASE_BASE}/jre_win.zip" "${LIBS_DIR}/jre_win.zip"
         ;;
     win-cuda)
         fetch_libtorch "${CUDA_VARIANT}" "libtorch-win-shared-with-deps-${LIBTORCH_VERSION}+${CUDA_VARIANT}.zip"
         fetch "${RELEASE_BASE}/libduckdb-windows-amd64.zip" "${LIBS_DIR}/libduckdb-windows-amd64.zip"
-        fetch "${RELEASE_BASE}/jre_win.zip" "${LIBS_DIR}/jre_win.zip"
         ;;
     mac-cpu)
         fetch_libtorch cpu "libtorch-macos-arm64-${LIBTORCH_VERSION}.zip"
         fetch "${RELEASE_BASE}/libduckdb-osx-universal.zip" "${LIBS_DIR}/libduckdb-osx-universal.zip"
-        fetch "${RELEASE_BASE}/jre_macos_arm.zip" "${LIBS_DIR}/jre_macos_arm.zip"
         ;;
     *)
         echo "unknown target: ${TARGET}" >&2

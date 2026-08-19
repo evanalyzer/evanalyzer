@@ -1,0 +1,77 @@
+# LibTorch CUDA files that are NOT shipped in release packages.
+#
+# Read by .github/workflows/release.yml's build-linux-cuda and
+# build-windows-cuda "Package" steps: every matched file is deleted from
+# dist/ after `cp libs/libtorch/lib/*` copies everything in. One glob
+# pattern per line; blank lines and lines starting with # are ignored.
+# Patterns are intentionally listed for both platforms in one shared file -
+# a .dll pattern is simply a no-op on Linux and vice versa.
+#
+# Every entry here is gated by a *platform or API this app never uses*, not
+# by which model gets loaded - confirmed safe regardless of which
+# TorchScript model (including arbitrary externally-sourced BioImage Model
+# Zoo models) runs through it. Verified against the real libtorch
+# distribution's PE/ELF import tables, not guessed - see chat history for
+# the full per-file reasoning if this needs revisiting.
+#
+# Deliberately NOT excluded here, despite being large:
+#   - libcudnn_*.so.9 / cudnn_*.dll (~946MB): cuDNN 9 dlopen()s these by
+#     name at runtime depending on which op/engine actually runs - nothing
+#     in the static import graph references them, but they are required.
+#     Dropping any one risks a crash the first time some model's specific
+#     op hits that engine.
+#   - libnvrtc*.so.12, libnvrtc-builtins.so, libcaffe2_nvrtc.so /
+#     nvrtc*.dll, caffe2_nvrtc.dll (~106MB): TorchScript's automatic CUDA
+#     operator fusion can invoke NVRTC for *any* loaded model - this is
+#     default PyTorch behavior, not something the model or app opts into,
+#     so it can't be ruled out for arbitrary user-supplied models.
+#   - libcusparseLt-*.so.0 / cusparseLt*.dll (~432MB): only needed for
+#     structured-sparse models. Lower risk than the two above (requires a
+#     deliberate export-time choice, not an automatic runtime heuristic),
+#     but still model-content-gated - left in by default since this app
+#     accepts arbitrary external models. Trim manually if you want to
+#     accept that risk for the extra ~432MB saved.
+
+# Python C-extension bindings - tch (Rust) links libtorch's C++ API
+# directly and never touches PyTorch's Python layer.
+libtorch_python.so
+torch_python.dll
+
+# Multi-GPU/multi-node distributed communication (NVSHMEM) - this app runs
+# single-process, single-GPU inference only.
+libnvshmem_host-*.so.*
+nvshmem_host*.dll
+
+# Profiling-only instrumentation (Nsight Compute counters / NVTX markers) -
+# never invoked by any code path in this app.
+libnvperf_host-*.so
+libnvToolsExt-*.so.*
+nvperf_host*.dll
+nvToolsExt*.dll
+
+# GPUDirect Storage (direct disk<->GPU DMA) - not used; this app reads
+# pixel data through normal file I/O.
+libcufile-*.so.*
+libcufile_rdma-*.so.*
+cufile*.dll
+
+# PyTorch's own internal test fixtures, bundled in the redistributable by
+# mistake upstream - never loaded by any real model.
+libtorchbind_test.so
+libc10d_cuda_test.so
+libjitbackend_test.so
+libbackend_with_compiler.so
+torchbind_test.dll
+c10d_cuda_test.dll
+jitbackend_test.dll
+backend_with_compiler.dll
+
+# Android NNAPI mobile backend - this is a desktop app, not Android.
+libnnapi_backend.so
+nnapi_backend.dll
+
+# AOTInductor custom-ops runtime - only used by torch.export/AOTInductor-
+# compiled model artifacts, a separate export/loading path from the
+# TorchScript (.pt) models this app actually loads.
+libaoti_custom_ops.so
+aoti_custom_ops.dll

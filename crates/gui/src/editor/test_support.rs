@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Builds a real `UiState` backed by a fresh, empty, in-memory project - no
-/// JVM, no Slint window/platform required.
+/// Slint window/platform required.
 pub(crate) fn test_ui_state() -> Arc<UiState> {
     test_ui_state_with_project(ProjectWithRuntime::default())
 }
