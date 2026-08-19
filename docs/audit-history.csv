@@ -20,3 +20,6 @@ date,commit,kind,crate,version,advisory_id,cve,cvss_vector,title
 2026-08-10T19:07:29Z,216d622f,clean,,,,,,No vulnerabilities or warnings found
 2026-08-12T14:15:24Z,d4086c88,clean,,,,,,No vulnerabilities or warnings found
 2026-08-12T17:09:00Z,3779921f,clean,,,,,,No vulnerabilities or warnings found
+2026-08-19T15:20:10Z,5698a3b5,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0194,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Quadratic run time when checking a start tag for duplicate attribute names
+2026-08-19T15:20:10Z,5698a3b5,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0195,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+2026-08-19T15:20:10Z,5698a3b5,unsound,lru,0.16.4,RUSTSEC-2026-0253,,,Potential use-after-free due to lack of panic safety in `LruCache::pop()`
