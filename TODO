@@ -10,9 +10,9 @@
 
 ## Algorithms
 - [ ] Add measure distance command
-- [ ] Allow to train pixel classifier
-- [ ] Add fill holes command
-- [ ] Add AI Object classifier command
+- [x] Allow to train pixel classifier
+- [x] Add fill holes command
+- [x] Add AI Object classifier command
 
 ## GUI review (Slint/gui crate)
 
