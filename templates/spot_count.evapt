@@ -3,8 +3,9 @@
     "name": "Spot count",
     "shortDescription": "Count the number of spots in an image channel.",
     "description": "Count the number of spots in an image channel.",
-    "authorFirstName": "Melanie",
-    "authorLastName": "Schuerz",
+    "authors": [
+      "Melanie Schuerz"
+    ],
     "authorOrganization": "University of Salzburg",
     "creationTime": "2026-06-11T00:00:00Z",
     "category": "Spot Detection",

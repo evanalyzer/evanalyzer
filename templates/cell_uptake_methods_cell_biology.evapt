@@ -3,8 +3,10 @@
     "name": "EV uptake in cells",
     "shortDescription": "Methods of Cell Biology course",
     "description": "Methods of Cell Biology course",
-    "authorFirstName": "Melanie",
-    "authorLastName": "Schuerz, Anna Dlugosch",
+    "authors": [
+      "Melanie Schuerz",
+      "Anna Dlugosch"
+    ],
     "authorOrganization": "LBI NVPM",
     "creationTime": "2026-06-11T00:00:00Z",
     "category": "Cell Biology / Uptake",

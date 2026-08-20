@@ -3,8 +3,9 @@
     "name": "Coloc 3 channels",
     "shortDescription": "Spot colocalization with three image channels.",
     "description": "Spot colocalization with three image channels.",
-    "authorFirstName": "Melanie",
-    "authorLastName": "Schuerz",
+    "authors": [
+      "Melanie Schuerz"
+    ],
     "authorOrganization": "University of Salzburg",
     "creationTime": "2026-06-11T00:00:00Z",
     "category": "Colocalization",

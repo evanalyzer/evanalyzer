@@ -2082,12 +2082,8 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         })
         .unwrap_or(StepCategory::Preprocess);
 
-    let author = format!(
-        "{} {}",
-        template.meta.author_first_name, template.meta.author_last_name
-    )
-    .trim()
-    .to_string();
+    let author = template.meta.authors.first().cloned().unwrap_or_default();
+    let co_authors = template.meta.authors.get(1..).unwrap_or(&[]).join(", ");
 
     CommandDef {
         id: -(idx as i32) - 1,
@@ -2103,6 +2099,7 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         default_params: ModelRc::default(),
         is_template: true,
         author: author.into(),
+        co_authors: co_authors.into(),
         organization: template.meta.author_organization.clone().into(),
         creation_time: template
             .meta
@@ -2135,6 +2132,7 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         default_params: ModelRc::default(),
         is_template: false,
         author: "".into(),
+        co_authors: "".into(),
         organization: "".into(),
         creation_time: "".into(),
     };
@@ -2274,11 +2272,8 @@ fn format_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> Str
     if !meta.description.is_empty() {
         out.push_str(&format!("\n{}\n", meta.description));
     }
-    let author = format!("{} {}", meta.author_first_name, meta.author_last_name)
-        .trim()
-        .to_string();
-    if !author.is_empty() {
-        out.push_str(&format!("\nAuthor: {author}\n"));
+    if !meta.authors.is_empty() {
+        out.push_str(&format!("\nAuthor: {}\n", meta.authors.join(", ")));
     }
     match &saved.settings.classifier {
         AiLearningClassifierSettings::Pixel { class_labels, .. } => {
@@ -2428,8 +2423,7 @@ mod tests {
                 name: format!("Template {idx_seed}"),
                 short_description: "short".into(),
                 description: "long description".into(),
-                author_first_name: "Ada".into(),
-                author_last_name: "Lovelace".into(),
+                authors: vec!["Ada Lovelace".into()],
                 ..Default::default()
             },
             pipeline_steps: steps,
@@ -2465,18 +2459,25 @@ mod tests {
     }
 
     #[test]
-    fn template_to_command_def_joins_author_names_and_trims_when_empty() {
+    fn template_to_command_def_uses_the_first_author_and_joins_the_rest_as_co_authors() {
         let mut t = template("X", vec![]);
         let def = template_to_command_def(0, &t);
         assert_eq!(def.author, SharedString::from("Ada Lovelace"));
+        assert_eq!(def.co_authors, SharedString::from(""));
 
-        t.meta.author_first_name.clear();
-        t.meta.author_last_name.clear();
+        t.meta.authors.push("Alan Turing".into());
+        let def_with_co_author = template_to_command_def(0, &t);
+        assert_eq!(
+            def_with_co_author.co_authors,
+            SharedString::from("Alan Turing")
+        );
+
+        t.meta.authors.clear();
         let def_empty = template_to_command_def(0, &t);
         assert_eq!(
             def_empty.author,
             SharedString::from(""),
-            "no dangling space with both names empty"
+            "no author when the authors list is empty"
         );
     }
 
@@ -2677,8 +2678,7 @@ mod tests {
                 name: "Model".into(),
                 short_description: "A short summary".into(),
                 description: "A longer description.".into(),
-                author_first_name: "Ada".into(),
-                author_last_name: "Lovelace".into(),
+                authors: vec!["Ada Lovelace".into()],
                 ..Default::default()
             },
         );
