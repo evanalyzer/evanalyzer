@@ -67,6 +67,7 @@ export struct CommandDef {
     // Pipeline template entries (negative ids).
     is-template: bool,
     author: string,
+    co-authors: string,
     organization: string,
     creation-time: string,
 }
@@ -533,6 +534,24 @@ component DetailPane inherits Rectangle {
 
                 Text {
                     text: cmd.author;
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    overflow: elide;
+                }
+            }
+
+            if cmd.is-template && cmd.co-authors != "": HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: "Co-authors";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                }
+
+                Text {
+                    text: cmd.co-authors;
                     color: Theme.text-dim;
                     font-size: 10.5px;
                     font-family: Theme.font-mono;

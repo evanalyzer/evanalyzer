@@ -1248,17 +1248,17 @@
           "type": "string",
           "default": ""
         },
-        "authorFirstName": {
-          "description": "Author first name",
-          "type": "string"
-        },
-        "authorLastName": {
-          "description": "Author last name",
-          "type": "string"
-        },
         "authorOrganization": {
           "description": "Author organization",
           "type": "string"
+        },
+        "authors": {
+          "description": "Every author, in display order (the first entry is treated as the\nprimary author in template/pipeline picker dialogs, the rest as\nco-authors). Free-form display strings, not split into first/last.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
         },
         "category": {
           "description": "Category used to group templates in pickers (e.g. \"Cell Biology / Uptake\")",
@@ -1295,8 +1295,6 @@
         "name",
         "shortDescription",
         "description",
-        "authorFirstName",
-        "authorLastName",
         "authorOrganization",
         "creationTime"
       ]

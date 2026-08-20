@@ -1,8 +1,22 @@
+use evanalyzer_cfg::core_types::InternalErrors;
 use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
 use evanalyzer_cfg::{PIPELINE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS};
 use std::path::{Path, PathBuf};
 
 use crate::settings::get_user_folder;
+
+/// Loads a single `ProjectTemplate` from an arbitrary path (e.g. one picked
+/// via a file-open dialog), rather than scanning a whole templates folder
+/// like [`load_project_templates`] does. Unlike that bulk scan - which
+/// silently skips files that fail to parse, since one bad file in a folder
+/// shouldn't block the rest - a single explicitly-opened file surfaces its
+/// error so the caller can show it to the user.
+pub fn load_project_template_from_file(path: &Path) -> Result<ProjectTemplate, InternalErrors> {
+    let data =
+        std::fs::read_to_string(path).map_err(|e| InternalErrors::Internal(e.to_string()))?;
+    serde_json::from_str(&data)
+        .map_err(|e| InternalErrors::Internal(format!("Failed to parse project template: {e}")))
+}
 
 /// Returns the directory where templates shipped with the application are stored.
 ///

@@ -3,8 +3,9 @@
     "name": "Cell uptake 3 channels coloc",
     "shortDescription": "Uptake assay with two spot channels and brightfield cell.",
     "description": "Uptake assay with two spot channels and brightfield cell.",
-    "authorFirstName": "Melanie",
-    "authorLastName": "Schuerz",
+    "authors": [
+      "Melanie Schuerz"
+    ],
     "authorOrganization": "University of Salzburg",
     "creationTime": "2026-06-11T00:00:00Z",
     "category": "Cell Biology / Uptake",

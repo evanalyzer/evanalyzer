@@ -114,9 +114,14 @@ impl ProjectSettingsController {
             {
                 let meta = &mut project.metadata;
                 let full_name: String = project_settings.author_name.clone().into();
-                let mut parts = full_name.split_whitespace();
-                meta.author_first_name = parts.next().unwrap_or("").into();
-                meta.author_last_name = parts.next().unwrap_or("").into();
+                // This field only ever edits the primary author (authors[0]);
+                // any co-authors past that (only settable today by
+                // hand-editing the project file) are left untouched.
+                match meta.authors.first_mut() {
+                    Some(primary) => *primary = full_name,
+                    None if !full_name.is_empty() => meta.authors.push(full_name),
+                    None => {}
+                }
                 meta.author_organization = project_settings.organization_name.clone().into();
                 meta.name = project_settings.project_name.clone().into();
             }
@@ -157,9 +162,7 @@ impl ProjectSettingsController {
 
         let (author_name, organization) = {
             let addr = &project.metadata;
-            let full_name = format!("{} {}", addr.author_first_name, addr.author_last_name)
-                .trim()
-                .to_string();
+            let full_name = addr.authors.first().cloned().unwrap_or_default();
             (full_name, addr.author_organization.clone())
         };
 
@@ -417,8 +420,7 @@ mod tests {
         controller.update_project_settings_in_project(&sample_settings());
 
         let project = ui_state.get_project();
-        assert_eq!(project.metadata.author_first_name, "Ada");
-        assert_eq!(project.metadata.author_last_name, "Lovelace");
+        assert_eq!(project.metadata.authors, vec!["Ada Lovelace".to_string()]);
         assert_eq!(project.metadata.author_organization, "Analytical Engines");
         assert_eq!(project.metadata.name, "Test Project");
         assert_eq!(project.plate.well_rows, 2);

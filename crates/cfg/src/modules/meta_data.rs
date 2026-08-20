@@ -13,11 +13,11 @@ pub struct MetaData {
     /// A long detailed description of the module
     pub description: String,
 
-    /// Author first name
-    pub author_first_name: String,
-
-    /// Author last name
-    pub author_last_name: String,
+    /// Every author, in display order (the first entry is treated as the
+    /// primary author in template/pipeline picker dialogs, the rest as
+    /// co-authors). Free-form display strings, not split into first/last.
+    #[serde(default)]
+    pub authors: Vec<String>,
 
     /// Author organization
     pub author_organization: String,
