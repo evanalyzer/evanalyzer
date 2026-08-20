@@ -223,10 +223,10 @@ fn to_tensors(
 /// per epoch is the sample-count-weighted mean loss across that epoch's
 /// batches (the last batch is often smaller than the rest).
 ///
-/// TODO: `settings.seed` is used for the train/val split and per-epoch batch
-/// shuffling above but not yet for weight initialization (burn's
-/// `LinearConfig::init` doesn't take a seed directly), so two runs with the
-/// same seed still get different starting weights.
+/// `settings.seed` also seeds weight initialization (via `MlpBackend::seed`,
+/// right before `Mlp::new`), so together with the train/val split and
+/// per-epoch batch shuffling above, two runs with the same seed produce the
+/// same trained model.
 pub fn fit_mlp(
     rows: &[Vec<f32>],
     labels: &[usize],
@@ -260,6 +260,14 @@ pub fn fit_mlp(
         )
     });
 
+    // Seeds burn's global initialization RNG so `Mlp::new`'s layer weights
+    // are deterministic for a given `settings.seed`, not just the train/val
+    // split and batch shuffling above (burn's `LinearConfig::init` pulls
+    // from this global RNG rather than taking a seed directly - this is the
+    // only way to make it deterministic). Must happen right before the
+    // model is constructed, since it seeds a shared RNG rather than the
+    // model itself.
+    MlpBackend::seed(&device, settings.seed);
     let mut model = Mlp::<MlpBackend>::new(&device, n_in, &settings.hidden_layers, n_classes);
     let mut optim = AdamConfig::new()
         .with_epsilon(settings.epsilon as f32)
@@ -404,6 +412,14 @@ mod tests {
             hidden_layers: vec![4],
             epochs: 300,
             learning_rate: 0.05,
+            // `MlpSettings::default()`'s seed (0) now that weight init is
+            // seeded (see `MlpBackend::seed` above) happens to draw a dead
+            // ReLU initialization for this tiny 4-unit network - it never
+            // recovers in 300 epochs, regardless of how well-separated the
+            // data is. Confirmed by sweeping seeds 0..30: 0 is the only one
+            // that fails. Pin to a seed verified to converge rather than
+            // leave this flaky/seed-dependent.
+            seed: 1,
             ..Default::default()
         };
 
@@ -456,6 +472,11 @@ mod tests {
                 epochs: 300,
                 learning_rate: 0.05,
                 activation,
+                // See the seed comment in
+                // `fit_mlp_separates_two_well_separated_clusters` above -
+                // the default seed (0) fails to converge specifically under
+                // `Relu`, for the same reason.
+                seed: 1,
                 ..Default::default()
             };
             let (progress, cancel) = no_op_progress();
@@ -494,6 +515,9 @@ mod tests {
             epochs: 300,
             learning_rate: 0.05,
             batch_size: 7, // 30 rows / 7 = 4 batches of [7, 7, 7, 3] once val split removes some
+            // See the seed comment in
+            // `fit_mlp_separates_two_well_separated_clusters` above.
+            seed: 1,
             ..Default::default()
         };
 
