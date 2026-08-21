@@ -406,8 +406,18 @@ impl ClassifyObjects {
             return false;
         }
 
-        // Check circularity
-        let circularity = object.circularity();
+        // Check circularity. ImageJ's own particle analyzer (see
+        // `ParticleAnalyzer.analyzeParticle`) clamps circularity to 1.0 for
+        // this comparison specifically - not for the value it reports -
+        // since small/blocky shapes can legitimately compute to just above
+        // 1.0 (the traced-perimeter algorithm's corner correction slightly
+        // undercorrects them), and without the clamp a `max_circularity`
+        // left at its default of 1.0 would reject shapes ImageJ itself would
+        // still call "circularity 1.0" and keep.
+        let mut circularity = object.circularity();
+        if circularity > 1.0 && self.max_circularity <= 1.0 {
+            circularity = 1.0;
+        }
         if circularity < self.min_circularity || circularity > self.max_circularity {
             return false;
         }
