@@ -18,6 +18,7 @@
 use crate::{
     algos::ImageAlgorithm,
     object::{Object, ObjectInit},
+    spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
     InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
@@ -136,6 +137,16 @@ impl ImageAlgorithm for Colocalization {
             class_buckets.insert(target_class.clone(), matched_ids);
         }
 
+        // Spatial index per class bucket, used below to prune the "does this anchor
+        // overlap an object of this other class" scan down from a full bucket walk to a
+        // small candidate list - see `BboxGrid` docs. Built once per class and reused
+        // across every anchor, since a class's bucket (and its objects' positions) don't
+        // change during this pass.
+        let class_grids: std::collections::HashMap<ObjectClass, BboxGrid> = class_buckets
+            .iter()
+            .map(|(class, ids)| (*class, BboxGrid::build(ids, cache)))
+            .collect();
+
         // ROIs carrying any of `exclude_classes` (subject to the same `filter_classes`).
         // An anchor overlapping one of these by at least `min_coloc_area` is dropped
         // entirely, regardless of how well it matches `classes_to_coloc`.
@@ -157,6 +168,7 @@ impl ImageAlgorithm for Colocalization {
                 .map(|object| object.id.clone())
                 .collect()
         };
+        let exclude_grid = BboxGrid::build(&exclude_ids, cache);
 
         let mut overlap_matches: std::collections::HashMap<
             ObjectId,
@@ -188,8 +200,8 @@ impl ImageAlgorithm for Colocalization {
                 if target_idx == source_idx {
                     continue;
                 }
-                let target_bucket = match class_buckets.get(target_class) {
-                    Some(b) => b,
+                let target_grid = match class_grids.get(target_class) {
+                    Some(g) => g,
                     None => continue,
                 };
                 for source_id in source_ids {
@@ -197,10 +209,11 @@ impl ImageAlgorithm for Colocalization {
                         Some(o) => o,
                         None => continue,
                     };
+                    let candidates = target_grid.candidates(source_object.bbox);
                     if let Some(best_id) = Self::best_overlap(
                         source_object,
                         source_id,
-                        target_bucket,
+                        &candidates,
                         cache,
                         min_area_px,
                     ) {
@@ -232,14 +245,15 @@ impl ImageAlgorithm for Colocalization {
                     if other_idx == class_idx {
                         continue;
                     }
-                    let other_bucket = match class_buckets.get(other_class) {
-                        Some(b) => b,
+                    let other_grid = match class_grids.get(other_class) {
+                        Some(g) => g,
                         None => continue 'anchor,
                     };
+                    let other_candidates = other_grid.candidates(anchor_object.bbox);
 
                     // Compute the actual overlap and keep only entries meeting min_area_px.
                     // Each entry is (ObjectId, overlap_area_in_pixels).
-                    let mut candidates: Vec<(ObjectId, usize)> = other_bucket
+                    let mut candidates: Vec<(ObjectId, usize)> = other_candidates
                         .iter()
                         .filter(|other_id| *other_id != anchor_id)
                         .filter_map(|other_id| {
@@ -289,7 +303,7 @@ impl ImageAlgorithm for Colocalization {
 
                 // The anchor satisfies classes_to_coloc, but drop it if it also overlaps
                 // (by at least min_coloc_area) any object from an excluded class.
-                if exclude_ids.iter().any(|excl_id| {
+                if exclude_grid.candidates(anchor_object.bbox).iter().any(|excl_id| {
                     excl_id != anchor_id
                         && cache
                             .object_cache
@@ -524,6 +538,102 @@ mod tests {
 
     fn run(coloc: &Colocalization, cache: &mut PipelineCache) {
         coloc.execute(&mut make_ctx(), cache).unwrap();
+    }
+
+    /// Manual repro/benchmark, originally written to demonstrate that `execute` scanned,
+    /// for every anchor object, *every* object of every other class-to-coloc via a plain
+    /// nested loop with no spatial index at all - O(class_a_count * class_b_count)
+    /// regardless of how many pairs actually overlap. `MANY_TO_MANY` colocalization is
+    /// exactly the production pipeline shape from a user report (a pipeline chaining 12
+    /// sequential MANY_TO_MANY steps): a noisy/low-threshold channel producing tens of
+    /// thousands of tiny spurious objects on one image could stall for over an hour.
+    /// Fixed by `BboxGrid` (see `spatial_grid.rs`), which prunes each anchor's per-class
+    /// scan down to a small candidate list instead of the whole bucket. Left in place as a
+    /// regression benchmark - a future change to `execute` that accidentally drops back to
+    /// a full scan should show up here as scaling roughly quadratically again instead of
+    /// near-linearly. Not asserted against a baseline (timing isn't deterministic across
+    /// machines), so it must still be read manually. Run manually with:
+    ///   cargo test --release -p evanalyzer_core --features ai -- --ignored \
+    ///     repro_many_to_many_coloc_object_count_scaling --nocapture
+    #[test]
+    #[ignore]
+    fn repro_many_to_many_coloc_object_count_scaling() {
+        // xorshift32 - deterministic, no external dep needed.
+        struct Rng(u32);
+        impl Rng {
+            fn next(&mut self) -> u32 {
+                self.0 ^= self.0 << 13;
+                self.0 ^= self.0 >> 17;
+                self.0 ^= self.0 << 5;
+                self.0
+            }
+            fn range(&mut self, n: u32) -> u32 {
+                self.next() % n
+            }
+        }
+
+        // Small (3x3px), scattered, non-overlapping-within-class objects -
+        // real EV/puncta detections are small and sparse; what's under test
+        // is the class_a x class_b scan cost, not overlap resolution itself.
+        fn scattered_objects(
+            n: u32,
+            class: ObjectClass,
+            id_base: u128,
+            span: u32,
+            seed: u32,
+        ) -> Vec<Object> {
+            let mut rng = Rng(seed.max(1));
+            let mut objects = Vec::with_capacity(n as usize);
+            for i in 0..n {
+                // Stride placement (not fully random) guarantees no
+                // within-class overlap regardless of n, isolating the
+                // cross-class scan cost from any O(n^2) contribution the
+                // *input generation* itself might otherwise add.
+                let cell = i;
+                let x = (cell % span) * 4;
+                let y = (cell / span) * 4;
+                let jitter = rng.range(2);
+                let x = x + jitter;
+                let y = y + jitter;
+                objects.push(make_filled_object(
+                    id_base + i as u128,
+                    [x, y, x + 2, y + 2],
+                    ImagePlane::default(),
+                    class,
+                ));
+            }
+            objects
+        }
+
+        for &n in &[500u32, 2_000, 8_000, 20_000] {
+            let span = (n as f64).sqrt().ceil() as u32 + 1;
+            let mut cache = PipelineCache::default();
+            for o in scattered_objects(n, CLASS_A, 100_000, span, 111) {
+                cache.object_cache.insert(o.id.clone(), o);
+            }
+            for o in scattered_objects(n, CLASS_B, 900_000_000, span, 222) {
+                cache.object_cache.insert(o.id.clone(), o);
+            }
+
+            let coloc = Colocalization {
+                classes_to_coloc: vec![CLASS_A, CLASS_B],
+                filter_classes: vec![],
+                exclude_classes: vec![],
+                class_for_overlapping_areas: CLASS_OVERLAP,
+                multiplicity: ColocMultiplicity::ManyToMany,
+                size_unit: SizeUnits::Pixels,
+                min_coloc_area: 0.0,
+            };
+
+            let t0 = std::time::Instant::now();
+            run(&coloc, &mut cache);
+            let elapsed = t0.elapsed();
+
+            println!(
+                "class_a={n:6} class_b={n:6} ({:>12} pairs scanned) -> {elapsed:8.2?}",
+                n as u64 * n as u64
+            );
+        }
     }
 
     #[test]
@@ -1559,5 +1669,137 @@ mod tests {
             cell_1_c, expected_cell_1_c,
             "Cell 1 must not list a C spot it merely touches but didn't win"
         );
+    }
+
+    // --- BboxGrid integration cross-check ---
+
+    /// End-to-end cross-check of the grid-pruned scan against an independent naive
+    /// O(N*M) reference computed directly here with `Object::overlaps` (bypassing
+    /// `BboxGrid` entirely) - across many randomized 3-class layouts with size and
+    /// position variance (small/large mixes, dense clusters, near-misses, wide empty
+    /// gaps). Restricted to `ManyToMany`, whose semantics are exactly "coloc with every
+    /// overlapping partner meeting `min_coloc_area`" and so are simple enough to
+    /// reimplement independently without duplicating `execute`'s own logic. This is the
+    /// correctness guardrail for wiring `BboxGrid` into `execute` itself, complementing
+    /// `spatial_grid::tests::randomized_layouts_never_miss_a_true_bbox_intersection`
+    /// (which only checks the grid's candidate lists in isolation, not the full
+    /// `Colocalization` pipeline built on top of them).
+    #[test]
+    fn randomized_many_to_many_layout_matches_naive_pairwise_reference() {
+        struct Rng(u32);
+        impl Rng {
+            fn next(&mut self) -> u32 {
+                self.0 ^= self.0 << 13;
+                self.0 ^= self.0 >> 17;
+                self.0 ^= self.0 << 5;
+                self.0
+            }
+            fn range(&mut self, n: u32) -> u32 {
+                self.next() % n
+            }
+        }
+
+        let classes = [CLASS_A, CLASS_B, CLASS_C];
+
+        for seed in 1..12u32 {
+            let mut rng = Rng(seed * 104_729 + 1);
+            let mut cache = PipelineCache::default();
+            let mut ids_by_class: std::collections::HashMap<ObjectClass, Vec<ObjectId>> =
+                std::collections::HashMap::new();
+            let mut next_id: u128 = 1;
+            for &class in &classes {
+                for _ in 0..25 {
+                    // Wide size and position ranges (1..20px extents over a 0..50
+                    // canvas) so layouts include dense clusters, near-misses (adjacent
+                    // but not touching), and isolated objects across seeds.
+                    let w = 1 + rng.range(20);
+                    let h = 1 + rng.range(20);
+                    let x = rng.range(50);
+                    let y = rng.range(50);
+                    let object = make_filled_object(
+                        next_id,
+                        [x, y, x + w, y + h],
+                        ImagePlane::default(),
+                        class,
+                    );
+                    next_id += 1;
+                    ids_by_class.entry(class).or_default().push(object.id.clone());
+                    cache.object_cache.insert(object.id.clone(), object);
+                }
+            }
+
+            let coloc = Colocalization {
+                classes_to_coloc: classes.to_vec(),
+                filter_classes: vec![],
+                exclude_classes: vec![],
+                class_for_overlapping_areas: ObjectClass::Unset,
+                multiplicity: ColocMultiplicity::ManyToMany,
+                min_coloc_area: 0.0,
+                size_unit: SizeUnits::Pixels,
+            };
+            run(&coloc, &mut cache);
+
+            for &anchor_class in &classes {
+                for anchor_id in &ids_by_class[&anchor_class] {
+                    let anchor_object = cache.object_cache.get(anchor_id).unwrap();
+
+                    // Raw per-other-class overlap lists, and whether the anchor overlaps
+                    // *every* other class - `execute` only records an anchor as
+                    // colocalized at all if it overlaps at least one object from every
+                    // other class-to-coloc (see `three_class_hub_spoke_only_hub_colocalized`
+                    // above), independent of `ManyToMany` allowing multiple partners
+                    // *within* a class.
+                    let mut raw: std::collections::HashMap<ObjectClass, Vec<ObjectId>> =
+                        std::collections::HashMap::new();
+                    let mut overlaps_every_other_class = true;
+                    for &other_class in &classes {
+                        if other_class == anchor_class {
+                            continue;
+                        }
+                        let matches: Vec<ObjectId> = ids_by_class[&other_class]
+                            .iter()
+                            .filter(|other_id| {
+                                cache
+                                    .object_cache
+                                    .get(*other_id)
+                                    .and_then(|other| anchor_object.overlaps(other))
+                                    .is_some()
+                            })
+                            .cloned()
+                            .collect();
+                        if matches.is_empty() {
+                            overlaps_every_other_class = false;
+                        }
+                        raw.insert(other_class, matches);
+                    }
+
+                    for &other_class in &classes {
+                        if other_class == anchor_class {
+                            continue;
+                        }
+                        let mut expected = if overlaps_every_other_class {
+                            raw[&other_class].clone()
+                        } else {
+                            Vec::new()
+                        };
+                        expected.sort();
+
+                        let mut actual = anchor_object
+                            .colocalized_with
+                            .get(&other_class)
+                            .cloned()
+                            .unwrap_or_default();
+                        actual.sort();
+
+                        assert_eq!(
+                            actual, expected,
+                            "seed {seed}: anchor {anchor_id:?} ({anchor_class:?}) vs \
+                             {other_class:?} - grid-pruned result diverged from the naive \
+                             pairwise reference"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

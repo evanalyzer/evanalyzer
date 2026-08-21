@@ -10,6 +10,7 @@ mod job;
 mod object;
 mod pipeline;
 mod resources;
+mod spatial_grid;
 mod storage;
 
 // System resource sizing (parallelism, reader pool size) based on available RAM
