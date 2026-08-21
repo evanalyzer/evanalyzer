@@ -452,6 +452,38 @@ mod tests {
     }
 
     #[test]
+    fn execute_is_a_noop_when_tolerance_is_not_positive() {
+        // `maximum_finder_tolerance <= 0.0` short-circuits before touching
+        // the instance map at all - a `0.0` (the boundary itself, `<=` not
+        // `<`) and a negative tolerance must both leave existing instance
+        // labels completely untouched.
+        let size = ImageSize {
+            width: 3,
+            height: 3,
+        };
+        let seed = vec![1u32, 1, 0, 0, 2, 2, 0, 0, 0];
+        for tolerance in [0.0f32, -1.0] {
+            let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+            ctx.instance_map =
+                Some(Image::<u32, 1, CpuAllocator>::new(size, seed.clone(), CpuAllocator).unwrap());
+            let mut cache = PipelineCache::default();
+
+            let cmd = Watershed {
+                maximum_finder_tolerance: tolerance,
+                smoothing_sigma: 0.0,
+                min_object_size: 0,
+            };
+            cmd.execute(&mut ctx, &mut cache).unwrap();
+
+            assert_eq!(
+                ctx.instance_map.as_ref().unwrap().as_slice(),
+                seed.as_slice(),
+                "tolerance {tolerance} must leave the instance map unchanged"
+            );
+        }
+    }
+
+    #[test]
     fn test_watershed_multi_class_boundaries() {
         let size = ImageSize {
             width: 25,
