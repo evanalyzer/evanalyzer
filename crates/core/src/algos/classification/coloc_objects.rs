@@ -303,14 +303,18 @@ impl ImageAlgorithm for Colocalization {
 
                 // The anchor satisfies classes_to_coloc, but drop it if it also overlaps
                 // (by at least min_coloc_area) any object from an excluded class.
-                if exclude_grid.candidates(anchor_object.bbox).iter().any(|excl_id| {
-                    excl_id != anchor_id
-                        && cache
-                            .object_cache
-                            .get(excl_id)
-                            .and_then(|r| anchor_object.overlaps(r))
-                            .is_some_and(|intersection| intersection.area >= min_area_px)
-                }) {
+                if exclude_grid
+                    .candidates(anchor_object.bbox)
+                    .iter()
+                    .any(|excl_id| {
+                        excl_id != anchor_id
+                            && cache
+                                .object_cache
+                                .get(excl_id)
+                                .and_then(|r| anchor_object.overlaps(r))
+                                .is_some_and(|intersection| intersection.area >= min_area_px)
+                    })
+                {
                     continue 'anchor;
                 }
 
@@ -1723,7 +1727,10 @@ mod tests {
                         class,
                     );
                     next_id += 1;
-                    ids_by_class.entry(class).or_default().push(object.id.clone());
+                    ids_by_class
+                        .entry(class)
+                        .or_default()
+                        .push(object.id.clone());
                     cache.object_cache.insert(object.id.clone(), object);
                 }
             }

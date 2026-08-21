@@ -96,7 +96,10 @@ impl BboxGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ImagePlane, object::{Object, ObjectInit}};
+    use crate::{
+        ImagePlane,
+        object::{Object, ObjectInit},
+    };
     use bitvec::prelude::*;
     use evanalyzer_cfg::core_types::ObjectClass;
 
@@ -166,7 +169,7 @@ mod tests {
 
     #[test]
     fn adjacent_but_not_touching_objects_are_not_required_to_be_pruned_but_are_correctly_excludable()
-    {
+     {
         // A=[0,0,3,3], B=[4,0,7,3] - share no pixel (A ends at x=3, B starts at x=4).
         let a = make_object(1, [0, 0, 3, 3]);
         let b = make_object(2, [4, 0, 7, 3]);

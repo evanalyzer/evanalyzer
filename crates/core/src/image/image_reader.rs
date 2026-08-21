@@ -1300,6 +1300,129 @@ mod tests {
         }
     }
 
+    fn fixture_path() -> PathBuf {
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/multi-channel-4D-series.ome.tif"
+        )
+        .into()
+    }
+
+    fn full_tile() -> ImageTile {
+        ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    #[test]
+    fn read_image_tile_combined_pooled_errors_on_an_empty_pool() {
+        let err = ImageReader::read_image_tile_combined_pooled(
+            &[],
+            0,
+            0,
+            ZProjection::None,
+            &None,
+            0,
+            None,
+            &full_tile(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, InternalErrors::Internal(msg) if msg.contains("Reader pool is empty"))
+        );
+    }
+
+    #[test]
+    fn read_image_tile_combined_errors_for_a_nonexistent_series() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let err = reader
+            .read_image_tile_combined(99, 0, ZProjection::None, &None, 0, None, &full_tile())
+            .unwrap_err();
+        assert!(
+            matches!(err, InternalErrors::ImageReadError(msg) if msg.contains("Series 99 does not exist"))
+        );
+    }
+
+    #[test]
+    fn read_image_tile_combined_errors_for_a_nonexistent_resolution() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let err = reader
+            .read_image_tile_combined(0, 99, ZProjection::None, &None, 0, None, &full_tile())
+            .unwrap_err();
+        assert!(
+            matches!(err, InternalErrors::ImageReadError(msg) if msg.contains("Pyramid 99 does not exist"))
+        );
+    }
+
+    #[test]
+    fn get_image_size_errors_for_a_nonexistent_series() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let err = reader.get_image_size(99).unwrap_err();
+        assert!(
+            matches!(err, InternalErrors::ImageReadError(msg) if msg.contains("Series 99 does not exist"))
+        );
+    }
+
+    #[test]
+    fn get_image_size_returns_the_real_dimensions_for_an_existing_series() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let size = reader.get_image_size(0).unwrap();
+        assert!(size.width > 0);
+        assert!(size.height > 0);
+    }
+
+    #[test]
+    fn get_pixel_sizes_from_meta_returns_the_real_values_for_an_existing_series() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let (x, y, z) = reader.get_pixel_sizes_from_meta(&0).unwrap();
+        let expected = &reader.get_image_meta().series[&0].pixel_sizes;
+        assert_eq!(
+            (x, y, z),
+            (expected.px_size_x, expected.px_size_y, expected.px_size_z)
+        );
+    }
+
+    #[test]
+    fn get_pixel_sizes_from_meta_falls_back_to_1_1_1_for_a_nonexistent_series() {
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        assert_eq!(
+            reader.get_pixel_sizes_from_meta(&99).unwrap(),
+            (1.0, 1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn read_image_tile_combined_silently_drops_a_channel_index_past_the_last_real_channel() {
+        // Unlike a nonexistent series/resolution (hard errors), requesting a
+        // channel index >= `nr_c_stacks` is filtered out of the result
+        // rather than failing the whole read - useful for a caller that
+        // requests a fixed set of channel slots without knowing up front how
+        // many real channels a given image has.
+        let reader = ImageReader::new(&fixture_path(), ReadMode::Default).unwrap();
+        let nr_c_stacks = reader.get_image_meta().series[&0].nr_c_stacks;
+        let result = reader
+            .read_image_tile_combined(
+                0,
+                0,
+                ZProjection::None,
+                &None,
+                0,
+                Some(&vec![0, nr_c_stacks]),
+                &full_tile(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            result.len(),
+            1,
+            "only channel 0 is real - the out-of-range channel must be silently dropped, not errored"
+        );
+        assert_eq!(result[0].c_stack, 0);
+    }
+
     #[test]
     fn take_the_middle_projection_returns_the_middle_slice_not_the_first() {
         let path = concat!(
@@ -1873,6 +1996,41 @@ mod tests {
                 "clone_empty() on a U32 container must return a U32 container, got {other:?}"
             ),
         }
+    }
+
+    #[test]
+    fn u32_container_accessors_match_their_f32_counterparts() {
+        // `nr_color_channels`, `as_f32_slice`, `get_image_memory_usage`,
+        // `tile_offset` and `plane` are all per-variant match arms - every
+        // other test in this file exercises `F32Gray`/`F32Rgb` containers,
+        // leaving the `U32` arm of each one untested.
+        let size = ImageSize {
+            width: 4,
+            height: 3,
+        };
+        let plane = Some(ImagePlane { z: 1, c: 2, t: 3 });
+        let container = ImageContainer::U32(ManagedImage {
+            data: Image::<u32, 1, CpuAllocator>::new(
+                size,
+                vec![7u32; size.width * size.height],
+                CpuAllocator,
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 5, y: 6 },
+            plane,
+        });
+
+        assert_eq!(container.nr_color_channels(), 1);
+        assert!(
+            container.as_f32_slice().is_none(),
+            "a U32 container has no f32 data to slice"
+        );
+        assert_eq!(
+            container.get_image_memory_usage(),
+            size.width * size.height * 4
+        );
+        assert_eq!(container.tile_offset(), Point2d { x: 5, y: 6 });
+        assert_eq!(container.plane(), plane);
     }
 
     /// Regression test for a real-world bug: `G7_03.vsi`'s series 0 declares

@@ -385,6 +385,9 @@ impl Cellpose {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algos::ai_segmentation::test_support::trace_and_save_model;
+    use kornia_image::{Image, ImageSize};
+    use kornia_tensor::CpuAllocator;
 
     fn cellpose(min_object_size: i32) -> Cellpose {
         Cellpose {
@@ -395,6 +398,161 @@ mod tests {
             flow_iterations: 10,
             min_object_size,
         }
+    }
+
+    fn gray_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
+        let img =
+            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, values, CpuAllocator)
+                .unwrap();
+        PipelineContext::new_from_image_test(img).unwrap()
+    }
+
+    // ---- execute() - real TorchScript load + inference, see `test_support` ----
+
+    #[test]
+    fn execute_errors_when_the_model_path_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = Cellpose {
+            model_path: dir.path().join("missing.pt"),
+            ..cellpose(0)
+        };
+        let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
+        let mut cache = PipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+        assert!(matches!(err, InternalErrors::Generic(_)));
+    }
+
+    /// dY=0, dX=0 everywhere (a cell pixel never moves, so it is its own
+    /// sink), cell-probability logit derived directly from the input pixel
+    /// value: `value * 20 - 10`, i.e. an input near `1.0` saturates the
+    /// post-sigmoid probability near `1.0` (cell) and near `0.0` saturates
+    /// near `0.0` (background) - comfortably on either side of the default
+    /// 0.5 threshold. Two *adjacent* cell pixels each become their own sink
+    /// at zero flow, but those sinks are themselves 8-connected, so
+    /// `label_sinks` still merges them into one instance - this is the real
+    /// tensor-plumbing test, the merge logic itself is covered directly by
+    /// `label_sinks_gives_the_same_label_to_pixels_converging_to_adjacent_sinks`.
+    fn flow_free_cellpose_model(
+        in_channels: i64,
+        width: i64,
+        height: i64,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        trace_and_save_model(in_channels, height, width, |x| {
+            let image_channel = x.narrow(1, 0, 1);
+            let flow_y = image_channel.zeros_like();
+            let flow_x = image_channel.zeros_like();
+            let cell_logit = image_channel * 20.0 - 10.0;
+            Tensor::cat(&[flow_y, flow_x, cell_logit], 1)
+        })
+    }
+
+    #[test]
+    fn execute_end_to_end_merges_adjacent_cell_pixels_into_one_instance() {
+        let (_dir, model_path) = flow_free_cellpose_model(2, 3, 1);
+        let cmd = Cellpose {
+            model_path,
+            input_channels: 2,
+            min_object_size: 0,
+            ..cellpose(0)
+        };
+        let mut ctx = gray_ctx(3, 1, vec![0.0, 1.0, 1.0]);
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        assert_eq!(seg.as_slice(), &[0u32, 7, 7]);
+        let inst = ctx.get_instance_map().unwrap();
+        assert_eq!(inst.as_slice()[0], 0);
+        assert_eq!(
+            inst.as_slice()[1],
+            inst.as_slice()[2],
+            "two adjacent cell pixels must share one instance id"
+        );
+        assert_ne!(inst.as_slice()[1], 0);
+    }
+
+    #[test]
+    fn execute_single_input_channel_skips_the_zero_fill_padding() {
+        // input_channels = 1 takes the `image` tensor directly (no
+        // concatenated zero channels) - a model traced for a genuine 1-channel
+        // input exercises that branch instead of the zero-fill one above.
+        let (_dir, model_path) = flow_free_cellpose_model(1, 2, 1);
+        let cmd = Cellpose {
+            model_path,
+            input_channels: 1,
+            min_object_size: 0,
+            ..cellpose(0)
+        };
+        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        assert_eq!(seg.as_slice(), &[0u32, 7]);
+    }
+
+    #[test]
+    fn execute_errors_when_the_model_output_has_too_few_dimensions() {
+        let (_dir, model_path) = trace_and_save_model(2, 1, 2, |x| {
+            // Collapses [1,2,1,2] down to rank 2, well short of the required
+            // `[1, C, H, W]`.
+            x.narrow(1, 0, 1).squeeze_dim(0).squeeze_dim(0)
+        });
+        let cmd = Cellpose {
+            model_path,
+            min_object_size: 0,
+            ..cellpose(0)
+        };
+        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
+        let mut cache = PipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+        assert!(matches!(err, InternalErrors::Generic(msg) if msg.contains("too few dimensions")));
+    }
+
+    #[test]
+    fn execute_errors_when_the_model_output_has_fewer_than_three_channels() {
+        let (_dir, model_path) = trace_and_save_model(2, 1, 2, |x| {
+            let c = x.narrow(1, 0, 1);
+            Tensor::cat(&[c.shallow_clone(), c.shallow_clone()], 1)
+        });
+        let cmd = Cellpose {
+            model_path,
+            min_object_size: 0,
+            ..cellpose(0)
+        };
+        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
+        let mut cache = PipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+        assert!(
+            matches!(err, InternalErrors::Generic(msg) if msg.contains("fewer than 3 channels"))
+        );
+    }
+
+    #[test]
+    fn execute_errors_when_the_model_output_resolution_does_not_match_the_input() {
+        let (_dir, model_path) = trace_and_save_model(2, 1, 4, |x| {
+            let c = x.narrow(1, 0, 1);
+            let cropped = c.narrow(3, 0, 2); // half the input width
+            Tensor::cat(
+                &[cropped.shallow_clone(), cropped.shallow_clone(), cropped],
+                1,
+            )
+        });
+        let cmd = Cellpose {
+            model_path,
+            min_object_size: 0,
+            ..cellpose(0)
+        };
+        let mut ctx = gray_ctx(4, 1, vec![0.0; 4]);
+        let mut cache = PipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+        assert!(
+            matches!(err, InternalErrors::Generic(msg) if msg.contains("does not match the input resolution"))
+        );
     }
 
     // ---- follow_flows ----

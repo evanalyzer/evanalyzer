@@ -2258,6 +2258,93 @@ mod full_run_integration_tests {
     }
 
     #[test]
+    fn run_on_a_single_invalid_image_names_it_in_the_propagated_error() {
+        // Mirrors `run_on_a_real_fixture_image_writes_extracted_objects_through_the_exporter`
+        // but with a nonexistent path, exercising the single-image branch's
+        // *error* arm (the success arm is already covered by that test).
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let job = make_multi_image_job(
+            out_objects.clone(),
+            vec![PathBuf::from("does-not-exist.ome.tif")],
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = job.run(1, tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        let err = result.expect_err("the only image failed, so the whole run must fail");
+        assert!(
+            err.to_string().contains("does-not-exist.ome.tif"),
+            "error should name the failing image, got: {err}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageFailed { .. }))
+        );
+        assert!(out_objects.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_on_multiple_valid_images_succeeds_and_exports_every_images_objects() {
+        // `run_still_processes_the_rest_of_the_batch_after_one_image_fails`
+        // covers the multi-image branch's failure-aggregation path; this
+        // covers its `Ok(())` path (every image in the batch succeeding).
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let a = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let b = PathBuf::from("slice_Z0_C0_T0.tif");
+        let job = make_multi_image_job(out_objects.clone(), vec![a.clone(), b.clone()]);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = job.run(2, tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        result.expect("both images are valid, the whole batch should succeed");
+        for path in [&a, &b] {
+            assert!(
+                events.iter().any(
+                    |e| matches!(e, ProgressEvent::ImageCompleted { path: p, .. } if p == path)
+                ),
+                "{path:?} should have completed"
+            );
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageFailed { .. }))
+        );
+        assert!(!out_objects.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_on_multiple_images_stops_early_when_already_cancelled() {
+        // Setting `cancel` before the run starts must stop every per-image
+        // task from doing any work at all (the multi-image branch's
+        // per-item `if cancel.load(...) { return; }` check), and the run
+        // must report `Cancelled` rather than treating "nothing failed" as
+        // success.
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let a = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let b = PathBuf::from("slice_Z0_C0_T0.tif");
+        let job = make_multi_image_job(out_objects.clone(), vec![a, b]);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(true));
+        let result = job.run(2, tx, cancel);
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        assert!(matches!(result, Err(InternalErrors::Cancelled)));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageCompleted { .. })
+                    || matches!(e, ProgressEvent::ImageFailed { .. })),
+            "a pre-cancelled run must not process any image"
+        );
+        assert!(out_objects.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn count_preview_visible_tiles_matches_the_real_fixture_images_single_tile_grid() {
         let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
 
