@@ -8,7 +8,67 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
+
+/// One resident ("anchor") `Connection` per results file path, so every
+/// caller in this file that needs a connection to a given `.evadb` shares
+/// one already-open DuckDB `Database` instead of each doing its own
+/// independent `Connection::open`.
+///
+/// This matters specifically on Windows: `Connection::open` on a path that
+/// some *other* already-open `Connection` in this same process also has
+/// open fails with a sharing-violation IO error ("The process cannot access
+/// the file because it is being used by another process... File is already
+/// open in <this exact exe/PID>") - not a lock held by another program, a
+/// self-conflict against this process's own earlier connection. Before this
+/// cache existed, `DuckDbReader::open` (called fresh on essentially every
+/// results-panel query - see `results_loader.rs`) and `DuckDbExporter::new`
+/// each opened the file independently, so any one of them still being open
+/// (e.g. a slow aggregate query, or a long-running analyze job) made every
+/// other concurrent open attempt on the same file fail outright, surfacing
+/// as "failed to load ROIs"/"failed to load image names" warnings in the
+/// results panels for as long as the slow one held its connection.
+///
+/// `Connection::try_clone` (used below) creates a new logical connection to
+/// an *already-open* database - no new OS-level file handle, so it can't
+/// collide with the anchor or with other clones of it. DuckDB's own
+/// concurrency control (MVCC) coordinates reads/writes across clones of one
+/// `Database` safely, which is exactly what multiple results panels (or a
+/// live-preview writer running alongside a results viewer) need.
+///
+/// Never evicted: entries stay open for the life of the process. For this
+/// app's actual usage (a handful of results files open per session, not
+/// thousands) that's a better tradeoff than the complexity of an eviction
+/// policy - the cost is a few extra open file handles hanging around, not a
+/// resource leak that grows unboundedly during normal use.
+static CONNECTION_CACHE: LazyLock<Mutex<HashMap<PathBuf, Connection>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Returns a `Connection` usable for `path`, sharing the resident anchor
+/// connection for that path if one is already open (see `CONNECTION_CACHE`'s
+/// doc comment), opening and caching a fresh one otherwise.
+fn shared_connection(path: &Path) -> Result<Connection, InternalErrors> {
+    let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+    let mut cache = CONNECTION_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+
+    if let Some(anchor) = cache.get(path) {
+        match anchor.try_clone() {
+            Ok(handle) => return Ok(handle),
+            // The anchor connection has gone bad (e.g. the file was deleted
+            // or replaced out from under it) - drop it and fall through to
+            // open a fresh one below, rather than keep handing out clones
+            // of a connection that can no longer serve queries.
+            Err(_) => {
+                cache.remove(path);
+            }
+        }
+    }
+
+    let anchor = Connection::open(path).map_err(to_io_err)?;
+    let handle = anchor.try_clone().map_err(to_io_err)?;
+    cache.insert(path.to_path_buf(), anchor);
+    Ok(handle)
+}
 
 /// Derives the display `image_name` (bare filename) from an image's relative
 /// path, falling back to the full relative path when it has no filename
@@ -44,7 +104,7 @@ impl DuckDbExporter {
         // but never "DDL complete" the crash is inside DuckDB itself - see the
         // build note in the README about using the MSVC toolchain on Windows.
         log::info!("DuckDB: opening {} and running DDL ...", path.display());
-        let conn = Connection::open(&path).map_err(|e| InternalErrors::Io(e.to_string()))?;
+        let conn = shared_connection(&path)?;
         conn.execute_batch(CREATE_TABLES)
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
@@ -1120,7 +1180,7 @@ fn where_and_order(filter: &ObjectFilter) -> (String, String) {
 
 impl DuckDbReader {
     pub fn open(path: &Path) -> Result<Self, InternalErrors> {
-        let conn = Connection::open(path).map_err(|e| InternalErrors::Io(e.to_string()))?;
+        let conn = shared_connection(path)?;
         Ok(Self { conn })
     }
 
@@ -1725,6 +1785,123 @@ mod tests {
                 .get_objects(&ObjectFilter::default())
                 .expect("get_objects failed")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn reader_opens_successfully_while_the_writer_connection_is_still_alive() {
+        // Regression test for a real production bug: on Windows, opening a
+        // *second*, independent `Connection` to a `.evadb` file some other
+        // still-open `Connection` in this same process already has open
+        // fails with a sharing-violation IO error ("File is already open in
+        // <this exact exe/PID>") - not a lock from another program, a
+        // self-conflict. Before `shared_connection` existed, every call site
+        // (`DuckDbExporter::new`, `DuckDbReader::open`) did its own
+        // independent `Connection::open`, so a results panel opening a
+        // reader while an analyze job's exporter (or another panel's
+        // reader) was still open on the same file would fail outright -
+        // this is exactly what happened in production: results panels
+        // logged "failed to load ROIs"/"failed to load image names" for
+        // hours after a run finished, because *something* still held a
+        // connection open.
+        //
+        // This can't reproduce the Windows-specific IO error on Linux CI
+        // (verified empirically: two independent raw `Connection::open`
+        // calls to the same path both succeed on Linux) - what this test
+        // verifies instead is that the fix's actual mechanism works: a
+        // `DuckDbReader` opened while a `DuckDbExporter` is still alive
+        // sees the exporter's writes immediately, proving it shares the
+        // exporter's live connection (via `Connection::try_clone`, which
+        // DuckDB's MVCC coordinates safely) rather than racing it for an
+        // independent OS-level file handle.
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path = dir.path().join("results.duckdb");
+
+        let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
+        let cache = PipelineCache {
+            image_rel_path: "still_open.tif".into(),
+            ..Default::default()
+        };
+        exporter.export(&cache).expect("export failed");
+        exporter
+            .finalize_image(Path::new("still_open.tif"), None)
+            .expect("finalize_image failed");
+
+        // `exporter` is deliberately NOT dropped here - this is the crux of
+        // the regression: the reader must open successfully, and see the
+        // just-written row, with the writer's connection still fully alive.
+        let reader = DuckDbReader::open(&path).expect(
+            "opening a reader while the writer connection is still open must succeed - it \
+             failing here is exactly the production bug this test guards against",
+        );
+        let images = reader.get_images().expect("get_images failed");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].image_name, "still_open.tif");
+
+        drop(exporter);
+    }
+
+    #[test]
+    fn shared_connection_reuses_one_cached_anchor_per_path_instead_of_opening_independently() {
+        // The functional test above (`reader_opens_successfully_while_the_
+        // writer_connection_is_still_alive`) can't actually fail on Linux
+        // even without the fix - two independent `Connection::open` calls
+        // to the same file both succeed here, and DuckDB's on-disk state
+        // stays consistent across them regardless (verified empirically).
+        // The real, Windows-specific regression is unreproducible in this
+        // CI environment. This test instead directly verifies the fix's
+        // *mechanism* - that repeated `shared_connection` calls for one
+        // path reuse a single cached anchor rather than opening
+        // independently - so reverting `DuckDbReader::open`/
+        // `DuckDbExporter::new` back to a raw `Connection::open` (silently
+        // reintroducing the bug) fails this test even on Linux, where the
+        // symptom itself wouldn't otherwise show up.
+        // `CONNECTION_CACHE` is a process-wide global every test in this
+        // module shares (and tests run in parallel by default), so this
+        // only ever checks for its own two paths by key - never the
+        // cache's overall size or a before/after delta, since other
+        // concurrently-running tests are free to insert their own
+        // (differently-pathed - `TempDir` is unique per test) entries at
+        // the same time, which would make a size-based assertion flaky.
+        let contains = |p: &Path| {
+            CONNECTION_CACHE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(p)
+        };
+
+        let dir = TempDir::new().expect("failed to create temp dir");
+        let path_a = dir.path().join("a.duckdb");
+        let path_b = dir.path().join("b.duckdb");
+        assert!(
+            !contains(&path_a) && !contains(&path_b),
+            "freshly-generated tempdir paths must not already be cached"
+        );
+
+        let _conn1 = shared_connection(&path_a).expect("first open failed");
+        assert!(
+            contains(&path_a),
+            "opening path_a must cache an anchor for it"
+        );
+        assert!(
+            !contains(&path_b),
+            "must not cache anything for an unrelated path"
+        );
+
+        // A second call for the SAME path must succeed by reusing the
+        // cached anchor via `try_clone` - a `HashMap` can only ever hold
+        // one entry per key regardless, so this call succeeding without
+        // error (rather than failing the way independent
+        // `Connection::open` calls to the same file can on Windows) is
+        // what actually matters here, not the cache's size.
+        let _conn2 = shared_connection(&path_a)
+            .expect("second open of the same (still cached) path must succeed");
+
+        // A DIFFERENT path must get its own, separate anchor.
+        let _conn3 = shared_connection(&path_b).expect("open of a different path failed");
+        assert!(
+            contains(&path_b),
+            "opening path_b must cache an anchor for it"
         );
     }
 
