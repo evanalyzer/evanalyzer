@@ -27,7 +27,7 @@ log = { workspace = true }
 # wired through our own `bioformats-gpl` feature below instead, so the
 # workspace root can toggle it (see the `evanalyzer_core` comment in the root
 # Cargo.toml).
-bioformats = { git = "https://github.com/henriksson-lab/bioformats-rs", rev = "cd99301e10fec890f940ddd969c7ceb071f45751", features = [
+bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "nd2-fix", features = [
     "jpegxr",
     "zarr",
     "tissuefaxs",
