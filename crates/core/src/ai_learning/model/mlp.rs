@@ -379,6 +379,19 @@ pub fn fit_mlp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// `fit_mlp` seeds burn's *global* initialization RNG (`MlpBackend::seed`,
+    /// a process-wide `Mutex<Option<Rng>>` inside burn-ndarray - see the call
+    /// site above and its doc comment) rather than a per-call one. Cargo's
+    /// test runner runs tests in parallel by default, so without this lock,
+    /// two `fit_mlp`-calling tests running concurrently race on that global
+    /// RNG: one test's seed can get clobbered mid-training by another's,
+    /// making results nondeterministic again despite each test using a
+    /// seed verified to converge in isolation. Every test below that calls
+    /// `fit_mlp` (directly or via `fit_classifier`) must hold this for its
+    /// duration.
+    static TRAIN_LOCK: Mutex<()> = Mutex::new(());
 
     /// Two well-separated clusters - see `model::random_forest`'s test
     /// module doc comment for why this is a wiring smoke test, not a
@@ -407,6 +420,7 @@ mod tests {
 
     #[test]
     fn fit_mlp_separates_two_well_separated_clusters() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (rows, labels) = two_cluster_dataset();
         let settings = MlpSettings {
             hidden_layers: vec![4],
@@ -461,6 +475,7 @@ mod tests {
     /// regression can't hide behind that).
     #[test]
     fn fit_mlp_separates_clusters_under_every_activation() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (rows, labels) = two_cluster_dataset();
         for activation in [
             MlpActivation::Relu,
@@ -508,6 +523,7 @@ mod tests {
     /// `chunks(batch_size)` loop or the sample-count-weighted loss average.
     #[test]
     fn fit_mlp_trains_correctly_with_a_batch_size_that_does_not_evenly_divide_the_data() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (rows, labels) = two_cluster_dataset();
         assert_eq!(rows.len(), 30, "test assumes the fixture's known size");
         let settings = MlpSettings {
@@ -535,6 +551,7 @@ mod tests {
     /// be treated as 1 (pure per-sample SGD), not panic in `chunks(0)`.
     #[test]
     fn fit_mlp_treats_a_zero_batch_size_as_one_instead_of_panicking() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (rows, labels) = two_cluster_dataset();
         let settings = MlpSettings {
             hidden_layers: vec![4],
@@ -556,6 +573,7 @@ mod tests {
     /// would fail to observe any difference.
     #[test]
     fn fit_mlp_a_large_epsilon_suppresses_training_progress_relative_to_a_tiny_one() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (rows, labels) = two_cluster_dataset();
 
         let run = |epsilon: f64| {
@@ -595,6 +613,7 @@ mod tests {
 
     #[test]
     fn fit_mlp_rejects_zero_samples() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (progress, cancel) = no_op_progress();
         let err = fit_mlp(&[], &[], 2, &MlpSettings::default(), &progress, &cancel).unwrap_err();
         assert!(matches!(err, InternalErrors::Internal(_)));
@@ -602,6 +621,7 @@ mod tests {
 
     #[test]
     fn fit_mlp_rejects_zero_classes() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (rows, labels) = two_cluster_dataset();
         let (progress, cancel) = no_op_progress();
         let err = fit_mlp(
@@ -621,6 +641,7 @@ mod tests {
 
     #[test]
     fn fit_mlp_skips_the_val_split_below_the_minimum_sample_count() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         // Only 4 samples - well under MIN_SAMPLES_FOR_VAL_SPLIT - so every
         // row must be used for training and no validation loss reported.
         let rows = vec![vec![0.0], vec![0.1], vec![10.0], vec![10.1]];
@@ -649,6 +670,7 @@ mod tests {
 
     #[test]
     fn fit_mlp_stops_early_and_returns_cancelled_when_the_flag_is_set() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (rows, labels) = two_cluster_dataset();
         let settings = MlpSettings {
             hidden_layers: vec![4],
@@ -665,6 +687,7 @@ mod tests {
 
     #[test]
     fn fit_mlp_reports_epoch_progress_including_the_final_epoch() {
+        let _guard = TRAIN_LOCK.lock().unwrap();
         let (rows, labels) = two_cluster_dataset();
         let settings = MlpSettings {
             hidden_layers: vec![4],
