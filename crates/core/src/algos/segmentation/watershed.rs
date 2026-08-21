@@ -266,6 +266,191 @@ mod tests {
     use crate::{F32Gray, image::ImageDebugExt};
     use kornia_image::ImageSize;
 
+    /// xorshift32 - deterministic, no external dep needed for scattering
+    /// noise specks reproducibly.
+    struct Rng(u32);
+    impl Rng {
+        fn next(&mut self) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 17;
+            self.0 ^= self.0 << 5;
+            self.0
+        }
+        fn range(&mut self, n: usize) -> usize {
+            (self.next() as usize) % n
+        }
+    }
+
+    /// Scatters `n_specks` small (1-2px radius) non-zero blobs across a
+    /// `size x size` grid - simulating a noisy image's thresholded mask
+    /// (many tiny spurious objects) rather than a real image's real objects.
+    fn noisy_mask(size: usize, n_specks: usize, seed: u32) -> Vec<u32> {
+        let mut mask = vec![0u32; size * size];
+        let mut rng = Rng(seed.max(1));
+        for _ in 0..n_specks {
+            let cx = 3 + rng.range(size - 6);
+            let cy = 3 + rng.range(size - 6);
+            let r = 1 + rng.range(2);
+            for dy in -(r as i64)..=(r as i64) {
+                for dx in -(r as i64)..=(r as i64) {
+                    if dx * dx + dy * dy <= (r * r) as i64 {
+                        let x = (cx as i64 + dx) as usize;
+                        let y = (cy as i64 + dy) as usize;
+                        if x < size && y < size {
+                            mask[y * size + x] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        mask
+    }
+
+    /// Manual repro/benchmark for the user's hypothesis that a noisy image
+    /// with thousands of small objects could make `ConnectedComponents`
+    /// and/or `Watershed` pathologically slow, explaining a pipeline that
+    /// stalls for up to an hour on one image. Not a `#[test]`-asserted
+    /// regression guard (there's no known-good baseline to assert against
+    /// yet) - run manually with:
+    ///   cargo test --release -p evanalyzer_core --features ai -- --ignored \
+    ///     repro_noisy_image_connected_components_and_watershed_timing --nocapture
+    #[test]
+    #[ignore]
+    fn repro_noisy_image_connected_components_and_watershed_timing() {
+        let size = 2048usize;
+        for &n_specks in &[200usize, 1_000, 4_000, 12_000, 30_000, 80_000] {
+            let mask = noisy_mask(size, n_specks, 12345);
+            let image_size = ImageSize {
+                width: size,
+                height: size,
+            };
+            let mut ctx = PipelineContext::new_test::<F32Gray>(image_size).unwrap();
+            ctx.segmentation_map =
+                Some(Image::<u32, 1, CpuAllocator>::new(image_size, mask, CpuAllocator).unwrap());
+            let mut cache = PipelineCache::default();
+
+            let t0 = std::time::Instant::now();
+            crate::algos::segmentation::connected_components::ConnectedComponents { min_size: 0 }
+                .execute(&mut ctx, &mut cache)
+                .expect("ConnectedComponents failed");
+            let cc_elapsed = t0.elapsed();
+
+            let n_objects = ctx
+                .instance_map
+                .as_ref()
+                .unwrap()
+                .as_slice()
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+
+            let t1 = std::time::Instant::now();
+            Watershed {
+                maximum_finder_tolerance: 0.5,
+                smoothing_sigma: 0.0,
+                min_object_size: 0,
+            }
+            .execute(&mut ctx, &mut cache)
+            .expect("Watershed failed");
+            let ws_elapsed = t1.elapsed();
+
+            println!(
+                "specks={n_specks:6} -> {n_objects:6} objects | ConnectedComponents: {cc_elapsed:8.2?} | Watershed: {ws_elapsed:8.2?}"
+            );
+        }
+    }
+
+    /// Scatters `n_bumps` overlapping same-radius discs so they merge into a
+    /// few large *connected* blobs (touching/clumped, like crowded nuclei) -
+    /// unlike `noisy_mask`'s isolated specks, `ConnectedComponents` here
+    /// reports only a handful of components, so `Watershed` has to find and
+    /// resolve thousands of local maxima *within one region*, which is the
+    /// actual scenario the algorithm's neck-splitting exists for and a much
+    /// more realistic stress case for "many small objects" than pre-
+    /// separated specks.
+    fn clumped_mask(size: usize, n_bumps: usize, radius: i64, seed: u32) -> Vec<u32> {
+        let mut mask = vec![0u32; size * size];
+        let mut rng = Rng(seed.max(1));
+        for _ in 0..n_bumps {
+            let cx = radius + 1 + rng.range(size - 2 * (radius as usize + 1)) as i64;
+            let cy = radius + 1 + rng.range(size - 2 * (radius as usize + 1)) as i64;
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    if dx * dx + dy * dy <= radius * radius {
+                        let x = (cx + dx) as usize;
+                        let y = (cy + dy) as usize;
+                        if x < size && y < size {
+                            mask[y * size + x] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        mask
+    }
+
+    /// See `repro_noisy_image_connected_components_and_watershed_timing`'s
+    /// doc comment - same purpose, but with `clumped_mask` (thousands of
+    /// maxima packed into a few large connected regions) instead of
+    /// isolated specks, which is the harder case for `Watershed`
+    /// specifically. Run manually with:
+    ///   cargo test --release -p evanalyzer_core --features ai -- --ignored \
+    ///     repro_clumped_noisy_image_watershed_timing --nocapture
+    #[test]
+    #[ignore]
+    fn repro_clumped_noisy_image_watershed_timing() {
+        let size = 2048usize;
+        for &n_bumps in &[200usize, 1_000, 4_000, 12_000, 30_000] {
+            let mask = clumped_mask(size, n_bumps, 12, 12345);
+            let image_size = ImageSize {
+                width: size,
+                height: size,
+            };
+            let mut ctx = PipelineContext::new_test::<F32Gray>(image_size).unwrap();
+            ctx.segmentation_map =
+                Some(Image::<u32, 1, CpuAllocator>::new(image_size, mask, CpuAllocator).unwrap());
+            let mut cache = PipelineCache::default();
+
+            crate::algos::segmentation::connected_components::ConnectedComponents { min_size: 0 }
+                .execute(&mut ctx, &mut cache)
+                .expect("ConnectedComponents failed");
+            let n_components = ctx
+                .instance_map
+                .as_ref()
+                .unwrap()
+                .as_slice()
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+
+            let t1 = std::time::Instant::now();
+            Watershed {
+                maximum_finder_tolerance: 0.5,
+                smoothing_sigma: 0.0,
+                min_object_size: 0,
+            }
+            .execute(&mut ctx, &mut cache)
+            .expect("Watershed failed");
+            let ws_elapsed = t1.elapsed();
+
+            let n_split = ctx
+                .instance_map
+                .as_ref()
+                .unwrap()
+                .as_slice()
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+
+            println!(
+                "bumps={n_bumps:6} -> {n_components:5} connected regions -> {n_split:6} objects after split | Watershed: {ws_elapsed:8.2?}"
+            );
+        }
+    }
+
     #[test]
     fn test_watershed_multi_class_boundaries() {
         let size = ImageSize {
