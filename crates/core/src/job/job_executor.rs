@@ -209,6 +209,7 @@ impl<'a> JobExecutor {
         cancel: Arc<AtomicBool>,
     ) -> Result<(), InternalErrors> {
         info!("Starting pipeline with {} parallel threads", parallelism);
+        let start = Instant::now();
 
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(parallelism)
@@ -327,6 +328,7 @@ impl<'a> JobExecutor {
             }
         });
 
+        info!("Pipeline completed in {:?}", start.elapsed());
         progress.send(ProgressEvent::Finished).ok();
         result
     }
@@ -678,6 +680,7 @@ impl<'a> JobExecutor {
         progress: Sender<ProgressEvent>,
         cancel: Arc<AtomicBool>,
     ) -> Result<(), InternalErrors> {
+        let start_image = Instant::now();
         const RES_IDX: i32 = 0;
         let tile_size = self.preview_tile_size();
 
@@ -1011,6 +1014,9 @@ impl<'a> JobExecutor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .finalize_image(image_rel_path, combined_error.as_deref());
+
+        let duration = start_image.elapsed();
+        info!("Executed image pipeline in {:?}", duration);
 
         pass_result.and(writer_result).and(finalize_result)
     }
