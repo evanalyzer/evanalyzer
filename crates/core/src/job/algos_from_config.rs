@@ -25,6 +25,15 @@ impl From<FiltersIlluminationCorrectionApplyMethodSettings> for ApplyMethod {
     }
 }
 
+impl From<SegmentationThresholdAveragingSettings> for Averaging {
+    fn from(_s: SegmentationThresholdAveragingSettings) -> Self {
+        match _s {
+            SegmentationThresholdAveragingSettings::Mean => Averaging::Mean,
+            SegmentationThresholdAveragingSettings::Median => Averaging::Median,
+        }
+    }
+}
+
 impl From<FiltersRollingBallBallTypeSettings> for BallType {
     fn from(_s: FiltersRollingBallBallTypeSettings) -> Self {
         match _s {
@@ -276,6 +285,17 @@ impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
             }
             SegmentationThresholdThresholdMethodSettings::Shanbhag => ThresholdMethod::Shanbhag,
             SegmentationThresholdThresholdMethodSettings::Yen => ThresholdMethod::Yen,
+            SegmentationThresholdThresholdMethodSettings::RobustBackground {
+                lower_outlier_fraction,
+                upper_outlier_fraction,
+                averaging_method,
+                deviations_above_average,
+            } => ThresholdMethod::RobustBackground {
+                lower_outlier_fraction: lower_outlier_fraction,
+                upper_outlier_fraction: upper_outlier_fraction,
+                averaging_method: Averaging::from(averaging_method),
+                deviations_above_average: deviations_above_average,
+            },
         }
     }
 }

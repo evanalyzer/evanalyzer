@@ -44,6 +44,16 @@ pub enum FiltersIlluminationCorrectionApplyMethodSettings {
     Subtract,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SegmentationThresholdAveragingSettings {
+    #[default]
+    #[serde(alias = "mean")]
+    Mean,
+    #[serde(alias = "median")]
+    Median,
+}
+
 /// The geometric shape used to probe the image intensity surface.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -583,6 +593,24 @@ pub enum SegmentationThresholdThresholdMethodSettings {
     /// Minimizes a cost function based on the discrepancy between two classes.
     #[serde(alias = "yen")]
     Yen,
+    /// Trims outliers from both ends of the sorted pixel distribution, then
+    /// sets the threshold at `deviations_above_average` standard deviations
+    /// (or MADs) above the trimmed mean (or median). A port of CellProfiler's
+    /// "Robust Background" method - well suited to images with a clean, low
+    /// background and sparse foreground, since the outlier trim keeps bright
+    /// foreground pixels from dragging the background estimate upward.
+    #[serde(rename_all = "camelCase")]
+    #[serde(
+        alias = "robust-background",
+        alias = "robustBackground",
+        alias = "robust_background"
+    )]
+    RobustBackground {
+        lower_outlier_fraction: f32,
+        upper_outlier_fraction: f32,
+        averaging_method: SegmentationThresholdAveragingSettings,
+        deviations_above_average: f32,
+    },
 }
 
 impl Default for SegmentationThresholdThresholdMethodSettings {
