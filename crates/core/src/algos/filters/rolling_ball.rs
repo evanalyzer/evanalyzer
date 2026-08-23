@@ -10,7 +10,7 @@
 use crate::algos::ImageAlgorithm;
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
 
 /// Removes non-uniform background illumination by calculating a local intensity baseline.
@@ -21,7 +21,7 @@ use macros::CommandsMeta;
 /// curves of background variations. The path traced by the ball establishes a local
 /// baseline map that is subtracted from the original image to isolate foreground features.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "Preprocessing")]
+#[cmdsmeta(category = "Preprocessing", display_name = "Rolling Ball")]
 pub struct RollingBall {
     /// The radius of the ball or paraboloid in pixels.
     ///
@@ -307,7 +307,20 @@ impl ImageAlgorithm for RollingBall {
     }
 
     fn name(&self) -> &'static str {
-        "RollingBall"
+        "Rolling Ball"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "sternberg1983biomedical",
+            title: "Biomedical Image Processing",
+            authors: &["Stanley R. Sternberg"],
+            year: 1983,
+            container: Some("IEEE Computer"),
+            doi: Some("10.1109/MC.1983.1654163"),
+            url: Some("https://doi.org/10.1109/MC.1983.1654163"),
+            pages: Some("22-34"),
+        })
     }
 }
 

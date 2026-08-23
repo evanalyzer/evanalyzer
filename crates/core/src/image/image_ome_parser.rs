@@ -234,13 +234,6 @@ pub(crate) fn build_image_meta(
                 && pyramid_info.nr_bits == 8
             {
                 pyramid_info.is_rgb = true;
-                // `color_channels` was derived from `m.is_rgb` above, which
-                // `ChannelSeparator` still reported as `false` at that point
-                // - it must be corrected to 3 here too, or `decode_image`
-                // (which switches on `(color_channels, is_interleaved)`)
-                // takes the grayscale passthrough branch and decodes this
-                // packed-RGB plane as three separate grayscale planes.
-                pyramid_info.color_channels = 3;
                 const RGB_NAMES: [&str; 3] = ["Red", "Green", "Blue"];
                 const RGB_EMISSION_NM: [f32; 3] = [635.0, 532.0, 450.0];
                 for i in 0..3 {
@@ -455,4 +448,3 @@ mod tests {
         assert_eq!(reader.resolution(), 0);
     }
 }
-

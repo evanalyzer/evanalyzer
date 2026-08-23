@@ -9,7 +9,7 @@
 
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::{algos::ImageAlgorithm, pipeline::pipeline_context::PipelineContext};
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
 
 /// Fills enclosed background holes in the segmentation map.
@@ -65,7 +65,11 @@ impl ImageAlgorithm for FillHoles {
     }
 
     fn name(&self) -> &'static str {
-        "FillHoles"
+        "Fill Holes"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -146,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_fill_holes_name() {
-        assert_eq!(FillHoles {}.name(), "FillHoles");
+        assert_eq!(FillHoles {}.name(), "Fill Holes");
     }
 
     /// The core algorithmic property that distinguishes a faithful ImageJ

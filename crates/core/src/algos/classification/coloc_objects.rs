@@ -21,7 +21,7 @@ use crate::{
     spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
-    InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
+    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
 };
 use indexmap::IndexMap;
 use log::{debug, info, warn};
@@ -409,6 +409,10 @@ impl ImageAlgorithm for Colocalization {
 
     fn name(&self) -> &'static str {
         "Colocalization"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

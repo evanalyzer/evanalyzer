@@ -9,7 +9,7 @@
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
 use std::sync::Arc;
 
@@ -181,7 +181,11 @@ impl ImageAlgorithm for IlluminationCorrection {
     }
 
     fn name(&self) -> &'static str {
-        "IlluminationCorrection"
+        "Illumination Correction"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -889,6 +893,6 @@ mod tests {
             apply_method: ApplyMethod::Divide,
             rescale: false,
         };
-        assert_eq!(cmd.name(), "IlluminationCorrection");
+        assert_eq!(cmd.name(), "Illumination Correction");
     }
 }

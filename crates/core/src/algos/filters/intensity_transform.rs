@@ -12,7 +12,7 @@ use crate::{
     image::ImageContainer,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
@@ -83,7 +83,11 @@ impl ImageAlgorithm for IntensityTransformation {
     }
 
     fn name(&self) -> &'static str {
-        "IntensityTransformation"
+        "Intensity Transformation"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

@@ -9,7 +9,7 @@
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::sobel;
 use macros::CommandsMeta;
 use std::sync::Arc;
@@ -72,7 +72,11 @@ impl ImageAlgorithm for EdgeDetectionSobel {
     }
 
     fn name(&self) -> &'static str {
-        "EdgeDetectionSobel"
+        "Edge Detection Sobel"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -169,6 +173,6 @@ mod tests {
     fn test_name() {
         let extractor = EdgeDetectionSobel { kernel_size: 3 };
         let name = extractor.name();
-        assert_eq!(name, "EdgeDetectionSobel");
+        assert_eq!(name, "Edge Detection Sobel");
     }
 }

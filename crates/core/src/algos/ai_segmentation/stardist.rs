@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
@@ -147,6 +147,24 @@ impl ImageAlgorithm for Stardist {
 
     fn name(&self) -> &'static str {
         "Stardist"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "schmidt2018stardist",
+            title: "Cell Detection with Star-Convex Polygons",
+            authors: &[
+                "Uwe Schmidt",
+                "Martin Weigert",
+                "Coleman Broaddus",
+                "Gene Myers",
+            ],
+            year: 2018,
+            container: Some("Medical Image Computing and Computer-Assisted Intervention (MICCAI)"),
+            doi: Some("10.1007/978-3-030-00934-2_30"),
+            url: Some("https://doi.org/10.1007/978-3-030-00934-2_30"),
+            pages: Some("265-273"),
+        })
     }
 }
 

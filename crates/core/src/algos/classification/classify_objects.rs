@@ -20,7 +20,7 @@ use crate::{
     spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
-    InternalErrors,
+    CitationMetadata, InternalErrors,
     ObjectClass::{self, Unset},
     ObjectId, PixelUnits, SegmentationClass, SizeUnits,
 };
@@ -378,7 +378,11 @@ impl ImageAlgorithm for ClassifyObjects {
     }
 
     fn name(&self) -> &'static str {
-        "ClassifyObjects"
+        "Classify Objects"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

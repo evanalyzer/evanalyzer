@@ -10,6 +10,7 @@
 use crate::algos::{
     ImageAlgorithm, ImageMath, PipelineCache, PipelineContext, RankFilter, RankFilterType,
 };
+use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::InternalErrors;
 use macros::CommandsMeta;
@@ -73,7 +74,11 @@ impl ImageAlgorithm for MedianSubtract {
     }
 
     fn name(&self) -> &'static str {
-        "MedianSubtract"
+        "Median Subtract"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -173,6 +178,6 @@ mod tests {
     #[test]
     fn test_median_subtract_name() {
         let algo = MedianSubtract { radius: 10.0 };
-        assert_eq!(algo.name(), "MedianSubtract");
+        assert_eq!(algo.name(), "Median Subtract");
     }
 }
