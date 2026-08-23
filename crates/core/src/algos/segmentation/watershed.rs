@@ -91,7 +91,7 @@ pub struct Watershed {
     /// method (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),
     /// the fix for diffusely-connected regions whose *shape* has no separate
     /// peaks but whose *brightness* clearly does.
-    #[cmdsmeta(default = SeedSource::DistanceMap)]
+    #[cmdsmeta(default = SeedSource::DistanceMap, optional = true)]
     pub seed_source: SeedSource,
 }
 

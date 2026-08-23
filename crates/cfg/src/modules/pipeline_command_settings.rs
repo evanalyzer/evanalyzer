@@ -1727,6 +1727,9 @@ impl Default for ConnectedComponentsSettings {
 #[serde(rename_all = "camelCase")]
 pub struct FillHolesSettings {}
 
+fn _serde_default_watershed_seed_source() -> SegmentationWatershedSeedSourceSettings {
+    SegmentationWatershedSeedSourceSettings::DistanceMap
+}
 /// A morphological segmentation algorithm that splits touching objects using distance topography.
 ///
 /// This is a faithful port of ImageJ's `Process > Binary > Watershed`
@@ -1790,6 +1793,7 @@ pub struct WatershedSettings {
     /// method (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),
     /// the fix for diffusely-connected regions whose *shape* has no separate
     /// peaks but whose *brightness* clearly does.
+    #[serde(default = "_serde_default_watershed_seed_source")]
     pub seed_source: SegmentationWatershedSeedSourceSettings,
 }
 
