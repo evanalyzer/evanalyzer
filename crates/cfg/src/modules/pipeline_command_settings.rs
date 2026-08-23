@@ -19,6 +19,19 @@ pub enum ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings {
     ReclassifyIfMatch,
 }
 
+///  How the estimated illumination field is combined with the original image.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FiltersIlluminationCorrectionApplyMethodSettings {
+    /// `corrected = image * mean(field) / field`. Multiplicative correction
+    /// that preserves overall image brightness - the right default for
+    /// gain/vignetting-style illumination problems.
+    #[default]
+    Divide,
+    /// `corrected = image - (field - mean(field))`. Additive correction.
+    Subtract,
+}
+
 ///  The geometric shape used to probe the image intensity surface.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -69,6 +82,21 @@ pub enum ClassificationColocObjectsColocMultiplicitySettings {
     /// `MultiFor([Cell])`, a cell can coloc with any number of spots, but
     /// each spot colocs with exactly one cell (the one it overlaps most).
     MultiFor(Vec<ObjectClass>),
+}
+
+///  How the illumination field is estimated from the block-reduced image.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FiltersIlluminationCorrectionCorrectionMethodSettings {
+    /// Block *mean*. The right default for typical uneven illumination
+    /// (vignetting, uneven excitation): every block contributes its average
+    /// brightness to the estimated field.
+    #[default]
+    Regular,
+    /// Block *minimum*. Use this when dense or bright foreground objects
+    /// would otherwise pull the mean-based estimate upward - the minimum
+    /// hugs the true background floor instead.
+    Background,
 }
 
 ///  Specifies the feature extraction method for the Hessian matrix.
@@ -238,6 +266,39 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     /// Replaces a pixel only if it deviates from the neighborhood median
     /// by more than the specified threshold.
     Outliers(f32),
+}
+
+///  Smoothing applied to the block-reduced field to remove blockiness before
+///  it is used as the correction field.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FiltersIlluminationCorrectionSmoothingMethodSettings {
+    /// Use the block-reduced field as-is.
+    None,
+    /// Separable Gaussian blur of the block grid.
+    #[serde(rename_all = "camelCase")]
+    Gaussian {
+        ///  Standard deviation, in block-grid units.
+        #[schemars(range(min = 0.1, max = 20))]
+        sigma: f32,
+    },
+    /// Windowed median filter of the block grid.
+    #[serde(rename_all = "camelCase")]
+    Median {
+        ///  Neighborhood radius, in block-grid units.
+        #[schemars(range(min = 1, max = 20))]
+        radius: usize,
+    },
+    /// Fits a smooth 2nd-order polynomial surface
+    /// (a + bx + cy + dx² + exy + fy²) through the block grid. Has no
+    /// tunable radius/sigma, so it's the most stable option when unsure.
+    FitPolynomial,
+}
+
+impl Default for FiltersIlluminationCorrectionSmoothingMethodSettings {
+    fn default() -> Self {
+        Self::None {}
+    }
 }
 
 ///  The specific calculation to extract from the Structure Tensor.
@@ -660,6 +721,68 @@ pub struct HsvRangeSettings {
     pub min_v: f32,
     ///  Maximum Value (Brightness) normalized [0.0, 1.0].
     pub max_v: f32,
+}
+
+///  Use this when your images are brighter in the middle and dimmer toward
+///  the edges/corners (vignetting), or show any other smooth shading pattern
+///  that repeats the same way across every tile or every image from the same
+///  microscope/camera setup - a consequence of the optics or illumination,
+///  not the sample. Left uncorrected, that shading makes intensity
+///  comparisons between regions of an image (or between images/wells)
+///  unreliable, even though it rarely stops segmentation from finding
+///  objects on its own.
+///
+///  Use [`super::rolling_ball::RollingBall`] instead when the problem is a
+///  *local* background glow or halo under/around individual objects (e.g.
+///  out-of-focus light, autofluorescence, uneven staining) that differs from
+///  image to image rather than being tied to the acquisition setup -
+///  RollingBall strips that local floor so thresholding/segmentation works
+///  cleanly. The two solve different problems: RollingBall won't fix a
+///  global brightness gradient, and this filter won't remove a local halo.
+///
+///  ### How it works
+///
+///  Flat-field ("illumination") correction: estimates a smooth, slowly-varying
+///  gain/offset field caused by uneven illumination (vignetting, dust on the
+///  condenser, uneven excitation) and removes it in a single calculate+apply
+///  step - equivalent to CellProfiler's `CorrectIlluminationCalculate` and
+///  `CorrectIlluminationApply` modules combined into one.
+///
+///  Unlike `RollingBall`, which estimates a *local* per-object background
+///  baseline via a rolling structural element, this estimates one *global*,
+///  low-frequency field for the whole image/channel.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[schemars(default)]
+#[serde(rename_all = "camelCase")]
+pub struct IlluminationCorrectionSettings {
+    ///  How the illumination field is estimated from the image.
+    pub method: FiltersIlluminationCorrectionCorrectionMethodSettings,
+    ///  Block size, in pixels, used to reduce the image to a coarse
+    ///  illumination estimate before smoothing. Should be larger than the
+    ///  largest foreground object, so objects are averaged/eroded away and
+    ///  only the slow-varying illumination trend survives.
+    #[schemars(range(min = 1, max = 2000))]
+    pub block_size: usize,
+    ///  Smoothing applied to the block-reduced field to remove blockiness.
+    pub smoothing: FiltersIlluminationCorrectionSmoothingMethodSettings,
+    ///  How the field is combined with the original image.
+    pub apply_method: FiltersIlluminationCorrectionApplyMethodSettings,
+    ///  Stretch the corrected image's intensities to fill the full
+    ///  `[0.0, 1.0]` range afterward - guards against `Divide` pushing
+    ///  previously-dim regions above `1.0`.
+    pub rescale: bool,
+}
+
+impl Default for IlluminationCorrectionSettings {
+    fn default() -> Self {
+        Self {
+            method: FiltersIlluminationCorrectionCorrectionMethodSettings::default(),
+            block_size: 60usize,
+            smoothing: FiltersIlluminationCorrectionSmoothingMethodSettings::default(),
+            apply_method: FiltersIlluminationCorrectionApplyMethodSettings::default(),
+            rescale: bool::default(),
+        }
+    }
 }
 
 ///  A filter that acts as a synchronization point between the pipeline and a storage backend.

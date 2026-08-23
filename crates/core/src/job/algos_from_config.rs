@@ -16,6 +16,15 @@ impl From<ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings>
     }
 }
 
+impl From<FiltersIlluminationCorrectionApplyMethodSettings> for ApplyMethod {
+    fn from(_s: FiltersIlluminationCorrectionApplyMethodSettings) -> Self {
+        match _s {
+            FiltersIlluminationCorrectionApplyMethodSettings::Divide => ApplyMethod::Divide,
+            FiltersIlluminationCorrectionApplyMethodSettings::Subtract => ApplyMethod::Subtract,
+        }
+    }
+}
+
 impl From<FiltersRollingBallBallTypeSettings> for BallType {
     fn from(_s: FiltersRollingBallBallTypeSettings) -> Self {
         match _s {
@@ -53,6 +62,19 @@ impl From<ClassificationColocObjectsColocMultiplicitySettings> for ColocMultipli
             }
             ClassificationColocObjectsColocMultiplicitySettings::MultiFor(v) => {
                 ColocMultiplicity::MultiFor(v)
+            }
+        }
+    }
+}
+
+impl From<FiltersIlluminationCorrectionCorrectionMethodSettings> for CorrectionMethod {
+    fn from(_s: FiltersIlluminationCorrectionCorrectionMethodSettings) -> Self {
+        match _s {
+            FiltersIlluminationCorrectionCorrectionMethodSettings::Regular => {
+                CorrectionMethod::Regular
+            }
+            FiltersIlluminationCorrectionCorrectionMethodSettings::Background => {
+                CorrectionMethod::Background
             }
         }
     }
@@ -164,6 +186,25 @@ impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
             FiltersRankFilterRankFilterTypeSettings::Max => RankFilterType::Max,
             FiltersRankFilterRankFilterTypeSettings::Mean => RankFilterType::Mean,
             FiltersRankFilterRankFilterTypeSettings::Outliers(v) => RankFilterType::Outliers(v),
+        }
+    }
+}
+
+impl From<FiltersIlluminationCorrectionSmoothingMethodSettings> for SmoothingMethod {
+    fn from(_s: FiltersIlluminationCorrectionSmoothingMethodSettings) -> Self {
+        match _s {
+            FiltersIlluminationCorrectionSmoothingMethodSettings::None => SmoothingMethod::None,
+            FiltersIlluminationCorrectionSmoothingMethodSettings::Gaussian { sigma } => {
+                SmoothingMethod::Gaussian {
+                    sigma: sigma.clamp(0.1, 20.0),
+                }
+            }
+            FiltersIlluminationCorrectionSmoothingMethodSettings::Median { radius } => {
+                SmoothingMethod::Median { radius: radius }
+            }
+            FiltersIlluminationCorrectionSmoothingMethodSettings::FitPolynomial => {
+                SmoothingMethod::FitPolynomial
+            }
         }
     }
 }
@@ -465,6 +506,18 @@ impl From<HsvRangeSettings> for HsvRange {
     }
 }
 
+impl From<IlluminationCorrectionSettings> for IlluminationCorrection {
+    fn from(_s: IlluminationCorrectionSettings) -> Self {
+        IlluminationCorrection {
+            method: CorrectionMethod::from(_s.method),
+            block_size: _s.block_size,
+            smoothing: SmoothingMethod::from(_s.smoothing),
+            apply_method: ApplyMethod::from(_s.apply_method),
+            rescale: _s.rescale,
+        }
+    }
+}
+
 impl From<ImageCacheSettings> for ImageCache {
     fn from(_s: ImageCacheSettings) -> Self {
         ImageCache {
@@ -757,6 +810,9 @@ pub fn into_algorithm(cmd: PipelineCommand) -> Result<Box<dyn ImageAlgorithm>, I
             Ok(Box::new(crate::algos::GaussianBlur::from(settings)))
         }
         PipelineCommand::Hessian(settings) => Ok(Box::new(crate::algos::Hessian::from(settings))),
+        PipelineCommand::IlluminationCorrection(settings) => Ok(Box::new(
+            crate::algos::IlluminationCorrection::from(settings),
+        )),
         PipelineCommand::ImageCache(settings) => {
             Ok(Box::new(crate::algos::ImageCache::from(settings)))
         }
