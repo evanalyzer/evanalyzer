@@ -1712,11 +1712,18 @@ pub struct FillHolesSettings {}
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct WatershedSettings {
-    /// Prominence tolerance for the maximum finder, in pixels of distance.
+    /// Prominence tolerance for the maximum finder, in pixels of distance -
+    /// **or**, when `seed_source == Intensity`, CellProfiler's "typical
+    /// object diameter"-derived maxima-suppression radius, in pixels (its
+    /// disk-shaped local-maximum search footprint is `max(1, this - 0.5)`).
+    /// Same field, two meanings depending on which surface seeds come from -
+    /// both are fundamentally a spatial scale over the *seed-finding*
+    /// surface, only the surface itself changes.
     ///
-    /// A local maximum of the distance map is treated as a separate object only
-    /// if it protrudes more than this value above the ridge connecting it to a
-    /// higher maximum. This is ImageJ's "prominence"/"noise tolerance" parameter.
+    /// For `DistanceMap`: a local maximum of the distance map is treated as
+    /// a separate object only if it protrudes more than this value above
+    /// the ridge connecting it to a higher maximum. This is ImageJ's
+    /// "prominence"/"noise tolerance" parameter.
     ///
     /// * **Low values**: more sensitive; may over-segment ragged objects.
     /// * **High values**: more robust; may fail to split genuinely touching objects.
@@ -1725,12 +1732,16 @@ pub struct WatershedSettings {
     /// single object is being split into several pieces.
     #[schemars(range(min = 0.1, max = 20))]
     pub maximum_finder_tolerance: f32,
-    /// Standard deviation (px) of an optional Gaussian blur applied to the
-    /// distance map *before* the maximum finder. `0` disables it.
+    /// Standard deviation (px) of an optional Gaussian blur applied *before*
+    /// seed-finding, to the surface `seed_source` seeds from - the distance
+    /// map for `DistanceMap`, or the grayscale intensity image for
+    /// `Intensity` (matching CellProfiler's own smoothing step ahead of its
+    /// "Intensity" unclumping). `0` disables it. The watershed *flood*
+    /// always runs on the (unsmoothed-by-this-field) distance map either way.
     ///
     /// ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
-    /// boundaries, so this is rarely needed; for extremely noisy AI masks a value
-    /// of `1.0`–`2.0` can further suppress spurious maxima.
+    /// boundaries, so this is rarely needed for `DistanceMap`; for extremely
+    /// noisy AI masks a value of `1.0`–`2.0` can further suppress spurious maxima.
     #[schemars(range(min = 0, max = 10))]
     pub smoothing_sigma: f32,
     /// Minimum object size, in pixels. After segmentation, any object smaller than
@@ -1739,12 +1750,18 @@ pub struct WatershedSettings {
     /// Use it to drop tiny fragments left by very ragged masks.
     #[schemars(range(min = 0, max = 100000))]
     pub min_object_size: i32,
-    /// What surface local maxima are seeded from.
+    /// What surface local maxima are seeded from. The watershed *flood*
+    /// itself is unaffected either way - it always runs on the distance
+    /// map, matching CellProfiler's "Shape" watershed method.
     ///
-    /// `DistanceMap` is default behaviour emulating ImageJ's watershed implemention.
-    /// `Intensity` finds seeds on the (optionally smoothed) grayscale image instead,
-    /// restricted to the foreground mask - the fix for diffusely-connected regions
-    /// whose *shape* has no separate peaks but whose *brightness* clearly does.
+    /// `DistanceMap` (default) emulates ImageJ's watershed implementation:
+    /// seeds and flood both come from the distance map. `Intensity` instead
+    /// finds seeds as local maxima of the (optionally smoothed) grayscale
+    /// image, restricted to each object's own footprint - a faithful port
+    /// of CellProfiler `IdentifyPrimaryObjects`' "Intensity" unclumping
+    /// method (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),
+    /// the fix for diffusely-connected regions whose *shape* has no separate
+    /// peaks but whose *brightness* clearly does.
     pub seed_source: SegmentationWatershedSeedSourceSettings,
 }
 

@@ -2825,7 +2825,7 @@
       "type": "object",
       "properties": {
         "maximumFinderTolerance": {
-          "description": "Prominence tolerance for the maximum finder, in pixels of distance.\n\nA local maximum of the distance map is treated as a separate object only\nif it protrudes more than this value above the ridge connecting it to a\nhigher maximum. This is ImageJ's \"prominence\"/\"noise tolerance\" parameter.\n\n* **Low values**: more sensitive; may over-segment ragged objects.\n* **High values**: more robust; may fail to split genuinely touching objects.\n\nImageJ's default of `0.5` works well for most distance maps; raise it if a\nsingle object is being split into several pieces.",
+          "description": "Prominence tolerance for the maximum finder, in pixels of distance -\n**or**, when `seed_source == Intensity`, CellProfiler's \"typical\nobject diameter\"-derived maxima-suppression radius, in pixels (its\ndisk-shaped local-maximum search footprint is `max(1, this - 0.5)`).\nSame field, two meanings depending on which surface seeds come from -\nboth are fundamentally a spatial scale over the *seed-finding*\nsurface, only the surface itself changes.\n\nFor `DistanceMap`: a local maximum of the distance map is treated as\na separate object only if it protrudes more than this value above\nthe ridge connecting it to a higher maximum. This is ImageJ's\n\"prominence\"/\"noise tolerance\" parameter.\n\n* **Low values**: more sensitive; may over-segment ragged objects.\n* **High values**: more robust; may fail to split genuinely touching objects.\n\nImageJ's default of `0.5` works well for most distance maps; raise it if a\nsingle object is being split into several pieces.",
           "type": "number",
           "format": "float",
           "default": 0.5,
@@ -2841,12 +2841,12 @@
           "minimum": 0
         },
         "seedSource": {
-          "description": "What surface local maxima are seeded from.\n\n`DistanceMap` is default behaviour emulating ImageJ's watershed implemention.\n`Intensity` finds seeds on the (optionally smoothed) grayscale image instead,\nrestricted to the foreground mask - the fix for diffusely-connected regions\nwhose *shape* has no separate peaks but whose *brightness* clearly does.",
+          "description": "What surface local maxima are seeded from. The watershed *flood*\nitself is unaffected either way - it always runs on the distance\nmap, matching CellProfiler's \"Shape\" watershed method.\n\n`DistanceMap` (default) emulates ImageJ's watershed implementation:\nseeds and flood both come from the distance map. `Intensity` instead\nfinds seeds as local maxima of the (optionally smoothed) grayscale\nimage, restricted to each object's own footprint - a faithful port\nof CellProfiler `IdentifyPrimaryObjects`' \"Intensity\" unclumping\nmethod (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),\nthe fix for diffusely-connected regions whose *shape* has no separate\npeaks but whose *brightness* clearly does.",
           "$ref": "#/$defs/SegmentationWatershedSeedSourceSettings",
           "default": "DISTANCE_MAP"
         },
         "smoothingSigma": {
-          "description": "Standard deviation (px) of an optional Gaussian blur applied to the\ndistance map *before* the maximum finder. `0` disables it.\n\nImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\nboundaries, so this is rarely needed; for extremely noisy AI masks a value\nof `1.0`–`2.0` can further suppress spurious maxima.",
+          "description": "Standard deviation (px) of an optional Gaussian blur applied *before*\nseed-finding, to the surface `seed_source` seeds from - the distance\nmap for `DistanceMap`, or the grayscale intensity image for\n`Intensity` (matching CellProfiler's own smoothing step ahead of its\n\"Intensity\" unclumping). `0` disables it. The watershed *flood*\nalways runs on the (unsmoothed-by-this-field) distance map either way.\n\nImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\nboundaries, so this is rarely needed for `DistanceMap`; for extremely\nnoisy AI masks a value of `1.0`–`2.0` can further suppress spurious maxima.",
           "type": "number",
           "format": "float",
           "default": 0.0,
