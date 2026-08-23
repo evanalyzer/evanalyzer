@@ -5,7 +5,8 @@ import { ToolbarState } from "toolbar.slint";
 
 component MenuItem inherits Rectangle {
     in property <string> text;
-    in property <image> icon: @image-url(""); // Default to empty
+    in property <bool> enabled;
+    in property <image> icon: @image-url("");
     in property <brush> icon-colorize: Theme.text;
     callback clicked;
 
@@ -139,6 +140,49 @@ export component CustomMenuBar inherits Rectangle {
                             file-menu.close();
                         }
                     }
+                }
+            }
+        }
+
+        // --- MENU: EXPORT ---
+        export-item := Rectangle {
+            width: file-text.preferred-width + 16px;
+            background: file-touch.has-hover ? Theme.hover : transparent;
+            border-radius: 3px;
+            export-text := Text {
+                text: "Export";
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+
+            export-touch := TouchArea {
+                clicked => {
+                    export-menu.show();
+                }
+            }
+
+            export-menu := PopupWindow {
+                y: parent.height;
+                width: 200px;
+                MenuContainer {
+                    MenuItem {
+                        text: "Cite project";
+                        icon: @image-url("icons/regular-blue/quotes.svg");
+                        clicked => {
+                            ToolbarState.cite_project_clicked();
+                            export-menu.close();
+                        }
+                    }
+
+                    // MenuItem {
+                   //     text: "Publish project";
+                   //     icon: @image-url("icons/regular-blue/upload-simple.svg");
+                   //     enabled: false;
+                   //     clicked => {
+                   //         ToolbarState.publish_project_clicked();
+                   //         export-menu.close();
+                   //     }
+                   // }
                 }
             }
         }

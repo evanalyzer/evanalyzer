@@ -16,6 +16,7 @@ use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
 use crate::editor::template_controller::TemplateController;
+use evanalyzer_app::exporter;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::extensions::project_ext::SaveProjectActions;
 use evanalyzer_app::templates::{load_project_template_from_file, load_project_templates};
@@ -422,6 +423,13 @@ impl ProjectController {
                 });
             });
 
+            // Export project template for cite
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_cite_project_clicked(move || {
+                    manager.export_project_cite();
+                });
+
             // Unsaved-changes dialog: "Save" - save first, then only run the
             // pending action (if any) once the save actually succeeded. If
             // the user cancels the save-as file picker, or the save fails,
@@ -571,6 +579,28 @@ impl ProjectController {
 
     fn save_project(self: &Arc<Self>) {
         self.save_project_then(|_saved| {});
+    }
+
+    fn export_project_cite(self: &Arc<Self>) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Markdown files", &["md"])
+            .save_file()
+        {
+            let in_thread = self.clone();
+            std::thread::spawn(move || {
+                let project_settings = &in_thread.app_state.get_project().settings;
+                let result = exporter::cite_project(project_settings, &path);
+                match result {
+                    Ok(_) => {
+                        info!("Project cite saved as: {}", path.display());
+                        in_thread.app_state.clear_dirty();
+                    }
+                    Err(msg) => {
+                        warn!("Project cite not saved: {}", msg);
+                    }
+                }
+            });
+        }
     }
 
     /// Saves the project (prompting for a path first if none is set yet,
