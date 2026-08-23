@@ -1229,6 +1229,60 @@ mod intensity_seeding_tests {
         assert_eq!(points[0], (2, 2));
     }
 
+    /// Reproduces a reported failure mode: two genuinely separate bright
+    /// "heads" (e.g. two touching comets in a comet assay) whose connecting
+    /// region is *also* clipped/saturated to the same maximum value - as
+    /// happens with overexposed or coarsely-quantized real images - must
+    /// still collapse to a single seed, and that collapse is independent of
+    /// `suppression_size` (tested across the same 0.5/5/20 sweep a tolerance
+    /// tuning session would try).
+    ///
+    /// This is the tie rule's documented behavior, not a bug in
+    /// `seed_source` wiring: a same-label neighbor only disqualifies a pixel
+    /// from being a local max if it's *strictly* greater (see
+    /// `find_intensity_seeds`'s doc comment), so a tied plateau bridging two
+    /// real peaks is indistinguishable from one big peak - no suppression
+    /// radius can separate pixels that never differ. Contrast with
+    /// `two_separated_peaks_in_one_label_each_get_a_seed` below, which is
+    /// the same two-peak layout but with a genuine (unclipped) dip between
+    /// the peaks, and correctly yields two seeds at every tested tolerance.
+    #[test]
+    fn two_heads_bridged_by_a_saturated_plateau_collapse_to_one_seed_at_every_tolerance() {
+        let width = 20;
+        let height = 5;
+        let labels = vec![1u32; width * height]; // one connected blob, e.g. two fused comets
+        let peak1 = 3i32;
+        let peak2 = 16i32;
+        let mut intensity = vec![0f32; width * height];
+        for y in 0..height {
+            for x in 0..width as i32 {
+                // Everything from head to head reads at the sensor's clip
+                // ceiling - the same physical value a genuine, shallower
+                // valley would saturate to. Only outside the two heads does
+                // intensity fall off normally (giving the blob an edge at
+                // all, rather than being saturated everywhere).
+                let v = if x >= peak1 && x <= peak2 {
+                    1.0
+                } else {
+                    let d = if x < peak1 { peak1 - x } else { x - peak2 };
+                    (1.0 - 0.1 * d as f32).max(0.05)
+                };
+                intensity[y * width + x as usize] = v;
+            }
+        }
+
+        for tolerance in [0.5f32, 5.0, 20.0] {
+            let seeds = find_intensity_seeds(&intensity, &labels, width, height, tolerance);
+            let points = seed_points(&seeds, width);
+            assert_eq!(
+                points.len(),
+                1,
+                "a saturated bridge between two real peaks must still collapse to \
+                 one seed regardless of tolerance ({tolerance}), got {points:?}"
+            );
+        }
+    }
+
     /// Two distinct, well-separated intensity peaks within the *same*
     /// instance label must each produce their own seed - this is the whole
     /// point of Intensity unclumping: a diffusely-connected region (one
