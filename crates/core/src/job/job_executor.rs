@@ -1,3 +1,4 @@
+use super::tile_merge::{PendingFragment, merge_pending_fragments, touches_tile_edge};
 use crate::{
     ImageInfo, ZProjection,
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
@@ -15,6 +16,7 @@ use evanalyzer_cfg::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
         },
         object_settings::ObjectMetricSettings,
+        project_settings::TileMergeSettings,
     },
 };
 use indexmap::IndexMap;
@@ -148,6 +150,12 @@ pub struct JobExecutor {
 
     /// Debugging settings, if set the pipeline stops at this point and returns the actual image
     pub breakpoint: Option<BreakpointSettings>,
+
+    /// Opt-in setting to reassemble objects that got split across an
+    /// internal tile boundary back into one correct object - see
+    /// `docs/tile_merge_plan.md`. Defaults to disabled (a complete no-op);
+    /// set by `job_generator` from the project's own `ProjectSettings`.
+    pub tile_merge: TileMergeSettings,
 }
 
 impl<'a> JobExecutor {
@@ -171,6 +179,7 @@ impl<'a> JobExecutor {
             override_pixel_sizes,
             preview_tile_settings: None,
             breakpoint: None,
+            tile_merge: TileMergeSettings::default(),
         }
     }
 
@@ -592,6 +601,22 @@ impl<'a> JobExecutor {
                 .ok();
         }
 
+        // Buffer for objects that touch their own tile's edge (but not the
+        // full image's edge) and don't carry a class in
+        // `tile_merge.classes_to_not_merge` - held back from the normal
+        // per-tile export path and matched/merged once every tile of this
+        // image has finished, see
+        // `docs/tile_merge_plan.md`. `None` when the feature is off, which
+        // must be a complete no-op on the existing per-tile export path -
+        // every `run_tile` invocation below checks this once and does
+        // nothing extra when it's `None`. One buffer per image (not global):
+        // merging is per-image, and `analyze_image` itself is already the
+        // per-image unit of work.
+        let pending: Option<Arc<Mutex<Vec<PendingFragment>>>> = self
+            .tile_merge
+            .enabled
+            .then(|| Arc::new(Mutex::new(Vec::new())));
+
         // Spawn a dedicated DB writer thread so one tile's image loading and
         // pipeline execution can overlap with another tile's DuckDB insert.
         // Rayon workers send their completed caches through a bounded channel
@@ -732,6 +757,43 @@ impl<'a> JobExecutor {
                 return Ok(());
             }
 
+            // Split out tile-edge-touching, merge-eligible objects into
+            // `pending` instead of letting them flow through the normal
+            // per-tile export below - they're matched against fragments from
+            // other tiles and (re-)exported once every tile of this image
+            // has finished, see `docs/tile_merge_plan.md`. A no-op whenever
+            // `pending` is `None` (`tile_merge.enabled == false`). Every
+            // class merges by default - `classes_to_not_merge` is an
+            // opt-out deny-list, not an opt-in allow-list, since a user
+            // turning this on has no reason to know about tiles at all and
+            // just expects their objects to be detected correctly.
+            if let Some(pending) = &pending {
+                let fragment_ids: Vec<_> = cache
+                    .object_cache
+                    .iter()
+                    .filter(|(_, object)| {
+                        !object.touches_edge
+                            && touches_tile_edge(object.bbox, &tile)
+                            && !object
+                                .object_class
+                                .iter()
+                                .any(|c| self.tile_merge.classes_to_not_merge.contains(c))
+                    })
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                if !fragment_ids.is_empty() {
+                    let mut buffer = pending.lock().unwrap_or_else(|e| e.into_inner());
+                    for id in fragment_ids {
+                        if let Some(object) = cache.object_cache.remove(&id) {
+                            buffer.push(PendingFragment {
+                                object,
+                                tile: tile.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
             // Only interactive runs consume per-tile objects (for the
             // TileCompleted event below) - skip the clone/collect otherwise.
             let tile_objects: Vec<ObjectMetricSettings> = if sender.is_some() {
@@ -790,14 +852,60 @@ impl<'a> JobExecutor {
         // processed and its output handed to `exporter` by this point,
         // regardless of which calling context (`progress` above) got us here.
 
+        // Match/merge every tile-edge fragment buffered above (a no-op when
+        // `pending` is `None`) and export the merged objects via a synthetic
+        // whole-image `PipelineCache` - see `docs/tile_merge_plan.md`. Must
+        // run before `finalize_image` below, which the exporter uses as the
+        // "this image is done" signal.
+        let merge_result: Result<(), InternalErrors> = match &pending {
+            Some(pending) => {
+                let fragments =
+                    std::mem::take(&mut *pending.lock().unwrap_or_else(|e| e.into_inner()));
+                if fragments.is_empty() {
+                    Ok(())
+                } else {
+                    merge_pending_fragments(fragments, &self.tile_merge).and_then(|merged| {
+                        if merged.is_empty() {
+                            return Ok(());
+                        }
+                        let synthetic_cache = PipelineCache {
+                            image_cache: ImageCache {
+                                image_meta: PipelineImageMeta {
+                                    image_tile_info: ImageTile {
+                                        offset_x: 0,
+                                        offset_y: 0,
+                                        width: full_size.width,
+                                        height: full_size.height,
+                                    },
+                                    full_image_width: full_size,
+                                    is_rgb,
+                                    nr_of_bits: nr_bits,
+                                    pixel_sizes: pixel_sizes.clone(),
+                                },
+                                images: ImageMap::new(),
+                            },
+                            object_cache: merged.into_iter().map(|o| (o.id.clone(), o)).collect(),
+                            image_rel_path: image_rel_path.clone(),
+                        };
+                        exporter
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .export(&synthetic_cache)
+                    })
+                }
+            }
+            None => Ok(()),
+        };
+
         // Record the image was processed even if it produced zero objects -
-        // run regardless of tile/writer errors so a partially-failed image
-        // still shows up rather than vanishing entirely. The error (if any)
-        // is passed through so it's recorded as failed rather than looking
-        // identical to a genuinely complete image.
+        // run regardless of tile/writer/merge errors so a partially-failed
+        // image still shows up rather than vanishing entirely. The error (if
+        // any) is passed through so it's recorded as failed rather than
+        // looking identical to a genuinely complete image.
         let combined_error = tile_result
             .as_ref()
             .and(writer_result.as_ref())
+            .and(merge_result.as_ref())
             .err()
             .map(|e| e.to_string());
         let finalize_result = exporter
@@ -808,7 +916,10 @@ impl<'a> JobExecutor {
         let duration = start_image.elapsed();
         info!("Executed image pipeline in {:?}", duration);
 
-        tile_result.and(writer_result).and(finalize_result)
+        tile_result
+            .and(writer_result)
+            .and(merge_result)
+            .and(finalize_result)
     }
 
     /// Generates an iterator over image tiles for processing large images.
@@ -2318,6 +2429,281 @@ mod full_run_integration_tests {
         // exactly one tile.
         let count = job.count_preview_visible_tiles().unwrap();
         assert_eq!(count, 1);
+    }
+}
+
+/// The plan's strongest correctness check for `docs/tile_merge_plan.md`:
+/// a synthetic object deliberately split across a tile boundary must produce,
+/// after buffering + merging, the exact same area/bbox/intensity as running
+/// the identical pipeline on the same object *without* tiling at all.
+///
+/// Runs the real `Threshold -> ConnectedComponents -> ExtractObjects` chain
+/// (via `Pipeline::run`, bypassing file I/O) so this exercises the actual
+/// extraction path's `touches_edge`/bbox/intensity output feeding into
+/// `tile_merge`, not just hand-built `Object`s like `tile_merge`'s own unit
+/// tests. Doesn't go through `JobExecutor::analyze_image` itself (that needs
+/// a real multi-tile-sized image file on disk) - this instead replicates
+/// exactly what `analyze_image`'s tile loop does: run each tile's pipeline,
+/// split out tile-edge-touching fragments, buffer them, and merge once every
+/// tile is done.
+#[cfg(test)]
+mod tile_merge_end_to_end_tests {
+    use super::*;
+    use crate::ImagePlane;
+    use crate::algos::{
+        ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod,
+        ThresholdValueSource,
+    };
+    use crate::image::{ImageContainer, ManagedImage};
+    use crate::pipeline::pipeline::CorePipelineSettings;
+    use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass};
+    use kornia_apriltag::utils::Point2d;
+    use kornia_image::Image;
+    use kornia_tensor::CpuAllocator;
+
+    fn threshold_connected_components_extract_pipeline() -> Pipeline {
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        pipeline.add_command(Box::new(Threshold {
+            thresholds: vec![ThresholdEntry {
+                method: ThresholdMethod::Manual,
+                min_threshold: 0.0,
+                max_threshold: 255.0,
+                unit: PixelUnits::Bit,
+                object_class_id: SegmentationClass(1),
+                value_source: ThresholdValueSource::ActualImage,
+            }],
+        }));
+        pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
+        pipeline.add_command(Box::new(ExtractObjects {
+            max_objects_before_fail: 100_000,
+        }));
+        pipeline
+    }
+
+    /// A `PipelineCache` seeded with a single-channel gray image, as if it
+    /// were tile `(tile_offset_x, 0)` of a `(full_width, full_height)` image
+    /// - everything `Threshold`/`ConnectedComponents`/`ExtractObjects` need
+    /// to run exactly as `job_executor` would run them on a real tile.
+    fn gray_tile_cache(
+        data: Vec<f32>,
+        tile_width: usize,
+        tile_height: usize,
+        tile_offset_x: usize,
+        full_width: usize,
+        full_height: usize,
+    ) -> PipelineCache {
+        let image = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: tile_width,
+                height: tile_height,
+            },
+            data,
+            CpuAllocator,
+        )
+        .unwrap();
+        let container = Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: image,
+            tile_offset: Point2d {
+                x: tile_offset_x,
+                y: 0,
+            },
+            plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        }));
+        let mut images: ImageMap = ImageMap::new();
+        images.insert(ImageAddress::Channel(0), container);
+        PipelineCache {
+            image_cache: ImageCache {
+                image_meta: PipelineImageMeta {
+                    image_tile_info: ImageTile {
+                        offset_x: tile_offset_x,
+                        offset_y: 0,
+                        width: tile_width,
+                        height: tile_height,
+                    },
+                    full_image_width: ImageSize {
+                        width: full_width,
+                        height: full_height,
+                    },
+                    is_rgb: false,
+                    nr_of_bits: 8,
+                    pixel_sizes: PixelSizes::default(),
+                },
+                images,
+            },
+            object_cache: BTreeMap::new(),
+            image_rel_path: PathBuf::new(),
+        }
+    }
+
+    fn run_pipeline(cache: PipelineCache) -> PipelineCache {
+        threshold_connected_components_extract_pipeline()
+            .run(PathBuf::new(), cache, None, false)
+            .expect("pipeline must run successfully")
+            .cache
+    }
+
+    /// Splits every tile-edge-touching, merge-eligible object out of `cache`
+    /// into `PendingFragment`s - the same filter `analyze_image`'s tile loop
+    /// applies before `cache_tx.try_send`. Every class merges unless it's on
+    /// `classes_to_not_merge`.
+    fn split_fragments(
+        cache: &mut PipelineCache,
+        tile: &ImageTile,
+        classes_to_not_merge: &[ObjectClass],
+    ) -> Vec<PendingFragment> {
+        let ids: Vec<_> = cache
+            .object_cache
+            .iter()
+            .filter(|(_, object)| {
+                !object.touches_edge
+                    && touches_tile_edge(object.bbox, tile)
+                    && !object
+                        .object_class
+                        .iter()
+                        .any(|c| classes_to_not_merge.contains(c))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                cache
+                    .object_cache
+                    .remove(&id)
+                    .map(|object| PendingFragment {
+                        object,
+                        tile: tile.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    /// 6x3 image, one horizontal 4-pixel-wide object at row y=1, columns
+    /// x=1..=4 - entirely interior to the full image (doesn't touch its
+    /// edges), but split by a tile boundary at x=3 into a 2px piece in each
+    /// of two 3-wide tiles. Reference: process the whole image as one tile.
+    fn whole_image_data() -> Vec<f32> {
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        data
+    }
+
+    #[test]
+    fn tiled_merge_reproduces_the_untiled_reference_object() {
+        // Reference: single tile covering the whole image.
+        let reference_cache = run_pipeline(gray_tile_cache(whole_image_data(), 6, 3, 0, 6, 3));
+        let reference_objects: Vec<_> = reference_cache.object_cache.values().collect();
+        assert_eq!(
+            reference_objects.len(),
+            1,
+            "the untiled reference must find exactly one object"
+        );
+        let reference = reference_objects[0];
+        assert_eq!(reference.bbox, [1, 1, 4, 1]);
+        assert_eq!(reference.area, 4);
+        let reference_sum = reference.intensities.get(&0).unwrap().sum_intensity;
+
+        // Tiled: split the same image into two 3-wide tiles at x=3, process
+        // each independently (exactly like two rayon workers would).
+        let full = whole_image_data();
+        let mut tile_a_data = Vec::with_capacity(9);
+        let mut tile_b_data = Vec::with_capacity(9);
+        for y in 0..3 {
+            let row = &full[y * 6..(y + 1) * 6];
+            tile_a_data.extend_from_slice(&row[0..3]);
+            tile_b_data.extend_from_slice(&row[3..6]);
+        }
+        let tile_a = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 3,
+            height: 3,
+        };
+        let tile_b = ImageTile {
+            offset_x: 3,
+            offset_y: 0,
+            width: 3,
+            height: 3,
+        };
+        let mut cache_a = run_pipeline(gray_tile_cache(tile_a_data, 3, 3, 0, 6, 3));
+        let mut cache_b = run_pipeline(gray_tile_cache(tile_b_data, 3, 3, 3, 6, 3));
+
+        assert_eq!(
+            cache_a.object_cache.len(),
+            1,
+            "tile A must find one fragment"
+        );
+        assert_eq!(
+            cache_b.object_cache.len(),
+            1,
+            "tile B must find one fragment"
+        );
+        let frag_a_bbox = cache_a.object_cache.values().next().unwrap().bbox;
+        let frag_b_bbox = cache_b.object_cache.values().next().unwrap().bbox;
+        assert_eq!(
+            frag_a_bbox,
+            [1, 1, 2, 1],
+            "tile A's fragment is its half of the blob"
+        );
+        assert_eq!(
+            frag_b_bbox,
+            [3, 1, 4, 1],
+            "tile B's fragment is its half of the blob"
+        );
+
+        // No `classes_to_not_merge` entries - every class merges by default.
+        let classes_to_not_merge: [ObjectClass; 0] = [];
+        let mut pending = split_fragments(&mut cache_a, &tile_a, &classes_to_not_merge);
+        pending.extend(split_fragments(
+            &mut cache_b,
+            &tile_b,
+            &classes_to_not_merge,
+        ));
+        assert_eq!(
+            pending.len(),
+            2,
+            "both tile-edge fragments must have been buffered, not exported per-tile"
+        );
+        assert!(
+            cache_a.object_cache.is_empty() && cache_b.object_cache.is_empty(),
+            "buffered fragments must be removed from their tile's own export"
+        );
+
+        let settings = TileMergeSettings {
+            enabled: true,
+            classes_to_not_merge: Vec::new(),
+            connectivity:
+                evanalyzer_cfg::settings::project_settings::TileMergeConnectivity::EightConnected,
+            max_fragments_per_group: 100,
+        };
+        let merged = merge_pending_fragments(pending, &settings).unwrap();
+
+        assert_eq!(
+            merged.len(),
+            1,
+            "the two fragments must merge into one object"
+        );
+        assert_eq!(
+            merged[0].bbox, reference.bbox,
+            "merged bbox must match the untiled reference exactly"
+        );
+        assert_eq!(
+            merged[0].area, reference.area,
+            "merged area must match the untiled reference exactly"
+        );
+        assert_eq!(
+            merged[0].intensities.get(&0).unwrap().sum_intensity,
+            reference_sum,
+            "merged intensity sum must match the untiled reference exactly"
+        );
     }
 }
 

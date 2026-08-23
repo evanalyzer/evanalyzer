@@ -938,6 +938,7 @@ fn watershed_settings_convert_and_clamp_tolerance_and_sigma() {
         maximum_finder_tolerance: 0.0,
         smoothing_sigma: 999.0,
         min_object_size: 30,
+        seed_source: SegmentationWatershedSeedSourceSettings::DistanceMap,
     };
     let result = Watershed::from(settings);
     assert_eq!(result.maximum_finder_tolerance, 0.1);

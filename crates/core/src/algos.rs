@@ -79,6 +79,7 @@ pub use self::segmentation::threshold::Threshold;
 pub use self::segmentation::threshold::ThresholdEntry;
 pub use self::segmentation::threshold::ThresholdMethod;
 pub use self::segmentation::threshold::ThresholdValueSource;
+pub use self::segmentation::watershed::SeedSource;
 pub use self::segmentation::watershed::Watershed;
 pub use self::spartial_transform::edm::DistanceTransform;
 

@@ -2551,6 +2551,13 @@
         }
       ]
     },
+    "SegmentationWatershedSeedSourceSettings": {
+      "type": "string",
+      "enum": [
+        "DISTANCE_MAP",
+        "INTENSITY"
+      ]
+    },
     "SizeUnits": {
       "type": "string",
       "enum": [
@@ -2832,6 +2839,11 @@
           "default": 0,
           "maximum": 100000,
           "minimum": 0
+        },
+        "seedSource": {
+          "description": "What surface local maxima are seeded from.\n\n`DistanceMap` is default behaviour emulating ImageJ's watershed implemention.\n`Intensity` finds seeds on the (optionally smoothed) grayscale image instead,\nrestricted to the foreground mask - the fix for diffusely-connected regions\nwhose *shape* has no separate peaks but whose *brightness* clearly does.",
+          "$ref": "#/$defs/SegmentationWatershedSeedSourceSettings",
+          "default": "DISTANCE_MAP"
         },
         "smoothingSigma": {
           "description": "Standard deviation (px) of an optional Gaussian blur applied to the\ndistance map *before* the maximum finder. `0` disables it.\n\nImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\nboundaries, so this is rarely needed; for extremely noisy AI masks a value\nof `1.0`–`2.0` can further suppress spurious maxima.",

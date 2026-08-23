@@ -30,6 +30,16 @@
       "format": "uint32",
       "default": 0,
       "minimum": 0
+    },
+    "tileMerge": {
+      "description": "Setting to reassemble objects split across an internal tile boundary\nback into one correct object - on by default, matching what a user\nexpects without needing to configure anything. Absent on files\nwritten before this feature existed, which `serde(default)` also\nreads as enabled - see `TileMergeSettings`.",
+      "$ref": "#/$defs/TileMergeSettings",
+      "default": {
+        "classesToNotMerge": [],
+        "connectivity": "EIGHT_CONNECTED",
+        "enabled": true,
+        "maxFragmentsPerGroup": 10000
+      }
     }
   },
   "required": [
@@ -2962,6 +2972,13 @@
         }
       ]
     },
+    "SegmentationWatershedSeedSourceSettings": {
+      "type": "string",
+      "enum": [
+        "DISTANCE_MAP",
+        "INTENSITY"
+      ]
+    },
     "SeriesSettings": {
       "type": "object",
       "properties": {
@@ -3182,6 +3199,44 @@
         "thresholds"
       ]
     },
+    "TileMergeConnectivity": {
+      "description": "How close two tile-edge object fragments must be, in pixel connectivity\nterms, to be considered the same real-world object - see [`TileMergeSettings`].\n\n`ConnectedComponents` (the usual source of the instance labels tile-merge\nfragments come from) always uses 8-connectivity, so `EightConnected` is\nthe default: it's what reproduces an untiled run's result exactly for the\ncommon case. `FourConnected` is available for segmentation sources that\nuse plain 4-connectivity instead.",
+      "type": "string",
+      "enum": [
+        "FOUR_CONNECTED",
+        "EIGHT_CONNECTED"
+      ]
+    },
+    "TileMergeSettings": {
+      "description": "Project-level setting to reassemble objects that a tiled analysis run\nsplit across an internal tile boundary (e.g. a whole organ/tissue region\non a whole-slide image) back into one correct object after every tile\nfinishes - see `docs/tile_merge_plan.md`.\n\n`enabled: true` (the default) - a user has no reason to know or care\nabout tiles, they just expect their objects to be detected correctly,\nwhich for a tiled run means split fragments merged back together. Every\nclass merges by default too (see `classes_to_not_merge`), so this is a\nworking, correct-by-default setup with nothing to configure. Set\n`enabled: false` to fully restore the old per-tile-only export path (a\ncomplete no-op, zero behavior change) - e.g. for a pipeline that only\never runs single-tile, where the extra buffering/matching pass is pure\noverhead.",
+      "type": "object",
+      "properties": {
+        "classesToNotMerge": {
+          "description": "Opt-out deny-list: objects carrying any of these classes are excluded\nfrom tile-edge merging. Empty (the default) means every class is\nmerge-eligible once `enabled` - a non-expert user turning this on has\nno reason to know about tiles at all and just expects objects to be\ndetected correctly, not to configure a class list first.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObjectClass"
+          }
+        },
+        "connectivity": {
+          "description": "4- or 8-connected boundary adjacency used to decide whether two\nfragments from different tiles are actually touching.",
+          "$ref": "#/$defs/TileMergeConnectivity",
+          "default": "EIGHT_CONNECTED"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "maxFragmentsPerGroup": {
+          "description": "Safety cap on how many tile-edge fragments a single merge group (one\nreal-world object's worth of fragments, before matching) may contain\nbefore the run fails loudly instead of building a pathological merge\n- mirrors `ExtractObjects.max_objects_before_fail`. Since every class\nis merge-eligible by default, this is the guard against a class that\nturns out to match thousands of small tile-edge-touching objects\n(add it to `classes_to_not_merge` instead), not just a misconfigured\nallow-list.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 10000,
+          "minimum": 0
+        }
+      }
+    },
     "TrackId": {
       "type": "integer",
       "format": "uint64",
@@ -3371,6 +3426,11 @@
           "default": 0,
           "maximum": 100000,
           "minimum": 0
+        },
+        "seedSource": {
+          "description": "What surface local maxima are seeded from.\n\n`DistanceMap` is default behaviour emulating ImageJ's watershed implemention.\n`Intensity` finds seeds on the (optionally smoothed) grayscale image instead,\nrestricted to the foreground mask - the fix for diffusely-connected regions\nwhose *shape* has no separate peaks but whose *brightness* clearly does.",
+          "$ref": "#/$defs/SegmentationWatershedSeedSourceSettings",
+          "default": "DISTANCE_MAP"
         },
         "smoothingSigma": {
           "description": "Standard deviation (px) of an optional Gaussian blur applied to the\ndistance map *before* the maximum finder. `0` disables it.\n\nImageJ's `trueEdmHeight` correction already handles ordinary ragged mask\nboundaries, so this is rarely needed; for extremely noisy AI masks a value\nof `1.0`–`2.0` can further suppress spurious maxima.",

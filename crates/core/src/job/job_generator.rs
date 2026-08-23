@@ -177,6 +177,7 @@ fn generate_job_from_project_settings_intenal(
         result_storage,
         pixel_sizes,
     );
+    job.tile_merge = config.tile_merge.clone();
 
     for pipeline_setting in &config.pipelines {
         if !pipeline_setting.enabled {
