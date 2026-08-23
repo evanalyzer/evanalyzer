@@ -11,7 +11,7 @@ use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::{
     algos::ImageAlgorithm, image::ImageContainer, pipeline::pipeline_context::PipelineContext,
 };
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_imgproc::filter::gaussian_blur;
 use kornia_imgproc::filter::spatial_gradient_float;
@@ -240,7 +240,22 @@ impl ImageAlgorithm for StructureTensor {
     }
 
     fn name(&self) -> &'static str {
-        "StructureTensor"
+        "Structure Tensor"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "bigun1987orientation",
+            title: "Optimal Orientation Detection of Linear Symmetry",
+            authors: &["Josef Bigün", "Gösta H. Granlund"],
+            year: 1987,
+            container: Some(
+                "Proceedings of the First International Conference on Computer Vision (ICCV)",
+            ),
+            doi: None,
+            url: None,
+            pages: None,
+        })
     }
 }
 

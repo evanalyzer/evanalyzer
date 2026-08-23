@@ -21,7 +21,9 @@ use crate::{
     algos::ImageAlgorithm,
     object::{BooleanOp, Object, ObjectInit},
 };
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SizeUnits};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SizeUnits,
+};
 use macros::CommandsMeta;
 
 /// Boolean set operation applied between an `input_class` object ("A") and the union of
@@ -227,7 +229,11 @@ impl ImageAlgorithm for ObjectMath {
     }
 
     fn name(&self) -> &'static str {
-        "ObjectMath"
+        "Object Math"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -610,6 +616,6 @@ mod tests {
     #[test]
     fn name_is_object_math() {
         let cmd = default_cmd(ObjectSetOperation::And, ObjectClass::Unset);
-        assert_eq!(cmd.name(), "ObjectMath");
+        assert_eq!(cmd.name(), "Object Math");
     }
 }

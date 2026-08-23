@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::{Image, ImageSize};
 use kornia_imgproc::filter::box_blur;
 use kornia_tensor::CpuAllocator;
@@ -87,6 +87,10 @@ impl ImageAlgorithm for Blur {
 
     fn name(&self) -> &'static str {
         "Blur"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

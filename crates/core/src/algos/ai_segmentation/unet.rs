@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
 use tch::{CModule, Device, Kind, Tensor};
 
@@ -170,6 +170,19 @@ impl ImageAlgorithm for UNet {
 
     fn name(&self) -> &'static str {
         "UNet"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "ronneberger2015unet",
+            title: "U-Net: Convolutional Networks for Biomedical Image Segmentation",
+            authors: &["Olaf Ronneberger", "Philipp Fischer", "Thomas Brox"],
+            year: 2015,
+            container: Some("Medical Image Computing and Computer-Assisted Intervention (MICCAI)"),
+            doi: Some("10.1007/978-3-319-24574-4_28"),
+            url: Some("https://doi.org/10.1007/978-3-319-24574-4_28"),
+            pages: Some("234-241"),
+        })
     }
 }
 

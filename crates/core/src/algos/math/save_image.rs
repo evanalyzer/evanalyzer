@@ -9,7 +9,7 @@
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use image::{ImageBuffer, Luma, Rgb};
 use log::info;
 use macros::CommandsMeta;
@@ -195,6 +195,10 @@ impl ImageAlgorithm for SaveImage {
 
     fn name(&self) -> &'static str {
         "Save Image"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

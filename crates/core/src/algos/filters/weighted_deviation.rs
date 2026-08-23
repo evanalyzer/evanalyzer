@@ -12,7 +12,7 @@ use crate::{
     image::ImageContainer,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_imgproc::filter::gaussian_blur;
 use kornia_tensor::CpuAllocator;
@@ -176,7 +176,11 @@ impl ImageAlgorithm for WeightedDeviation {
     }
 
     fn name(&self) -> &'static str {
-        "WeightedDeviation"
+        "Weighted Deviation"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

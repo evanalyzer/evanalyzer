@@ -17,7 +17,9 @@ use crate::{
     },
 };
 use bitvec::{order::Lsb0, vec::BitVec};
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SegmentationClass};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass,
+};
 use indexmap::IndexMap;
 use kornia_apriltag::utils::Point2d;
 use kornia_image::ImageSize;
@@ -250,7 +252,11 @@ impl ImageAlgorithm for ExtractObjects {
     }
 
     fn name(&self) -> &'static str {
-        "ExtractObjects"
+        "Extract Objects"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -811,6 +817,6 @@ mod tests {
             max_objects_before_fail: 100_000,
         };
         let name = extractor.name();
-        assert_eq!(name, "ExtractObjects");
+        assert_eq!(name, "Extract Objects");
     }
 }

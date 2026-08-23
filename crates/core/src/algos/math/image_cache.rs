@@ -8,6 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::InternalErrors;
 use macros::CommandsMeta;
@@ -97,7 +98,11 @@ impl ImageAlgorithm for ImageCache {
     }
 
     fn name(&self) -> &'static str {
-        "ImageCache"
+        "Image Cache"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -228,6 +233,6 @@ mod tests {
             mode: ImageCacheMode::Store,
             address: ImageAddress::Memory(MemoryId::PipelineContext(1)),
         };
-        assert_eq!(algo.name(), "ImageCache");
+        assert_eq!(algo.name(), "Image Cache");
     }
 }

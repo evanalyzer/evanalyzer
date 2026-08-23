@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings;
 use macros::CommandsMeta;
 
@@ -104,7 +104,11 @@ impl ImageAlgorithm for PixelClassifier {
     }
 
     fn name(&self) -> &'static str {
-        "PixelClassifier"
+        "Pixel Classifier"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -298,7 +302,7 @@ mod tests {
             model_path: PathBuf::new(),
             segmentation_mapping: vec![],
         };
-        assert_eq!(cmd.name(), "PixelClassifier");
+        assert_eq!(cmd.name(), "Pixel Classifier");
     }
 
     fn labels() -> Vec<PixelClassLabel> {

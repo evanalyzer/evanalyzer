@@ -86,6 +86,7 @@ pub use self::spartial_transform::edm::DistanceTransform;
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 
+use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::InternalErrors;
 
 pub trait ImageAlgorithm: Send + Sync {
@@ -96,4 +97,5 @@ pub trait ImageAlgorithm: Send + Sync {
         cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors>;
     fn name(&self) -> &'static str;
+    fn cite(&self) -> Option<&'static CitationMetadata>;
 }

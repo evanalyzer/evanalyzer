@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
@@ -175,6 +175,24 @@ impl ImageAlgorithm for Cellpose {
 
     fn name(&self) -> &'static str {
         "Cellpose"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "stringer2021cellpose",
+            title: "Cellpose: a generalist algorithm for cellular segmentation",
+            authors: &[
+                "Carsen Stringer",
+                "Tim Wang",
+                "Michalis Michaelos",
+                "Marius Pachitariu",
+            ],
+            year: 2021,
+            container: Some("Nature Methods"),
+            doi: Some("10.1038/s41592-020-01018-x"),
+            url: Some("https://doi.org/10.1038/s41592-020-01018-x"),
+            pages: Some("100-106"),
+        })
     }
 }
 

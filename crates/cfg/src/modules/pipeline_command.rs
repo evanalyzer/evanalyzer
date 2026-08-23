@@ -391,7 +391,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         },
         CommandMeta {
             id: 25,
-            name: "RollingBall",
+            name: "Rolling Ball",
             category: CommandCategory::Preprocess,
             summary: "Removes non-uniform background illumination by calculating a local intensity baseline.",
             description: "This algorithm models the image as a 3D intensity landscape and conceptually rolls\na sphere of a user-defined radius underneath it. The ball cannot penetrate narrow\nintensity peaks (true signal objects) but follows the sweeping, lower-frequency\ncurves of background variations. The path traced by the ball establishes a local\nbaseline map that is subtracted from the original image to isolate foreground features.",
@@ -571,7 +571,7 @@ impl PipelineCommand {
             Self::ObjectMath(_) => "ObjectMath",
             Self::PixelClassifier(_) => "AI Pixel Classifier",
             Self::RankFilter(_) => "RankFilter",
-            Self::RollingBall(_) => "RollingBall",
+            Self::RollingBall(_) => "Rolling Ball",
             Self::SaveImage(_) => "SaveImage",
             Self::Stardist(_) => "AI Stardist Segmentation",
             Self::StructureTensor(_) => "StructureTensor",

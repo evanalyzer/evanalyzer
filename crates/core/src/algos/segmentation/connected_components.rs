@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
 
 use crate::{
@@ -84,7 +84,20 @@ impl ImageAlgorithm for ConnectedComponents {
     }
 
     fn name(&self) -> &'static str {
-        "ConnectedComponents"
+        "Connected Components"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "rosenfeld1966sequential",
+            title: "Sequential Operations in Digital Picture Processing",
+            authors: &["Azriel Rosenfeld", "John L. Pfaltz"],
+            year: 1966,
+            container: Some("Journal of the ACM"),
+            doi: Some("10.1145/321356.321357"),
+            url: Some("https://doi.org/10.1145/321356.321357"),
+            pages: Some("471-494"),
+        })
     }
 }
 impl ConnectedComponents {

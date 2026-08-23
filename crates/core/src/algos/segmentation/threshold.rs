@@ -1,4 +1,6 @@
-use evanalyzer_cfg::core_types::{InternalErrors, MemoryId, PixelUnits, SegmentationClass};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, MemoryId, PixelUnits, SegmentationClass,
+};
 use macros::CommandsMeta;
 use std::collections::HashMap;
 
@@ -237,6 +239,10 @@ impl ImageAlgorithm for Threshold {
 
     fn name(&self) -> &'static str {
         "Threshold"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

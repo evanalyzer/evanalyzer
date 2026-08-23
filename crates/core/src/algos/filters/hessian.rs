@@ -10,7 +10,7 @@
 use crate::algos::{ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage, PixelSizes};
 use crate::pipeline::pipeline_cache::PipelineCache;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
@@ -101,6 +101,19 @@ impl ImageAlgorithm for Hessian {
 
     fn name(&self) -> &'static str {
         "Hessian"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "steger1998unbiased",
+            title: "An Unbiased Detector of Curvilinear Structures",
+            authors: &["Carsten Steger"],
+            year: 1998,
+            container: Some("IEEE Transactions on Pattern Analysis and Machine Intelligence"),
+            doi: Some("10.1109/34.659930"),
+            url: Some("https://doi.org/10.1109/34.659930"),
+            pages: Some("113-125"),
+        })
     }
 }
 

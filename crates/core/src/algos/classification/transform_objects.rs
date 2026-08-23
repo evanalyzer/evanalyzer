@@ -20,7 +20,9 @@ use crate::{
     image::PixelSizes,
     object::{Object, ObjectInit, TransformedGeometry},
 };
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SizeUnits};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SizeUnits,
+};
 use kornia_image::ImageSize;
 use macros::CommandsMeta;
 
@@ -206,7 +208,11 @@ impl ImageAlgorithm for TransformObjects {
     }
 
     fn name(&self) -> &'static str {
-        "TransformObjects"
+        "Transform Objects"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

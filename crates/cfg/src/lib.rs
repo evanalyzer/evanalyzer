@@ -57,6 +57,7 @@ pub mod settings {
 
 // Shared types
 pub mod core_types {
+    pub use crate::types::cite::CitationMetadata;
     pub use crate::types::classes::ObjectClass;
     pub use crate::types::classes::SegmentationClass;
     pub use crate::types::errors::*;

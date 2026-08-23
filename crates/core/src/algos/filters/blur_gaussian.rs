@@ -9,7 +9,7 @@
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::gaussian_blur;
 use macros::CommandsMeta;
 use std::sync::Arc;
@@ -99,7 +99,11 @@ impl ImageAlgorithm for GaussianBlur {
     }
 
     fn name(&self) -> &'static str {
-        "Blur"
+        "Gaussian Blur"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -224,7 +228,7 @@ mod tests {
             sigma: 1.0,
         };
         let name = blur.name();
-        assert_eq!(name, "Blur");
+        assert_eq!(name, "Gaussian Blur");
     }
 
     #[test]

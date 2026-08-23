@@ -9,7 +9,7 @@
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::gaussian_blur;
 use kornia_imgproc::filter::spatial_gradient_float;
 use kornia_tensor::CpuAllocator;
@@ -169,7 +169,20 @@ impl ImageAlgorithm for EdgeDetectionCanny {
     }
 
     fn name(&self) -> &'static str {
-        "EdgeDetectionCanny"
+        "Edge Detection Canny"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "canny1986computational",
+            title: "A Computational Approach to Edge Detection",
+            authors: &["John Canny"],
+            year: 1986,
+            container: Some("IEEE Transactions on Pattern Analysis and Machine Intelligence"),
+            doi: Some("10.1109/TPAMI.1986.4767851"),
+            url: Some("https://doi.org/10.1109/TPAMI.1986.4767851"),
+            pages: Some("679-698"),
+        })
     }
 }
 

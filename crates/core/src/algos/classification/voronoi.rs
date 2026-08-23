@@ -23,7 +23,7 @@ use crate::{
 };
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{
-    InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
+    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass, SizeUnits,
 };
 use macros::CommandsMeta;
 
@@ -481,6 +481,19 @@ impl ImageAlgorithm for Voronoi {
 
     fn name(&self) -> &'static str {
         "Voronoi"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "voronoi1908nouvelles",
+            title: "Nouvelles applications des paramètres continus à la théorie des formes quadratiques. Deuxième mémoire",
+            authors: &["Georgy Voronoi"],
+            year: 1908,
+            container: Some("Journal für die reine und angewandte Mathematik"),
+            doi: None,
+            url: None,
+            pages: Some("198-287"),
+        })
     }
 }
 

@@ -989,7 +989,7 @@ fn into_algorithm_classify_objects_dispatches_to_classify_objects_algorithm() {
         ClassifyObjectsSettings::default(),
     ))
     .expect("conversion should not fail");
-    assert_eq!(result.name(), "ClassifyObjects");
+    assert_eq!(result.name(), "Classify Objects");
 }
 
 #[test]
@@ -1035,9 +1035,9 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
     // Table-driven so every `PipelineCommand` variant not already covered above
     // is checked against the exact `name()` its algorithm reports - several of
     // these deliberately don't match their settings type name 1:1 (e.g.
-    // `ColorFilterCommand` -> "HsvColorFilter", `GaussianBlur` -> "Blur",
-    // `SaveImage` -> "Save Image"), so a generic "does it convert" test
-    // wouldn't catch a dispatch arm wired to the wrong algorithm.
+    // `ColorFilterCommand` -> "HsvColorFilter", `ConnectedComponents` ->
+    // "Connected Components"), so a generic "does it convert" test wouldn't
+    // catch a dispatch arm wired to the wrong algorithm.
     let cases: Vec<(PipelineCommand, &str)> = vec![
         (
             PipelineCommand::Colocalization(ColocalizationSettings::default()),
@@ -1049,31 +1049,31 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
         ),
         (
             PipelineCommand::ConnectedComponents(ConnectedComponentsSettings::default()),
-            "ConnectedComponents",
+            "Connected Components",
         ),
         (
             PipelineCommand::DistanceTransform(DistanceTransformSettings::default()),
-            "DistanceTransform",
+            "Distance Transform",
         ),
         (
             PipelineCommand::EdgeDetectionCanny(EdgeDetectionCannySettings::default()),
-            "EdgeDetectionCanny",
+            "Edge Detection Canny",
         ),
         (
             PipelineCommand::EdgeDetectionSobel(EdgeDetectionSobelSettings::default()),
-            "EdgeDetectionSobel",
+            "Edge Detection Sobel",
         ),
         (
             PipelineCommand::EnhanceContrast(EnhanceContrastSettings::default()),
-            "EnhanceContrast",
+            "Enhance Contrast",
         ),
         (
             PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
-            "ExtractObjects",
+            "Extract Objects",
         ),
         (
             PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
-            "Blur",
+            "Gaussian Blur",
         ),
         (
             PipelineCommand::Hessian(HessianSettings::default()),
@@ -1081,15 +1081,15 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
         ),
         (
             PipelineCommand::ImageCache(ImageCacheSettings::default()),
-            "ImageCache",
+            "Image Cache",
         ),
         (
             PipelineCommand::ImageMath(ImageMathSettings::default()),
-            "ImageMath",
+            "Image Math",
         ),
         (
             PipelineCommand::IntensityTransformation(IntensityTransformationSettings::default()),
-            "IntensityTransformation",
+            "Intensity Transformation",
         ),
         (
             PipelineCommand::Laplacian(LaplacianSettings::default()),
@@ -1097,23 +1097,23 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
         ),
         (
             PipelineCommand::MedianSubtract(MedianSubtractSettings::default()),
-            "MedianSubtract",
+            "Median Subtract",
         ),
         (
             PipelineCommand::MorphologicalCommand(MorphologicalCommandSettings::default()),
-            "MorphologicalTransform",
+            "Morphological Transform",
         ),
         (
             PipelineCommand::ObjectMath(ObjectMathSettings::default()),
-            "ObjectMath",
+            "Object Math",
         ),
         (
             PipelineCommand::RankFilter(RankFilterSettings::default()),
-            "RankFilter",
+            "Rank Filter",
         ),
         (
             PipelineCommand::RollingBall(RollingBallSettings::default()),
-            "RollingBall",
+            "Rolling Ball",
         ),
         (
             PipelineCommand::SaveImage(SaveImageSettings::default()),
@@ -1121,15 +1121,15 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
         ),
         (
             PipelineCommand::StructureTensor(StructureTensorSettings::default()),
-            "StructureTensor",
+            "Structure Tensor",
         ),
         (
             PipelineCommand::TransformObjects(TransformObjectsSettings::default()),
-            "TransformObjects",
+            "Transform Objects",
         ),
         (
             PipelineCommand::WeightedDeviation(WeightedDeviationSettings::default()),
-            "WeightedDeviation",
+            "Weighted Deviation",
         ),
     ];
 

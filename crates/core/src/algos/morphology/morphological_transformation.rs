@@ -12,7 +12,7 @@ use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::{
     algos::ImageAlgorithm, image::ImageContainer, pipeline::pipeline_context::PipelineContext,
 };
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_imgproc::padding::PaddingMode;
 use kornia_tensor::CpuAllocator;
@@ -134,7 +134,20 @@ impl ImageAlgorithm for MorphologicalCommand {
     }
 
     fn name(&self) -> &'static str {
-        "MorphologicalTransform"
+        "Morphological Transform"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "serra1982image",
+            title: "Image Analysis and Mathematical Morphology",
+            authors: &["Jean Serra"],
+            year: 1982,
+            container: Some("Academic Press"),
+            doi: None,
+            url: None,
+            pages: None,
+        })
     }
 }
 
@@ -561,6 +574,6 @@ mod tests {
             kernel_shape: KernelShapes::Box,
             use_grayscale: true,
         };
-        assert_eq!(cmd.name(), "MorphologicalTransform");
+        assert_eq!(cmd.name(), "Morphological Transform");
     }
 }

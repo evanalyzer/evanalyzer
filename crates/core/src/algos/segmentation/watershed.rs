@@ -18,7 +18,7 @@ use crate::{
     image::ImageContainer,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_imgproc::filter::gaussian_blur;
 use kornia_tensor::CpuAllocator;
@@ -233,6 +233,19 @@ impl ImageAlgorithm for Watershed {
 
     fn name(&self) -> &'static str {
         "Watershed"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "vincent1991watersheds",
+            title: "Watersheds in Digital Spaces: An Efficient Algorithm Based on Immersion Simulations",
+            authors: &["Luc Vincent", "Pierre Soille"],
+            year: 1991,
+            container: Some("IEEE Transactions on Pattern Analysis and Machine Intelligence"),
+            doi: Some("10.1109/34.87344"),
+            url: Some("https://doi.org/10.1109/34.87344"),
+            pages: Some("583-598"),
+        })
     }
 }
 
