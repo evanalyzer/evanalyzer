@@ -748,9 +748,9 @@ impl<'a> JobExecutor {
                 Ok(()) => {}
                 Err(std::sync::mpsc::TrySendError::Full(cache)) => {
                     warn!("DB writer backpressure: channel full, tile stalling");
-                    cache_tx.send(cache).map_err(|e| {
-                        InternalErrors::Io(format!("DB writer exited: {e}"))
-                    })?;
+                    cache_tx
+                        .send(cache)
+                        .map_err(|e| InternalErrors::Io(format!("DB writer exited: {e}")))?;
                 }
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                     return Err(InternalErrors::Io(

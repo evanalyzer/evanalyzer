@@ -809,6 +809,109 @@
         }
       ]
     },
+    "FiltersIlluminationCorrectionApplyMethodSettings": {
+      "description": "How the estimated illumination field is combined with the original image.",
+      "oneOf": [
+        {
+          "description": "`corrected = image * mean(field) / field`. Multiplicative correction\nthat preserves overall image brightness - the right default for\ngain/vignetting-style illumination problems.",
+          "type": "string",
+          "const": "DIVIDE"
+        },
+        {
+          "description": "`corrected = image - (field - mean(field))`. Additive correction.",
+          "type": "string",
+          "const": "SUBTRACT"
+        }
+      ]
+    },
+    "FiltersIlluminationCorrectionCorrectionMethodSettings": {
+      "description": "How the illumination field is estimated from the block-reduced image.",
+      "oneOf": [
+        {
+          "description": "Block *mean*. The right default for typical uneven illumination\n(vignetting, uneven excitation): every block contributes its average\nbrightness to the estimated field.",
+          "type": "string",
+          "const": "REGULAR"
+        },
+        {
+          "description": "Block *minimum*. Use this when dense or bright foreground objects\nwould otherwise pull the mean-based estimate upward - the minimum\nhugs the true background floor instead.",
+          "type": "string",
+          "const": "BACKGROUND"
+        }
+      ]
+    },
+    "FiltersIlluminationCorrectionSmoothingMethodSettings": {
+      "description": "Smoothing applied to the block-reduced field to remove blockiness before\n it is used as the correction field.",
+      "oneOf": [
+        {
+          "description": "Use the block-reduced field as-is.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Separable Gaussian blur of the block grid.",
+          "type": "object",
+          "properties": {
+            "sigma": {
+              "description": "Standard deviation, in block-grid units.",
+              "type": "number",
+              "format": "float",
+              "maximum": 20,
+              "minimum": 0.1
+            },
+            "type": {
+              "type": "string",
+              "const": "gaussian"
+            }
+          },
+          "required": [
+            "type",
+            "sigma"
+          ]
+        },
+        {
+          "description": "Windowed median filter of the block grid.",
+          "type": "object",
+          "properties": {
+            "radius": {
+              "description": "Neighborhood radius, in block-grid units.",
+              "type": "integer",
+              "format": "uint",
+              "maximum": 20,
+              "minimum": 1
+            },
+            "type": {
+              "type": "string",
+              "const": "median"
+            }
+          },
+          "required": [
+            "type",
+            "radius"
+          ]
+        },
+        {
+          "description": "Fits a smooth 2nd-order polynomial surface\n(a + bx + cy + dx² + exy + fy²) through the block grid. Has no\ntunable radius/sigma, so it's the most stable option when unsure.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "fitPolynomial"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
     "FiltersIntensityTransformIntensityTransformModeSettings": {
       "description": "Specifies how intensity adjustments are calculated.",
       "oneOf": [
@@ -984,6 +1087,42 @@
         "minV",
         "maxV"
       ]
+    },
+    "IlluminationCorrectionSettings": {
+      "description": "Use this when your images are brighter in the middle and dimmer toward\n the edges/corners (vignetting), or show any other smooth shading pattern\n that repeats the same way across every tile or every image from the same\n microscope/camera setup - a consequence of the optics or illumination,\n not the sample. Left uncorrected, that shading makes intensity\n comparisons between regions of an image (or between images/wells)\n unreliable, even though it rarely stops segmentation from finding\n objects on its own.\n\n Use [`super::rolling_ball::RollingBall`] instead when the problem is a\n *local* background glow or halo under/around individual objects (e.g.\n out-of-focus light, autofluorescence, uneven staining) that differs from\n image to image rather than being tied to the acquisition setup -\n RollingBall strips that local floor so thresholding/segmentation works\n cleanly. The two solve different problems: RollingBall won't fix a\n global brightness gradient, and this filter won't remove a local halo.\n\n ### How it works\n\n Flat-field (\"illumination\") correction: estimates a smooth, slowly-varying\n gain/offset field caused by uneven illumination (vignetting, dust on the\n condenser, uneven excitation) and removes it in a single calculate+apply\n step - equivalent to CellProfiler's `CorrectIlluminationCalculate` and\n `CorrectIlluminationApply` modules combined into one.\n\n Unlike `RollingBall`, which estimates a *local* per-object background\n baseline via a rolling structural element, this estimates one *global*,\n low-frequency field for the whole image/channel.",
+      "type": "object",
+      "properties": {
+        "applyMethod": {
+          "description": "How the field is combined with the original image.",
+          "$ref": "#/$defs/FiltersIlluminationCorrectionApplyMethodSettings",
+          "default": "DIVIDE"
+        },
+        "blockSize": {
+          "description": "Block size, in pixels, used to reduce the image to a coarse\n illumination estimate before smoothing. Should be larger than the\n largest foreground object, so objects are averaged/eroded away and\n only the slow-varying illumination trend survives.",
+          "type": "integer",
+          "format": "uint",
+          "default": 60,
+          "maximum": 2000,
+          "minimum": 1
+        },
+        "method": {
+          "description": "How the illumination field is estimated from the image.",
+          "$ref": "#/$defs/FiltersIlluminationCorrectionCorrectionMethodSettings",
+          "default": "REGULAR"
+        },
+        "rescale": {
+          "description": "Stretch the corrected image's intensities to fill the full\n `[0.0, 1.0]` range afterward - guards against `Divide` pushing\n previously-dim regions above `1.0`.",
+          "type": "boolean",
+          "default": false
+        },
+        "smoothing": {
+          "description": "Smoothing applied to the block-reduced field to remove blockiness.",
+          "$ref": "#/$defs/FiltersIlluminationCorrectionSmoothingMethodSettings",
+          "default": {
+            "type": "none"
+          }
+        }
+      }
     },
     "ImageAddress": {
       "oneOf": [
@@ -1641,6 +1780,19 @@
             }
           },
           "$ref": "#/$defs/HessianSettings",
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "illuminationCorrection"
+            }
+          },
+          "$ref": "#/$defs/IlluminationCorrectionSettings",
           "required": [
             "type"
           ]
