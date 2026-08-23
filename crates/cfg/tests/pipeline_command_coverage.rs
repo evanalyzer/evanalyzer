@@ -379,7 +379,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("ObjectMath", &[Classify]),
         ("AI Pixel Classifier", &[Object]),
         ("RankFilter", &[Segment, Preprocess]),
-        ("RollingBall", &[Segment, Preprocess]),
+        ("Rolling Ball", &[Segment, Preprocess]),
         ("SaveImage", &[Segment, Preprocess]),
         ("AI Stardist Segmentation", &[Measure]),
         ("StructureTensor", &[Segment, Preprocess]),
@@ -497,7 +497,7 @@ fn apply_param_change_dropdown_fields_cycle_through_every_option() {
         // `apply_param_change_rank_filter_ignores_unknown_filter_type_value`
         // below), so cycling through every option would fail here.
         ("ObjectMath", "operation"),
-        ("RollingBall", "ball_type"),
+        ("Rolling Ball", "ball_type"),
         ("SaveImage", "source"),
         ("StructureTensor", "mode"),
         ("ClassifyObjects", "match_handling"),
@@ -705,7 +705,7 @@ fn apply_param_change_dropdown_fields_ignore_unknown_values() {
         ("MorphologicalCommand", "op", "Erode"),
         ("MorphologicalCommand", "kernel_shape", "Ellipse"),
         ("ObjectMath", "operation", "Or"),
-        ("RollingBall", "ball_type", "Paraboloid"),
+        ("Rolling Ball", "ball_type", "Paraboloid"),
         ("SaveImage", "source", "Instance Map"),
         ("StructureTensor", "mode", "Coherence"),
         (
