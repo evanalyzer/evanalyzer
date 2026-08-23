@@ -7,7 +7,7 @@
 // is include!()-d into this separate build-script crate root, so it needs its
 // own copy of anything from `crate::` that it references.
 #[allow(dead_code)]
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 2;
 
 mod utils {
     pub mod hex_colors {

@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "meta": {
     "name": "EV in Cell",
     "shortDescription": "EV in cell detection",
@@ -13,24 +14,26 @@
     {
       "enabled": true,
       "command": {
-        "type": "medianSubtract",
+        "type": "MEDIAN_SUBTRACT",
         "radius": 3.0
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "threshold",
+        "type": "THRESHOLD",
         "thresholds": [
           {
-            "method": "LI",
+            "method": {
+              "type": "LI"
+            },
             "minThreshold": 0.0,
             "maxThreshold": 65535.0,
             "unit": "bit",
@@ -42,13 +45,13 @@
     {
       "enabled": true,
       "command": {
-        "type": "connectedComponents"
+        "type": "CONNECTED_COMPONENTS"
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "watershed",
+        "type": "WATERSHED",
         "maximumFinderTolerance": 0.5,
         "smoothingSigma": 0.0,
         "minObjectSize": 0
@@ -57,14 +60,14 @@
     {
       "enabled": true,
       "command": {
-        "type": "extractObjects",
+        "type": "EXTRACT_OBJECTS",
         "maxObjectsBeforeFail": 100000
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "classifyObjects",
+        "type": "CLASSIFY_OBJECTS",
         "inputClasses": [
           {
             "VALID": 3

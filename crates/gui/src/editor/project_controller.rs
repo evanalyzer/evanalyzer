@@ -929,8 +929,10 @@ mod tests {
                 .map(|_| evanalyzer_cfg::settings::templates::PipelineTemplate {
                     meta: MetaData::default(),
                     pipeline_steps: Vec::new(),
+                    ..Default::default()
                 })
                 .collect(),
+            ..Default::default()
         }
     }
 

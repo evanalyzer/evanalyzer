@@ -13,6 +13,7 @@ use evanalyzer_cfg::settings::meta_data::MetaData;
 use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
 use evanalyzer_cfg::settings::templates::{PipelineTemplate, ProjectTemplate};
 use evanalyzer_cfg::{
+    CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION, CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION,
     PIPELINE_EXTENSIONS, PROJECT_FILE_EXTENSIONS, PROJECT_FILE_TEMPLATE_EXTENSIONS,
 };
 use evanalyzer_cfg::{
@@ -1106,6 +1107,7 @@ impl ProjectExt for ProjectWithRuntime {
     ) -> Result<(), InternalErrors> {
         meta.app_version = env!("CARGO_PKG_VERSION").to_string();
         let template = ProjectTemplate {
+            schema_version: CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION,
             meta,
             classification: self.classification.clone(),
             plate: self.plate.clone(),
@@ -1113,6 +1115,7 @@ impl ProjectExt for ProjectWithRuntime {
                 .pipelines
                 .iter()
                 .map(|pipeline| PipelineTemplate {
+                    schema_version: CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION,
                     meta: MetaData {
                         name: pipeline.name.clone().unwrap_or_default(),
                         ..Default::default()
@@ -1149,6 +1152,7 @@ impl ProjectExt for ProjectWithRuntime {
 
         meta.app_version = env!("CARGO_PKG_VERSION").to_string();
         let template = PipelineTemplate {
+            schema_version: CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION,
             meta,
             pipeline_steps: pipeline.steps.clone(),
         };
@@ -1983,6 +1987,7 @@ mod tests {
                 ..Default::default()
             },
             pipeline_steps: vec![],
+            ..Default::default()
         };
         std::fs::write(&path, serde_json::to_string(&template).unwrap()).unwrap();
 
@@ -2035,7 +2040,9 @@ mod tests {
                     ..Default::default()
                 },
                 pipeline_steps: vec![],
+                ..Default::default()
             }],
+            ..Default::default()
         };
         project.apply_project_template(&template);
 

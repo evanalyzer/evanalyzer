@@ -14,8 +14,47 @@
 //! schema-generation copy.
 
 use crate::core_types::InternalErrors;
+use crate::migration::migration_v1_to_v2::migrate_from_v1_to_v2;
+use crate::settings::ai_learning_settings::AiLearningSettings;
+use crate::settings::project_settings::ProjectSettings;
+use crate::{CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION, CURRENT_PROJECT_SCHEMA_VERSION};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+
+/// Migration steps for [`ProjectSettings`], keyed on the version they migrate
+/// *from*: index 0 migrates version 0 (pre-versioning legacy files) to 1, etc.
+/// Each step's actual logic lives in its own `crate::migration::migration_vN_to_vM`
+/// module - this list only wires them in, so a legacy step can be dropped later
+/// by deleting its module and this one line, without touching anything else here.
+const PROJECT_MIGRATIONS: &[MigrationStep] = &[
+    |_raw| {}, // 0 -> 1: nothing to do yet
+    migrate_from_v1_to_v2,
+];
+
+/// Loads a [`ProjectSettings`] from its raw on-disk JSON, migrating it
+/// forward from whatever `schemaVersion` it was written with.
+pub fn load_project_settings(raw: Value) -> Result<ProjectSettings, InternalErrors> {
+    let version = schema_version_of(&raw, "schemaVersion");
+    reject_if_too_new(version, CURRENT_PROJECT_SCHEMA_VERSION, "project")?;
+    migrate_and_deserialize(raw, version, PROJECT_MIGRATIONS)
+}
+
+/// Migration steps for [`AiLearningSettings`] - see [`PROJECT_MIGRATIONS`].
+/// Nothing to migrate yet.
+const AI_LEARNING_SETTINGS_MIGRATIONS: &[MigrationStep] = &[|_raw| {}];
+
+/// Loads an [`AiLearningSettings`] from its raw on-disk JSON (a standalone
+/// `--settings` file, or embedded in a saved classifier), migrating it
+/// forward from whatever `schemaVersion` it was written with.
+pub fn load_ai_learning_settings(raw: Value) -> Result<AiLearningSettings, InternalErrors> {
+    let version = schema_version_of(&raw, "schemaVersion");
+    reject_if_too_new(
+        version,
+        CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
+        "AI training settings",
+    )?;
+    migrate_and_deserialize(raw, version, AI_LEARNING_SETTINGS_MIGRATIONS)
+}
 
 /// A single migration step: mutates a document currently at version `N`
 /// (its position in the step list) into version `N + 1`'s shape.
@@ -56,55 +95,6 @@ pub fn reject_if_too_new(version: u32, current: u32, kind: &str) -> Result<(), I
     Ok(())
 }
 
-use crate::settings::ai_learning_settings::AiLearningSettings;
-use crate::settings::project_settings::ProjectSettings;
-use crate::{CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION, CURRENT_PROJECT_SCHEMA_VERSION};
-
-/// Migration steps for [`ProjectSettings`], keyed on the version they migrate
-/// *from*: index 0 migrates version 0 (pre-versioning legacy files) to 1, etc.
-/// Every field added to `ProjectSettings` so far has been an additive
-/// `#[serde(default)]` field, so there is nothing to migrate yet - this is
-/// the seam future breaking changes hook into, e.g.:
-///
-/// ```ignore
-/// const PROJECT_MIGRATIONS: &[MigrationStep] = &[
-///     |_raw| {},               // 0 -> 1: nothing to do yet
-///     |raw| {                  // 1 -> 2: e.g. a field rename
-///         if let Some(obj) = raw.as_object_mut() {
-///             if let Some(v) = obj.remove("oldName") {
-///                 obj.insert("newName".into(), v);
-///             }
-///         }
-///     },
-/// ];
-/// ```
-const PROJECT_MIGRATIONS: &[MigrationStep] = &[|_raw| {}];
-
-/// Loads a [`ProjectSettings`] from its raw on-disk JSON, migrating it
-/// forward from whatever `schemaVersion` it was written with.
-pub fn load_project_settings(raw: Value) -> Result<ProjectSettings, InternalErrors> {
-    let version = schema_version_of(&raw, "schemaVersion");
-    reject_if_too_new(version, CURRENT_PROJECT_SCHEMA_VERSION, "project")?;
-    migrate_and_deserialize(raw, version, PROJECT_MIGRATIONS)
-}
-
-/// Migration steps for [`AiLearningSettings`] - see [`PROJECT_MIGRATIONS`].
-/// Nothing to migrate yet.
-const AI_LEARNING_SETTINGS_MIGRATIONS: &[MigrationStep] = &[|_raw| {}];
-
-/// Loads an [`AiLearningSettings`] from its raw on-disk JSON (a standalone
-/// `--settings` file, or embedded in a saved classifier), migrating it
-/// forward from whatever `schemaVersion` it was written with.
-pub fn load_ai_learning_settings(raw: Value) -> Result<AiLearningSettings, InternalErrors> {
-    let version = schema_version_of(&raw, "schemaVersion");
-    reject_if_too_new(
-        version,
-        CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-        "AI training settings",
-    )?;
-    migrate_and_deserialize(raw, version, AI_LEARNING_SETTINGS_MIGRATIONS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +127,10 @@ mod tests {
         let settings = load_project_settings(raw).expect("current version must load");
         assert_eq!(settings.schema_version, CURRENT_PROJECT_SCHEMA_VERSION);
     }
+
+    // Version-1-to-2 migration logic (camelCase "type" tags, bare-string
+    // ThresholdMethod) and its own tests live in
+    // `crate::migration::migration_v1_to_v2` - see that module's doc comment.
 
     fn sample_ai_learning_settings() -> AiLearningSettings {
         AiLearningSettings {

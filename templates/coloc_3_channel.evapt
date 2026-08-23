@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "meta": {
     "name": "Coloc 3 channels",
     "shortDescription": "Spot colocalization with three image channels.",
@@ -303,6 +304,7 @@
   },
   "pipelines": [
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Channel1",
         "shortDescription": "Channel1",
@@ -316,7 +318,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "rollingBall",
+            "type": "ROLLING_BALL",
             "radius": 4.0,
             "ballType": "PARABOLOID",
             "preSmooth": false
@@ -325,24 +327,26 @@
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "MANUAL",
+                "method": {
+                  "type": "MANUAL"
+                },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -354,7 +358,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "watershed",
+            "type": "WATERSHED",
             "maximumFinderTolerance": 0.5,
             "smoothingSigma": 0.0,
             "minObjectSize": 0
@@ -363,20 +367,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "originSegmentation": [],
             "inputClasses": [
               {
@@ -406,6 +410,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Channel2",
         "shortDescription": "Channel2",
@@ -419,7 +424,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "rollingBall",
+            "type": "ROLLING_BALL",
             "radius": 4.0,
             "ballType": "PARABOLOID",
             "preSmooth": false
@@ -428,24 +433,26 @@
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "MANUAL",
+                "method": {
+                  "type": "MANUAL"
+                },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -457,7 +464,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "watershed",
+            "type": "WATERSHED",
             "maximumFinderTolerance": 0.5,
             "smoothingSigma": 0.0,
             "minObjectSize": 0
@@ -466,20 +473,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "originSegmentation": [],
             "inputClasses": [
               {
@@ -509,6 +516,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Channel3",
         "shortDescription": "Channel3",
@@ -522,7 +530,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "rollingBall",
+            "type": "ROLLING_BALL",
             "radius": 4.0,
             "ballType": "PARABOLOID",
             "preSmooth": false
@@ -531,24 +539,26 @@
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "MANUAL",
+                "method": {
+                  "type": "MANUAL"
+                },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -560,7 +570,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "watershed",
+            "type": "WATERSHED",
             "maximumFinderTolerance": 0.5,
             "smoothingSigma": 0.0,
             "minObjectSize": 0
@@ -569,20 +579,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "originSegmentation": [],
             "inputClasses": [
               {
@@ -612,6 +622,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Tetraspeck",
         "shortDescription": "Tetraspeck",
@@ -625,7 +636,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "rollingBall",
+            "type": "ROLLING_BALL",
             "radius": 4.0,
             "ballType": "PARABOLOID",
             "preSmooth": false
@@ -634,24 +645,26 @@
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "MANUAL",
+                "method": {
+                  "type": "MANUAL"
+                },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -663,7 +676,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "watershed",
+            "type": "WATERSHED",
             "maximumFinderTolerance": 0.5,
             "smoothingSigma": 0.0,
             "minObjectSize": 0
@@ -672,20 +685,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "originSegmentation": [],
             "inputClasses": [
               {
@@ -715,7 +728,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 1
@@ -734,6 +747,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Coloc ",
         "shortDescription": "Coloc ",
@@ -747,7 +761,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 15
@@ -768,7 +782,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 1
@@ -789,7 +803,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 5
@@ -810,7 +824,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 12
@@ -831,7 +845,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 13
@@ -852,7 +866,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 14
@@ -873,7 +887,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 12
@@ -894,7 +908,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 13
@@ -915,7 +929,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 12
@@ -936,7 +950,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 14
@@ -957,7 +971,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 13
@@ -978,7 +992,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 14

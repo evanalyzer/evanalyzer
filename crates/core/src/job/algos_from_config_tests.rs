@@ -254,8 +254,34 @@ fn threshold_method_none_setting_converts() {
 
 #[test]
 fn threshold_method_otsu_setting_converts() {
-    let result: ThresholdMethod = SegmentationThresholdThresholdMethodSettings::Otsu.into();
-    assert!(matches!(result, ThresholdMethod::Otsu));
+    let result: ThresholdMethod = SegmentationThresholdThresholdMethodSettings::Otsu {
+        classes: SegmentationThresholdOtsuClassesSettings::Two,
+    }
+    .into();
+    assert!(matches!(
+        result,
+        ThresholdMethod::Otsu {
+            classes: OtsuClasses::Two
+        }
+    ));
+}
+
+#[test]
+fn threshold_method_otsu_three_class_setting_converts() {
+    let result: ThresholdMethod = SegmentationThresholdThresholdMethodSettings::Otsu {
+        classes: SegmentationThresholdOtsuClassesSettings::Three {
+            middle_class: SegmentationThresholdOtsuMiddleClassSettings::Foreground,
+        },
+    }
+    .into();
+    assert!(matches!(
+        result,
+        ThresholdMethod::Otsu {
+            classes: OtsuClasses::Three {
+                middle_class: OtsuMiddleClass::Foreground
+            }
+        }
+    ));
 }
 
 #[test]
@@ -795,7 +821,9 @@ fn threshold_settings_convert_vector_of_entries() {
     let settings = ThresholdSettings {
         thresholds: vec![
             ThresholdEntrySettings {
-                method: SegmentationThresholdThresholdMethodSettings::Otsu,
+                method: SegmentationThresholdThresholdMethodSettings::Otsu {
+                    classes: SegmentationThresholdOtsuClassesSettings::Two,
+                },
                 ..Default::default()
             },
             ThresholdEntrySettings {
@@ -806,7 +834,12 @@ fn threshold_settings_convert_vector_of_entries() {
     };
     let result = Threshold::from(settings);
     assert_eq!(result.thresholds.len(), 2);
-    assert!(matches!(result.thresholds[0].method, ThresholdMethod::Otsu));
+    assert!(matches!(
+        result.thresholds[0].method,
+        ThresholdMethod::Otsu {
+            classes: OtsuClasses::Two
+        }
+    ));
     assert!(matches!(
         result.thresholds[1].method,
         ThresholdMethod::Manual

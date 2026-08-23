@@ -178,6 +178,28 @@ impl From<MathImageMathOperandSettings> for Operand {
     }
 }
 
+impl From<SegmentationThresholdOtsuClassesSettings> for OtsuClasses {
+    fn from(_s: SegmentationThresholdOtsuClassesSettings) -> Self {
+        match _s {
+            SegmentationThresholdOtsuClassesSettings::Two => OtsuClasses::Two,
+            SegmentationThresholdOtsuClassesSettings::Three { middle_class } => {
+                OtsuClasses::Three {
+                    middle_class: OtsuMiddleClass::from(middle_class),
+                }
+            }
+        }
+    }
+}
+
+impl From<SegmentationThresholdOtsuMiddleClassSettings> for OtsuMiddleClass {
+    fn from(_s: SegmentationThresholdOtsuMiddleClassSettings) -> Self {
+        match _s {
+            SegmentationThresholdOtsuMiddleClassSettings::Foreground => OtsuMiddleClass::Foreground,
+            SegmentationThresholdOtsuMiddleClassSettings::Background => OtsuMiddleClass::Background,
+        }
+    }
+}
+
 impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
     fn from(_s: FiltersRankFilterRankFilterTypeSettings) -> Self {
         match _s {
@@ -234,7 +256,11 @@ impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
             SegmentationThresholdThresholdMethodSettings::MaxEntropy => ThresholdMethod::MaxEntropy,
             SegmentationThresholdThresholdMethodSettings::Mean => ThresholdMethod::Mean,
             SegmentationThresholdThresholdMethodSettings::Minimum => ThresholdMethod::Minimum,
-            SegmentationThresholdThresholdMethodSettings::Otsu => ThresholdMethod::Otsu,
+            SegmentationThresholdThresholdMethodSettings::Otsu { classes } => {
+                ThresholdMethod::Otsu {
+                    classes: OtsuClasses::from(classes),
+                }
+            }
             SegmentationThresholdThresholdMethodSettings::Percentile => ThresholdMethod::Percentile,
             SegmentationThresholdThresholdMethodSettings::RenyiEntropy => {
                 ThresholdMethod::RenyiEntropy

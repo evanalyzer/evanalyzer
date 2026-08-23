@@ -785,7 +785,11 @@ fn map_threshold_method(old: &str) -> SegmentationThresholdThresholdMethodSettin
         "MaxEntropy" => M::MaxEntropy,
         "Mean" => M::Mean,
         "Minimum" => M::Minimum,
-        "Otsu" => M::Otsu,
+        // Legacy projects predate three-class Otsu; they always meant the
+        // original two-class split.
+        "Otsu" => M::Otsu {
+            classes: SegmentationThresholdOtsuClassesSettings::Two,
+        },
         // Old's JSON strings were misspelled ("Percentil", "TenyiEntropy").
         "Percentil" => M::Percentile,
         "TenyiEntropy" => M::RenyiEntropy,
@@ -1526,7 +1530,12 @@ mod tests {
         use SegmentationThresholdThresholdMethodSettings as M;
         assert_eq!(map_threshold_method("Percentil"), M::Percentile);
         assert_eq!(map_threshold_method("TenyiEntropy"), M::RenyiEntropy);
-        assert_eq!(map_threshold_method("Otsu"), M::Otsu);
+        assert_eq!(
+            map_threshold_method("Otsu"),
+            M::Otsu {
+                classes: SegmentationThresholdOtsuClassesSettings::Two
+            }
+        );
         assert_eq!(map_threshold_method("SomethingUnknown"), M::None);
     }
 
