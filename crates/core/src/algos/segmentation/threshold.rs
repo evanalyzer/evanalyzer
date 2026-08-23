@@ -337,9 +337,7 @@ fn thresh_otsu_multi(hist: &[f32; 256]) -> (usize, usize) {
 
     // w*mu² = (sum)²/w for a class of total weight `w` and weighted sum
     // `sum`; contributes 0 for an empty class.
-    let class_term = |w: f64, sum: f64| -> f64 {
-        if w > 0.0 { sum * sum / w } else { 0.0 }
-    };
+    let class_term = |w: f64, sum: f64| -> f64 { if w > 0.0 { sum * sum / w } else { 0.0 } };
 
     let mut best = (0usize, 1usize);
     let mut best_bcv = f64::MIN;
@@ -1377,7 +1375,10 @@ mod tests {
         let two_class = ThresholdMethod::Otsu {
             classes: OtsuClasses::Two,
         };
-        for hist in [bimodal_reference_histogram(), trimodal_reference_histogram()] {
+        for hist in [
+            bimodal_reference_histogram(),
+            trimodal_reference_histogram(),
+        ] {
             assert_eq!(
                 compute_auto_threshold(&two_class, &hist),
                 thresh_otsu(&hist),
@@ -1398,7 +1399,10 @@ mod tests {
     /// prefix-sum/variance formula.
     #[test]
     fn test_otsu_multi_matches_reference() {
-        assert_eq!(thresh_otsu_multi(&trimodal_reference_histogram()), (40, 130));
+        assert_eq!(
+            thresh_otsu_multi(&trimodal_reference_histogram()),
+            (40, 130)
+        );
     }
 
     /// End-to-end regression for CellProfiler's "Three-class thresholding" +
@@ -1410,8 +1414,8 @@ mod tests {
     /// exactly mirroring how CellProfiler's middle-class assignment changes
     /// which of the two jointly-optimized cuts becomes the final threshold.
     #[test]
-    fn test_otsu_three_class_middle_assignment_mirrors_cellprofiler(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn test_otsu_three_class_middle_assignment_mirrors_cellprofiler()
+    -> Result<(), Box<dyn std::error::Error>> {
         // Three equal-sized, well-separated populations: dark, mid, bright.
         let per_cluster = 100;
         let mut input_data = Vec::with_capacity(per_cluster * 3);

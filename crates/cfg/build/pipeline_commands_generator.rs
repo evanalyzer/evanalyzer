@@ -221,7 +221,10 @@ fn field_value_expr(
 /// any struct field - would never make it into `used_type_names`, and the
 /// settings code generated for it in `generate_from_impls` would reference an
 /// enum that `generate_config_code` never actually emitted.
-fn collect_used_type_names(commands: &[CommandInfo], enums: &[EnumInfo]) -> std::collections::HashSet<String> {
+fn collect_used_type_names(
+    commands: &[CommandInfo],
+    enums: &[EnumInfo],
+) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
 
     let mut used_type_names: HashSet<String> = HashSet::new();
@@ -1763,9 +1766,7 @@ fn enum_variant_param_defs(
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| snake_to_title_case(&f.name));
                         let description = escape_doc_comments(&f.doc_comments);
-                        if let Some(nested_enum) =
-                            enums.iter().find(|e| e.enum_name == f.ty)
-                        {
+                        if let Some(nested_enum) = enums.iter().find(|e| e.enum_name == f.ty) {
                             if nested_enum.has_variant_payload() {
                                 let dropdown = leaf_param_def_literal(
                                     &f.ty,
