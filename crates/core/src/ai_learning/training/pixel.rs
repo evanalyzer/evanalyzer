@@ -1,7 +1,7 @@
 use crate::ai_learning::model::SavedClassifier;
 use crate::ai_learning::training_job::{self, TrainingImage, TrainingProgressEvent};
 use crate::ai_learning::utils::{
-    TILE_SIZE, bbox_overlaps_tile, masked_pixels_in_tile, resolve_z_projection, tile_grid,
+    bbox_overlaps_tile, masked_pixels_in_tile, resolve_z_projection, tile_grid,
 };
 use crate::algos::EdgeDetectionSobel;
 use crate::algos::GaussianBlur;
@@ -15,6 +15,7 @@ use crate::object::Object;
 use crate::pipeline::pipeline::PipelineImageMeta;
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
+use crate::resources::MAX_TILE_SIZE;
 use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
 use evanalyzer_cfg::settings::ai_learning_pixel_settings::AiLearningPixelFeatureSettings;
 use evanalyzer_cfg::settings::ai_learning_pixel_settings::PreprocessingSteps;
@@ -240,7 +241,7 @@ impl PixelTrainingJob {
             let (z_projection, z_range) =
                 resolve_z_projection(&self.z_stack_handling, series_info.nr_z_stacks);
 
-            let tiles = tile_grid(full_width, full_height, TILE_SIZE);
+            let tiles = tile_grid(full_width, full_height, MAX_TILE_SIZE);
             let relevant_tiles: Vec<&ImageTile> = tiles
                 .iter()
                 .filter(|t| {

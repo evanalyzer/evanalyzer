@@ -7,11 +7,6 @@ use evanalyzer_cfg::settings::images_settings::ZStackHandling;
 use smartcore::linalg::basic::matrix::DenseMatrix;
 use std::ops::RangeInclusive;
 
-/// Matches `JobExecutor::analyze_image`'s fixed tile size
-/// (`crates/core/src/job/job_executor.rs`) - not reused directly (that
-/// constant is private to `JobExecutor`), but kept identical for consistency.
-pub const TILE_SIZE: usize = 4096;
-
 // -- Shared training helpers, backend-agnostic over how `rows`/`labels` were
 // gathered (pixel samples or object feature vectors) --------------------
 

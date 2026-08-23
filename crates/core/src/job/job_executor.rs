@@ -5,6 +5,7 @@ use crate::{
         pipeline::{Pipeline, PipelineImageMeta},
         pipeline_cache::{ImageCache, ImageMap, PipelineCache},
     },
+    resources::{CACHE_QUEUE_DEPTH, MAX_TILE_SIZE},
     storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
@@ -387,6 +388,43 @@ impl<'a> JobExecutor {
         self.pipelines.insert(p.id, p);
     }
 
+    /// Estimates the peak RAM one parallel worker in this job can need, from
+    /// the images actually being analyzed - for [`recommended_parallelism`](crate::recommended_parallelism)
+    /// instead of a flat guess that either over-commits on a large/many-channel
+    /// image or needlessly caps a small one down to a single thread on a
+    /// low-RAM machine.
+    ///
+    /// Takes the worst case across every image in the job (the largest by
+    /// tile pixel count and channel count, not necessarily the same image for
+    /// both), since parallelism is decided once up front for the whole batch,
+    /// not per image. Each image's own dimensions/channel count come from
+    /// already-scanned metadata (`ImageEntry`/`SeriesSettings`) - this never
+    /// reopens a file, so it's cheap to call before starting a run.
+    pub fn estimate_ram_per_worker_bytes(&self) -> u64 {
+        self.images
+            .values()
+            .filter_map(|entry| entry.series.get(&entry.selected_series))
+            .map(|series| {
+                let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
+                let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
+                crate::resources::estimate_ram_per_worker_bytes(
+                    tile_width,
+                    tile_height,
+                    series.channels.len(),
+                    CACHE_QUEUE_DEPTH,
+                )
+            })
+            .max()
+            .unwrap_or_else(|| {
+                crate::resources::estimate_ram_per_worker_bytes(
+                    MAX_TILE_SIZE,
+                    MAX_TILE_SIZE,
+                    1,
+                    CACHE_QUEUE_DEPTH,
+                )
+            })
+    }
+
     /// Picks the tile size for a single-image preview run.
     ///
     /// At higher zoom the viewport covers a smaller area of the full image, so
@@ -395,9 +433,8 @@ impl<'a> JobExecutor {
     /// the tile as zoom increases keeps the analyzed area closer to what's on
     /// screen, so feedback for that area arrives faster.
     fn preview_tile_size(&self) -> usize {
-        const BASE_TILE_SIZE: usize = 4096;
         let Some(zoom) = self.preview_tile_settings.as_ref().map(|s| s.zoom) else {
-            return BASE_TILE_SIZE;
+            return MAX_TILE_SIZE;
         };
         if zoom >= 8.0 {
             512
@@ -406,7 +443,7 @@ impl<'a> JobExecutor {
         } else if zoom >= 2.0 {
             2048
         } else {
-            BASE_TILE_SIZE
+            MAX_TILE_SIZE
         }
     }
 
@@ -473,7 +510,6 @@ impl<'a> JobExecutor {
         cancel: Arc<AtomicBool>,
     ) -> Result<(), InternalErrors> {
         const RES_IDX: i32 = 0;
-        const TILE_SIZE: usize = 4096;
         let start_image = Instant::now();
 
         // Extract everything needed from the reader in a scoped block so the
@@ -528,7 +564,7 @@ impl<'a> JobExecutor {
         };
 
         let tiles: Vec<ImageTile> = self
-            .prepare_tile_iterator(full_size.width, full_size.height, TILE_SIZE)
+            .prepare_tile_iterator(full_size.width, full_size.height, MAX_TILE_SIZE)
             .collect();
 
         // Flat (t, z, tile) work list, processed in parallel below.
@@ -544,7 +580,8 @@ impl<'a> JobExecutor {
 
         // Spawn a dedicated DB writer thread so one tile's image loading and
         // pipeline execution can overlap with another tile's DuckDB insert.
-        let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<PipelineCache>(4);
+        let (cache_tx, cache_rx) =
+            std::sync::mpsc::sync_channel::<PipelineCache>(CACHE_QUEUE_DEPTH);
         let writer_handle = {
             let exporter = exporter.clone();
             std::thread::spawn(move || -> Result<(), InternalErrors> {
@@ -822,7 +859,8 @@ impl<'a> JobExecutor {
         // caches through a bounded channel instead of locking a mutex — they
         // block only when the channel is full (backpressure), not for the
         // entire duration of a DuckDB insert.
-        let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<PipelineCache>(4);
+        let (cache_tx, cache_rx) =
+            std::sync::mpsc::sync_channel::<PipelineCache>(CACHE_QUEUE_DEPTH);
         let writer_handle = {
             let exporter = exporter.clone();
             std::thread::spawn(move || -> Result<(), InternalErrors> {
@@ -2359,6 +2397,81 @@ mod full_run_integration_tests {
         // exactly one tile.
         let count = job.count_preview_visible_tiles().unwrap();
         assert_eq!(count, 1);
+    }
+}
+
+#[cfg(test)]
+mod estimate_ram_per_worker_bytes_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use evanalyzer_cfg::settings::images_settings::{ChannelSettings, SeriesSettings};
+
+    fn image_entry(width: u64, height: u64, channel_count: usize) -> ImageEntry {
+        let channels = (0..channel_count as i32)
+            .map(|c| (c, ChannelSettings::default()))
+            .collect();
+        let mut series = BTreeMap::new();
+        series.insert(
+            0,
+            SeriesSettings {
+                image_width: width,
+                image_height: height,
+                channels,
+                ..Default::default()
+            },
+        );
+        ImageEntry {
+            selected_series: 0,
+            series,
+            ..Default::default()
+        }
+    }
+
+    fn job_with(images: IndexMap<PathBuf, ImageEntry>) -> JobExecutor {
+        JobExecutor::new(
+            PathBuf::new(),
+            PathBuf::new(),
+            images,
+            PathBuf::new(),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter {
+                out_objects: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        )
+    }
+
+    #[test]
+    fn matches_the_largest_image_in_the_job_not_the_first_or_smallest() {
+        let mut images = IndexMap::new();
+        images.insert(PathBuf::from("small.tif"), image_entry(512, 512, 1));
+        images.insert(PathBuf::from("large.tif"), image_entry(2048, 2048, 4));
+        let job = job_with(images);
+
+        let expected =
+            crate::resources::estimate_ram_per_worker_bytes(2048, 2048, 4, CACHE_QUEUE_DEPTH);
+        assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
+    }
+
+    #[test]
+    fn caps_tile_dimensions_to_the_max_analysis_tile_size() {
+        // A whole-slide image far larger than one analysis tile - the
+        // estimate must reflect one 4096x4096 tile's memory, not the whole
+        // image's, since a worker never holds more than one tile at a time
+        // regardless of the source image's total size.
+        let mut images = IndexMap::new();
+        images.insert(PathBuf::from("huge.tif"), image_entry(20_000, 20_000, 2));
+        let job = job_with(images);
+
+        let expected =
+            crate::resources::estimate_ram_per_worker_bytes(4096, 4096, 2, CACHE_QUEUE_DEPTH);
+        assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
+    }
+
+    #[test]
+    fn falls_back_sanely_when_the_job_has_no_images() {
+        let job = job_with(IndexMap::new());
+        assert!(job.estimate_ram_per_worker_bytes() > 0);
     }
 }
 
