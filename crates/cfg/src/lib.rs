@@ -231,7 +231,7 @@ mod tests {
             let json = serde_json::to_value(&cmd).unwrap();
             assert_eq!(
                 json["function"],
-                serde_json::json!({"type": "SNAP_AREA", "extraSize": 7.5, "unit": "nm"})
+                serde_json::json!({"type": "SNAP_AREA", "extraSize": 7.5, "unit": "NANO_METER"})
             );
 
             let round_tripped: PipelineCommand = serde_json::from_value(json).unwrap();

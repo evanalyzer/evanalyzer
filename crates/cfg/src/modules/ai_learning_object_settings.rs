@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 /// same as a database migration, not a normal refactor. Adding a new variant
 /// is safe.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ObjectMetric {
     Area,
     Perimeter,
@@ -47,4 +48,25 @@ pub enum ObjectMetric {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AiLearningObjectFeatureSettings {
     pub metrics: Vec<ObjectMetric>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `SCREAMING_SNAKE_CASE` tags, matching every other enum in the
+    /// codebase - not released yet, so no backward-compat aliases needed for
+    /// the old bare-PascalCase tags this used to produce.
+    #[test]
+    fn object_metric_serializes_unit_and_tuple_variants_as_screaming_snake_case() {
+        assert_eq!(serde_json::to_value(ObjectMetric::Area).unwrap(), "AREA");
+        assert_eq!(
+            serde_json::to_value(ObjectMetric::TouchesEdge).unwrap(),
+            "TOUCHES_EDGE"
+        );
+        assert_eq!(
+            serde_json::to_value(ObjectMetric::IntensitySum(2)).unwrap(),
+            serde_json::json!({"INTENSITY_SUM": 2})
+        );
+    }
 }

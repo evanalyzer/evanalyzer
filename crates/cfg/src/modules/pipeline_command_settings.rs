@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 // ============ ENUM SETTINGS ============
 
-///  What to do with an object's class labels once the model has predicted (and
-///  `segmentation_mapping` has remapped) a class for it.
+/// What to do with an object's class labels once the model has predicted (and
+/// `segmentation_mapping` has remapped) a class for it.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings {
@@ -29,7 +29,7 @@ pub enum ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings {
     ReclassifyIfMatch,
 }
 
-///  How the estimated illumination field is combined with the original image.
+/// How the estimated illumination field is combined with the original image.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersIlluminationCorrectionApplyMethodSettings {
@@ -44,7 +44,7 @@ pub enum FiltersIlluminationCorrectionApplyMethodSettings {
     Subtract,
 }
 
-///  The geometric shape used to probe the image intensity surface.
+/// The geometric shape used to probe the image intensity surface.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersRollingBallBallTypeSettings {
@@ -129,7 +129,7 @@ pub enum ClassificationClassifyObjectsClassifyMatchHandlingSettings {
     ReclassifyIfNotMatch,
 }
 
-///  How many partners an object may coloc with at once.
+/// How many partners an object may coloc with at once.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClassificationColocObjectsColocMultiplicitySettings {
@@ -151,7 +151,7 @@ pub enum ClassificationColocObjectsColocMultiplicitySettings {
     MultiFor(Vec<ObjectClass>),
 }
 
-///  How the illumination field is estimated from the block-reduced image.
+/// How the illumination field is estimated from the block-reduced image.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersIlluminationCorrectionCorrectionMethodSettings {
@@ -168,10 +168,10 @@ pub enum FiltersIlluminationCorrectionCorrectionMethodSettings {
     Background,
 }
 
-///  Specifies the feature extraction method for the Hessian matrix.
+/// Specifies the feature extraction method for the Hessian matrix.
 ///
-///  The Hessian matrix describes the local second-order structure of an image,
-///  often used for blob detection (LoG) or ridge extraction.
+/// The Hessian matrix describes the local second-order structure of an image,
+/// often used for blob detection (LoG) or ridge extraction.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersHessianHessianModeSettings {
@@ -203,7 +203,7 @@ pub enum FiltersHessianHessianModeSettings {
     EigenvaluesY,
 }
 
-///  Defines the interaction type with the persistent image storage.
+/// Defines the interaction type with the persistent image storage.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MathImageCacheImageCacheModeSettings {
@@ -238,7 +238,7 @@ pub enum MathSaveImageImageSourceSettings {
     SegmentationMask,
 }
 
-///  Specifies how intensity adjustments are calculated.
+/// Specifies how intensity adjustments are calculated.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersIntensityTransformIntensityTransformModeSettings {
@@ -251,7 +251,7 @@ pub enum FiltersIntensityTransformIntensityTransformModeSettings {
     Manual,
 }
 
-///  The geometric structure of the kernel (structuring element).
+/// The geometric structure of the kernel (structuring element).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
@@ -267,10 +267,10 @@ pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
     Cross,
 }
 
-///  The specific morphological transformation to perform.
+/// The specific morphological transformation to perform.
 ///
-///  Morphological operations process images based on shapes, typically used to
-///  remove noise, isolate individual elements, or join disparate elements.
+/// Morphological operations process images based on shapes, typically used to
+/// remove noise, isolate individual elements, or join disparate elements.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
@@ -291,8 +291,8 @@ pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
     Close,
 }
 
-///  Boolean set operation applied between an `input_class` object ("A") and the union of
-///  its overlapping `other_class` ROIs ("B").
+/// Boolean set operation applied between an `input_class` object ("A") and the union of
+/// its overlapping `other_class` ROIs ("B").
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClassificationObjectMathObjectSetOperationSettings {
@@ -315,7 +315,7 @@ pub enum ClassificationObjectMathObjectSetOperationSettings {
     Subtract,
 }
 
-///  The mathematical or logical operation to perform between two images.
+/// The mathematical or logical operation to perform between two images.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MathImageMathOperandSettings {
@@ -365,12 +365,12 @@ pub enum MathImageMathOperandSettings {
     DifferenceType,
 }
 
-///  How many populations Otsu splits the histogram into.
+/// How many populations Otsu splits the histogram into.
 ///
-///  `Three` needs a second, jointly-optimized cut - see [`ThresholdMethod::Otsu`].
-///  Not generalized past three: a fourth class would need a genuine "which of the
-///  K-1 cuts" selector in place of `middle_class`, not just a wider range - see
-///  the multilevel-thresholding note on `thresh_otsu_multi`.
+/// `Three` needs a second, jointly-optimized cut - see [`ThresholdMethod::Otsu`].
+/// Not generalized past three: a fourth class would need a genuine "which of the
+/// K-1 cuts" selector in place of `middle_class`, not just a wider range - see
+/// the multilevel-thresholding note on `thresh_otsu_multi`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SegmentationThresholdOtsuClassesSettings {
@@ -389,7 +389,7 @@ impl Default for SegmentationThresholdOtsuClassesSettings {
     }
 }
 
-///  Which side of a three-class Otsu split the middle-intensity population joins.
+/// Which side of a three-class Otsu split the middle-intensity population joins.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SegmentationThresholdOtsuMiddleClassSettings {
@@ -400,7 +400,7 @@ pub enum SegmentationThresholdOtsuMiddleClassSettings {
     Background,
 }
 
-///  Specifies the statistical operation to perform on the local pixel neighborhood.
+/// Specifies the statistical operation to perform on the local pixel neighborhood.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersRankFilterRankFilterTypeSettings {
@@ -427,8 +427,8 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     Outliers(f32),
 }
 
-///  Smoothing applied to the block-reduced field to remove blockiness before
-///  it is used as the correction field.
+/// Smoothing applied to the block-reduced field to remove blockiness before
+/// it is used as the correction field.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersIlluminationCorrectionSmoothingMethodSettings {
@@ -439,7 +439,7 @@ pub enum FiltersIlluminationCorrectionSmoothingMethodSettings {
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "gaussian")]
     Gaussian {
-        ///  Standard deviation, in block-grid units.
+        /// Standard deviation, in block-grid units.
         #[schemars(range(min = 0.1, max = 20))]
         sigma: f32,
     },
@@ -447,7 +447,7 @@ pub enum FiltersIlluminationCorrectionSmoothingMethodSettings {
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "median")]
     Median {
-        ///  Neighborhood radius, in block-grid units.
+        /// Neighborhood radius, in block-grid units.
         #[schemars(range(min = 1, max = 20))]
         radius: usize,
     },
@@ -468,7 +468,7 @@ impl Default for FiltersIlluminationCorrectionSmoothingMethodSettings {
     }
 }
 
-///  The specific calculation to extract from the Structure Tensor.
+/// The specific calculation to extract from the Structure Tensor.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersStructureTensorTensorModeSettings {
@@ -501,10 +501,10 @@ pub enum FiltersStructureTensorTensorModeSettings {
     Coherence,
 }
 
-///  The mathematical strategy used to determine the optimal global threshold.
+/// The mathematical strategy used to determine the optimal global threshold.
 ///
-///  Most methods analyze the image histogram to find a "cut-off" point that
-///  best separates the foreground from the background.
+/// Most methods analyze the image histogram to find a "cut-off" point that
+/// best separates the foreground from the background.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SegmentationThresholdThresholdMethodSettings {
@@ -581,11 +581,11 @@ impl Default for SegmentationThresholdThresholdMethodSettings {
     }
 }
 
-///  Which image the threshold *value* is calculated from. Mirrors CellProfiler's
-///  ability to calculate a threshold on one image (e.g. the raw, unblurred
-///  image) and apply it to another (the blurred image actually being
-///  segmented): the cut-off computed here is always applied against the
-///  pipeline's actual current image - see [`ThresholdEntry::value_source`].
+/// Which image the threshold *value* is calculated from. Mirrors CellProfiler's
+/// ability to calculate a threshold on one image (e.g. the raw, unblurred
+/// image) and apply it to another (the blurred image actually being
+/// segmented): the cut-off computed here is always applied against the
+/// pipeline's actual current image - see [`ThresholdEntry::value_source`].
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SegmentationThresholdThresholdValueSourceSettings {
@@ -607,9 +607,9 @@ pub enum SegmentationThresholdThresholdValueSourceSettings {
     Memory(MemoryId),
 }
 
-///  Each variant carries only the parameters it actually uses, so there's no shared field whose
-///  meaning shifts depending on which function is selected (e.g. a "factor" that's a unitless
-///  multiplier for `Scale` but a length in `size_unit` for `SnapArea`).
+/// Each variant carries only the parameters it actually uses, so there's no shared field whose
+/// meaning shifts depending on which function is selected (e.g. a "factor" that's a unitless
+/// multiplier for `Scale` but a length in `size_unit` for `SnapArea`).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClassificationTransformObjectsTransformFunctionSettings {
@@ -619,7 +619,7 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "scale")]
     Scale {
-        ///  Unitless scale factor
+        /// Unitless scale factor
         #[schemars(range(min = 0, max = 65535))]
         factor: f32,
     },
@@ -627,20 +627,20 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "snap-area", alias = "snapArea", alias = "snap_area")]
     SnapArea {
-        ///  Size added on top of the object's bounding-box diameter
+        /// Size added on top of the object's bounding-box diameter
         #[schemars(range(min = 0, max = 65535))]
         extra_size: f32,
-        ///  Unit `extra_size` is expressed in
+        /// Unit `extra_size` is expressed in
         unit: SizeUnits,
     },
     /// Draws a circle around the object's bounding box, with `min_diameter` as the minimum diameter.
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "min-circle", alias = "minCircle", alias = "min_circle")]
     MinCircle {
-        ///  Minimum circle diameter
+        /// Minimum circle diameter
         #[schemars(range(min = 0, max = 65535))]
         min_diameter: f32,
-        ///  Unit `min_diameter` is expressed in
+        /// Unit `min_diameter` is expressed in
         unit: SizeUnits,
     },
     /// Draws a circle with exactly `diameter` as diameter around the object.
@@ -649,10 +649,10 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "draw-circle", alias = "drawCircle", alias = "draw_circle")]
     DrawCircle {
-        ///  Circle diameter (0 = use the object's bounding box)
+        /// Circle diameter (0 = use the object's bounding box)
         #[schemars(range(min = 0, max = 65535))]
         diameter: f32,
-        ///  Unit `diameter` is expressed in
+        /// Unit `diameter` is expressed in
         unit: SizeUnits,
     },
     /// Replaces the object with the ellipse fitted to its mask.
@@ -663,7 +663,7 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
         alias = "fitting_ellipse"
     )]
     FittingEllipse {
-        ///  Unitless scale factor for the fitted ellipse
+        /// Unitless scale factor for the fitted ellipse
         #[schemars(range(min = 0, max = 65535))]
         scale: f32,
     },
@@ -673,10 +673,10 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "expand")]
     Expand {
-        ///  Margin added on every side of the mask's contour
+        /// Margin added on every side of the mask's contour
         #[schemars(range(min = 0, max = 65535))]
         margin: f32,
-        ///  Unit `margin` is expressed in
+        /// Unit `margin` is expressed in
         unit: SizeUnits,
     },
     /// Shrinks the object inward by `margin`, following its actual contour (standard flat
@@ -684,10 +684,10 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     #[serde(rename_all = "camelCase")]
     #[serde(alias = "shrink")]
     Shrink {
-        ///  Margin removed from every side of the mask's contour
+        /// Margin removed from every side of the mask's contour
         #[schemars(range(min = 0, max = 65535))]
         margin: f32,
-        ///  Unit `margin` is expressed in
+        /// Unit `margin` is expressed in
         unit: SizeUnits,
     },
 }
@@ -698,9 +698,9 @@ impl Default for ClassificationTransformObjectsTransformFunctionSettings {
     }
 }
 
-///  How a multi-channel U-Net output should be turned into a single foreground
-///  probability map. Ignored for single-channel outputs, which are always
-///  treated as already-activated foreground probabilities.
+/// How a multi-channel U-Net output should be turned into a single foreground
+/// probability map. Ignored for single-channel outputs, which are always
+/// treated as already-activated foreground probabilities.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AiSegmentationUnetUNetOutputModeSettings {
@@ -730,19 +730,19 @@ pub enum AiSegmentationUnetUNetOutputModeSettings {
 
 // ============ PREPROCESSING ============
 
-///  Smooths an image by averaging pixel intensities within a local neighborhood.
+/// Smooths an image by averaging pixel intensities within a local neighborhood.
 ///
-///  This algorithm applies a uniform box filter where every pixel within the moving
-///  window contributes equally to the final value. It is a computationally fast
-///  method used for general image smoothing, blending variations, and rapid noise
-///  suppression where edge precision is less critical.
+/// This algorithm applies a uniform box filter where every pixel within the moving
+/// window contributes equally to the final value. It is a computationally fast
+/// method used for general image smoothing, blending variations, and rapid noise
+/// suppression where edge precision is less critical.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlurSettings {
-    ///  The size of the blur matrix.
+    /// The size of the blur matrix.
     ///
-    ///  Must be an odd number (e.g., 3, 5, 7)
+    /// Must be an odd number (e.g., 3, 5, 7)
     #[schemars(range(min = 3, max = 27))]
     pub kernel_size: usize,
 }
@@ -755,165 +755,165 @@ impl Default for BlurSettings {
     }
 }
 
-///  A command that filters an image based on a specific HSV color range.
+/// A command that filters an image based on a specific HSV color range.
 ///
-///  Pixels falling outside the provided [`HsvRange`] are masked
-///  out by setting to black.
+/// Pixels falling outside the provided [`HsvRange`] are masked
+/// out by setting to black.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  # use imagec::backend::algos::{ColorFilterCommand, HsvRange};
-///  let range = HsvRange {
-///      min_h: 0.0,   max_h: 30.0, // Red tones
-///      min_s: 0.5,   max_s: 1.0,
-///      min_v: 0.5,   max_v: 1.0,
-///  };
+/// ```
+/// # use imagec::backend::algos::{ColorFilterCommand, HsvRange};
+/// let range = HsvRange {
+/// min_h: 0.0,   max_h: 30.0, // Red tones
+/// min_s: 0.5,   max_s: 1.0,
+/// min_v: 0.5,   max_v: 1.0,
+/// };
 ///
-///  let command = ColorFilterCommand { range };
-///  ```
+/// let command = ColorFilterCommand { range };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColorFilterCommandSettings {
-    ///  The HSV color bounds to be preserved by the filter.
+    /// The HSV color bounds to be preserved by the filter.
     pub range: HsvRangeSettings,
 }
 
-///  A command that calculates the Euclidean Distance Map (EDM) of an f32 image.
+/// A command that calculates the Euclidean Distance Map (EDM) of an f32 image.
 ///
-///  This algorithm identifies pixels below a threshold as "background" and
-///  calculates the distance of every "foreground" pixel to the nearest background pixel.
+/// This algorithm identifies pixels below a threshold as "background" and
+/// calculates the distance of every "foreground" pixel to the nearest background pixel.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DistanceTransformSettings {
-    ///  Values less than or equal to this are treated as background (distance = 0).
+    /// Values less than or equal to this are treated as background (distance = 0).
     pub threshold: f32,
-    ///  If true, the pixels outside the image boundary are treated as background.
+    /// If true, the pixels outside the image boundary are treated as background.
     pub edges_are_background: bool,
 }
 
-///  Extracts structural boundaries and fine edges using the multi-stage Canny algorithm.
+/// Extracts structural boundaries and fine edges using the multi-stage Canny algorithm.
 ///
-///  This algorithm identifies optimal edge locations by calculating spatial intensity
-///  gradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,
-///  and applying a dual-threshold hysteresis loop to preserve weak edges connected
-///  to strong ones while completely rejecting isolated noise.
+/// This algorithm identifies optimal edge locations by calculating spatial intensity
+/// gradients, suppressing non-maximum pixel responses to thin lines down to 1-pixel width,
+/// and applying a dual-threshold hysteresis loop to preserve weak edges connected
+/// to strong ones while completely rejecting isolated noise.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  # use imagec::backend::algos::EdgeDetectionCanny;
-///  let edges = EdgeDetectionCanny {
-///      kernel_size: 3,
-///      threshold_min: 0.1,
-///      threshold_max: 0.3,
-///  };
-///  ```
+/// ```
+/// # use imagec::backend::algos::EdgeDetectionCanny;
+/// let edges = EdgeDetectionCanny {
+/// kernel_size: 3,
+/// threshold_min: 0.1,
+/// threshold_max: 0.3,
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeDetectionCannySettings {
-    ///  Size of the Gaussian smoothing kernel.
+    /// Size of the Gaussian smoothing kernel.
     ///
-    ///  Must be an odd number (e.g., 3, 5). Larger values reduce
-    ///  noise but can blur fine edge details.
+    /// Must be an odd number (e.g., 3, 5). Larger values reduce
+    /// noise but can blur fine edge details.
     pub kernel_size: usize,
-    ///  Lower bound for hysteresis thresholding [0.0, 1.0].
+    /// Lower bound for hysteresis thresholding [0.0, 1.0].
     ///
-    ///  Edges with a gradient intensity below this value are discarded.
+    /// Edges with a gradient intensity below this value are discarded.
     pub threshold_min: f32,
-    ///  Upper bound for hysteresis thresholding [0.0, 1.0].
+    /// Upper bound for hysteresis thresholding [0.0, 1.0].
     ///
-    ///  Edges with a gradient intensity above this value are considered
-    ///  "strong" and are automatically preserved.
+    /// Edges with a gradient intensity above this value are considered
+    /// "strong" and are automatically preserved.
     pub threshold_max: f32,
 }
 
-///  Extracts directional boundaries by computing spatial image intensity gradients.
+/// Extracts directional boundaries by computing spatial image intensity gradients.
 ///
-///  This algorithm applies localized 3x3 kernels to approximate the first derivative
-///  of pixel intensities across the horizontal and vertical axes. It highlights
-///  areas of sharp luminance changes, producing a continuous gradient map that
-///  emphasizes prominent structural edges and surface transitions.
+/// This algorithm applies localized 3x3 kernels to approximate the first derivative
+/// of pixel intensities across the horizontal and vertical axes. It highlights
+/// areas of sharp luminance changes, producing a continuous gradient map that
+/// emphasizes prominent structural edges and surface transitions.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  # use imagec::backend::algos::EdgeDetectionSobel;
-///  let filter = EdgeDetectionSobel { kernel_size: 3 };
-///  ```
+/// ```
+/// # use imagec::backend::algos::EdgeDetectionSobel;
+/// let filter = EdgeDetectionSobel { kernel_size: 3 };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeDetectionSobelSettings {
-    ///  The size of the Sobel operator window.
+    /// The size of the Sobel operator window.
     ///
-    ///  Typically 3. Larger values (5, 7) provide a more smoothed
-    ///  gradient but result in "thicker" edges. Must be an odd number.
+    /// Typically 3. Larger values (5, 7) provide a more smoothed
+    /// gradient but result in "thicker" edges. Must be an odd number.
     pub kernel_size: usize,
 }
 
-///  Configuration for contrast enhancement and histogram manipulation.
+/// Configuration for contrast enhancement and histogram manipulation.
 ///
-///  This algorithm can perform linear contrast stretching, normalization,
-///  or histogram equalization to improve the dynamic range of an image.
+/// This algorithm can perform linear contrast stretching, normalization,
+/// or histogram equalization to improve the dynamic range of an image.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  # use imagec::backend::algos::EnhanceContrast;
-///  let settings = EnhanceContrast {
-///      saturated_pixels: 0.01,   // Clip 1% of outliers
-///      normalize: true,          // Stretch to [0.0, 1.0]
-///      equalize_histogram: false,
-///  };
-///  ```
+/// ```
+/// # use imagec::backend::algos::EnhanceContrast;
+/// let settings = EnhanceContrast {
+/// saturated_pixels: 0.01,   // Clip 1% of outliers
+/// normalize: true,          // Stretch to [0.0, 1.0]
+/// equalize_histogram: false,
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EnhanceContrastSettings {
-    ///  Percentage of pixels to "clip" from the top and bottom of the histogram.
+    /// Percentage of pixels to "clip" from the top and bottom of the histogram.
     ///
-    ///  Range: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels
-    ///  that would otherwise prevent effective contrast stretching.
+    /// Range: [0.0, 1.0]. A value of 0.01 (1%) helps ignore hot/dead pixels
+    /// that would otherwise prevent effective contrast stretching.
     pub saturated_pixels: f32,
-    ///  Whether to linearly stretch the remaining pixel intensities to fill
-    ///  the full [0.0, 1.0] range.
+    /// Whether to linearly stretch the remaining pixel intensities to fill
+    /// the full [0.0, 1.0] range.
     pub normalize: bool,
-    ///  Whether to apply Histogram Equalization.
+    /// Whether to apply Histogram Equalization.
     ///
-    ///  This redistributes pixel intensities to achieve a uniform distribution,
-    ///  which is highly effective for images with low contrast but high noise.
+    /// This redistributes pixel intensities to achieve a uniform distribution,
+    /// which is highly effective for images with low contrast but high noise.
     pub equalize_histogram: bool,
 }
 
-///  Smooths an image and reduces background noise using a Gaussian kernel.
+/// Smooths an image and reduces background noise using a Gaussian kernel.
 ///
-///  This algorithm applies a localized, bell-curve weighted blur that suppresses
-///  high-frequency pixel variations (like camera noise, salt-and-pepper artifacts,
-///  or dust) while preserving structural features. It is commonly used as a
-///  preprocessing step to optimize thresholding and edge detection tasks.
+/// This algorithm applies a localized, bell-curve weighted blur that suppresses
+/// high-frequency pixel variations (like camera noise, salt-and-pepper artifacts,
+/// or dust) while preserving structural features. It is commonly used as a
+/// preprocessing step to optimize thresholding and edge detection tasks.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::algos::GaussianBlur;
+/// ```
+/// use imagec::backend::algos::GaussianBlur;
 ///
-///  let settings = GaussianBlur {
-///      kernel_size: 5,
-///      sigma: 2.0
-///  };
-///  ```
+/// let settings = GaussianBlur {
+/// kernel_size: 5,
+/// sigma: 2.0
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct GaussianBlurSettings {
-    ///  The size of the blur matrix.
+    /// The size of the blur matrix.
     ///
-    ///  Must be an odd number (e.g., 3, 5, 7).
+    /// Must be an odd number (e.g., 3, 5, 7).
     #[schemars(range(min = 3, max = 27))]
     pub kernel_size: usize,
-    ///  The standard deviation of the Gaussian kernel.
+    /// The standard deviation of the Gaussian kernel.
     ///
-    ///  Higher values create a more significant blur effect.
-    ///  $$N \approx 6\sigma + 1$$
+    /// Higher values create a more significant blur effect.
+    /// $$N \approx 6\sigma + 1$$
     #[schemars(range(min = 0.1, max = 5))]
     pub sigma: f32,
 }
@@ -927,110 +927,110 @@ impl Default for GaussianBlurSettings {
     }
 }
 
-///  Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.
+/// Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.
 ///
-///  This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature
-///  and intensity topography. By evaluating the eigenvalues of this matrix, it differentiates
-///  between directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),
-///  and flat regions, making it highly effective for curvilinear feature extraction.
+/// This algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature
+/// and intensity topography. By evaluating the eigenvalues of this matrix, it differentiates
+/// between directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),
+/// and flat regions, making it highly effective for curvilinear feature extraction.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  # use imagec::backend::algos::{Hessian, HessianMode};
-///  let detector = Hessian {
-///      mode: HessianMode::Determinant,
-///  };
-///  ```
+/// ```
+/// # use imagec::backend::algos::{Hessian, HessianMode};
+/// let detector = Hessian {
+/// mode: HessianMode::Determinant,
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HessianSettings {
-    ///  Determines which component of the Hessian matrix structure to extract.
+    /// Determines which component of the Hessian matrix structure to extract.
     ///
-    ///  Depending on the mode, this can highlight interest points (blobs)
-    ///  or directional features (ridges).
+    /// Depending on the mode, this can highlight interest points (blobs)
+    /// or directional features (ridges).
     pub mode: FiltersHessianHessianModeSettings,
 }
 
-///  Defines a range within the HSV (Hue, Saturation, Value) color space.
+/// Defines a range within the HSV (Hue, Saturation, Value) color space.
 ///
-///  This is commonly used for color-based filtering or "chroma keying."
+/// This is commonly used for color-based filtering or "chroma keying."
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::algos::HsvRange;
+/// ```
+/// use imagec::backend::algos::HsvRange;
 ///
-///  let green_filter = HsvRange {
-///      min_h: 100.0, max_h: 140.0,
-///      min_s: 0.2,   max_s: 1.0,
-///      min_v: 0.2,   max_v: 1.0,
-///  };
-///  ```
+/// let green_filter = HsvRange {
+/// min_h: 100.0, max_h: 140.0,
+/// min_s: 0.2,   max_s: 1.0,
+/// min_v: 0.2,   max_v: 1.0,
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HsvRangeSettings {
-    ///  Minimum Hue angle in degrees [0.0, 360.0].
+    /// Minimum Hue angle in degrees [0.0, 360.0].
     pub min_h: f32,
-    ///  Maximum Hue angle in degrees [0.0, 360.0].
+    /// Maximum Hue angle in degrees [0.0, 360.0].
     pub max_h: f32,
-    ///  Minimum Saturation normalized [0.0, 1.0].
+    /// Minimum Saturation normalized [0.0, 1.0].
     pub min_s: f32,
-    ///  Maximum Saturation normalized [0.0, 1.0].
+    /// Maximum Saturation normalized [0.0, 1.0].
     pub max_s: f32,
-    ///  Minimum Value (Brightness) normalized [0.0, 1.0].
+    /// Minimum Value (Brightness) normalized [0.0, 1.0].
     pub min_v: f32,
-    ///  Maximum Value (Brightness) normalized [0.0, 1.0].
+    /// Maximum Value (Brightness) normalized [0.0, 1.0].
     pub max_v: f32,
 }
 
-///  Use this when your images are brighter in the middle and dimmer toward
-///  the edges/corners (vignetting), or show any other smooth shading pattern
-///  that repeats the same way across every tile or every image from the same
-///  microscope/camera setup - a consequence of the optics or illumination,
-///  not the sample. Left uncorrected, that shading makes intensity
-///  comparisons between regions of an image (or between images/wells)
-///  unreliable, even though it rarely stops segmentation from finding
-///  objects on its own.
+/// Use this when your images are brighter in the middle and dimmer toward
+/// the edges/corners (vignetting), or show any other smooth shading pattern
+/// that repeats the same way across every tile or every image from the same
+/// microscope/camera setup - a consequence of the optics or illumination,
+/// not the sample. Left uncorrected, that shading makes intensity
+/// comparisons between regions of an image (or between images/wells)
+/// unreliable, even though it rarely stops segmentation from finding
+/// objects on its own.
 ///
-///  Use [`super::rolling_ball::RollingBall`] instead when the problem is a
-///  *local* background glow or halo under/around individual objects (e.g.
-///  out-of-focus light, autofluorescence, uneven staining) that differs from
-///  image to image rather than being tied to the acquisition setup -
-///  RollingBall strips that local floor so thresholding/segmentation works
-///  cleanly. The two solve different problems: RollingBall won't fix a
-///  global brightness gradient, and this filter won't remove a local halo.
+/// Use [`super::rolling_ball::RollingBall`] instead when the problem is a
+/// *local* background glow or halo under/around individual objects (e.g.
+/// out-of-focus light, autofluorescence, uneven staining) that differs from
+/// image to image rather than being tied to the acquisition setup -
+/// RollingBall strips that local floor so thresholding/segmentation works
+/// cleanly. The two solve different problems: RollingBall won't fix a
+/// global brightness gradient, and this filter won't remove a local halo.
 ///
-///  ### How it works
+/// ### How it works
 ///
-///  Flat-field ("illumination") correction: estimates a smooth, slowly-varying
-///  gain/offset field caused by uneven illumination (vignetting, dust on the
-///  condenser, uneven excitation) and removes it in a single calculate+apply
-///  step - equivalent to CellProfiler's `CorrectIlluminationCalculate` and
-///  `CorrectIlluminationApply` modules combined into one.
+/// Flat-field ("illumination") correction: estimates a smooth, slowly-varying
+/// gain/offset field caused by uneven illumination (vignetting, dust on the
+/// condenser, uneven excitation) and removes it in a single calculate+apply
+/// step - equivalent to CellProfiler's `CorrectIlluminationCalculate` and
+/// `CorrectIlluminationApply` modules combined into one.
 ///
-///  Unlike `RollingBall`, which estimates a *local* per-object background
-///  baseline via a rolling structural element, this estimates one *global*,
-///  low-frequency field for the whole image/channel.
+/// Unlike `RollingBall`, which estimates a *local* per-object background
+/// baseline via a rolling structural element, this estimates one *global*,
+/// low-frequency field for the whole image/channel.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct IlluminationCorrectionSettings {
-    ///  How the illumination field is estimated from the image.
+    /// How the illumination field is estimated from the image.
     pub method: FiltersIlluminationCorrectionCorrectionMethodSettings,
-    ///  Block size, in pixels, used to reduce the image to a coarse
-    ///  illumination estimate before smoothing. Should be larger than the
-    ///  largest foreground object, so objects are averaged/eroded away and
-    ///  only the slow-varying illumination trend survives.
+    /// Block size, in pixels, used to reduce the image to a coarse
+    /// illumination estimate before smoothing. Should be larger than the
+    /// largest foreground object, so objects are averaged/eroded away and
+    /// only the slow-varying illumination trend survives.
     #[schemars(range(min = 1, max = 2000))]
     pub block_size: usize,
-    ///  Smoothing applied to the block-reduced field to remove blockiness.
+    /// Smoothing applied to the block-reduced field to remove blockiness.
     pub smoothing: FiltersIlluminationCorrectionSmoothingMethodSettings,
-    ///  How the field is combined with the original image.
+    /// How the field is combined with the original image.
     pub apply_method: FiltersIlluminationCorrectionApplyMethodSettings,
-    ///  Stretch the corrected image's intensities to fill the full
-    ///  `[0.0, 1.0]` range afterward - guards against `Divide` pushing
-    ///  previously-dim regions above `1.0`.
+    /// Stretch the corrected image's intensities to fill the full
+    /// `[0.0, 1.0]` range afterward - guards against `Divide` pushing
+    /// previously-dim regions above `1.0`.
     pub rescale: bool,
 }
 
@@ -1046,193 +1046,193 @@ impl Default for IlluminationCorrectionSettings {
     }
 }
 
-///  A filter that acts as a synchronization point between the pipeline and a storage backend.
+/// A filter that acts as a synchronization point between the pipeline and a storage backend.
 ///
-///  `ImageCache` allows the pipeline to branch or "undo" operations by saving
-///  states to a named address and reloading them as needed.
+/// `ImageCache` allows the pipeline to branch or "undo" operations by saving
+/// states to a named address and reloading them as needed.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};
-///  let checkpoint = ImageCache {
-///      mode: ImageCacheMode::Store,
-///      address: ImageAddress::from("pre_processed_state"),
-///  };
-///  ```
+/// ```
+/// use imagec::backend::core::context::{ImageCache, ImageCacheMode, ImageAddress};
+/// let checkpoint = ImageCache {
+/// mode: ImageCacheMode::Store,
+/// address: ImageAddress::from("pre_processed_state"),
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageCacheSettings {
-    ///  Whether to save the current state to the cache or load a state from it.
+    /// Whether to save the current state to the cache or load a state from it.
     pub mode: MathImageCacheImageCacheModeSettings,
-    ///  The unique identifier or memory slot where the image is stored.
+    /// The unique identifier or memory slot where the image is stored.
     pub address: ImageAddress,
 }
 
-///  A filter that performs pixel-wise mathematical operations between the current
-///  pipeline image and a secondary image stored in the cache.
+/// A filter that performs pixel-wise mathematical operations between the current
+/// pipeline image and a secondary image stored in the cache.
 ///
-///  This command allows for complex image blending, masking, and comparison.
+/// This command allows for complex image blending, masking, and comparison.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::algos::{ImageMath, Operand};
-///  let subtract_bg = ImageMath {
-///      operand: Operand::Subtract,
-///      second_image_address: ImageAddress::from("background"),
-///      swap_operands: false,
-///  };
-///  ```
+/// ```
+/// use imagec::backend::algos::{ImageMath, Operand};
+/// let subtract_bg = ImageMath {
+/// operand: Operand::Subtract,
+/// second_image_address: ImageAddress::from("background"),
+/// swap_operands: false,
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageMathSettings {
-    ///  The specific mathematical or logical operator to apply.
+    /// The specific mathematical or logical operator to apply.
     pub operand: MathImageMathOperandSettings,
-    ///  The address of the second image in the [`ImageCache`] to use for the operation.
+    /// The address of the second image in the [`ImageCache`] to use for the operation.
     pub second_image_address: ImageAddress,
-    ///  If false, the calculation is `(Current Image OP Cached Image)`.
-    ///  If true, the calculation is `(Cached Image OP Current Image)`.
+    /// If false, the calculation is `(Current Image OP Cached Image)`.
+    /// If true, the calculation is `(Cached Image OP Current Image)`.
     ///
-    ///  This is critical for non-commutative operations like Subtraction or Division.
+    /// This is critical for non-commutative operations like Subtraction or Division.
     pub swap_operands: bool,
 }
 
-///  Configuration for adjusting image contrast and brightness.
+/// Configuration for adjusting image contrast and brightness.
 ///
-///  This transformation applies a linear mapping to pixel values.
-///  In [`Mode::Manual`], the output is typically calculated as:
-///  `output = input * contrast + brightness`.
+/// This transformation applies a linear mapping to pixel values.
+/// In [`Mode::Manual`], the output is typically calculated as:
+/// `output = input * contrast + brightness`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct IntensityTransformationSettings {
-    ///  Determines whether to use automated enhancement or user-defined values.
+    /// Determines whether to use automated enhancement or user-defined values.
     pub mode: FiltersIntensityTransformIntensityTransformModeSettings,
-    ///  Contrast multiplier (gain).
+    /// Contrast multiplier (gain).
     ///
-    ///  Only active in [`Mode::Manual`].
-    ///  Values > 1.0 increase contrast, while values < 1.0 decrease it.
+    /// Only active in [`Mode::Manual`].
+    /// Values > 1.0 increase contrast, while values < 1.0 decrease it.
     pub contrast: f32,
-    ///  Brightness offset (bias).
+    /// Brightness offset (bias).
     ///
-    ///  Only active in [`Mode::Manual`].
-    ///  Positive values brighten the image, negative values darken it.
+    /// Only active in [`Mode::Manual`].
+    /// Positive values brighten the image, negative values darken it.
     pub brightness: f32,
 }
 
-///  Configuration for the Laplacian edge detection filter.
+/// Configuration for the Laplacian edge detection filter.
 ///
-///  The Laplacian is a second-order derivative operator used to find regions of
-///  rapid intensity change. It is particularly effective for detecting edges
-///  and fine details, though it is highly sensitive to noise.
+/// The Laplacian is a second-order derivative operator used to find regions of
+/// rapid intensity change. It is particularly effective for detecting edges
+/// and fine details, though it is highly sensitive to noise.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  # use imagec::backend::algos::Laplacian;
-///  let filter = Laplacian { kernel_size: 3 };
-///  ```
+/// ```
+/// # use imagec::backend::algos::Laplacian;
+/// let filter = Laplacian { kernel_size: 3 };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LaplacianSettings {
-    ///  The size of the discrete Laplacian aperture.
+    /// The size of the discrete Laplacian aperture.
     ///
-    ///  Typically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)
-    ///  more closely but are more computationally expensive. Must be an odd number.
+    /// Typically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)
+    /// more closely but are more computationally expensive. Must be an odd number.
     pub kernel_size: usize,
 }
 
-///  A background subtraction filter that uses a median rank operator.
+/// A background subtraction filter that uses a median rank operator.
 ///
-///  This algorithm is highly effective for removing large-scale background
-///  variations while preserving small, high-contrast features. It works by
-///  estimating the background as the median intensity within a local radius.
+/// This algorithm is highly effective for removing large-scale background
+/// variations while preserving small, high-contrast features. It works by
+/// estimating the background as the median intensity within a local radius.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::algos::MedianSubtract;
-///  let filter = MedianSubtract { radius: 10.0 };
-///  ```
+/// ```
+/// use imagec::backend::algos::MedianSubtract;
+/// let filter = MedianSubtract { radius: 10.0 };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MedianSubtractSettings {
-    ///  The radius of the neighborhood used to estimate the background.
+    /// The radius of the neighborhood used to estimate the background.
     ///
-    ///  Features smaller than this radius will be preserved, while
-    ///  larger structures will be treated as background and removed.
+    /// Features smaller than this radius will be preserved, while
+    /// larger structures will be treated as background and removed.
     pub radius: f64,
 }
 
-///  A filter that applies mathematical morphology to an image.
+/// A filter that applies mathematical morphology to an image.
 ///
-///  Morphological operations use a structuring element (kernel) to probe
-///  and modify the shapes within an image.
+/// Morphological operations use a structuring element (kernel) to probe
+/// and modify the shapes within an image.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};
-///  let clean_noise = MorphologicalCommand {
-///      op: MorphOps::Open,
-///      kernel_size: 3,
-///      kernel_shape: KernelShapes::Ellipse,
-///  };
-///  ```
+/// ```
+/// use imagec::backend::algos::{MorphologicalCommand, MorphOps, KernelShapes};
+/// let clean_noise = MorphologicalCommand {
+/// op: MorphOps::Open,
+/// kernel_size: 3,
+/// kernel_shape: KernelShapes::Ellipse,
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MorphologicalCommandSettings {
-    ///  The transformation type (e.g., Dilate, Erode).
+    /// The transformation type (e.g., Dilate, Erode).
     pub op: MorphologyMorphologicalTransformationMorphOpsSettings,
-    ///  The diameter of the structuring element in pixels.
-    ///  Must be an odd number (e.g., 3, 5, 7).
+    /// The diameter of the structuring element in pixels.
+    /// Must be an odd number (e.g., 3, 5, 7).
     pub kernel_size: usize,
-    ///  The geometric profile of the structuring element.
+    /// The geometric profile of the structuring element.
     pub kernel_shape: MorphologyMorphologicalTransformationKernelShapesSettings,
-    ///  If set the grayscale image instead of the labeld image is taken to perform a morphological transform
+    /// If set the grayscale image instead of the labeld image is taken to perform a morphological transform
     pub use_grayscale: bool,
 }
 
-///  A filter that transforms pixels based on the statistical rank of their neighbors.
+/// A filter that transforms pixels based on the statistical rank of their neighbors.
 ///
-///  Rank filters are non-linear operators used for noise reduction,
-///  morphological operations, and feature enhancement.
+/// Rank filters are non-linear operators used for noise reduction,
+/// morphological operations, and feature enhancement.
 ///
-///  This algorithm sorts (ranks) all pixel values within a local neighborhood
-///  window and assigns a specific percentile value to the center pixel. By selecting
-///  different ranks, it acts as a configurable operator: the minimum rank performs
-///  erosion, the maximum rank performs dilation, and the median rank (50th percentile)
-///  provides highly effective impulse noise suppression while preserving sharp structural edges.
+/// This algorithm sorts (ranks) all pixel values within a local neighborhood
+/// window and assigns a specific percentile value to the center pixel. By selecting
+/// different ranks, it acts as a configurable operator: the minimum rank performs
+/// erosion, the maximum rank performs dilation, and the median rank (50th percentile)
+/// provides highly effective impulse noise suppression while preserving sharp structural edges.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RankFilterSettings {
-    ///  The circular radius of the neighborhood to consider.
+    /// The circular radius of the neighborhood to consider.
     ///
-    ///  A radius of 1.0 roughly corresponds to a 3x3 square, while larger
-    ///  values increase the effect's strength and computational cost.
+    /// A radius of 1.0 roughly corresponds to a 3x3 square, while larger
+    /// values increase the effect's strength and computational cost.
     pub radius: f64,
-    ///  The specific ranking algorithm to apply to the neighborhood.
+    /// The specific ranking algorithm to apply to the neighborhood.
     pub filter_type: FiltersRankFilterRankFilterTypeSettings,
 }
 
-///  Removes non-uniform background illumination by calculating a local intensity baseline.
+/// Removes non-uniform background illumination by calculating a local intensity baseline.
 ///
-///  This algorithm models the image as a 3D intensity landscape and conceptually rolls
-///  a sphere of a user-defined radius underneath it. The ball cannot penetrate narrow
-///  intensity peaks (true signal objects) but follows the sweeping, lower-frequency
-///  curves of background variations. The path traced by the ball establishes a local
-///  baseline map that is subtracted from the original image to isolate foreground features.
+/// This algorithm models the image as a 3D intensity landscape and conceptually rolls
+/// a sphere of a user-defined radius underneath it. The ball cannot penetrate narrow
+/// intensity peaks (true signal objects) but follows the sweeping, lower-frequency
+/// curves of background variations. The path traced by the ball establishes a local
+/// baseline map that is subtracted from the original image to isolate foreground features.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct RollingBallSettings {
-    ///  The radius of the ball or paraboloid in pixels.
+    /// The radius of the ball or paraboloid in pixels.
     ///
-    ///  This should be at least as large as the radius of the largest
-    ///  object in the image that is not part of the background.
+    /// This should be at least as large as the radius of the largest
+    /// object in the image that is not part of the background.
     #[schemars(range(min = 1, max = 64))]
     pub radius: f64,
-    ///  The geometric shape of the rolling structural element.
+    /// The geometric shape of the rolling structural element.
     pub ball_type: FiltersRollingBallBallTypeSettings,
     pub pre_smooth: bool,
 }
@@ -1247,149 +1247,149 @@ impl Default for RollingBallSettings {
     }
 }
 
-///  A command that exports the current image to a persistent file on disk.
+/// A command that exports the current image to a persistent file on disk.
 ///
-///  This is a **transparent command**: it does not modify the image data in the
-///  pipeline context, nor does it perform a buffer swap. It acts as a tap
-///  to view the state of the image at a specific point in the pipeline.
+/// This is a **transparent command**: it does not modify the image data in the
+/// pipeline context, nor does it perform a buffer swap. It acts as a tap
+/// to view the state of the image at a specific point in the pipeline.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::algos::SaveImage;
-///  let saver = SaveImage {path:"output/processed_cell.png"};
-///  ```
+/// ```
+/// use imagec::backend::algos::SaveImage;
+/// let saver = SaveImage {path:"output/processed_cell.png"};
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveImageSettings {
-    ///  Name the image should be stord under
+    /// Name the image should be stord under
     pub name: String,
-    ///  Which image from the pipeline should be stored
+    /// Which image from the pipeline should be stored
     pub source: MathSaveImageImageSourceSettings,
 }
 
-///  Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.
+/// Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.
 ///
-///  This algorithm summarizes the predominant directions of the image gradient within a local
-///  neighborhood, smoothing the structural data with a Gaussian window. By evaluating the
-///  eigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues
-///  near zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),
-///  and complex corners or intersections (two large eigenvalues).
+/// This algorithm summarizes the predominant directions of the image gradient within a local
+/// neighborhood, smoothing the structural data with a Gaussian window. By evaluating the
+/// eigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues
+/// near zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),
+/// and complex corners or intersections (two large eigenvalues).
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::algos::{StructureTensor, Mode};
-///  let settings = StructureTensor {
-///      mode: Mode::Coherence,
-///      kernel_size: 3,
-///      sigma: 1.5
-///  };
-///  ```
+/// ```
+/// use imagec::backend::algos::{StructureTensor, Mode};
+/// let settings = StructureTensor {
+/// mode: Mode::Coherence,
+/// kernel_size: 3,
+/// sigma: 1.5
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StructureTensorSettings {
-    ///  The mathematical output to be produced by the algorithm.
+    /// The mathematical output to be produced by the algorithm.
     pub mode: FiltersStructureTensorTensorModeSettings,
-    ///  The size of the integration window used to average the local gradients.
+    /// The size of the integration window used to average the local gradients.
     ///
-    ///  Larger windows provide more stability against noise but reduce
-    ///  spatial resolution.
+    /// Larger windows provide more stability against noise but reduce
+    /// spatial resolution.
     pub kernel_size: usize,
-    ///  The standard deviation for the Gaussian weighting of the integration window.
+    /// The standard deviation for the Gaussian weighting of the integration window.
     ///
-    ///  Controls the spatial "reach" of the neighborhood analysis.
+    /// Controls the spatial "reach" of the neighborhood analysis.
     pub sigma: f32,
 }
 
-///  A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.
+/// A filter that computes the Gaussian-weighted standard deviation of a local neighborhood.
 ///
-///  Unlike a standard deviation filter which treats all pixels in a window equally,
-///  the Weighted Deviation uses a Gaussian kernel to give more importance to
-///  pixels closer to the center. This is particularly effective for edge-preserving
-///  noise analysis and local contrast enhancement.
+/// Unlike a standard deviation filter which treats all pixels in a window equally,
+/// the Weighted Deviation uses a Gaussian kernel to give more importance to
+/// pixels closer to the center. This is particularly effective for edge-preserving
+/// noise analysis and local contrast enhancement.
 ///
-///  This algorithm evaluates local variance by calculating two distinct Gaussian-blurred
-///  baselines across the image: the weighted average of the pixel intensities, and the
-///  weighted average of the squared intensities. By subtracting the squared mean from
-///  the mean of squares, it yields a localized, smooth statistical variance map that
-///  highlights micro-textures and subtle surface boundaries without producing blocky artifacts.
+/// This algorithm evaluates local variance by calculating two distinct Gaussian-blurred
+/// baselines across the image: the weighted average of the pixel intensities, and the
+/// weighted average of the squared intensities. By subtracting the squared mean from
+/// the mean of squares, it yields a localized, smooth statistical variance map that
+/// highlights micro-textures and subtle surface boundaries without producing blocky artifacts.
 ///
-///  # Examples
+/// # Examples
 ///
-///  ```
-///  use imagec::backend::algos::WeightedDeviation;
-///  let settings = WeightedDeviation {
-///      kernel_size: 7,
-///      sigma: 2.0,
-///  };
-///  ```
+/// ```
+/// use imagec::backend::algos::WeightedDeviation;
+/// let settings = WeightedDeviation {
+/// kernel_size: 7,
+/// sigma: 2.0,
+/// };
+/// ```
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WeightedDeviationSettings {
-    ///  The size of the local neighborhood window.
+    /// The size of the local neighborhood window.
     ///
-    ///  Must be an odd number. Larger windows capture broader texture
-    ///  variations but increase computational load.
+    /// Must be an odd number. Larger windows capture broader texture
+    /// variations but increase computational load.
     pub kernel_size: usize,
-    ///  The standard deviation for the Gaussian weighting function.
+    /// The standard deviation for the Gaussian weighting function.
     ///
-    ///  Defines the "softness" of the neighborhood boundaries. A larger
-    ///  sigma includes more of the surrounding context in the deviation calculation.
+    /// Defines the "softness" of the neighborhood boundaries. A larger
+    /// sigma includes more of the surrounding context in the deviation calculation.
     pub sigma: f32,
 }
 
 // ============ SEGMENTATION ============
 
-///  Instance segmentation using a pretrained Cellpose model exported as TorchScript.
+/// Instance segmentation using a pretrained Cellpose model exported as TorchScript.
 ///
-///  The model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)
-///  grayscale image is placed in channel 0 and any remaining channels are filled
-///  with zeros. Standard Cellpose networks expect **two** channels (cytoplasm +
-///  optional nucleus), which is the default; single-channel exports use
-///  `input_channels = 1`. The model must return a `[1, C, H, W]` tensor with
-///  `C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow
-///  `dX` (channel 1) and the cell-probability logits (channel 2), which is
-///  Cellpose's spatial-gradient representation. Exports that wrap the output in a
-///  tuple (e.g. `(flows, style)`) are also supported — the first tensor with at
-///  least three channels is used.
+/// The model is fed a `[1, input_channels, H, W]` float tensor: the (normalized)
+/// grayscale image is placed in channel 0 and any remaining channels are filled
+/// with zeros. Standard Cellpose networks expect **two** channels (cytoplasm +
+/// optional nucleus), which is the default; single-channel exports use
+/// `input_channels = 1`. The model must return a `[1, C, H, W]` tensor with
+/// `C >= 3` channels: the vertical flow `dY` (channel 0), the horizontal flow
+/// `dX` (channel 1) and the cell-probability logits (channel 2), which is
+/// Cellpose's spatial-gradient representation. Exports that wrap the output in a
+/// tuple (e.g. `(flows, style)`) are also supported — the first tensor with at
+/// least three channels is used.
 ///
-///  Instances are recovered with Cellpose's *dynamics*: every pixel whose
-///  cell probability reaches `probability_threshold` is advected for
-///  `flow_iterations` Euler steps along the (down-scaled) flow field until it
-///  converges to the sink at its cell's center. Pixels whose trajectories end in
-///  the same sink basin — found by connected components over the final-position
-///  density map — form one instance. Instances smaller than `min_object_size`
-///  pixels are discarded. Runs on GPU automatically if CUDA is available in the
-///  linked libtorch build, otherwise falls back to CPU.
+/// Instances are recovered with Cellpose's *dynamics*: every pixel whose
+/// cell probability reaches `probability_threshold` is advected for
+/// `flow_iterations` Euler steps along the (down-scaled) flow field until it
+/// converges to the sink at its cell's center. Pixels whose trajectories end in
+/// the same sink basin — found by connected components over the final-position
+/// density map — form one instance. Instances smaller than `min_object_size`
+/// pixels are discarded. Runs on GPU automatically if CUDA is available in the
+/// linked libtorch build, otherwise falls back to CPU.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct CellposeSettings {
-    ///  Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
+    /// Path to a TorchScript-exported Cellpose model (`torch.jit.script`/`torch.jit.trace`).
     pub model_path: PathBuf,
-    ///  The class assigned to pixels of every detected object. All other
-    ///  pixels are assigned `SegmentationClass::BACKGROUND`.
+    /// The class assigned to pixels of every detected object. All other
+    /// pixels are assigned `SegmentationClass::BACKGROUND`.
     pub object_class_id: SegmentationClass,
-    ///  Number of input channels the model expects. The grayscale image goes in
-    ///  channel 0; any further channels are zero-filled. Standard Cellpose models
-    ///  take `2` (cytoplasm + optional nucleus); set `1` for single-channel
-    ///  exports, or higher to match a custom model.
+    /// Number of input channels the model expects. The grayscale image goes in
+    /// channel 0; any further channels are zero-filled. Standard Cellpose models
+    /// take `2` (cytoplasm + optional nucleus); set `1` for single-channel
+    /// exports, or higher to match a custom model.
     #[schemars(range(min = 1, max = 8))]
     pub input_channels: i32,
-    ///  Cell probability above which a pixel takes part in the flow dynamics and
-    ///  can be assigned to an object. The raw cell-probability logits are passed
-    ///  through a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's
-    ///  default logit threshold of `0` corresponds to `0.5`).
+    /// Cell probability above which a pixel takes part in the flow dynamics and
+    /// can be assigned to an object. The raw cell-probability logits are passed
+    /// through a sigmoid first, so this is a probability in `[0, 1]` (Cellpose's
+    /// default logit threshold of `0` corresponds to `0.5`).
     #[schemars(range(min = 0, max = 1))]
     pub probability_threshold: f32,
-    ///  Number of Euler integration steps used to follow the flow field. Higher
-    ///  values let pixels of large cells reach their sink at the cost of runtime;
-    ///  Cellpose's default is `200`.
+    /// Number of Euler integration steps used to follow the flow field. Higher
+    /// values let pixels of large cells reach their sink at the cost of runtime;
+    /// Cellpose's default is `200`.
     #[schemars(range(min = 1, max = 1000))]
     pub flow_iterations: i32,
-    ///  Minimum object size, in pixels. After the dynamics, any instance smaller
-    ///  than this is removed (its pixels become background). `0` disables the filter.
+    /// Minimum object size, in pixels. After the dynamics, any instance smaller
+    /// than this is removed (its pixels become background). `0` disables the filter.
     #[schemars(range(min = 0, max = 100000))]
     pub min_object_size: i32,
 }
@@ -1407,79 +1407,79 @@ impl Default for CellposeSettings {
     }
 }
 
-///  A pixel classifier trained via the app's AI training dialog
-///  (an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),
-///  applied here as a pipeline segmentation step: every pixel is classified
-///  independently (reusing the same feature recipe used at training time),
-///  then remapped through `segmentation_mapping` into this project's own
-///  classes and written to the segmentation map - the same output shape
-///  `Threshold` produces, so downstream steps (extraction, classification)
-///  don't need to care which one ran.
+/// A pixel classifier trained via the app's AI training dialog
+/// (an`.evamodel` file - see `ai_learning::training::pixel::PixelTrainingJob`),
+/// applied here as a pipeline segmentation step: every pixel is classified
+/// independently (reusing the same feature recipe used at training time),
+/// then remapped through `segmentation_mapping` into this project's own
+/// classes and written to the segmentation map - the same output shape
+/// `Threshold` produces, so downstream steps (extraction, classification)
+/// don't need to care which one ran.
 ///
-///  Predicted classes with no matching `segmentation_mapping` entry are
-///  written as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`
-///  leaves pixels outside every configured range as background - mapping
-///  only the classes you care about is a deliberate simplification, not an
-///  oversight.
+/// Predicted classes with no matching `segmentation_mapping` entry are
+/// written as `SegmentationClass::BACKGROUND`, mirroring how `Threshold`
+/// leaves pixels outside every configured range as background - mapping
+/// only the classes you care about is a deliberate simplification, not an
+/// oversight.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PixelClassifierSettings {
-    ///  Path to a trained pixel classifier model, saved from the AI training dialog.
+    /// Path to a trained pixel classifier model, saved from the AI training dialog.
     pub model_path: PathBuf,
-    ///  Maps the model's predicted classes to this project's segmentation classes.
+    /// Maps the model's predicted classes to this project's segmentation classes.
     pub segmentation_mapping: Vec<SegmentationMappingSettings>,
 }
 
-///  Maps one class the model was trained to predict to a class ID meaningful
-///  in this project. Model class IDs are a snapshot taken at training time
-///  (see `evanalyzer_cfg::PixelClassLabel`'s doc comment) and aren't
-///  guaranteed to line up with this project's own `SegmentationClass` IDs -
-///  this is the bridge between the two.
+/// Maps one class the model was trained to predict to a class ID meaningful
+/// in this project. Model class IDs are a snapshot taken at training time
+/// (see `evanalyzer_cfg::PixelClassLabel`'s doc comment) and aren't
+/// guaranteed to line up with this project's own `SegmentationClass` IDs -
+/// this is the bridge between the two.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SegmentationMappingSettings {
-    ///  Segmentation class predicted by the classifier model.
+    /// Segmentation class predicted by the classifier model.
     pub segmentation_class: SegmentationClass,
-    ///  The project's own segmentation class pixels predicted as
-    ///  `segmentation_class` are written as.
+    /// The project's own segmentation class pixels predicted as
+    /// `segmentation_class` are written as.
     pub object_class_id: SegmentationClass,
 }
 
-///  Instance segmentation using a pretrained StarDist model exported as TorchScript.
+/// Instance segmentation using a pretrained StarDist model exported as TorchScript.
 ///
-///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-///  same normalization as the rest of the pipeline) and return two tensors:
-///  an object-probability map `[1, 1, H', W']` and a ray-distance map
-///  `[1, n_rays, H', W']` giving, for each grid cell, the distance to the object
-///  boundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon
-///  representation). `H'`/`W'` may be smaller than the input size if the model
-///  predicts on a coarser grid; this is detected from the output shape and the
-///  polygons are rescaled back to image resolution automatically.
+/// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
+/// same normalization as the rest of the pipeline) and return two tensors:
+/// an object-probability map `[1, 1, H', W']` and a ray-distance map
+/// `[1, n_rays, H', W']` giving, for each grid cell, the distance to the object
+/// boundary along `n_rays` equally-spaced angles (the StarDist star-convex-polygon
+/// representation). `H'`/`W'` may be smaller than the input size if the model
+/// predicts on a coarser grid; this is detected from the output shape and the
+/// polygons are rescaled back to image resolution automatically.
 ///
-///  Some TorchScript exports concatenate both outputs into a single
-///  `[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =
-///  distances); this is also supported.
+/// Some TorchScript exports concatenate both outputs into a single
+/// `[1, 1 + n_rays, H', W']` tensor (channel 0 = probability, the rest =
+/// distances); this is also supported.
 ///
-///  Per grid cell candidates above `probability_threshold` are converted to
-///  star-convex polygons, then greedily filtered with non-maximum suppression
-///  (polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds
-///  `nms_threshold` are discarded) before being rasterized into the pipeline's
-///  segmentation and instance maps. Runs on GPU automatically if CUDA is
-///  available in the linked libtorch build, otherwise falls back to CPU.
+/// Per grid cell candidates above `probability_threshold` are converted to
+/// star-convex polygons, then greedily filtered with non-maximum suppression
+/// (polygons whose pixel-overlap ratio with a higher-scoring candidate exceeds
+/// `nms_threshold` are discarded) before being rasterized into the pipeline's
+/// segmentation and instance maps. Runs on GPU automatically if CUDA is
+/// available in the linked libtorch build, otherwise falls back to CPU.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct StardistSettings {
-    ///  Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
+    /// Path to a TorchScript-exported StarDist model (`torch.jit.script`/`torch.jit.trace`).
     pub model_path: PathBuf,
-    ///  The class assigned to pixels of every detected object. All other
-    ///  pixels are assigned `SegmentationClass::BACKGROUND`.
+    /// The class assigned to pixels of every detected object. All other
+    /// pixels are assigned `SegmentationClass::BACKGROUND`.
     pub object_class_id: SegmentationClass,
-    ///  Probability above which a grid cell is considered a candidate object center.
+    /// Probability above which a grid cell is considered a candidate object center.
     #[schemars(range(min = 0, max = 1))]
     pub probability_threshold: f32,
-    ///  Pixel-overlap ratio (intersection / union) above which a lower-scoring
-    ///  candidate polygon is suppressed in favor of an overlapping higher-scoring one.
+    /// Pixel-overlap ratio (intersection / union) above which a lower-scoring
+    /// candidate polygon is suppressed in favor of an overlapping higher-scoring one.
     #[schemars(range(min = 0, max = 1))]
     pub nms_threshold: f32,
 }
@@ -1495,16 +1495,16 @@ impl Default for StardistSettings {
     }
 }
 
-///  A filter that segments an image into discrete classes based on intensity.
+/// A filter that segments an image into discrete classes based on intensity.
 ///
-///  This supports "Multi-Otsu" style behavior by allowing a vector of
-///  [`ThresholdSettings`]. Each pixel is evaluated against the settings to
-///  determine which `object_class_id` it belongs to.
+/// This supports "Multi-Otsu" style behavior by allowing a vector of
+/// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
+/// determine which `object_class_id` it belongs to.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdSettings {
-    ///  A list of thresholding layers. Overlapping ranges are resolved
-    ///  by the order of the vector (last-in priority).
+    /// A list of thresholding layers. Overlapping ranges are resolved
+    /// by the order of the vector (last-in priority).
     pub thresholds: Vec<ThresholdEntrySettings>,
 }
 
@@ -1512,33 +1512,33 @@ fn _serde_default_thresholdentry_value_source() -> SegmentationThresholdThreshol
 {
     SegmentationThresholdThresholdValueSourceSettings::ActualImage
 }
-///  Configuration for a single thresholding operation within a multi-threshold stack.
+/// Configuration for a single thresholding operation within a multi-threshold stack.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdEntrySettings {
-    ///  The algorithm to use (Manual or Automatic).
+    /// The algorithm to use (Manual or Automatic).
     pub method: SegmentationThresholdThresholdMethodSettings,
-    ///  The lower intensity bound. Used directly in `Manual` mode, or as a
-    ///  floor for auto-methods.
+    /// The lower intensity bound. Used directly in `Manual` mode, or as a
+    /// floor for auto-methods.
     #[schemars(range(min = 0, max = 65535))]
     pub min_threshold: f32,
-    ///  The upper intensity bound. Used directly in `Manual` mode, or as a
-    ///  ceiling for auto-methods.
+    /// The upper intensity bound. Used directly in `Manual` mode, or as a
+    /// ceiling for auto-methods.
     #[schemars(range(min = 0, max = 65535))]
     pub max_threshold: f32,
-    ///  Unit used for the threshold value.
+    /// Unit used for the threshold value.
     ///
-    ///  bit: 0 - 255/65535
-    ///  %: 0 - 100.0
-    ///  rel: 0 - 1.0
+    /// bit: 0 - 255/65535
+    /// %: 0 - 100.0
+    /// rel: 0 - 1.0
     pub unit: PixelUnits,
-    ///  The classification ID assigned to pixels falling within this threshold range.
+    /// The classification ID assigned to pixels falling within this threshold range.
     pub object_class_id: SegmentationClass,
-    ///  Defines which image should be taken for calculating the threhold value.
+    /// Defines which image should be taken for calculating the threhold value.
     ///
-    ///  This is the source which is used to calculate the threshold value.
-    ///  The value itself is applied to the actual image the pipeline stands.
+    /// This is the source which is used to calculate the threshold value.
+    /// The value itself is applied to the actual image the pipeline stands.
     #[serde(default = "_serde_default_thresholdentry_value_source")]
     pub value_source: SegmentationThresholdThresholdValueSourceSettings,
 }
@@ -1556,59 +1556,59 @@ impl Default for ThresholdEntrySettings {
     }
 }
 
-///  Semantic segmentation using a pretrained U-Net exported as TorchScript.
+/// Semantic segmentation using a pretrained U-Net exported as TorchScript.
 ///
-///  The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
-///  same normalization as the rest of the pipeline) and return either a
-///  `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
-///  applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
-///  channel, in which case `output_mode` and `foreground_channel` decide how the
-///  foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
-///  automatically if CUDA is available in the linked libtorch build, otherwise
-///  falls back to CPU.
+/// The model is expected to accept a `[1, 1, H, W]` float tensor (single-channel,
+/// same normalization as the rest of the pipeline) and return either a
+/// `[1, 1, H, W]` tensor of per-pixel foreground probabilities (the model already
+/// applies its final sigmoid) or a `[1, C, H, W]` tensor with more than one
+/// channel, in which case `output_mode` and `foreground_channel` decide how the
+/// foreground probability is extracted (see [`UNetOutputMode`]). Runs on GPU
+/// automatically if CUDA is available in the linked libtorch build, otherwise
+/// falls back to CPU.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct UNetSettings {
-    ///  Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).
+    /// Path to a TorchScript-exported U-Net model (`torch.jit.script`/`torch.jit.trace`).
     pub model_path: PathBuf,
-    ///  The class assigned to pixels whose predicted probability reaches
-    ///  `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.
+    /// The class assigned to pixels whose predicted probability reaches
+    /// `probability_threshold`. All other pixels are assigned `SegmentationClass::BACKGROUND`.
     pub object_class_id: SegmentationClass,
-    ///  Probability above which a pixel is classified as foreground.
+    /// Probability above which a pixel is classified as foreground.
     #[schemars(range(min = 0, max = 1))]
     pub probability_threshold: f32,
-    ///  How to interpret the model output when it has more than one channel.
-    ///  Ignored for single-channel outputs.
+    /// How to interpret the model output when it has more than one channel.
+    /// Ignored for single-channel outputs.
     pub output_mode: AiSegmentationUnetUNetOutputModeSettings,
-    ///  Index of the channel holding the foreground probability, used only
-    ///  when the model output has more than one channel. Out-of-range values
-    ///  are clamped to the last available channel.
+    /// Index of the channel holding the foreground probability, used only
+    /// when the model output has more than one channel. Out-of-range values
+    /// are clamped to the last available channel.
     ///
-    ///  * For `SoftmaxClasses`, this is typically the last channel (e.g. `1`
-    ///    for a 2-class background/foreground head).
-    ///  * For `IndependentChannels`, this is whichever channel the model
-    ///    dedicates to the foreground mask — commonly `0` for boundary-aware
-    ///    models, which conventionally output mask before boundary.
+    /// * For `SoftmaxClasses`, this is typically the last channel (e.g. `1`
+    /// for a 2-class background/foreground head).
+    /// * For `IndependentChannels`, this is whichever channel the model
+    /// dedicates to the foreground mask — commonly `0` for boundary-aware
+    /// models, which conventionally output mask before boundary.
     #[schemars(range(min = 0, max = 16))]
     pub foreground_channel: i32,
-    ///  Index of an optional **boundary** channel for boundary-aware models
-    ///  (e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,
-    ///  which outputs mask in channel 0 and boundary in channel 1). Set to `-1`
-    ///  to disable.
+    /// Index of an optional **boundary** channel for boundary-aware models
+    /// (e.g. bioimage.io's `affable-shark` / NucleiSegmentationBoundaryModel,
+    /// which outputs mask in channel 0 and boundary in channel 1). Set to `-1`
+    /// to disable.
     ///
-    ///  When enabled, a pixel is classified as foreground only where the
-    ///  foreground probability reaches `probability_threshold` **and** the
-    ///  boundary probability stays below `boundary_threshold`. This carves the
-    ///  predicted boundaries out as thin gaps, so a following `ConnectedComponents`
-    ///  separates touching objects directly — which is the whole point of a
-    ///  boundary model and the only way to split nuclei a plain mask merges.
+    /// When enabled, a pixel is classified as foreground only where the
+    /// foreground probability reaches `probability_threshold` **and** the
+    /// boundary probability stays below `boundary_threshold`. This carves the
+    /// predicted boundaries out as thin gaps, so a following `ConnectedComponents`
+    /// separates touching objects directly — which is the whole point of a
+    /// boundary model and the only way to split nuclei a plain mask merges.
     #[schemars(range(min = -1, max = 16))]
     pub boundary_channel: i32,
-    ///  Boundary probability at or above which a pixel is treated as an object
-    ///  boundary and excluded from the foreground. Only used when
-    ///  `boundary_channel` is enabled (>= 0). Lower values cut wider gaps
-    ///  (separate more aggressively); higher values cut thinner gaps.
+    /// Boundary probability at or above which a pixel is treated as an object
+    /// boundary and excluded from the foreground. Only used when
+    /// `boundary_channel` is enabled (>= 0). Lower values cut wider gaps
+    /// (separate more aggressively); higher values cut thinner gaps.
     #[schemars(range(min = 0, max = 1))]
     pub boundary_threshold: f32,
 }
@@ -1632,19 +1632,19 @@ impl Default for UNetSettings {
 fn _serde_default_connectedcomponents_min_size() -> i32 {
     0i32
 }
-///  Identifies and labels discrete objects within a binary or multi-class image.
+/// Identifies and labels discrete objects within a binary or multi-class image.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectedComponentsSettings {
-    ///  Minimum object size, in pixels, an object must have to be kept.
+    /// Minimum object size, in pixels, an object must have to be kept.
     ///
-    ///  After labeling, connected components with a pixel count below this
-    ///  threshold are discarded (their pixels are reset to background) and
-    ///  the remaining object IDs are re-compacted to a contiguous range.
-    ///  Useful for suppressing noise/speckle artifacts before they reach
-    ///  downstream measurement or classification steps. A value of 0 (the
-    ///  default) disables filtering.
+    /// After labeling, connected components with a pixel count below this
+    /// threshold are discarded (their pixels are reset to background) and
+    /// the remaining object IDs are re-compacted to a contiguous range.
+    /// Useful for suppressing noise/speckle artifacts before they reach
+    /// downstream measurement or classification steps. A value of 0 (the
+    /// default) disables filtering.
     #[schemars(range(min = 1))]
     #[schemars(description = "unit: px²")]
     #[serde(default = "_serde_default_connectedcomponents_min_size")]
@@ -1657,76 +1657,76 @@ impl Default for ConnectedComponentsSettings {
     }
 }
 
-///  Fills enclosed background holes in the segmentation map.
+/// Fills enclosed background holes in the segmentation map.
 ///
-///  A direct port of ImageJ's `Process > Binary > Fill Holes` command
-///  (`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel
-///  Landini): a background pixel counts as a "hole" - and is turned into
-///  foreground - exactly when it cannot be reached from the image border by a
-///  path of background pixels using 4-connectivity.
+/// A direct port of ImageJ's `Process > Binary > Fill Holes` command
+/// (`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel
+/// Landini): a background pixel counts as a "hole" - and is turned into
+/// foreground - exactly when it cannot be reached from the image border by a
+/// path of background pixels using 4-connectivity.
 ///
-///  Like ImageJ's own command, this treats the image as strictly binary: every
-///  non-background pixel is "foreground" regardless of its actual label/class
-///  value, and a filled hole is stamped with a single fixed value rather than
-///  inheriting whatever label happens to surround it. If the segmentation map
-///  carries several distinct label values, holes are not attributed back to
-///  the object that encloses them - only ImageJ's original background/
-///  foreground distinction is reproduced here.
+/// Like ImageJ's own command, this treats the image as strictly binary: every
+/// non-background pixel is "foreground" regardless of its actual label/class
+/// value, and a filled hole is stamped with a single fixed value rather than
+/// inheriting whatever label happens to surround it. If the segmentation map
+/// carries several distinct label values, holes are not attributed back to
+/// the object that encloses them - only ImageJ's original background/
+/// foreground distinction is reproduced here.
 ///
-///  # Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)
-///  1. Scan every pixel on the image border; for each one that is background
-///     (`0`), flood-fill outward from it using 4-connectivity (up/down/left/
-///     right only - diagonal neighbors are **not** considered connected),
-///     marking every background pixel reached this way as "outside".
-///  2. Any background pixel never marked "outside" is enclosed and becomes
-///     foreground. Every non-background pixel is copied through unchanged.
+/// # Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)
+/// 1. Scan every pixel on the image border; for each one that is background
+/// (`0`), flood-fill outward from it using 4-connectivity (up/down/left/
+/// right only - diagonal neighbors are **not** considered connected),
+/// marking every background pixel reached this way as "outside".
+/// 2. Any background pixel never marked "outside" is enclosed and becomes
+/// foreground. Every non-background pixel is copied through unchanged.
 ///
-///  The 4-connectivity in step 1 is load-bearing, not an implementation
-///  detail: a boundary that only touches itself diagonally (8-connected) does
-///  **not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,
-///  whose own docs specify a 4-connected fill.
+/// The 4-connectivity in step 1 is load-bearing, not an implementation
+/// detail: a boundary that only touches itself diagonally (8-connected) does
+/// **not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,
+/// whose own docs specify a 4-connected fill.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FillHolesSettings {}
 
-///  A morphological segmentation algorithm that splits touching objects using distance topography.
+/// A morphological segmentation algorithm that splits touching objects using distance topography.
 ///
-///  This is a faithful port of ImageJ's `Process > Binary > Watershed`
-///  (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
-///  `ConnectedComponents` merged into a single blob are split at their "necks":
-///  the distance map's local maxima are the seeds, maxima protruding less than
-///  `maximum_finder_tolerance` above the ridge connecting them to a higher maximum
-///  are merged, and a constrained flood draws 1-pixel watershed lines between the
-///  surviving basins. The split blob is then re-labeled into separate instances.
+/// This is a faithful port of ImageJ's `Process > Binary > Watershed`
+/// (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
+/// `ConnectedComponents` merged into a single blob are split at their "necks":
+/// the distance map's local maxima are the seeds, maxima protruding less than
+/// `maximum_finder_tolerance` above the ridge connecting them to a higher maximum
+/// are merged, and a constrained flood draws 1-pixel watershed lines between the
+/// surviving basins. The split blob is then re-labeled into separate instances.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct WatershedSettings {
-    ///  Prominence tolerance for the maximum finder, in pixels of distance.
+    /// Prominence tolerance for the maximum finder, in pixels of distance.
     ///
-    ///  A local maximum of the distance map is treated as a separate object only
-    ///  if it protrudes more than this value above the ridge connecting it to a
-    ///  higher maximum. This is ImageJ's "prominence"/"noise tolerance" parameter.
+    /// A local maximum of the distance map is treated as a separate object only
+    /// if it protrudes more than this value above the ridge connecting it to a
+    /// higher maximum. This is ImageJ's "prominence"/"noise tolerance" parameter.
     ///
-    ///  * **Low values**: more sensitive; may over-segment ragged objects.
-    ///  * **High values**: more robust; may fail to split genuinely touching objects.
+    /// * **Low values**: more sensitive; may over-segment ragged objects.
+    /// * **High values**: more robust; may fail to split genuinely touching objects.
     ///
-    ///  ImageJ's default of `0.5` works well for most distance maps; raise it if a
-    ///  single object is being split into several pieces.
+    /// ImageJ's default of `0.5` works well for most distance maps; raise it if a
+    /// single object is being split into several pieces.
     #[schemars(range(min = 0.1, max = 20))]
     pub maximum_finder_tolerance: f32,
-    ///  Standard deviation (px) of an optional Gaussian blur applied to the
-    ///  distance map *before* the maximum finder. `0` disables it.
+    /// Standard deviation (px) of an optional Gaussian blur applied to the
+    /// distance map *before* the maximum finder. `0` disables it.
     ///
-    ///  ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
-    ///  boundaries, so this is rarely needed; for extremely noisy AI masks a value
-    ///  of `1.0`–`2.0` can further suppress spurious maxima.
+    /// ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
+    /// boundaries, so this is rarely needed; for extremely noisy AI masks a value
+    /// of `1.0`–`2.0` can further suppress spurious maxima.
     #[schemars(range(min = 0, max = 10))]
     pub smoothing_sigma: f32,
-    ///  Minimum object size, in pixels. After segmentation, any object smaller than
-    ///  this is removed (its pixels become background). `0` disables the filter.
+    /// Minimum object size, in pixels. After segmentation, any object smaller than
+    /// this is removed (its pixels become background). `0` disables the filter.
     ///
-    ///  Use it to drop tiny fragments left by very ragged masks.
+    /// Use it to drop tiny fragments left by very ragged masks.
     #[schemars(range(min = 0, max = 100000))]
     pub min_object_size: i32,
 }
@@ -1746,16 +1746,16 @@ impl Default for WatershedSettings {
 fn _serde_default_extractobjects_max_objects_before_fail() -> i32 {
     100000i32
 }
-///  Represents a bounded object extracted from a labeled image.
-///  A command to extract spatial statistics and bounding boxes from labeled objects.
+/// Represents a bounded object extracted from a labeled image.
+/// A command to extract spatial statistics and bounding boxes from labeled objects.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtractObjectsSettings {
-    ///  Maximum allowed ROIs to extract.
+    /// Maximum allowed ROIs to extract.
     ///
-    ///  If this limit is exceeded the pipeline fails.
-    ///  This is a protection against memory overload.
+    /// If this limit is exceeded the pipeline fails.
+    /// This is a protection against memory overload.
     #[schemars(range(min = 100000, max = 100000))]
     #[serde(default = "_serde_default_extractobjects_max_objects_before_fail")]
     pub max_objects_before_fail: i32,
@@ -1771,44 +1771,44 @@ impl Default for ExtractObjectsSettings {
 
 // ============ CLASSIFICATION ============
 
-///  An object classifier trained via the app's AI training dialog (an
-///  `.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),
-///  applied here as a pipeline classification step: every object already
-///  present in `PipelineCache::object_cache` matching `origin_segmentation`/
-///  `input_classes` is scored independently (reusing the same feature recipe
-///  used at training time), then remapped through `segmentation_mapping` into
-///  this project's own classes and applied via `match_handling` - the same
-///  input selection `ClassifyObjects` uses, but the output class comes from
-///  the model's prediction instead of a fixed rule.
+/// An object classifier trained via the app's AI training dialog (an
+/// `.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),
+/// applied here as a pipeline classification step: every object already
+/// present in `PipelineCache::object_cache` matching `origin_segmentation`/
+/// `input_classes` is scored independently (reusing the same feature recipe
+/// used at training time), then remapped through `segmentation_mapping` into
+/// this project's own classes and applied via `match_handling` - the same
+/// input selection `ClassifyObjects` uses, but the output class comes from
+/// the model's prediction instead of a fixed rule.
 ///
-///  Predicted classes with no matching `segmentation_mapping` entry leave the
-///  object untouched, mirroring how `PixelClassifier` leaves unmapped
-///  predictions as background - mapping only the classes you care about is a
-///  deliberate simplification, not an oversight.
+/// Predicted classes with no matching `segmentation_mapping` entry leave the
+/// object untouched, mirroring how `PixelClassifier` leaves unmapped
+/// predictions as background - mapping only the classes you care about is a
+/// deliberate simplification, not an oversight.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct AiObjectClassifierSettings {
-    ///  Path to a trained object classifier model, saved from the AI training dialog.
+    /// Path to a trained object classifier model, saved from the AI training dialog.
     pub model_path: PathBuf,
-    ///  Maps the model's predicted classes to this project's object classes.
+    /// Maps the model's predicted classes to this project's object classes.
     pub segmentation_mapping: Vec<ClassificationMappingSettings>,
-    ///  Apply only to objects with this given segmentation class
+    /// Apply only to objects with this given segmentation class
     ///
-    ///  The segmentation class value is assigned to each pixel in the image
-    ///  after a Threshold, Pixel classifier or AI classifier.
-    ///  If no seg class is selected the criteria are applied to all objects.
+    /// The segmentation class value is assigned to each pixel in the image
+    /// after a Threshold, Pixel classifier or AI classifier.
+    /// If no seg class is selected the criteria are applied to all objects.
     pub origin_segmentation: Vec<SegmentationClass>,
-    ///  Restrict classification to objects that already carry one of these classes
+    /// Restrict classification to objects that already carry one of these classes
     ///
-    ///  Only ROIs that have been assigned at least one of the listed classes by a prior
-    ///  pipeline step will be evaluated by the model. Leave empty to apply the model to
-    ///  every object regardless of its current class.
+    /// Only ROIs that have been assigned at least one of the listed classes by a prior
+    /// pipeline step will be evaluated by the model. Leave empty to apply the model to
+    /// every object regardless of its current class.
     pub input_classes: Vec<ObjectClass>,
-    ///  What to do with object class labels after prediction
+    /// What to do with object class labels after prediction
     ///
-    ///  - **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.
-    ///  - **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.
+    /// - **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.
+    /// - **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.
     pub match_handling: ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings,
 }
 
@@ -1825,164 +1825,164 @@ impl Default for AiObjectClassifierSettings {
     }
 }
 
-///  Maps one class the model was trained to predict to a class ID meaningful
-///  in this project. Model class IDs are a snapshot taken at training time
-///  (see `evanalyzer_cfg::ObjectClassLabel`'s doc comment) and aren't
-///  guaranteed to line up with this project's own `ObjectClass` IDs - this is
-///  the bridge between the two.
+/// Maps one class the model was trained to predict to a class ID meaningful
+/// in this project. Model class IDs are a snapshot taken at training time
+/// (see `evanalyzer_cfg::ObjectClassLabel`'s doc comment) and aren't
+/// guaranteed to line up with this project's own `ObjectClass` IDs - this is
+/// the bridge between the two.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassificationMappingSettings {
-    ///  Object class predicted by the classifier model.
+    /// Object class predicted by the classifier model.
     pub object_class: ObjectClass,
-    ///  The project's own object class objects predicted as `object_class`
-    ///  are assigned.
+    /// The project's own object class objects predicted as `object_class`
+    /// are assigned.
     pub output_class: ObjectClass,
 }
 
-///  Classifies ROIs based on morphological and intensity features.
+/// Classifies ROIs based on morphological and intensity features.
 ///
-///  This command applies rule-based classification logic to assign object classes
-///  to extracted ROIs. Classification is performed using configurable criteria
-///  including area, shape descriptors, and intensity statistics.
+/// This command applies rule-based classification logic to assign object classes
+/// to extracted ROIs. Classification is performed using configurable criteria
+/// including area, shape descriptors, and intensity statistics.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassifyObjectsSettings {
-    ///  Apply only to objects with this given segmentation class
+    /// Apply only to objects with this given segmentation class
     ///
-    ///  The segmentation class value is assigned to each pixel in the image
-    ///  after a Threshold, Pixel classifier or AI classifier.
-    ///  If no seg class is selected the criteria are applied to all objects.
+    /// The segmentation class value is assigned to each pixel in the image
+    /// after a Threshold, Pixel classifier or AI classifier.
+    /// If no seg class is selected the criteria are applied to all objects.
     pub origin_segmentation: Vec<SegmentationClass>,
-    ///  Restrict classification to objects that already carry one of these classes
+    /// Restrict classification to objects that already carry one of these classes
     ///
-    ///  Only ROIs that have been assigned at least one of the listed classes by a prior
-    ///  pipeline step will be evaluated against the morphological and intensity criteria below.
-    ///  Leave empty to apply the criteria to every object regardless of its current class.
+    /// Only ROIs that have been assigned at least one of the listed classes by a prior
+    /// pipeline step will be evaluated against the morphological and intensity criteria below.
+    /// Leave empty to apply the criteria to every object regardless of its current class.
     pub input_classes: Vec<ObjectClass>,
-    ///  What to do with object class labels after criteria evaluation
+    /// What to do with object class labels after criteria evaluation
     ///
-    ///  Controls whether the output class is added or existing classes are removed,
-    ///  and whether the action is triggered on a criteria **match** or a **non-match**:
+    /// Controls whether the output class is added or existing classes are removed,
+    /// and whether the action is triggered on a criteria **match** or a **non-match**:
     ///
-    ///  - **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.
-    ///  - **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.
-    ///  - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
-    ///  - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
-    ///  - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
+    /// - **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.
+    /// - **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.
+    /// - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
+    /// - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
+    /// - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
     pub match_handling: ClassificationClassifyObjectsClassifyMatchHandlingSettings,
-    ///  Class label assigned to (or removed from) objects by the chosen operation
+    /// Class label assigned to (or removed from) objects by the chosen operation
     ///
-    ///  Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
-    ///  Has no effect when the selected operation only manipulates input classes or clears all classes.
+    /// Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
+    /// Has no effect when the selected operation only manipulates input classes or clears all classes.
     pub output_class: ObjectClass,
-    ///  Additional criterion: the object must intersect an object carrying this class
+    /// Additional criterion: the object must intersect an object carrying this class
     ///
-    ///  If unset (the default) this filter is not applied. When set, an object only
-    ///  satisfies the overall criteria if it also overlaps at least one object carrying this
-    ///  class by at least `min_intersection_area`. Combine with e.g.
-    ///  `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
-    ///  or `AddOutputClassIfMatch` to tag objects that do.
+    /// If unset (the default) this filter is not applied. When set, an object only
+    /// satisfies the overall criteria if it also overlaps at least one object carrying this
+    /// class by at least `min_intersection_area`. Combine with e.g.
+    /// `RemoveAllClassesIfMatch` to drop objects that intersect another class's objects,
+    /// or `AddOutputClassIfMatch` to tag objects that do.
     pub overlapping_with: ObjectClass,
-    ///  Minimum intersection area with an `overlapping_with` object, in `size_unit`
+    /// Minimum intersection area with an `overlapping_with` object, in `size_unit`
     ///
-    ///  Has no effect while `overlapping_with` is Unset.
+    /// Has no effect while `overlapping_with` is Unset.
     #[schemars(range(min = 0, max = 2147483600))]
     pub min_intersection_area: f32,
-    ///  Unit to use for object extraction
+    /// Unit to use for object extraction
     pub size_unit: SizeUnits,
-    ///  Minimum area size
+    /// Minimum area size
     ///
-    ///  Minimum area size of the object in selected unit (px^2 or nm^2).
+    /// Minimum area size of the object in selected unit (px^2 or nm^2).
     #[schemars(range(min = 0, max = 2147483600))]
     pub min_area: f32,
-    ///  Maximum area size
+    /// Maximum area size
     ///
-    ///  Maximum area size of the object in selected unit (px^2 or nm^2).
+    /// Maximum area size of the object in selected unit (px^2 or nm^2).
     #[schemars(range(min = 0, max = 2147483600))]
     pub max_area: f32,
-    ///  Circularity range: 0 = elongated, 1 = perfect circle
+    /// Circularity range: 0 = elongated, 1 = perfect circle
     ///
-    ///  Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.
-    ///  A circle is the mathematically perfect shape for maximizing area while minimizing perimeter.
-    ///  It is calculated with `4*Pi*AreaSize / Perimeter^2`
+    /// Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.
+    /// A circle is the mathematically perfect shape for maximizing area while minimizing perimeter.
+    /// It is calculated with `4*Pi*AreaSize / Perimeter^2`
     #[schemars(range(min = 0, max = 1))]
     pub min_circularity: f32,
-    ///  Circularity range: 0 = elongated, 1 = perfect circle
+    /// Circularity range: 0 = elongated, 1 = perfect circle
     ///
-    ///  Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.
-    ///  A circle is the mathematically perfect shape for maximizing area while minimizing perimeter.
-    ///  It is calculated with `4*Pi*AreaSize / Perimeter^2`
+    /// Circularity (sometimes called Isoperimetric Quotient) measures how efficiently a shape encloses its area relative to the length of its perimeter.
+    /// A circle is the mathematically perfect shape for maximizing area while minimizing perimeter.
+    /// It is calculated with `4*Pi*AreaSize / Perimeter^2`
     #[schemars(range(min = 0, max = 1))]
     pub max_circularity: f32,
-    ///  Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex
+    /// Minimum Solidity/Compactness: 0 = hollow, 1 = perfect convex
     ///
-    ///  Solidity is a structural metric used in shape analysis to measure how "solid" or compact an object is.
-    ///  It compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,
-    ///  often visualized as a rubber band stretched around the shape).
+    /// Solidity is a structural metric used in shape analysis to measure how "solid" or compact an object is.
+    /// It compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,
+    /// often visualized as a rubber band stretched around the shape).
     ///
-    ///  Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.
-    ///  Solidity < 1.0: The object has irregular boundaries, deep "bays," protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.
+    /// Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.
+    /// Solidity < 1.0: The object has irregular boundaries, deep "bays," protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.
     #[schemars(range(min = 0, max = 1))]
     pub min_solidity: f32,
-    ///  Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex
+    /// Maximum Solidity/Compactness: 0 = hollow, 1 = perfect convex
     ///
-    ///  Solidity is a structural metric used in shape analysis to measure how "solid" or compact an object is.
-    ///  It compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,
-    ///  often visualized as a rubber band stretched around the shape).
+    /// Solidity is a structural metric used in shape analysis to measure how "solid" or compact an object is.
+    /// It compares the actual area of an object to the area of its Convex Hull (the smallest convex polygon that can completely enclose the object,
+    /// often visualized as a rubber band stretched around the shape).
     ///
-    ///  Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.
-    ///  Solidity < 1.0: The object has irregular boundaries, deep "bays," protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.
+    /// Solidity = 1.0: The object is perfectly convex (e.g., a perfect circle, a solid square, or an ellipse). It has no holes, indentations, or deep recesses.
+    /// Solidity < 1.0: The object has irregular boundaries, deep "bays," protrusions, or internal holes. The lower the value, the more jagged or structurally fragmented the object is.
     #[schemars(range(min = 0, max = 1))]
     pub max_solidity: f32,
-    ///  Minimum proportional relationship between an object's width and its height
+    /// Minimum proportional relationship between an object's width and its height
     ///
-    ///  This value is calculated by the object bounding box with and height and is defined with `a = with/height`.
-    ///  The value is without unit in the range of 0 to MAX_F32
+    /// This value is calculated by the object bounding box with and height and is defined with `a = with/height`.
+    /// The value is without unit in the range of 0 to MAX_F32
     #[schemars(range(min = 0, max = 2147483600))]
     pub min_aspect_ratio: f32,
-    ///  Maximum proportional relationship between an object's width and its height
+    /// Maximum proportional relationship between an object's width and its height
     ///
-    ///  This value is calculated by the object bounding box with and height and is defined with `a = with/height`.
-    ///  The value is without unit in the range of 0 to MAX_F32
+    /// This value is calculated by the object bounding box with and height and is defined with `a = with/height`.
+    /// The value is without unit in the range of 0 to MAX_F32
     #[schemars(range(min = 0, max = 2147483600))]
     pub max_aspect_ratio: f32,
-    ///  Eccentricity: 0 = perfect circle, 1 = line
+    /// Eccentricity: 0 = perfect circle, 1 = line
     ///
-    ///  Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
-    ///  It imagines the shape as an ellipse and measures how far apart its focal points are.
-    ///  It is calculated with `sqrt(1-(b/a)^2)`
+    /// Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
+    /// It imagines the shape as an ellipse and measures how far apart its focal points are.
+    /// It is calculated with `sqrt(1-(b/a)^2)`
     #[schemars(range(min = 0, max = 1))]
     pub min_eccentricity: f32,
-    ///  Eccentricity: 0 = perfect circle, 1 = line
+    /// Eccentricity: 0 = perfect circle, 1 = line
     ///
-    ///  Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
-    ///  It imagines the shape as an ellipse and measures how far apart its focal points are.
-    ///  It is calculated with `sqrt(1-(b/a)^2)`
+    /// Eccentricity is a metric that measures how much a shape deviates from being a perfect circle.
+    /// It imagines the shape as an ellipse and measures how far apart its focal points are.
+    /// It is calculated with `sqrt(1-(b/a)^2)`
     #[schemars(range(min = 0, max = 1))]
     pub max_eccentricity: f32,
-    ///  Feret diameter threshold
+    /// Feret diameter threshold
     ///
-    ///  The absolute shortest parallel distance across the object.
-    ///  This represents the minimum sieve size a particle could pass through.
+    /// The absolute shortest parallel distance across the object.
+    /// This represents the minimum sieve size a particle could pass through.
     ///
-    ///  In image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.
-    ///  It mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.
-    ///  When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.
+    /// In image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.
+    /// It mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.
+    /// When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.
     #[schemars(range(min = 0, max = 2147483600))]
     pub min_feret: f32,
-    ///  Maximum feret diameter threshold in selected unit (px or nm)
+    /// Maximum feret diameter threshold in selected unit (px or nm)
     ///
-    ///  The absolute longest distance across the object at any angle.
-    ///  Used to measure elongation or the maximum length of a particle.
+    /// The absolute longest distance across the object at any angle.
+    /// Used to measure elongation or the maximum length of a particle.
     ///
-    ///  In image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.
-    ///  It mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.
-    ///  When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.
+    /// In image processing and particle size analysis, the Feret diameter (often called the caliper diameter) is a metric used to measure the size of an irregular object.
+    /// It mimics the action of a slide caliper, measuring the distance between two parallel tangential lines bounding the object at a specific angle.
+    /// When analyzing objects or particles, applying Feret diameter thresholds allows you to filter out noise, classify objects by shape, or isolate specific structures based on their directional length rather than their total area.
     #[schemars(range(min = 0, max = 2147483600))]
     pub max_feret: f32,
-    ///  Whether object can touch image edge
+    /// Whether object can touch image edge
     pub allow_edge_touching: bool,
 }
 
@@ -2016,41 +2016,41 @@ impl Default for ClassifyObjectsSettings {
 fn _serde_default_colocalization_exclude_classes() -> Vec<ObjectClass> {
     vec![]
 }
-///  Calculates spatial colocalization and intersections between specified object classes.
+/// Calculates spatial colocalization and intersections between specified object classes.
 ///
-///  This command scans the object cache, groups objects by their designated classes,
-///  and performs spatial overlap analysis. It records colocalization relationships
-///  between intersecting entities and can optionally generate new child ROIs representing
-///  the precise intersection regions.
+/// This command scans the object cache, groups objects by their designated classes,
+/// and performs spatial overlap analysis. It records colocalization relationships
+/// between intersecting entities and can optionally generate new child ROIs representing
+/// the precise intersection regions.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ColocalizationSettings {
-    ///  Theses are the classes the coloclization should be calculated for
+    /// Theses are the classes the coloclization should be calculated for
     pub classes_to_coloc: Vec<ObjectClass>,
-    ///  Optional additional label filters.
+    /// Optional additional label filters.
     ///
-    ///  Only classes which matches all of these filters are used for coloc calculation
+    /// Only classes which matches all of these filters are used for coloc calculation
     pub filter_classes: Vec<ObjectClass>,
-    ///  Class of the overlapping area if needed
+    /// Class of the overlapping area if needed
     ///
-    ///  If defined the overlapping coloc area is added as new object and labeled with this class
+    /// If defined the overlapping coloc area is added as new object and labeled with this class
     pub class_for_overlapping_areas: ObjectClass,
-    ///  How many partners an object may coloc with at once.
+    /// How many partners an object may coloc with at once.
     pub multiplicity: ClassificationColocObjectsColocMultiplicitySettings,
-    ///  Size unit for the minimum coloc area size
+    /// Size unit for the minimum coloc area size
     pub size_unit: SizeUnits,
-    ///  Minimum overlapping area size to count objects as coloc
+    /// Minimum overlapping area size to count objects as coloc
     pub min_coloc_area: f32,
-    ///  Classes an object must NOT overlap to be considered colocalized.
+    /// Classes an object must NOT overlap to be considered colocalized.
     ///
-    ///  Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
-    ///  Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).
-    ///  Without exclude_classes, any object satisfying that gets recorded as colocalized.
-    ///  With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.
-    ///  So it's a "match A and B, but not C" filter
+    /// Exclude_classes is a blocklist — "even if an object matches everything else, throw it out if it also touches one of these classes."
+    /// Concretely: you're looking for objects that overlap every class in classes_to_coloc (say Class 1 and Class 2).
+    /// Without exclude_classes, any object satisfying that gets recorded as colocalized.
+    /// With exclude_classes: an object that overlaps 1 and 2 but also touches Class 3 gets dropped entirely - no colocalization recorded for it at all, even though it passed the 1-and-2 check.
+    /// So it's a "match A and B, but not C" filter
     ///
-    ///  Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
+    /// Example: "cells colocalizing with both a nucleus stain and a membrane stain, but exclude any that also overlap a dead-cell marker."
     #[serde(default = "_serde_default_colocalization_exclude_classes")]
     pub exclude_classes: Vec<ObjectClass>,
 }
@@ -2069,42 +2069,42 @@ impl Default for ColocalizationSettings {
     }
 }
 
-///  Computes a boolean set operation between two object classes, object pair by
-///  object pair.
+/// Computes a boolean set operation between two object classes, object pair by
+/// object pair.
 ///
-///  When more than one `other_class` object overlaps a given input object, all of them
-///  are unioned into a single "B" before the operation is applied, so the result
-///  doesn't depend on the order they'd otherwise be combined in.
+/// When more than one `other_class` object overlaps a given input object, all of them
+/// are unioned into a single "B" before the operation is applied, so the result
+/// doesn't depend on the order they'd otherwise be combined in.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectMathSettings {
-    ///  Boolean set operation to apply
+    /// Boolean set operation to apply
     pub operation: ClassificationObjectMathObjectSetOperationSettings,
-    ///  ROIs carrying this class are the left-hand operand ("A").
+    /// ROIs carrying this class are the left-hand operand ("A").
     pub input_class: ObjectClass,
-    ///  ROIs carrying this class are the right-hand operand ("B").
+    /// ROIs carrying this class are the right-hand operand ("B").
     pub other_class: ObjectClass,
-    ///  Optional additional label filters applied to `other_class` objects.
+    /// Optional additional label filters applied to `other_class` objects.
     ///
-    ///  Only `other_class` objects that carry all listed classes are used.
+    /// Only `other_class` objects that carry all listed classes are used.
     pub other_filter_classes: Vec<ObjectClass>,
-    ///  Size unit for `min_overlap_area`
+    /// Size unit for `min_overlap_area`
     pub size_unit: SizeUnits,
-    ///  Minimum overlap area before an `other_class` object is treated as a partner
-    ///  of an input object; objects overlapping less than this are ignored.
+    /// Minimum overlap area before an `other_class` object is treated as a partner
+    /// of an input object; objects overlapping less than this are ignored.
     pub min_overlap_area: f32,
-    ///  If unset, the result replaces the input object in place.
+    /// If unset, the result replaces the input object in place.
     ///
-    ///  If set, a new object carrying this class is created for each input object instead,
-    ///  leaving the input object untouched.
+    /// If set, a new object carrying this class is created for each input object instead,
+    /// leaving the input object untouched.
     pub output_class: ObjectClass,
-    ///  When an input object has no qualifying overlapping partner: keep it unchanged in
-    ///  the output (true), or drop it entirely - no output for it at all - (false).
+    /// When an input object has no qualifying overlapping partner: keep it unchanged in
+    /// the output (true), or drop it entirely - no output for it at all - (false).
     ///
-    ///  Note this is a policy override, not the literal mathematical result: e.g. for
-    ///  `And`, the true result of "A and nothing" is empty, but `keep_unmatched = true`
-    ///  still leaves A untouched rather than emitting a zero-area object.
+    /// Note this is a policy override, not the literal mathematical result: e.g. for
+    /// `And`, the true result of "A and nothing" is empty, but `keep_unmatched = true`
+    /// still leaves A untouched rather than emitting a zero-area object.
     pub keep_unmatched: bool,
 }
 
@@ -2123,24 +2123,24 @@ impl Default for ObjectMathSettings {
     }
 }
 
-///  Transforms given ROIs and either replaces the old ones or creates new ones.
+/// Transforms given ROIs and either replaces the old ones or creates new ones.
 ///
-///  This command applies a geometric transform (scale, circle, fitted ellipse) to every object
-///  carrying `input_class`. The transformed shape keeps the original object's bounding-box center.
-///  If `output_class` is unset (or equal to `input_class`) the input object is replaced in place;
-///  otherwise a new object carrying `output_class` is created alongside the untouched input object.
+/// This command applies a geometric transform (scale, circle, fitted ellipse) to every object
+/// carrying `input_class`. The transformed shape keeps the original object's bounding-box center.
+/// If `output_class` is unset (or equal to `input_class`) the input object is replaced in place;
+/// otherwise a new object carrying `output_class` is created alongside the untouched input object.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
 #[serde(rename_all = "camelCase")]
 pub struct TransformObjectsSettings {
-    ///  Geometric transform applied to each input object
+    /// Geometric transform applied to each input object
     pub function: ClassificationTransformObjectsTransformFunctionSettings,
-    ///  ROIs carrying this class are the input to the transform
+    /// ROIs carrying this class are the input to the transform
     pub input_class: ObjectClass,
-    ///  If unset, the transformed shape replaces the input object in place.
+    /// If unset, the transformed shape replaces the input object in place.
     ///
-    ///  If set, a new object carrying this class is created for each transformed input object instead,
-    ///  leaving the input object untouched.
+    /// If set, a new object carrying this class is created for each transformed input object instead,
+    /// leaving the input object untouched.
     pub output_class: ObjectClass,
 }
 
@@ -2154,43 +2154,43 @@ impl Default for TransformObjectsSettings {
     }
 }
 
-///  Computes a Voronoi tessellation from segmented seed objects.
+/// Computes a Voronoi tessellation from segmented seed objects.
 ///
-///  Each seed center expands outward until it reaches another region, the optional mask
-///  boundary, or the maximum radius. The resulting areas are stored as new ROIs labeled
-///  with `output_class` and linked to their originating center object.
+/// Each seed center expands outward until it reaches another region, the optional mask
+/// boundary, or the maximum radius. The resulting areas are stored as new ROIs labeled
+/// with `output_class` and linked to their originating center object.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct VoronoiSettings {
-    ///  Object class whose instances act as Voronoi seed points.
+    /// Object class whose instances act as Voronoi seed points.
     pub centers: ObjectClass,
-    ///  Additional label filters applied to center objects before tessellation.
+    /// Additional label filters applied to center objects before tessellation.
     ///
-    ///  Only center objects that carry all listed classes pass the filter.
-    ///  Leave empty to include all objects of `centers`.
+    /// Only center objects that carry all listed classes pass the filter.
+    /// Leave empty to include all objects of `centers`.
     pub center_filter_classes: Vec<ObjectClass>,
-    ///  Object class used to spatially constrain the Voronoi areas.
+    /// Object class used to spatially constrain the Voronoi areas.
     ///
-    ///  Each computed Voronoi region is intersected with the union of all mask objects,
-    ///  discarding pixels that fall outside the mask. Set to `Unset` to expand
-    ///  to the full image boundary instead.
+    /// Each computed Voronoi region is intersected with the union of all mask objects,
+    /// discarding pixels that fall outside the mask. Set to `Unset` to expand
+    /// to the full image boundary instead.
     pub mask: ObjectClass,
-    ///  Additional label filters applied to mask objects.
+    /// Additional label filters applied to mask objects.
     ///
-    ///  Only mask objects that carry all listed classes pass the filter.
-    ///  Leave empty to include all objects of `mask`.
+    /// Only mask objects that carry all listed classes pass the filter.
+    /// Leave empty to include all objects of `mask`.
     pub mask_filter_classes: Vec<ObjectClass>,
-    ///  Object class assigned to the resulting Voronoi region ROIs.
+    /// Object class assigned to the resulting Voronoi region ROIs.
     pub output_class: ObjectClass,
-    ///  Unit in which `max_radius` is expressed (e.g. pixels, nm, µm).
+    /// Unit in which `max_radius` is expressed (e.g. pixels, nm, µm).
     pub unit: SizeUnits,
-    ///  Maximum expansion radius for a Voronoi region.
+    /// Maximum expansion radius for a Voronoi region.
     ///
-    ///  Pixels farther than this distance from the nearest seed center are excluded
-    ///  from the region. Use `0` or a negative value to disable the limit.
+    /// Pixels farther than this distance from the nearest seed center are excluded
+    /// from the region. Use `0` or a negative value to disable the limit.
     pub max_radius: f32,
-    ///  Discard Voronoi regions that touch the image border.
+    /// Discard Voronoi regions that touch the image border.
     pub exclude_areas_at_the_edges: bool,
-    ///  Discard Voronoi regions whose originating center object was filtered out or missing.
+    /// Discard Voronoi regions whose originating center object was filtered out or missing.
     pub exclude_areas_with_no_center: bool,
 }

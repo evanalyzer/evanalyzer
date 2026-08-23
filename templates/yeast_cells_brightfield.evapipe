@@ -48,7 +48,7 @@
             },
             "minThreshold": 4000.0,
             "maxThreshold": 65535.0,
-            "unit": "bit",
+            "unit": "BIT",
             "objectClassId": 1
           }
         ]
@@ -71,7 +71,7 @@
         "outputClass": {
           "VALID": 4
         },
-        "unit": "px",
+        "unit": "PIXELS",
         "maxRadius": 30.0,
         "excludeAreasAtTheEdges": false,
         "excludeAreasWithNoCenter": false
