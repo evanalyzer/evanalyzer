@@ -1,0 +1,872 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AiLearningSettings",
+  "description": "This struct describes the AI model used for training.\nThis information is needed to build up the models\neither for training or inference.\n\nTogether with the trained weights, this is the full portable trained\nmodel - see `PixelClassLabel`/`ObjectClassLabel` for why class names are\nsnapshotted here rather than resolved from a live project.\n\nSERIALIZATION-CRITICAL: never rename or remove an existing field once a\nmodel has been saved with it.",
+  "type": "object",
+  "properties": {
+    "backend": {
+      "description": "Backend used for AI training (RandomForest, Knn, MLP, ...)",
+      "$ref": "#/$defs/AiLearningBackendSettings"
+    },
+    "classifier": {
+      "description": "Whether a pixel or object classifier was trained, its feature recipe,\nand the classes it predicts.",
+      "$ref": "#/$defs/AiLearningClassifierSettings"
+    },
+    "metadata": {
+      "description": "Name, description, author, creation time, category/tags - the same\nbrowsable-artifact metadata project templates already use, so a\nfuture \"pick a model\" UI can list/search/filter saved models the same\nway the template picker already does.",
+      "$ref": "#/$defs/MetaData"
+    },
+    "schemaVersion": {
+      "description": "On-disk format version of this settings document. Absent on files\nwritten before versioning was introduced, which `serde(default)`\nreads as `0` - see `CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION` and\n`evanalyzer_cfg::load_ai_learning_settings`.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    }
+  },
+  "required": [
+    "metadata",
+    "backend",
+    "classifier"
+  ],
+  "$defs": {
+    "AiLearningBackendSettings": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "RANDOM_FOREST": {
+              "$ref": "#/$defs/RandomForestSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "RANDOM_FOREST"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "KNN": {
+              "$ref": "#/$defs/KnnSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "KNN"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "MLP": {
+              "$ref": "#/$defs/MlpSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "MLP"
+          ]
+        }
+      ]
+    },
+    "AiLearningClassifierSettings": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "PIXEL": {
+              "type": "object",
+              "properties": {
+                "class_labels": {
+                  "description": "Classes this model predicts, in the exact order its output\nindices refer to (predicted index 0 = class_labels[0], etc.) -\norder is load-bearing (it's what an MLP's output layer is\nstructured around), not just informational.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/PixelClassLabel"
+                  }
+                },
+                "feature_spec": {
+                  "$ref": "#/$defs/AiLearningPixelFeatureSettings"
+                }
+              },
+              "required": [
+                "feature_spec",
+                "class_labels"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "PIXEL"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "OBJECT": {
+              "type": "object",
+              "properties": {
+                "class_labels": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ObjectClassLabel"
+                  }
+                },
+                "feature_spec": {
+                  "$ref": "#/$defs/AiLearningObjectFeatureSettings"
+                }
+              },
+              "required": [
+                "feature_spec",
+                "class_labels"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "OBJECT"
+          ]
+        }
+      ]
+    },
+    "AiLearningObjectFeatureSettings": {
+      "description": "The closed, versioned feature recipe for an object classifier: one entry\nper feature, in the order features are assembled into a training/inference\nrow. Bundled with the saved classifier so training and inference reproduce\nidentical inputs.\n\nSERIALIZATION-CRITICAL — see `ObjectMetric` doc comment above.",
+      "type": "object",
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjectMetric"
+          }
+        }
+      },
+      "required": [
+        "metrics"
+      ]
+    },
+    "AiLearningPixelFeatureSettings": {
+      "description": "The closed, versioned feature recipe for a pixel classifier: one entry per\noutput feature channel, each channel an ordered chain of preprocessing\nsteps. Bundled with the saved classifier so training and inference\nreproduce identical inputs. An empty inner `Vec` is the raw, unmodified\npixel value for that channel.\n\nSERIALIZATION-CRITICAL — see `PreprocessingSteps` doc comment above; the\nsame never-rename/never-remove rule applies to this type's own fields.",
+      "type": "object",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PreprocessingSteps"
+            }
+          }
+        }
+      },
+      "required": [
+        "channels"
+      ]
+    },
+    "EdgeDetectionSobelSettings": {
+      "description": "Extracts directional boundaries by computing spatial image intensity gradients.\n\nThis algorithm applies localized 3x3 kernels to approximate the first derivative\nof pixel intensities across the horizontal and vertical axes. It highlights\nareas of sharp luminance changes, producing a continuous gradient map that\nemphasizes prominent structural edges and surface transitions.\n\n# Examples\n\n```\n# use imagec::backend::algos::EdgeDetectionSobel;\nlet filter = EdgeDetectionSobel { kernel_size: 3 };\n```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the Sobel operator window.\n\nTypically 3. Larger values (5, 7) provide a more smoothed\ngradient but result in \"thicker\" edges. Must be an odd number.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kernelSize"
+      ]
+    },
+    "FiltersHessianHessianModeSettings": {
+      "description": "Specifies the feature extraction method for the Hessian matrix.\n\nThe Hessian matrix describes the local second-order structure of an image,\noften used for blob detection (LoG) or ridge extraction.",
+      "oneOf": [
+        {
+          "description": "Computes the determinant: $det(H) = I_{xx}I_{yy} - I_{xy}^2$.\n\nHigh values typically indicate \"blob-like\" structures or corners.",
+          "type": "string",
+          "const": "DETERMINANT"
+        },
+        {
+          "description": "Extracts the first (larger) eigenvalue ($\\lambda_1$).\n\nUseful for detecting the maximum local curvature, identifying\nthe principal axis of a ridge.",
+          "type": "string",
+          "const": "EIGENVALUES_X"
+        },
+        {
+          "description": "Extracts the second (smaller) eigenvalue ($\\lambda_2$).\n\nHighlights secondary curvature; when both $\\lambda_1$ and $\\lambda_2$\nare large, it indicates a blob or interest point.",
+          "type": "string",
+          "const": "EIGENVALUES_Y"
+        }
+      ]
+    },
+    "FiltersRankFilterRankFilterTypeSettings": {
+      "description": "Specifies the statistical operation to perform on the local pixel neighborhood.",
+      "oneOf": [
+        {
+          "description": "Selects the middle value. Excellent for removing salt-and-pepper noise\nwhile preserving sharp edges.",
+          "type": "string",
+          "const": "MEDIAN"
+        },
+        {
+          "description": "Selects the lowest intensity (Erosion). Shrinks bright regions and\nexpands dark regions.",
+          "type": "string",
+          "const": "MIN"
+        },
+        {
+          "description": "Selects the highest intensity (Dilation). Expands bright regions and\nshrinks dark regions.",
+          "type": "string",
+          "const": "MAX"
+        },
+        {
+          "description": "Computes the average value. Acts as a box blur, smoothing the image\nbut blurring edges.",
+          "type": "string",
+          "const": "MEAN"
+        },
+        {
+          "description": "Replaces a pixel only if it deviates from the neighborhood median\nby more than the specified threshold.",
+          "type": "object",
+          "properties": {
+            "OUTLIERS": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "OUTLIERS"
+          ]
+        }
+      ]
+    },
+    "FiltersStructureTensorTensorModeSettings": {
+      "description": "The specific calculation to extract from the Structure Tensor.",
+      "oneOf": [
+        {
+          "description": "Extracts the first (primary) eigenvalue.\n\nRepresents the local image intensity variation in the direction\nperpendicular to the edge. Useful for edge detection.",
+          "type": "string",
+          "const": "EIGENVALUES_X"
+        },
+        {
+          "description": "Extracts the second (secondary) eigenvalue.\n\nRepresents the local image intensity variation along the edge.\nHigh values typically indicate corners or noise.",
+          "type": "string",
+          "const": "EIGENVALUES_Y"
+        },
+        {
+          "description": "Computes the local anisotropy (coherence) of the image.\n\nMeasures how strongly the local neighborhood is oriented.\nRanges from 0 (isotropic/noise) to 1 (perfectly oriented/straight edge).",
+          "type": "string",
+          "const": "COHERENCE"
+        }
+      ]
+    },
+    "GaussianBlurSettings": {
+      "description": "Smooths an image and reduces background noise using a Gaussian kernel.\n\nThis algorithm applies a localized, bell-curve weighted blur that suppresses\nhigh-frequency pixel variations (like camera noise, salt-and-pepper artifacts,\nor dust) while preserving structural features. It is commonly used as a\npreprocessing step to optimize thresholding and edge detection tasks.\n\n# Examples\n\n```\nuse imagec::backend::algos::GaussianBlur;\n\nlet settings = GaussianBlur {\nkernel_size: 5,\nsigma: 2.0\n};\n```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the blur matrix.\n\nMust be an odd number (e.g., 3, 5, 7).",
+          "type": "integer",
+          "format": "uint",
+          "default": 3,
+          "maximum": 27,
+          "minimum": 3
+        },
+        "sigma": {
+          "description": "The standard deviation of the Gaussian kernel.\n\nHigher values create a more significant blur effect.\n$$N \\approx 6\\sigma + 1$$",
+          "type": "number",
+          "format": "float",
+          "default": 0.3400000035762787,
+          "maximum": 5,
+          "minimum": 0.1
+        }
+      }
+    },
+    "HessianSettings": {
+      "description": "Extracts continuous structural ridges, tubular vessels, and blobs using second-order spatial derivatives.\n\nThis algorithm constructs a localized Hessian matrix for each pixel to analyze local curvature\nand intensity topography. By evaluating the eigenvalues of this matrix, it differentiates\nbetween directional ridges (like blood vessels or filaments), distinct intensity peaks (blobs),\nand flat regions, making it highly effective for curvilinear feature extraction.\n\n# Examples\n\n```\n# use imagec::backend::algos::{Hessian, HessianMode};\nlet detector = Hessian {\nmode: HessianMode::Determinant,\n};\n```",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Determines which component of the Hessian matrix structure to extract.\n\nDepending on the mode, this can highlight interest points (blobs)\nor directional features (ridges).",
+          "$ref": "#/$defs/FiltersHessianHessianModeSettings"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "KNNAlgorithmName": {
+      "description": "Both, KNN classifier and regressor benefits from underlying search algorithms that helps to speed up queries.\n`KNNAlgorithmName` maintains a list of supported search algorithms, see [KNN algorithms]",
+      "oneOf": [
+        {
+          "description": "Heap Search algorithm",
+          "type": "string",
+          "const": "LINEAR_SEARCH"
+        },
+        {
+          "description": "Cover Tree Search algorithm",
+          "type": "string",
+          "const": "COVER_TREE"
+        }
+      ]
+    },
+    "KNNDistanceMetric": {
+      "description": "The distance function used to measure similarity between feature vectors\nwhen finding a point's k nearest neighbors.",
+      "oneOf": [
+        {
+          "description": "Straight-line (\"as the crow flies\") distance. The standard choice for\ncontinuous, comparably-scaled features.",
+          "type": "string",
+          "const": "EUCLIDEAN"
+        },
+        {
+          "description": "Sum of absolute differences per feature (\"taxicab\" distance) - less\nsensitive to outliers in a single feature than Euclidean.",
+          "type": "string",
+          "const": "MANHATTAN"
+        },
+        {
+          "description": "1 minus the cosine similarity between two vectors - measures the\nangle between them, ignoring magnitude. Useful when the direction of\na feature vector matters more than its scale.",
+          "type": "string",
+          "const": "COSINE"
+        },
+        {
+          "description": "Number of positions at which two vectors differ. Intended for\ndiscrete/categorical-valued features, not continuous ones.",
+          "type": "string",
+          "const": "HAMMING"
+        },
+        {
+          "description": "Generalization of Euclidean (`p = 2`) and Manhattan (`p = 1`) distance\nto an arbitrary order `p`.",
+          "type": "object",
+          "properties": {
+            "MINKOWSKI": {
+              "type": "object",
+              "properties": {
+                "p": {
+                  "description": "The order of the norm. Must be at least 1.",
+                  "type": "integer",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "p"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "MINKOWSKI"
+          ]
+        }
+      ]
+    },
+    "KNNWeightFunction": {
+      "description": "Weight function that is used to determine estimated value.",
+      "oneOf": [
+        {
+          "description": "All k nearest points are weighted equally",
+          "type": "string",
+          "const": "UNIFORM"
+        },
+        {
+          "description": "k nearest points are weighted by the inverse of their distance. Closer neighbors will have a greater influence than neighbors which are further away.",
+          "type": "string",
+          "const": "DISTANCE"
+        }
+      ]
+    },
+    "KnnSettings": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "description": "backend search algorithm.",
+          "$ref": "#/$defs/KNNAlgorithmName",
+          "default": "COVER_TREE"
+        },
+        "distance": {
+          "description": "distance function used to find a point's nearest neighbors. Default is `KNNDistanceMetric::Euclidean`.",
+          "$ref": "#/$defs/KNNDistanceMetric",
+          "default": "EUCLIDEAN"
+        },
+        "k": {
+          "description": "number of training samples to consider when estimating class for new point. Default value is 3.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "weight": {
+          "description": "weighting function that is used to calculate estimated class value. Default function is `KNNWeightFunction::Uniform`.",
+          "$ref": "#/$defs/KNNWeightFunction",
+          "default": "UNIFORM"
+        }
+      }
+    },
+    "LaplacianSettings": {
+      "description": "Configuration for the Laplacian edge detection filter.\n\nThe Laplacian is a second-order derivative operator used to find regions of\nrapid intensity change. It is particularly effective for detecting edges\nand fine details, though it is highly sensitive to noise.\n\n# Examples\n\n```\n# use imagec::backend::algos::Laplacian;\nlet filter = Laplacian { kernel_size: 3 };\n```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the discrete Laplacian aperture.\n\nTypically 3. Larger sizes (5, 7) approximate the Laplacian of Gaussian (LoG)\nmore closely but are more computationally expensive. Must be an odd number.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kernelSize"
+      ]
+    },
+    "MetaData": {
+      "type": "object",
+      "properties": {
+        "appVersion": {
+          "description": "Version of EVAnalyzer that last wrote this file (`CARGO_PKG_VERSION`\nof the writing build). Empty for files written before this field\nexisted, or built by hand rather than saved from the app.",
+          "type": "string",
+          "default": ""
+        },
+        "authorOrganization": {
+          "description": "Author organization",
+          "type": "string"
+        },
+        "authors": {
+          "description": "Every author, in display order (the first entry is treated as the\nprimary author in template/pipeline picker dialogs, the rest as\nco-authors). Free-form display strings, not split into first/last.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "category": {
+          "description": "Category used to group templates in pickers (e.g. \"Cell Biology / Uptake\")",
+          "type": "string",
+          "default": ""
+        },
+        "creationTime": {
+          "description": "Creation time",
+          "type": "string",
+          "format": "date-time"
+        },
+        "description": {
+          "description": "A long detailed description of the module",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the module",
+          "type": "string"
+        },
+        "shortDescription": {
+          "description": "A short one line description of the module",
+          "type": "string"
+        },
+        "tags": {
+          "description": "Free-form keywords used to search/filter templates",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "shortDescription",
+        "description",
+        "authorOrganization",
+        "creationTime"
+      ]
+    },
+    "MlpActivation": {
+      "description": "The activation function applied between hidden layers.",
+      "type": "string",
+      "enum": [
+        "RELU",
+        "SIGMOID",
+        "TANH"
+      ]
+    },
+    "MlpSettings": {
+      "type": "object",
+      "properties": {
+        "activation": {
+          "description": "Activation function between hidden layers.",
+          "$ref": "#/$defs/MlpActivation",
+          "default": "RELU"
+        },
+        "batchSize": {
+          "description": "Samples per gradient update.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "epochs": {
+          "description": "Number of training epochs (full passes over the training data).",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "epsilon": {
+          "description": "Adam optimizer epsilon - a small value added to the denominator of the\nparameter update for numerical stability. Rarely needs tuning; the\ndefault (`1e-5`, via `Default` below) matches burn's own `AdamConfig`\ndefault.",
+          "type": "number",
+          "format": "double",
+          "default": 0.00001
+        },
+        "hiddenLayers": {
+          "description": "Number of nodes in each hidden layer, in order (e.g. `[64, 32]` is two\nhidden layers). Input/output layer sizes are derived from the feature\ncount and number of classes, not configured here.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "learningRate": {
+          "description": "Adam optimizer learning rate.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "seed": {
+          "description": "Seed for weight initialization, for reproducible training runs.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        }
+      }
+    },
+    "ObjectClass": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "UNSET"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "VALID": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "VALID"
+          ]
+        }
+      ]
+    },
+    "ObjectClassLabel": {
+      "description": "Same as `PixelClassLabel`, for object classifiers - writes to\n`object_class` instead of `segmentation_class`, hence the different ID\ntype. SERIALIZATION-CRITICAL.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/ObjectClass"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "class",
+        "name"
+      ]
+    },
+    "ObjectMetric": {
+      "description": "One selectable object-classifier feature, mapped directly onto `Object`'s\nown measurement methods (`crates/core/src/object.rs`) — no filter chain\nconcept here, unlike pixel features, since these are already-computed\nscalar measurements, not something composed from image filters.\n\nDeliberately excludes `object_class` (the training label itself — including\nit would be data leakage) and centroid/position (teaches location instead\nof shape, a classic overfitting trap for this kind of tool).\n\nSERIALIZATION-CRITICAL: this type is stored inside every saved object\nclassifier model. Once any model has been saved, existing variants must\nnever be renamed, removed, or have their meaning changed - treat this the\nsame as a database migration, not a normal refactor. Adding a new variant\nis safe.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "AREA",
+            "PERIMETER",
+            "CIRCULARITY",
+            "SOLIDITY",
+            "ASPECT_RATIO",
+            "ROUNDNESS",
+            "COMPACTNESS",
+            "FERET_DIAMETER",
+            "MIN_FERET_DIAMETER",
+            "ELLIPSE_MAJOR",
+            "ELLIPSE_MINOR",
+            "ELLIPSE_ANGLE",
+            "ECCENTRICITY",
+            "TOUCHES_EDGE"
+          ]
+        },
+        {
+          "description": "Sum of pixel intensities in the given image channel.",
+          "type": "object",
+          "properties": {
+            "INTENSITY_SUM": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_SUM"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "INTENSITY_MIN": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_MIN"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "INTENSITY_MAX": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_MAX"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "INTENSITY_AVG": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "INTENSITY_AVG"
+          ]
+        }
+      ]
+    },
+    "PixelClassLabel": {
+      "description": "One class a pixel classifier was trained to recognize: the stable ID\nactually used to write predictions back to `segmentation_class`, paired\nwith the display name that class had *at training time*.\n\nThis is a snapshot, not a live reference into a project's class list.\n`AiLearningSettings` plus the trained weights make up the full portable\nmodel file - it may be shared, applied to a different project, or applied\nlong after the original class was renamed in the project it came from -\nso the name has to travel with the model rather than being resolved from\nproject state that may not exist or may not match at inference time.\n\nSERIALIZATION-CRITICAL: part of the saved model artifact.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/SegmentationClass"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "class",
+        "name"
+      ]
+    },
+    "PreprocessingSteps": {
+      "description": "A single preprocessing step within one feature channel's chain (an inner\nentry of `FeatureSpec::channels`). Each step reads the previous step's\noutput in the same context (scratch-pad/swap chaining, same as any\nmulti-step Command sequence), so e.g. Laplacian-of-Gaussian is simply\n`vec![GaussianBlur(...), Laplacian(...)]` — pre-smoothing any filter is just\nan earlier step, not a bespoke field.\n\nWraps the already-generated `...Settings` types instead of re-declaring\nparallel fields/enums: they're already Serialize/Deserialize/JsonSchema,\nalready narrow (pure algorithm parameters, no pipeline-orchestration\nbaggage), and their `From<Settings> for Command` conversions already exist\nin `algos_from_config.rs`, so this stays in sync automatically if a\nfilter's parameters ever change.\n\nIMPORTANT: `GaussianBlurSettings::sigma` is clamped to [0.1, 5.0] by its\n`From` conversion (matches the command's own `#[cmdsmeta]` bounds) — any\nstep using `GaussianBlur` inherits that ceiling. ilastik's standard scale\nrange goes up to sigma=10; decide deliberately if you need to go higher.\n\nSERIALIZATION-CRITICAL: this type is stored inside every saved pixel\nclassifier model. Once any model has been saved, existing variants must\nnever be renamed, removed, or have their meaning changed — treat this the\nsame as a database migration, not a normal refactor. Adding a new variant\nis safe; changing or deleting an existing one silently breaks every model\nalready saved with it.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "GAUSSIAN_BLUR": {
+              "$ref": "#/$defs/GaussianBlurSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "GAUSSIAN_BLUR"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "EDGE_DETECTION_SOBEL": {
+              "$ref": "#/$defs/EdgeDetectionSobelSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "EDGE_DETECTION_SOBEL"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "LAPLACIAN": {
+              "$ref": "#/$defs/LaplacianSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "LAPLACIAN"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "STRUCTURE_TENSOR": {
+              "$ref": "#/$defs/StructureTensorSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "STRUCTURE_TENSOR"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "HESSIAN": {
+              "$ref": "#/$defs/HessianSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "HESSIAN"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "RANK_FILTER": {
+              "$ref": "#/$defs/RankFilterSettings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "RANK_FILTER"
+          ]
+        }
+      ]
+    },
+    "RandomForestSettings": {
+      "type": "object",
+      "properties": {
+        "criterion": {
+          "description": "Split criteria to use when building a tree.",
+          "$ref": "#/$defs/SplitCriterion",
+          "default": "GINI"
+        },
+        "keepSamples": {
+          "description": "Whether to keep samples used for tree generation. This is required for OOB prediction.",
+          "type": "boolean",
+          "default": false
+        },
+        "m": {
+          "description": "Number of random sample of predictors to use as split candidates.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "maxDepth": {
+          "description": "Tree max depth.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "minSamplesLeaf": {
+          "description": "The minimum number of samples required to be at a leaf node.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "minSamplesSplit": {
+          "description": "The minimum number of samples required to split an internal node.",
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "nTrees": {
+          "description": "The number of trees in the forest.",
+          "type": "integer",
+          "format": "uint16",
+          "default": 0,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "seed": {
+          "description": "Seed used for bootstrap sampling and feature selection for each tree.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        }
+      }
+    },
+    "RankFilterSettings": {
+      "description": "A filter that transforms pixels based on the statistical rank of their neighbors.\n\nRank filters are non-linear operators used for noise reduction,\nmorphological operations, and feature enhancement.\n\nThis algorithm sorts (ranks) all pixel values within a local neighborhood\nwindow and assigns a specific percentile value to the center pixel. By selecting\ndifferent ranks, it acts as a configurable operator: the minimum rank performs\nerosion, the maximum rank performs dilation, and the median rank (50th percentile)\nprovides highly effective impulse noise suppression while preserving sharp structural edges.",
+      "type": "object",
+      "properties": {
+        "filterType": {
+          "description": "The specific ranking algorithm to apply to the neighborhood.",
+          "$ref": "#/$defs/FiltersRankFilterRankFilterTypeSettings"
+        },
+        "radius": {
+          "description": "The circular radius of the neighborhood to consider.\n\nA radius of 1.0 roughly corresponds to a 3x3 square, while larger\nvalues increase the effect's strength and computational cost.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "radius",
+        "filterType"
+      ]
+    },
+    "SegmentationClass": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "SplitCriterion": {
+      "description": "The function to measure the quality of a split.",
+      "type": "string",
+      "enum": [
+        "GINI",
+        "ENTROPY",
+        "CLASSIFICATION_ERROR"
+      ]
+    },
+    "StructureTensorSettings": {
+      "description": "Analyzes local image texture, directional orientation, and corner features using a second-moment matrix.\n\nThis algorithm summarizes the predominant directions of the image gradient within a local\nneighborhood, smoothing the structural data with a Gaussian window. By evaluating the\neigenvalues of the resulting matrix tensor, it distinguishes between flat areas (both eigenvalues\nnear zero), straight linear boundaries (one dominant eigenvalue indicating structural direction),\nand complex corners or intersections (two large eigenvalues).\n\n# Examples\n\n```\nuse imagec::backend::algos::{StructureTensor, Mode};\nlet settings = StructureTensor {\nmode: Mode::Coherence,\nkernel_size: 3,\nsigma: 1.5\n};\n```",
+      "type": "object",
+      "properties": {
+        "kernelSize": {
+          "description": "The size of the integration window used to average the local gradients.\n\nLarger windows provide more stability against noise but reduce\nspatial resolution.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "mode": {
+          "description": "The mathematical output to be produced by the algorithm.",
+          "$ref": "#/$defs/FiltersStructureTensorTensorModeSettings"
+        },
+        "sigma": {
+          "description": "The standard deviation for the Gaussian weighting of the integration window.\n\nControls the spatial \"reach\" of the neighborhood analysis.",
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "required": [
+        "mode",
+        "kernelSize",
+        "sigma"
+      ]
+    }
+  }
+}

@@ -291,7 +291,7 @@
                 },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
-                "unit": "bit",
+                "unit": "BIT",
                 "objectClassId": 4
               }
             ]
@@ -423,7 +423,7 @@
                 },
                 "minThreshold": 0.0,
                 "maxThreshold": 65535.0,
-                "unit": "bit",
+                "unit": "BIT",
                 "objectClassId": 11
               }
             ]
@@ -501,7 +501,7 @@
             "outputClass": {
               "VALID": 12
             },
-            "unit": "px",
+            "unit": "PIXELS",
             "maxRadius": 0.0,
             "excludeAreasAtTheEdges": false,
             "excludeAreasWithNoCenter": true
@@ -546,7 +546,7 @@
                 },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
-                "unit": "bit",
+                "unit": "BIT",
                 "objectClassId": 21
               }
             ]
@@ -664,7 +664,7 @@
                 },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
-                "unit": "bit",
+                "unit": "BIT",
                 "objectClassId": 1
               }
             ]

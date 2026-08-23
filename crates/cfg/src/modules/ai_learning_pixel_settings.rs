@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 /// is safe; changing or deleting an existing one silently breaks every model
 /// already saved with it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PreprocessingSteps {
     GaussianBlur(GaussianBlurSettings),
     EdgeDetectionSobel(EdgeDetectionSobelSettings),
@@ -57,6 +58,10 @@ impl AiLearningPixelFeatureSettings {
     /// Convenience: same filter at several scales, e.g. gaussian_scales(&[1.0, 2.0, 4.0], 5).
     /// Values outside [0.1, 5.0] will be silently clamped by GaussianBlur's own
     /// `From<GaussianBlurSettings>` conversion — see the `PreprocessingSteps` doc comment.
+    // Unused from the build script's own compiled copy of this file (it only
+    // needs the type for `schema_for!`, never calls this) - same reason
+    // `ObjectId`/`TrackId` in `types/ids.rs` carry the same allow.
+    #[allow(dead_code)]
     pub fn gaussian_scales(sigmas: &[f32], kernel_size: usize) -> Vec<Vec<PreprocessingSteps>> {
         sigmas
             .iter()
@@ -150,6 +155,22 @@ mod tests {
         assert_eq!(
             json, re_serialized,
             "serializing, deserializing, then re-serializing must be a no-op"
+        );
+    }
+
+    /// `SCREAMING_SNAKE_CASE` tags, matching every other enum in the
+    /// codebase - not released yet, so no backward-compat aliases needed for
+    /// the old bare-PascalCase tags this used to produce.
+    #[test]
+    fn preprocessing_steps_serializes_variant_tags_as_screaming_snake_case() {
+        let json = serde_json::to_value(PreprocessingSteps::GaussianBlur(GaussianBlurSettings {
+            kernel_size: 5,
+            sigma: 1.5,
+        }))
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"GAUSSIAN_BLUR": {"kernelSize": 5, "sigma": 1.5}})
         );
     }
 

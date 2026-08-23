@@ -199,7 +199,7 @@
                 "minThreshold": 0.0,
                 "maxThreshold": 1.0,
                 "objectClassId": 0,
-                "unit": "bit"
+                "unit": "BIT"
               }
             ]
           }
@@ -292,7 +292,7 @@
                 "minThreshold": 0.0,
                 "maxThreshold": 100.0,
                 "objectClassId": 0,
-                "unit": "%"
+                "unit": "PERCENT"
               }
             ]
           }

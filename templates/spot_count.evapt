@@ -131,7 +131,7 @@
                 },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
-                "unit": "bit",
+                "unit": "BIT",
                 "objectClassId": 1
               }
             ]
@@ -237,7 +237,7 @@
                 },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
-                "unit": "bit",
+                "unit": "BIT",
                 "objectClassId": 5
               }
             ]

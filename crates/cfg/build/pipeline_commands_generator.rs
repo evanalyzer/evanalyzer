@@ -1010,7 +1010,14 @@ fn extract_doc_comments(attrs: &[syn::Attribute]) -> Vec<String> {
                     ..
                 }) = &nv.value
                 {
-                    docs.push(s.value().trim_end().to_string());
+                    // `/// text` lowers to `#[doc = " text"]` - the leading
+                    // space is part of the attribute value, not a stylistic
+                    // choice. Trimming only the end (as this used to) leaves
+                    // it in, so re-emitting via `format!("/// {}\n", doc)`
+                    // below doubles it up into `///  text`. `trim()` (both
+                    // ends) strips it, matching `extract_enum_variants`,
+                    // which already gets this right for variant docs.
+                    docs.push(s.value().trim().to_string());
                 }
             }
         }
