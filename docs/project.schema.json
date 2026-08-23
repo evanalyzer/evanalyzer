@@ -339,7 +339,7 @@
             },
             "type": {
               "type": "string",
-              "const": "scale"
+              "const": "SCALE"
             }
           },
           "required": [
@@ -360,7 +360,7 @@
             },
             "type": {
               "type": "string",
-              "const": "snapArea"
+              "const": "SNAP_AREA"
             },
             "unit": {
               "description": "Unit `extra_size` is expressed in",
@@ -386,7 +386,7 @@
             },
             "type": {
               "type": "string",
-              "const": "minCircle"
+              "const": "MIN_CIRCLE"
             },
             "unit": {
               "description": "Unit `min_diameter` is expressed in",
@@ -412,7 +412,7 @@
             },
             "type": {
               "type": "string",
-              "const": "drawCircle"
+              "const": "DRAW_CIRCLE"
             },
             "unit": {
               "description": "Unit `diameter` is expressed in",
@@ -438,7 +438,7 @@
             },
             "type": {
               "type": "string",
-              "const": "fittingEllipse"
+              "const": "FITTING_ELLIPSE"
             }
           },
           "required": [
@@ -459,7 +459,7 @@
             },
             "type": {
               "type": "string",
-              "const": "expand"
+              "const": "EXPAND"
             },
             "unit": {
               "description": "Unit `margin` is expressed in",
@@ -485,7 +485,7 @@
             },
             "type": {
               "type": "string",
-              "const": "shrink"
+              "const": "SHRINK"
             },
             "unit": {
               "description": "Unit `margin` is expressed in",
@@ -890,7 +890,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "none"
+              "const": "NONE"
             }
           },
           "required": [
@@ -910,7 +910,7 @@
             },
             "type": {
               "type": "string",
-              "const": "gaussian"
+              "const": "GAUSSIAN"
             }
           },
           "required": [
@@ -931,7 +931,7 @@
             },
             "type": {
               "type": "string",
-              "const": "median"
+              "const": "MEDIAN"
             }
           },
           "required": [
@@ -945,7 +945,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "fitPolynomial"
+              "const": "FIT_POLYNOMIAL"
             }
           },
           "required": [
@@ -1242,7 +1242,7 @@
           "description": "Smoothing applied to the block-reduced field to remove blockiness.",
           "$ref": "#/$defs/FiltersIlluminationCorrectionSmoothingMethodSettings",
           "default": {
-            "type": "none"
+            "type": "NONE"
           }
         }
       }
@@ -1958,7 +1958,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "aiObjectClassifier"
+              "const": "AI_OBJECT_CLASSIFIER"
             }
           },
           "$ref": "#/$defs/AiObjectClassifierSettings",
@@ -1971,7 +1971,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "blur"
+              "const": "BLUR"
             }
           },
           "$ref": "#/$defs/BlurSettings",
@@ -1984,7 +1984,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "cellpose"
+              "const": "CELLPOSE"
             }
           },
           "$ref": "#/$defs/CellposeSettings",
@@ -1997,7 +1997,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "classifyObjects"
+              "const": "CLASSIFY_OBJECTS"
             }
           },
           "$ref": "#/$defs/ClassifyObjectsSettings",
@@ -2010,7 +2010,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "colocalization"
+              "const": "COLOCALIZATION"
             }
           },
           "$ref": "#/$defs/ColocalizationSettings",
@@ -2023,7 +2023,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "colorFilterCommand"
+              "const": "COLOR_FILTER_COMMAND"
             }
           },
           "$ref": "#/$defs/ColorFilterCommandSettings",
@@ -2036,7 +2036,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "connectedComponents"
+              "const": "CONNECTED_COMPONENTS"
             }
           },
           "$ref": "#/$defs/ConnectedComponentsSettings",
@@ -2049,7 +2049,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "distanceTransform"
+              "const": "DISTANCE_TRANSFORM"
             }
           },
           "$ref": "#/$defs/DistanceTransformSettings",
@@ -2062,7 +2062,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "edgeDetectionCanny"
+              "const": "EDGE_DETECTION_CANNY"
             }
           },
           "$ref": "#/$defs/EdgeDetectionCannySettings",
@@ -2075,7 +2075,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "edgeDetectionSobel"
+              "const": "EDGE_DETECTION_SOBEL"
             }
           },
           "$ref": "#/$defs/EdgeDetectionSobelSettings",
@@ -2088,7 +2088,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "enhanceContrast"
+              "const": "ENHANCE_CONTRAST"
             }
           },
           "$ref": "#/$defs/EnhanceContrastSettings",
@@ -2101,7 +2101,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "extractObjects"
+              "const": "EXTRACT_OBJECTS"
             }
           },
           "$ref": "#/$defs/ExtractObjectsSettings",
@@ -2114,7 +2114,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "fillHoles"
+              "const": "FILL_HOLES"
             }
           },
           "$ref": "#/$defs/FillHolesSettings",
@@ -2127,7 +2127,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "gaussianBlur"
+              "const": "GAUSSIAN_BLUR"
             }
           },
           "$ref": "#/$defs/GaussianBlurSettings",
@@ -2140,7 +2140,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "hessian"
+              "const": "HESSIAN"
             }
           },
           "$ref": "#/$defs/HessianSettings",
@@ -2153,7 +2153,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "illuminationCorrection"
+              "const": "ILLUMINATION_CORRECTION"
             }
           },
           "$ref": "#/$defs/IlluminationCorrectionSettings",
@@ -2166,7 +2166,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "imageCache"
+              "const": "IMAGE_CACHE"
             }
           },
           "$ref": "#/$defs/ImageCacheSettings",
@@ -2179,7 +2179,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "imageMath"
+              "const": "IMAGE_MATH"
             }
           },
           "$ref": "#/$defs/ImageMathSettings",
@@ -2192,7 +2192,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "intensityTransformation"
+              "const": "INTENSITY_TRANSFORMATION"
             }
           },
           "$ref": "#/$defs/IntensityTransformationSettings",
@@ -2205,7 +2205,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "laplacian"
+              "const": "LAPLACIAN"
             }
           },
           "$ref": "#/$defs/LaplacianSettings",
@@ -2218,7 +2218,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "medianSubtract"
+              "const": "MEDIAN_SUBTRACT"
             }
           },
           "$ref": "#/$defs/MedianSubtractSettings",
@@ -2231,7 +2231,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "morphologicalCommand"
+              "const": "MORPHOLOGICAL_COMMAND"
             }
           },
           "$ref": "#/$defs/MorphologicalCommandSettings",
@@ -2244,7 +2244,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "objectMath"
+              "const": "OBJECT_MATH"
             }
           },
           "$ref": "#/$defs/ObjectMathSettings",
@@ -2257,7 +2257,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "pixelClassifier"
+              "const": "PIXEL_CLASSIFIER"
             }
           },
           "$ref": "#/$defs/PixelClassifierSettings",
@@ -2270,7 +2270,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "rankFilter"
+              "const": "RANK_FILTER"
             }
           },
           "$ref": "#/$defs/RankFilterSettings",
@@ -2283,7 +2283,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "rollingBall"
+              "const": "ROLLING_BALL"
             }
           },
           "$ref": "#/$defs/RollingBallSettings",
@@ -2296,7 +2296,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "saveImage"
+              "const": "SAVE_IMAGE"
             }
           },
           "$ref": "#/$defs/SaveImageSettings",
@@ -2309,7 +2309,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "stardist"
+              "const": "STARDIST"
             }
           },
           "$ref": "#/$defs/StardistSettings",
@@ -2322,7 +2322,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "structureTensor"
+              "const": "STRUCTURE_TENSOR"
             }
           },
           "$ref": "#/$defs/StructureTensorSettings",
@@ -2335,7 +2335,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "threshold"
+              "const": "THRESHOLD"
             }
           },
           "$ref": "#/$defs/ThresholdSettings",
@@ -2348,7 +2348,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "transformObjects"
+              "const": "TRANSFORM_OBJECTS"
             }
           },
           "$ref": "#/$defs/TransformObjectsSettings",
@@ -2361,7 +2361,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "uNet"
+              "const": "U_NET"
             }
           },
           "$ref": "#/$defs/UNetSettings",
@@ -2374,7 +2374,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "voronoi"
+              "const": "VORONOI"
             }
           },
           "$ref": "#/$defs/VoronoiSettings",
@@ -2387,7 +2387,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "watershed"
+              "const": "WATERSHED"
             }
           },
           "$ref": "#/$defs/WatershedSettings",
@@ -2400,7 +2400,7 @@
           "properties": {
             "type": {
               "type": "string",
-              "const": "weightedDeviation"
+              "const": "WEIGHTED_DEVIATION"
             }
           },
           "$ref": "#/$defs/WeightedDeviationSettings",
@@ -2663,93 +2663,274 @@
         "objectClassId"
       ]
     },
+    "SegmentationThresholdOtsuClassesSettings": {
+      "description": "How many populations Otsu splits the histogram into.\n\n `Three` needs a second, jointly-optimized cut - see [`ThresholdMethod::Otsu`].\n Not generalized past three: a fourth class would need a genuine \"which of the\n K-1 cuts\" selector in place of `middle_class`, not just a wider range - see\n the multilevel-thresholding note on `thresh_otsu_multi`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "TWO"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "middleClass": {
+              "$ref": "#/$defs/SegmentationThresholdOtsuMiddleClassSettings"
+            },
+            "type": {
+              "type": "string",
+              "const": "THREE"
+            }
+          },
+          "required": [
+            "type",
+            "middleClass"
+          ]
+        }
+      ]
+    },
+    "SegmentationThresholdOtsuMiddleClassSettings": {
+      "description": "Which side of a three-class Otsu split the middle-intensity population joins.",
+      "type": "string",
+      "enum": [
+        "FOREGROUND",
+        "BACKGROUND"
+      ]
+    },
     "SegmentationThresholdThresholdMethodSettings": {
       "description": "The mathematical strategy used to determine the optimal global threshold.\n\n Most methods analyze the image histogram to find a \"cut-off\" point that\n best separates the foreground from the background.",
       "oneOf": [
         {
           "description": "No threshold applied; typically used for bypass logic.",
-          "type": "string",
-          "const": "NONE"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "NONE"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Uses the user-provided `min_threshold` and `max_threshold` values directly.",
-          "type": "string",
-          "const": "MANUAL"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MANUAL"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Li's Minimum Cross Entropy method. Effective for images with varying backgrounds.",
-          "type": "string",
-          "const": "LI"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "LI"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "An iterative version of Kittler and Illingworth's minimum error thresholding.",
-          "type": "string",
-          "const": "MIN_ERROR"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MIN_ERROR"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Zack's algorithm. Geometric method best for skewed histograms with a single clear peak.",
-          "type": "string",
-          "const": "TRIANGLE"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "TRIANGLE"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Tsai's method. Preserves the moments of the original image in the binary result.",
-          "type": "string",
-          "const": "MOMENTS"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MOMENTS"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Huang's fuzzy thresholding. Minimizes the measures of fuzziness.",
-          "type": "string",
-          "const": "HUANG"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "HUANG"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Assumes a bimodal histogram and finds the average of two peaks.",
-          "type": "string",
-          "const": "INTERMODES"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "INTERMODES"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Ridler-Calvard iterative clustering. Similar to Otsu but uses a different error metric.",
-          "type": "string",
-          "const": "ISO_DATA"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ISO_DATA"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Kapur's method. Uses the entropy of the histogram to find the threshold.",
-          "type": "string",
-          "const": "MAX_ENTROPY"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MAX_ENTROPY"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Uses the average intensity of all pixels as the threshold.",
-          "type": "string",
-          "const": "MEAN"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MEAN"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Pre-smooths the histogram until there are only two peaks; finds the minimum between them.",
-          "type": "string",
-          "const": "MINIMUM"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "MINIMUM"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
-          "description": "Most common method. Minimizes intra-class variance (maximizes inter-class variance).",
-          "type": "string",
-          "const": "OTSU"
+          "description": "Minimizes intra-class variance (maximizes inter-class variance).\n\n`Two` behaves exactly as before - one cut, `thresh_otsu`. `Three` jointly\nfinds two simultaneous cuts (Otsu's variance criterion is additive across\nclasses, so this is the same search one level deeper - see `thresh_otsu_multi`)\nand returns whichever cut `middle_class` selects. Mirrors CellProfiler's\n\"Two-class or three-class thresholding?\" + \"Assign pixels in the middle\nintensity class to the foreground or the background?\" pair.",
+          "type": "object",
+          "properties": {
+            "classes": {
+              "$ref": "#/$defs/SegmentationThresholdOtsuClassesSettings"
+            },
+            "type": {
+              "type": "string",
+              "const": "OTSU"
+            }
+          },
+          "required": [
+            "type",
+            "classes"
+          ]
         },
         {
           "description": "Assumes a fixed percentage of pixels belong to the foreground.",
-          "type": "string",
-          "const": "PERCENTILE"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "PERCENTILE"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Based on the Renyi entropy of the histogram; a generalization of MaxEntropy.",
-          "type": "string",
-          "const": "RENYI_ENTROPY"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "RENYI_ENTROPY"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "An extension of Kapur's method using a different coefficient for entropy.",
-          "type": "string",
-          "const": "SHANBHAG"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "SHANBHAG"
+            }
+          },
+          "required": [
+            "type"
+          ]
         },
         {
           "description": "Minimizes a cost function based on the discrepancy between two classes.",
-          "type": "string",
-          "const": "YEN"
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "YEN"
+            }
+          },
+          "required": [
+            "type"
+          ]
         }
       ]
     },
@@ -2928,7 +3109,9 @@
         "method": {
           "description": "The algorithm to use (Manual or Automatic).",
           "$ref": "#/$defs/SegmentationThresholdThresholdMethodSettings",
-          "default": "MANUAL"
+          "default": {
+            "type": "MANUAL"
+          }
         },
         "minThreshold": {
           "description": "The lower intensity bound. Used directly in `Manual` mode, or as a\n floor for auto-methods.",
@@ -3008,7 +3191,7 @@
           "$ref": "#/$defs/ClassificationTransformObjectsTransformFunctionSettings",
           "default": {
             "factor": 1.0,
-            "type": "scale"
+            "type": "SCALE"
           }
         },
         "inputClass": {

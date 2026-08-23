@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "meta": {
     "name": "Cell brightfield",
     "shortDescription": "Cell brightfield",
@@ -13,56 +14,56 @@
     {
       "enabled": true,
       "command": {
-        "type": "edgeDetectionSobel",
+        "type": "EDGE_DETECTION_SOBEL",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "rollingBall",
+        "type": "ROLLING_BALL",
         "ballType": "BALL",
         "preSmooth": true,
         "radius": 4
@@ -71,10 +72,12 @@
     {
       "enabled": true,
       "command": {
-        "type": "threshold",
+        "type": "THRESHOLD",
         "thresholds": [
           {
-            "method": "MIN_ERROR",
+            "method": {
+              "type": "MIN_ERROR"
+            },
             "minThreshold": 0.0,
             "maxThreshold": 65535.0,
             "unit": "bit",
@@ -86,20 +89,20 @@
     {
       "enabled": true,
       "command": {
-        "type": "connectedComponents"
+        "type": "CONNECTED_COMPONENTS"
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "extractObjects",
+        "type": "EXTRACT_OBJECTS",
         "maxObjectsBeforeFail": 100000
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "classifyObjects",
+        "type": "CLASSIFY_OBJECTS",
         "inputClasses": [
           {
             "VALID": 1

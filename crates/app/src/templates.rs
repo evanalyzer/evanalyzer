@@ -99,6 +99,7 @@ mod tests {
                 ..Default::default()
             },
             pipeline_steps: vec![],
+            ..Default::default()
         }
     }
 
@@ -186,6 +187,7 @@ mod tests {
             classification: ClassificationSettings::default(),
             plate: PlateSettings::default(),
             pipelines: vec![pipeline_template("Inner")],
+            ..Default::default()
         };
         write(
             dir.path(),

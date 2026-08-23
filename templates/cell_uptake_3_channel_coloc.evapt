@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "meta": {
     "name": "Cell uptake 3 channels coloc",
     "shortDescription": "Uptake assay with two spot channels and brightfield cell.",
@@ -435,6 +436,7 @@
   },
   "pipelines": [
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Nuclei",
         "shortDescription": "Nuclei",
@@ -448,7 +450,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "rollingBall",
+            "type": "ROLLING_BALL",
             "radius": 4.0,
             "ballType": "PARABOLOID",
             "preSmooth": true
@@ -457,24 +459,26 @@
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "TRIANGLE",
+                "method": {
+                  "type": "TRIANGLE"
+                },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -486,7 +490,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "watershed",
+            "type": "WATERSHED",
             "maximumFinderTolerance": 0.5,
             "smoothingSigma": 0.0,
             "minObjectSize": 0
@@ -495,20 +499,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "inputClasses": [
               {
                 "VALID": 4
@@ -538,6 +542,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Cell area",
         "shortDescription": "Cell area",
@@ -551,59 +556,61 @@
         {
           "enabled": true,
           "command": {
-            "type": "edgeDetectionSobel",
+            "type": "EDGE_DETECTION_SOBEL",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "MIN_ERROR",
+                "method": {
+                  "type": "MIN_ERROR"
+                },
                 "minThreshold": 0.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -615,20 +622,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "inputClasses": [
               {
                 "VALID": 11
@@ -658,6 +665,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Cells",
         "shortDescription": "Cells",
@@ -671,7 +679,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "voronoi",
+            "type": "VORONOI",
             "centers": {
               "VALID": 4
             },
@@ -692,6 +700,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "spot ch1",
         "shortDescription": "spot ch1",
@@ -705,31 +714,33 @@
         {
           "enabled": true,
           "command": {
-            "type": "medianSubtract",
+            "type": "MEDIAN_SUBTRACT",
             "radius": 3.0
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "MANUAL",
+                "method": {
+                  "type": "MANUAL"
+                },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -741,7 +752,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "watershed",
+            "type": "WATERSHED",
             "maximumFinderTolerance": 0.5,
             "smoothingSigma": 0.0,
             "minObjectSize": 0
@@ -750,20 +761,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "originSegmentation": [],
             "inputClasses": [
               {
@@ -793,7 +804,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 21
@@ -814,6 +825,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "spot ch2",
         "shortDescription": "spot ch2",
@@ -827,31 +839,33 @@
         {
           "enabled": true,
           "command": {
-            "type": "medianSubtract",
+            "type": "MEDIAN_SUBTRACT",
             "radius": 3.0
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "MANUAL",
+                "method": {
+                  "type": "MANUAL"
+                },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -863,7 +877,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "watershed",
+            "type": "WATERSHED",
             "maximumFinderTolerance": 0.5,
             "smoothingSigma": 0.0,
             "minObjectSize": 0
@@ -872,20 +886,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "originSegmentation": [],
             "inputClasses": [
               {
@@ -915,7 +929,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 1
@@ -936,6 +950,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "spot ch3",
         "shortDescription": "spot ch3",
@@ -949,31 +964,33 @@
         {
           "enabled": true,
           "command": {
-            "type": "medianSubtract",
+            "type": "MEDIAN_SUBTRACT",
             "radius": 3.0
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "blur",
+            "type": "BLUR",
             "kernelSize": 3
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "threshold",
+            "type": "THRESHOLD",
             "thresholds": [
               {
-                "method": "MANUAL",
+                "method": {
+                  "type": "MANUAL"
+                },
                 "minThreshold": 200.0,
                 "maxThreshold": 65535.0,
                 "unit": "bit",
@@ -985,7 +1002,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "watershed",
+            "type": "WATERSHED",
             "maximumFinderTolerance": 0.5,
             "smoothingSigma": 0.0,
             "minObjectSize": 0
@@ -994,20 +1011,20 @@
         {
           "enabled": true,
           "command": {
-            "type": "connectedComponents"
+            "type": "CONNECTED_COMPONENTS"
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "extractObjects",
+            "type": "EXTRACT_OBJECTS",
             "maxObjectsBeforeFail": 100000
           }
         },
         {
           "enabled": true,
           "command": {
-            "type": "classifyObjects",
+            "type": "CLASSIFY_OBJECTS",
             "originSegmentation": [],
             "inputClasses": [
               {
@@ -1037,7 +1054,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 2
@@ -1058,6 +1075,7 @@
       ]
     },
     {
+      "schemaVersion": 2,
       "meta": {
         "name": "Coloc",
         "shortDescription": "Coloc",
@@ -1071,7 +1089,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 13
@@ -1092,7 +1110,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 3
@@ -1113,7 +1131,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 13
@@ -1134,7 +1152,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 5
@@ -1155,7 +1173,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 3
@@ -1176,7 +1194,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 5
@@ -1197,7 +1215,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 13
@@ -1218,7 +1236,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 3
@@ -1239,7 +1257,7 @@
         {
           "enabled": true,
           "command": {
-            "type": "colocalization",
+            "type": "COLOCALIZATION",
             "classesToColoc": [
               {
                 "VALID": 5

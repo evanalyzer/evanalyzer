@@ -1,12 +1,13 @@
 mod legacy_import;
 mod legacy_schema;
+mod load_config;
+mod migration;
 mod modules;
 mod types;
 mod utils;
-mod versioning;
 
 pub use legacy_import::{LegacyImportError, LegacyImportOutcome, import_legacy_project};
-pub use versioning::{load_ai_learning_settings, load_project_settings};
+pub use load_config::{load_ai_learning_settings, load_project_settings};
 
 // Constants
 pub const PROJECT_FILE_EXTENSIONS: &str = &"evaproj";
@@ -18,21 +19,36 @@ pub const EVANALYZER_TRAINED_AI_MODELS: &str = &"evamodel";
 pub const LEGACY_PROJECT_FILE_EXTENSION: &str = &"icproj";
 
 /// Current on-disk format version for [`settings::project_settings::ProjectSettings`].
-/// Bump this and add a case to `ProjectSettings::migrate` whenever a change
-/// to `ProjectSettings` (or something it contains) would break
-/// deserialization of `.evaproj` files written by an older version of the
-/// app - e.g. a renamed field/enum variant that isn't just an additive
+/// Bump this, add a new `crate::migration::migration_vN_to_vM` module, and
+/// wire it into `load_config::PROJECT_MIGRATIONS` whenever a change to
+/// `ProjectSettings` (or something it contains) would break deserialization
+/// of `.evaproj` files written by an older version of the app - e.g. a
+/// renamed field/enum variant that isn't just an additive
 /// `#[serde(default)]` field.
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 2;
 
 /// Current on-disk format version for
 /// [`settings::ai_learning_settings::AiLearningSettings`] - both the
 /// standalone `--settings` file `train-classifier` reads and the copy
 /// embedded in every saved `.evamodel` classifier. Bump alongside a new
-/// migration step in `versioning::AI_LEARNING_SETTINGS_MIGRATIONS` whenever a
+/// migration step in `load_config::AI_LEARNING_SETTINGS_MIGRATIONS` whenever a
 /// change to `AiLearningSettings` would break deserialization of a file
 /// written by an older version of the app.
-pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION: u32 = 2;
+
+/// Current on-disk format version for
+/// [`settings::templates::ProjectTemplate`] (`.evapt` files). Unlike
+/// `ProjectSettings`/`AiLearningSettings`, nothing currently loads templates
+/// through a version-checked/migrated path (see that struct's
+/// `schema_version` doc comment) - this only reserves the version number for
+/// when that's added.
+pub const CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION: u32 = 2;
+
+/// Current on-disk format version for
+/// [`settings::templates::PipelineTemplate`] (`.evapipe` files, and each
+/// entry of a `ProjectTemplate`'s `pipelines`). See
+/// `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`.
+pub const CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION: u32 = 2;
 
 // Project Settings structs
 pub mod settings {
@@ -56,17 +72,25 @@ pub mod core_types {
 
 #[cfg(test)]
 mod tests {
-    use crate::settings::project_settings::ProjectSettings;
+    use crate::load_project_settings;
     use std::path::PathBuf;
 
+    /// `example.improj` is a real version-1 fixture (no `schemaVersion`
+    /// field, camelCase command tags, bare-string `ThresholdMethod`
+    /// including a plain `"OTSU"`) - loading it through
+    /// [`load_project_settings`] rather than a raw `serde_json::from_str`
+    /// exercises the actual migration path real saved projects go through,
+    /// not just the current struct shape.
     #[test]
     fn example_project_deserializes() {
         let path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/example.improj");
         let json = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-        let project: ProjectSettings =
-            serde_json::from_str(&json).expect("example.improj failed to deserialize");
+        let raw: serde_json::Value = serde_json::from_str(&json)
+            .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()));
+        let project =
+            load_project_settings(raw).expect("example.improj failed to deserialize/migrate");
         assert_eq!(project.pipelines.len(), 2);
         assert_eq!(project.pipelines[0].steps.len(), 7);
         assert_eq!(project.pipelines[1].steps.len(), 5);
@@ -207,7 +231,7 @@ mod tests {
             let json = serde_json::to_value(&cmd).unwrap();
             assert_eq!(
                 json["function"],
-                serde_json::json!({"type": "snapArea", "extraSize": 7.5, "unit": "nm"})
+                serde_json::json!({"type": "SNAP_AREA", "extraSize": 7.5, "unit": "nm"})
             );
 
             let round_tripped: PipelineCommand = serde_json::from_value(json).unwrap();

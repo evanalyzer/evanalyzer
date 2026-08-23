@@ -15,7 +15,17 @@ use std::path::PathBuf;
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings {
     #[default]
+    #[serde(
+        alias = "add-output-class-if-match",
+        alias = "addOutputClassIfMatch",
+        alias = "add_output_class_if_match"
+    )]
     AddOutputClassIfMatch,
+    #[serde(
+        alias = "reclassify-if-match",
+        alias = "reclassifyIfMatch",
+        alias = "reclassify_if_match"
+    )]
     ReclassifyIfMatch,
 }
 
@@ -27,8 +37,10 @@ pub enum FiltersIlluminationCorrectionApplyMethodSettings {
     /// that preserves overall image brightness - the right default for
     /// gain/vignetting-style illumination problems.
     #[default]
+    #[serde(alias = "divide")]
     Divide,
     /// `corrected = image - (field - mean(field))`. Additive correction.
+    #[serde(alias = "subtract")]
     Subtract,
 }
 
@@ -41,11 +53,13 @@ pub enum FiltersRollingBallBallTypeSettings {
     /// This is the traditional ImageJ algorithm. Best for images with
     /// distinct, round features like cells or particles.
     #[default]
+    #[serde(alias = "ball")]
     Ball,
     /// A sliding parabolic surface.
     ///
     /// Mathematically smoother at the edges than the Ball, often
     /// resulting in fewer artifacts on complex gradients.
+    #[serde(alias = "paraboloid")]
     Paraboloid,
 }
 
@@ -53,15 +67,65 @@ pub enum FiltersRollingBallBallTypeSettings {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClassificationClassifyObjectsClassifyMatchHandlingSettings {
     #[default]
+    #[serde(
+        alias = "add-output-class-if-match",
+        alias = "addOutputClassIfMatch",
+        alias = "add_output_class_if_match"
+    )]
     AddOutputClassIfMatch,
+    #[serde(
+        alias = "add-output-class-if-not-match",
+        alias = "addOutputClassIfNotMatch",
+        alias = "add_output_class_if_not_match"
+    )]
     AddOutputClassIfNotMatch,
+    #[serde(
+        alias = "remove-input-class-if-match",
+        alias = "removeInputClassIfMatch",
+        alias = "remove_input_class_if_match"
+    )]
     RemoveInputClassIfMatch,
+    #[serde(
+        alias = "remove-input-class-if-not-match",
+        alias = "removeInputClassIfNotMatch",
+        alias = "remove_input_class_if_not_match"
+    )]
     RemoveInputClassIfNotMatch,
+    #[serde(
+        alias = "remove-output-class-if-match",
+        alias = "removeOutputClassIfMatch",
+        alias = "remove_output_class_if_match"
+    )]
     RemoveOutputClassIfMatch,
+    #[serde(
+        alias = "remove-output-class-if-not-match",
+        alias = "removeOutputClassIfNotMatch",
+        alias = "remove_output_class_if_not_match"
+    )]
     RemoveOutputClassIfNotMatch,
+    #[serde(
+        alias = "remove-all-classes-if-match",
+        alias = "removeAllClassesIfMatch",
+        alias = "remove_all_classes_if_match"
+    )]
     RemoveAllClassesIfMatch,
+    #[serde(
+        alias = "remove-all-classes-if-not-match",
+        alias = "removeAllClassesIfNotMatch",
+        alias = "remove_all_classes_if_not_match"
+    )]
     RemoveAllClassesIfNotMatch,
+    #[serde(
+        alias = "reclassify-if-match",
+        alias = "reclassifyIfMatch",
+        alias = "reclassify_if_match"
+    )]
     ReclassifyIfMatch,
+    #[serde(
+        alias = "reclassify-if-not-match",
+        alias = "reclassifyIfNotMatch",
+        alias = "reclassify_if_not_match"
+    )]
     ReclassifyIfNotMatch,
 }
 
@@ -73,14 +137,17 @@ pub enum ClassificationColocObjectsColocMultiplicitySettings {
     /// e.g. a small object sitting on the border of two larger ones picks
     /// exactly one (the larger overlap; ties go to the lower `ObjectId`).
     #[default]
+    #[serde(alias = "one-to-one", alias = "oneToOne", alias = "one_to_one")]
     OneToOne,
     /// Every object may coloc with every overlapping partner meeting `min_coloc_area`.
+    #[serde(alias = "many-to-many", alias = "manyToMany", alias = "many_to_many")]
     ManyToMany,
     /// Only objects of these classes may coloc with more than one partner;
     /// every other class in `classes_to_coloc` is capped to its single
     /// best-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and
     /// `MultiFor([Cell])`, a cell can coloc with any number of spots, but
     /// each spot colocs with exactly one cell (the one it overlaps most).
+    #[serde(alias = "multi-for", alias = "multiFor", alias = "multi_for")]
     MultiFor(Vec<ObjectClass>),
 }
 
@@ -92,10 +159,12 @@ pub enum FiltersIlluminationCorrectionCorrectionMethodSettings {
     /// (vignetting, uneven excitation): every block contributes its average
     /// brightness to the estimated field.
     #[default]
+    #[serde(alias = "regular")]
     Regular,
     /// Block *minimum*. Use this when dense or bright foreground objects
     /// would otherwise pull the mean-based estimate upward - the minimum
     /// hugs the true background floor instead.
+    #[serde(alias = "background")]
     Background,
 }
 
@@ -110,16 +179,27 @@ pub enum FiltersHessianHessianModeSettings {
     ///
     /// High values typically indicate "blob-like" structures or corners.
     #[default]
+    #[serde(alias = "determinant")]
     Determinant,
     /// Extracts the first (larger) eigenvalue ($\lambda_1$).
     ///
     /// Useful for detecting the maximum local curvature, identifying
     /// the principal axis of a ridge.
+    #[serde(
+        alias = "eigenvalues-x",
+        alias = "eigenvaluesX",
+        alias = "eigenvalues_x"
+    )]
     EigenvaluesX,
     /// Extracts the second (smaller) eigenvalue ($\lambda_2$).
     ///
     /// Highlights secondary curvature; when both $\lambda_1$ and $\lambda_2$
     /// are large, it indicates a blob or interest point.
+    #[serde(
+        alias = "eigenvalues-y",
+        alias = "eigenvaluesY",
+        alias = "eigenvalues_y"
+    )]
     EigenvaluesY,
 }
 
@@ -132,11 +212,13 @@ pub enum MathImageCacheImageCacheModeSettings {
     /// Used for "checkpointing" results at a specific stage in the pipeline
     /// for later comparison or retrieval.
     #[default]
+    #[serde(alias = "store")]
     Store,
     /// Retrieves a previously stored image from the cache and injects it
     /// into the current pipeline context.
     ///
     /// This effectively replaces the current working image with the cached version.
+    #[serde(alias = "load")]
     Load,
 }
 
@@ -144,8 +226,15 @@ pub enum MathImageCacheImageCacheModeSettings {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MathSaveImageImageSourceSettings {
     #[default]
+    #[serde(alias = "image")]
     Image,
+    #[serde(alias = "instance-map", alias = "instanceMap", alias = "instance_map")]
     InstanceMap,
+    #[serde(
+        alias = "segmentation-mask",
+        alias = "segmentationMask",
+        alias = "segmentation_mask"
+    )]
     SegmentationMask,
 }
 
@@ -155,8 +244,10 @@ pub enum MathSaveImageImageSourceSettings {
 pub enum FiltersIntensityTransformIntensityTransformModeSettings {
     /// Parameters are calculated based on image statistics (e.g., histogram analysis).
     #[default]
+    #[serde(alias = "automatic")]
     Automatic,
     /// Parameters are provided explicitly by the user.
+    #[serde(alias = "manual")]
     Manual,
 }
 
@@ -166,10 +257,13 @@ pub enum FiltersIntensityTransformIntensityTransformModeSettings {
 pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
     /// A square/rectangular kernel. Dilates in all directions equally (8-connectivity).
     #[default]
+    #[serde(alias = "box")]
     Box,
     /// A rounded kernel. Best for preserving the natural, circular shape of objects.
+    #[serde(alias = "ellipse")]
     Ellipse,
     /// A cross-shaped kernel. Only considers horizontal and vertical neighbors (4-connectivity).
+    #[serde(alias = "cross")]
     Cross,
 }
 
@@ -182,14 +276,18 @@ pub enum MorphologyMorphologicalTransformationKernelShapesSettings {
 pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
     /// Expands the bright regions of an image. Useful for filling small holes.
     #[default]
+    #[serde(alias = "dilate")]
     Dilate,
     /// Shrinks the bright regions of an image. Useful for removing small noise.
+    #[serde(alias = "erode")]
     Erode,
     /// An erosion followed by a dilation. Removes small bright spots (noise)
     /// while preserving the relative size of larger objects.
+    #[serde(alias = "open")]
     Open,
     /// A dilation followed by an erosion. Fills small dark gaps or cracks
     /// within bright objects.
+    #[serde(alias = "close")]
     Close,
 }
 
@@ -201,15 +299,19 @@ pub enum ClassificationObjectMathObjectSetOperationSettings {
     /// Intersection: pixels present in both A and B. With no overlapping B, the
     /// result is empty - there is nothing to keep regardless of `keep_unmatched`.
     #[default]
+    #[serde(alias = "and")]
     And,
     /// Union: pixels present in A or B (or both). The result can extend beyond A's
     /// own bounding box into B's territory.
+    #[serde(alias = "or")]
     Or,
     /// Symmetric difference: pixels present in exactly one of A, B (the overlap
     /// itself is excluded). Like `Or`, the result can extend beyond A's bbox.
+    #[serde(alias = "xor")]
     Xor,
     /// Set difference: pixels in A that are NOT in B (A \ B). The classic use case
     /// is deriving a cytoplasm-only region from a whole-cell mask and its nucleus.
+    #[serde(alias = "subtract")]
     Subtract,
 }
 
@@ -219,31 +321,83 @@ pub enum ClassificationObjectMathObjectSetOperationSettings {
 pub enum MathImageMathOperandSettings {
     /// No operation; typically used as a placeholder.
     #[default]
+    #[serde(alias = "none")]
     None,
     /// Unary operation: Negates the intensities of the primary image.
+    #[serde(alias = "invert")]
     Invert,
     /// Arithmetic addition: `A + B`. (Clamped to the maximum pixel value).
+    #[serde(alias = "add")]
     Add,
     /// Arithmetic subtraction: `A - B`. (Clamped to zero).
+    #[serde(alias = "subtract")]
     Subtract,
     /// Arithmetic multiplication: `A * B`.
+    #[serde(alias = "multiply")]
     Multiply,
     /// Arithmetic division: `A / B`.
+    #[serde(alias = "divide")]
     Divide,
     /// Bitwise AND operation.
+    #[serde(alias = "and")]
     And,
     /// Bitwise OR operation.
+    #[serde(alias = "or")]
     Or,
     /// Bitwise XOR operation.
+    #[serde(alias = "xor")]
     Xor,
     /// Per-pixel minimum: `min(A, B)`. (Darkest Pixel).
+    #[serde(alias = "min")]
     Min,
     /// Per-pixel maximum: `max(A, B)`. (Brightest Pixel).
+    #[serde(alias = "max")]
     Max,
     /// Arithmetic mean: `(A + B) / 2`.
+    #[serde(alias = "average")]
     Average,
     /// Absolute difference: `|A - B|`. Useful for change detection.
+    #[serde(
+        alias = "difference-type",
+        alias = "differenceType",
+        alias = "difference_type"
+    )]
     DifferenceType,
+}
+
+///  How many populations Otsu splits the histogram into.
+///
+///  `Three` needs a second, jointly-optimized cut - see [`ThresholdMethod::Otsu`].
+///  Not generalized past three: a fourth class would need a genuine "which of the
+///  K-1 cuts" selector in place of `middle_class`, not just a wider range - see
+///  the multilevel-thresholding note on `thresh_otsu_multi`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SegmentationThresholdOtsuClassesSettings {
+    #[serde(alias = "two")]
+    Two,
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "three")]
+    Three {
+        middle_class: SegmentationThresholdOtsuMiddleClassSettings,
+    },
+}
+
+impl Default for SegmentationThresholdOtsuClassesSettings {
+    fn default() -> Self {
+        Self::Two {}
+    }
+}
+
+///  Which side of a three-class Otsu split the middle-intensity population joins.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SegmentationThresholdOtsuMiddleClassSettings {
+    #[default]
+    #[serde(alias = "foreground")]
+    Foreground,
+    #[serde(alias = "background")]
+    Background,
 }
 
 ///  Specifies the statistical operation to perform on the local pixel neighborhood.
@@ -253,30 +407,37 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     /// Selects the middle value. Excellent for removing salt-and-pepper noise
     /// while preserving sharp edges.
     #[default]
+    #[serde(alias = "median")]
     Median,
     /// Selects the lowest intensity (Erosion). Shrinks bright regions and
     /// expands dark regions.
+    #[serde(alias = "min")]
     Min,
     /// Selects the highest intensity (Dilation). Expands bright regions and
     /// shrinks dark regions.
+    #[serde(alias = "max")]
     Max,
     /// Computes the average value. Acts as a box blur, smoothing the image
     /// but blurring edges.
+    #[serde(alias = "mean")]
     Mean,
     /// Replaces a pixel only if it deviates from the neighborhood median
     /// by more than the specified threshold.
+    #[serde(alias = "outliers")]
     Outliers(f32),
 }
 
 ///  Smoothing applied to the block-reduced field to remove blockiness before
 ///  it is used as the correction field.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FiltersIlluminationCorrectionSmoothingMethodSettings {
     /// Use the block-reduced field as-is.
+    #[serde(alias = "none")]
     None,
     /// Separable Gaussian blur of the block grid.
     #[serde(rename_all = "camelCase")]
+    #[serde(alias = "gaussian")]
     Gaussian {
         ///  Standard deviation, in block-grid units.
         #[schemars(range(min = 0.1, max = 20))]
@@ -284,6 +445,7 @@ pub enum FiltersIlluminationCorrectionSmoothingMethodSettings {
     },
     /// Windowed median filter of the block grid.
     #[serde(rename_all = "camelCase")]
+    #[serde(alias = "median")]
     Median {
         ///  Neighborhood radius, in block-grid units.
         #[schemars(range(min = 1, max = 20))]
@@ -292,6 +454,11 @@ pub enum FiltersIlluminationCorrectionSmoothingMethodSettings {
     /// Fits a smooth 2nd-order polynomial surface
     /// (a + bx + cy + dx² + exy + fy²) through the block grid. Has no
     /// tunable radius/sigma, so it's the most stable option when unsure.
+    #[serde(
+        alias = "fit-polynomial",
+        alias = "fitPolynomial",
+        alias = "fit_polynomial"
+    )]
     FitPolynomial,
 }
 
@@ -310,16 +477,27 @@ pub enum FiltersStructureTensorTensorModeSettings {
     /// Represents the local image intensity variation in the direction
     /// perpendicular to the edge. Useful for edge detection.
     #[default]
+    #[serde(
+        alias = "eigenvalues-x",
+        alias = "eigenvaluesX",
+        alias = "eigenvalues_x"
+    )]
     EigenvaluesX,
     /// Extracts the second (secondary) eigenvalue.
     ///
     /// Represents the local image intensity variation along the edge.
     /// High values typically indicate corners or noise.
+    #[serde(
+        alias = "eigenvalues-y",
+        alias = "eigenvaluesY",
+        alias = "eigenvalues_y"
+    )]
     EigenvaluesY,
     /// Computes the local anisotropy (coherence) of the image.
     ///
     /// Measures how strongly the local neighborhood is oriented.
     /// Ranges from 0 (isotropic/noise) to 1 (perfectly oriented/straight edge).
+    #[serde(alias = "coherence")]
     Coherence,
 }
 
@@ -327,56 +505,93 @@ pub enum FiltersStructureTensorTensorModeSettings {
 ///
 ///  Most methods analyze the image histogram to find a "cut-off" point that
 ///  best separates the foreground from the background.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SegmentationThresholdThresholdMethodSettings {
     /// No threshold applied; typically used for bypass logic.
-    #[default]
+    #[serde(alias = "none")]
     None,
     /// Uses the user-provided `min_threshold` and `max_threshold` values directly.
+    #[serde(alias = "manual")]
     Manual,
     /// Li's Minimum Cross Entropy method. Effective for images with varying backgrounds.
+    #[serde(alias = "li")]
     Li,
     /// An iterative version of Kittler and Illingworth's minimum error thresholding.
+    #[serde(alias = "min-error", alias = "minError", alias = "min_error")]
     MinError,
     /// Zack's algorithm. Geometric method best for skewed histograms with a single clear peak.
+    #[serde(alias = "triangle")]
     Triangle,
     /// Tsai's method. Preserves the moments of the original image in the binary result.
+    #[serde(alias = "moments")]
     Moments,
     /// Huang's fuzzy thresholding. Minimizes the measures of fuzziness.
+    #[serde(alias = "huang")]
     Huang,
     /// Assumes a bimodal histogram and finds the average of two peaks.
+    #[serde(alias = "intermodes")]
     Intermodes,
     /// Ridler-Calvard iterative clustering. Similar to Otsu but uses a different error metric.
+    #[serde(alias = "iso-data", alias = "isoData", alias = "iso_data")]
     IsoData,
     /// Kapur's method. Uses the entropy of the histogram to find the threshold.
+    #[serde(alias = "max-entropy", alias = "maxEntropy", alias = "max_entropy")]
     MaxEntropy,
     /// Uses the average intensity of all pixels as the threshold.
+    #[serde(alias = "mean")]
     Mean,
     /// Pre-smooths the histogram until there are only two peaks; finds the minimum between them.
+    #[serde(alias = "minimum")]
     Minimum,
-    /// Most common method. Minimizes intra-class variance (maximizes inter-class variance).
-    Otsu,
+    /// Minimizes intra-class variance (maximizes inter-class variance).
+    ///
+    /// `Two` behaves exactly as before - one cut, `thresh_otsu`. `Three` jointly
+    /// finds two simultaneous cuts (Otsu's variance criterion is additive across
+    /// classes, so this is the same search one level deeper - see `thresh_otsu_multi`)
+    /// and returns whichever cut `middle_class` selects. Mirrors CellProfiler's
+    /// "Two-class or three-class thresholding?" + "Assign pixels in the middle
+    /// intensity class to the foreground or the background?" pair.
+    #[serde(rename_all = "camelCase")]
+    #[serde(alias = "otsu")]
+    Otsu {
+        classes: SegmentationThresholdOtsuClassesSettings,
+    },
     /// Assumes a fixed percentage of pixels belong to the foreground.
+    #[serde(alias = "percentile")]
     Percentile,
     /// Based on the Renyi entropy of the histogram; a generalization of MaxEntropy.
+    #[serde(
+        alias = "renyi-entropy",
+        alias = "renyiEntropy",
+        alias = "renyi_entropy"
+    )]
     RenyiEntropy,
     /// An extension of Kapur's method using a different coefficient for entropy.
+    #[serde(alias = "shanbhag")]
     Shanbhag,
     /// Minimizes a cost function based on the discrepancy between two classes.
+    #[serde(alias = "yen")]
     Yen,
+}
+
+impl Default for SegmentationThresholdThresholdMethodSettings {
+    fn default() -> Self {
+        Self::None {}
+    }
 }
 
 ///  Each variant carries only the parameters it actually uses, so there's no shared field whose
 ///  meaning shifts depending on which function is selected (e.g. a "factor" that's a unitless
 ///  multiplier for `Scale` but a length in `size_unit` for `SnapArea`).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClassificationTransformObjectsTransformFunctionSettings {
     /// Scale the object by the given scale factor.
     ///
     /// Shape keeps and center of the object keeps the same, it is just shrinked or expanded.
     #[serde(rename_all = "camelCase")]
+    #[serde(alias = "scale")]
     Scale {
         ///  Unitless scale factor
         #[schemars(range(min = 0, max = 65535))]
@@ -384,6 +599,7 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     },
     /// Draws a circle around the object which is `extra_size` bigger than the object's bounding box.
     #[serde(rename_all = "camelCase")]
+    #[serde(alias = "snap-area", alias = "snapArea", alias = "snap_area")]
     SnapArea {
         ///  Size added on top of the object's bounding-box diameter
         #[schemars(range(min = 0, max = 65535))]
@@ -393,6 +609,7 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     },
     /// Draws a circle around the object's bounding box, with `min_diameter` as the minimum diameter.
     #[serde(rename_all = "camelCase")]
+    #[serde(alias = "min-circle", alias = "minCircle", alias = "min_circle")]
     MinCircle {
         ///  Minimum circle diameter
         #[schemars(range(min = 0, max = 65535))]
@@ -404,6 +621,7 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     ///
     /// If `diameter` is 0, the object's bounding box is used as the diameter instead.
     #[serde(rename_all = "camelCase")]
+    #[serde(alias = "draw-circle", alias = "drawCircle", alias = "draw_circle")]
     DrawCircle {
         ///  Circle diameter (0 = use the object's bounding box)
         #[schemars(range(min = 0, max = 65535))]
@@ -413,6 +631,11 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     },
     /// Replaces the object with the ellipse fitted to its mask.
     #[serde(rename_all = "camelCase")]
+    #[serde(
+        alias = "fitting-ellipse",
+        alias = "fittingEllipse",
+        alias = "fitting_ellipse"
+    )]
     FittingEllipse {
         ///  Unitless scale factor for the fitted ellipse
         #[schemars(range(min = 0, max = 65535))]
@@ -422,6 +645,7 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     /// dilation with a disk structuring element) - unlike `Scale`, irregular shapes
     /// grow by a uniform margin instead of being stretched proportionally.
     #[serde(rename_all = "camelCase")]
+    #[serde(alias = "expand")]
     Expand {
         ///  Margin added on every side of the mask's contour
         #[schemars(range(min = 0, max = 65535))]
@@ -432,6 +656,7 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     /// Shrinks the object inward by `margin`, following its actual contour (standard flat
     /// erosion with a disk structuring element).
     #[serde(rename_all = "camelCase")]
+    #[serde(alias = "shrink")]
     Shrink {
         ///  Margin removed from every side of the mask's contour
         #[schemars(range(min = 0, max = 65535))]
@@ -458,12 +683,22 @@ pub enum AiSegmentationUnetUNetOutputModeSettings {
     /// first, then the channel at `foreground_channel` is taken as the
     /// foreground probability.
     #[default]
+    #[serde(
+        alias = "softmax-classes",
+        alias = "softmaxClasses",
+        alias = "softmax_classes"
+    )]
     SoftmaxClasses,
     /// Channels are independent, already-activated probability maps — e.g. a
     /// foreground-mask channel plus a separate boundary channel, as produced by
     /// boundary-aware models (mask + boundary heads are *not* mutually
     /// exclusive, so they must never be put through a softmax together). The
     /// channel at `foreground_channel` is used directly.
+    #[serde(
+        alias = "independent-channels",
+        alias = "independentChannels",
+        alias = "independent_channels"
+    )]
     IndependentChannels,
 }
 

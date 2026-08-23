@@ -10,6 +10,7 @@ use crate::{
 ///
 /// Most methods analyze the image histogram to find a "cut-off" point that
 /// best separates the foreground from the background.
+#[derive(Debug, Clone, Copy, PartialEq, CommandsMeta)]
 pub enum ThresholdMethod {
     /// No threshold applied; typically used for bypass logic.
     None,
@@ -35,8 +36,18 @@ pub enum ThresholdMethod {
     Mean,
     /// Pre-smooths the histogram until there are only two peaks; finds the minimum between them.
     Minimum,
-    /// Most common method. Minimizes intra-class variance (maximizes inter-class variance).
-    Otsu,
+    /// Minimizes intra-class variance (maximizes inter-class variance).
+    ///
+    /// `Two` behaves exactly as before - one cut, `thresh_otsu`. `Three` jointly
+    /// finds two simultaneous cuts (Otsu's variance criterion is additive across
+    /// classes, so this is the same search one level deeper - see `thresh_otsu_multi`)
+    /// and returns whichever cut `middle_class` selects. Mirrors CellProfiler's
+    /// "Two-class or three-class thresholding?" + "Assign pixels in the middle
+    /// intensity class to the foreground or the background?" pair.
+    Otsu {
+        #[cmdsmeta(default = OtsuClasses::Two)]
+        classes: OtsuClasses,
+    },
     /// Assumes a fixed percentage of pixels belong to the foreground.
     Percentile,
     /// Based on the Renyi entropy of the histogram; a generalization of MaxEntropy.
@@ -45,6 +56,28 @@ pub enum ThresholdMethod {
     Shanbhag,
     /// Minimizes a cost function based on the discrepancy between two classes.
     Yen,
+}
+
+/// How many populations Otsu splits the histogram into.
+///
+/// `Three` needs a second, jointly-optimized cut - see [`ThresholdMethod::Otsu`].
+/// Not generalized past three: a fourth class would need a genuine "which of the
+/// K-1 cuts" selector in place of `middle_class`, not just a wider range - see
+/// the multilevel-thresholding note on `thresh_otsu_multi`.
+#[derive(Debug, Clone, Copy, PartialEq, CommandsMeta)]
+pub enum OtsuClasses {
+    Two,
+    Three {
+        #[cmdsmeta(default = OtsuMiddleClass::Background)]
+        middle_class: OtsuMiddleClass,
+    },
+}
+
+/// Which side of a three-class Otsu split the middle-intensity population joins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtsuMiddleClass {
+    Foreground,
+    Background,
 }
 
 /// Configuration for a single thresholding operation within a multi-threshold stack.
@@ -214,7 +247,21 @@ fn compute_auto_threshold(method: &ThresholdMethod, hist: &[f32; 256]) -> usize 
         ThresholdMethod::MaxEntropy => thresh_max_entropy(hist),
         ThresholdMethod::Mean => thresh_mean(hist),
         ThresholdMethod::Minimum => thresh_minimum(hist),
-        ThresholdMethod::Otsu => thresh_otsu(hist),
+        ThresholdMethod::Otsu { classes } => match classes {
+            OtsuClasses::Two => thresh_otsu(hist),
+            OtsuClasses::Three { middle_class } => {
+                let (t1, t2) = thresh_otsu_multi(hist);
+                match middle_class {
+                    // Middle class joins the background: only the brightest
+                    // population is foreground, so the *higher* cut is used.
+                    OtsuMiddleClass::Background => t2,
+                    // Middle class joins the foreground: everything above the
+                    // darkest population is foreground, so the *lower* cut
+                    // is used.
+                    OtsuMiddleClass::Foreground => t1,
+                }
+            }
+        },
         ThresholdMethod::Percentile => thresh_percentile(hist),
         ThresholdMethod::RenyiEntropy => thresh_renyi_entropy(hist),
         ThresholdMethod::Shanbhag => thresh_shanbhag(hist),
@@ -255,6 +302,64 @@ fn thresh_otsu(hist: &[f32; 256]) -> usize {
         }
     }
     k_star
+}
+
+/// Three-class Otsu: jointly searches for the two simultaneous cuts `(t1,
+/// t2)`, `t1 < t2`, that maximize the between-class variance across three
+/// populations (0..=t1, t1+1..=t2, t2+1..255). Otsu's variance criterion is
+/// additive across classes - `thresh_otsu`'s single-cut `bcv` is just
+/// `w0*mu0² + w1*mu1²` with the constant `n*muT²` term dropped, since it
+/// doesn't affect which cut wins - so the three-class case is the same
+/// maximization one level deeper: `w0*mu0² + w1*mu1² + w2*mu2²`, searched
+/// over both cuts.
+///
+/// Each returned cut is the *last* bin of its (lower) class, exactly like
+/// `thresh_otsu`'s return value, so the same "+1" scaling in
+/// `Threshold::execute` applies unchanged to whichever cut ends up selected.
+fn thresh_otsu_multi(hist: &[f32; 256]) -> (usize, usize) {
+    let n: f64 = hist.iter().map(|&v| v as f64).sum();
+    if n == 0.0 {
+        return (0, 0);
+    }
+
+    // Prefix count/sum through (and including) bin i.
+    let mut p = [0.0f64; 256];
+    let mut s = [0.0f64; 256];
+    let mut cum_p = 0.0f64;
+    let mut cum_s = 0.0f64;
+    for i in 0..256 {
+        cum_p += hist[i] as f64;
+        cum_s += i as f64 * hist[i] as f64;
+        p[i] = cum_p;
+        s[i] = cum_s;
+    }
+    let total_s = s[255];
+
+    // w*mu² = (sum)²/w for a class of total weight `w` and weighted sum
+    // `sum`; contributes 0 for an empty class.
+    let class_term = |w: f64, sum: f64| -> f64 {
+        if w > 0.0 { sum * sum / w } else { 0.0 }
+    };
+
+    let mut best = (0usize, 1usize);
+    let mut best_bcv = f64::MIN;
+    for t1 in 0..255usize {
+        let w0 = p[t1];
+        let s0 = s[t1];
+        let term0 = class_term(w0, s0);
+        for t2 in (t1 + 1)..255usize {
+            let w1 = p[t2] - w0;
+            let s1 = s[t2] - s0;
+            let w2 = n - p[t2];
+            let s2 = total_s - s[t2];
+            let bcv = term0 + class_term(w1, s1) + class_term(w2, s2);
+            if bcv > best_bcv {
+                best_bcv = bcv;
+                best = (t1, t2);
+            }
+        }
+    }
+    best
 }
 
 fn thresh_li(hist: &[f32; 256]) -> usize {
@@ -1149,7 +1254,12 @@ mod tests {
         let size = ImageSize { width, height };
 
         let methods = [
-            ("Otsu", ThresholdMethod::Otsu),
+            (
+                "Otsu",
+                ThresholdMethod::Otsu {
+                    classes: OtsuClasses::Two,
+                },
+            ),
             ("MinError", ThresholdMethod::MinError),
             ("Triangle", ThresholdMethod::Triangle),
             ("Moments", ThresholdMethod::Moments),
@@ -1235,6 +1345,136 @@ mod tests {
     #[test]
     fn test_otsu_matches_reference() {
         assert_eq!(thresh_otsu(&bimodal_reference_histogram()), 159);
+    }
+
+    /// Three well-separated populations (bins 20-40, 110-130, 200-220), for
+    /// exercising three-class Otsu. Deliberately *not* built by adding a
+    /// third cluster on top of [`bimodal_reference_histogram`]'s two - its
+    /// second cluster (160-200) would directly adjoin a cluster added at
+    /// 200-220, merging them into one contiguous block with no valley
+    /// between them.
+    fn trimodal_reference_histogram() -> [f32; 256] {
+        let mut h = [0.0f32; 256];
+        for i in 20..=40 {
+            h[i] = 50.0;
+        }
+        for i in 110..=130 {
+            h[i] = 50.0;
+        }
+        for i in 200..=220 {
+            h[i] = 50.0;
+        }
+        h
+    }
+
+    /// `ThresholdMethod::Otsu { classes: OtsuClasses::Two }` must still
+    /// dispatch to the exact same `thresh_otsu` the plain two-class case
+    /// always used, on both a two- and a three-population histogram -
+    /// wiring the new `classes` field in must not change Otsu's original
+    /// (two-class) behavior at all.
+    #[test]
+    fn test_otsu_two_class_dispatch_matches_original_thresh_otsu() {
+        let two_class = ThresholdMethod::Otsu {
+            classes: OtsuClasses::Two,
+        };
+        for hist in [bimodal_reference_histogram(), trimodal_reference_histogram()] {
+            assert_eq!(
+                compute_auto_threshold(&two_class, &hist),
+                thresh_otsu(&hist),
+                "OtsuClasses::Two must reproduce plain thresh_otsu exactly"
+            );
+        }
+    }
+
+    /// Three well-separated, equal-weight populations (bins 20-40, 110-130,
+    /// 200-220 - built by adding a third cluster on top of
+    /// `bimodal_reference_histogram`'s two) give an unambiguous ground truth
+    /// for the joint two-cut search: Otsu's between-class variance is flat
+    /// across any of the empty gaps separating the clusters, so the true
+    /// optimum sits anywhere each cluster ends - `thresh_otsu_multi`'s
+    /// tie-breaking (first cut reached, via strict `>`) should land exactly
+    /// on the end of the first cluster (40) and the end of the second (130).
+    /// Cross-checked with an independent Python re-implementation of the same
+    /// prefix-sum/variance formula.
+    #[test]
+    fn test_otsu_multi_matches_reference() {
+        assert_eq!(thresh_otsu_multi(&trimodal_reference_histogram()), (40, 130));
+    }
+
+    /// End-to-end regression for CellProfiler's "Three-class thresholding" +
+    /// "Assign pixels in the middle intensity class to the foreground or the
+    /// background?" pair: with three roughly equal-sized populations, setting
+    /// `middle_class` to `Background` must classify only the *brightest*
+    /// population as foreground (~1/3 of pixels), while `Foreground` must
+    /// classify the middle *and* brightest populations as foreground (~2/3) -
+    /// exactly mirroring how CellProfiler's middle-class assignment changes
+    /// which of the two jointly-optimized cuts becomes the final threshold.
+    #[test]
+    fn test_otsu_three_class_middle_assignment_mirrors_cellprofiler(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Three equal-sized, well-separated populations: dark, mid, bright.
+        let per_cluster = 100;
+        let mut input_data = Vec::with_capacity(per_cluster * 3);
+        for _ in 0..per_cluster {
+            input_data.push(30.0 / 255.0);
+        }
+        for _ in 0..per_cluster {
+            input_data.push(120.0 / 255.0);
+        }
+        for _ in 0..per_cluster {
+            input_data.push(210.0 / 255.0);
+        }
+        let size = ImageSize {
+            width: input_data.len(),
+            height: 1,
+        };
+
+        let run = |middle_class: OtsuMiddleClass| -> Result<f32, Box<dyn std::error::Error>> {
+            let input_img =
+                Image::<f32, 1, CpuAllocator>::new(size, input_data.clone(), CpuAllocator)?;
+            let settings = vec![ThresholdEntry {
+                method: ThresholdMethod::Otsu {
+                    classes: OtsuClasses::Three { middle_class },
+                },
+                min_threshold: 0.0,
+                max_threshold: 1.0,
+                object_class_id: SegmentationClass(1),
+                unit: PixelUnits::Relative,
+            }];
+            let cmd = Threshold {
+                thresholds: settings,
+            };
+            let mut ctx = PipelineContext::new_from_image_test(input_img)?;
+            let mut cache = PipelineCache::default();
+            cmd.execute(&mut ctx, &mut cache)?;
+            let result_pixels = ctx
+                .segmentation_map
+                .as_ref()
+                .expect("No labels found")
+                .as_slice();
+            Ok(result_pixels.iter().filter(|&&v| v == 1).count() as f32
+                / result_pixels.len() as f32)
+        };
+
+        let background_fraction = run(OtsuMiddleClass::Background)?;
+        let foreground_fraction = run(OtsuMiddleClass::Foreground)?;
+
+        assert!(
+            (0.25..0.40).contains(&background_fraction),
+            "middle_class=Background should classify only the brightest ~1/3 as foreground, \
+             got {background_fraction:.3}"
+        );
+        assert!(
+            (0.55..0.75).contains(&foreground_fraction),
+            "middle_class=Foreground should classify the middle+brightest ~2/3 as foreground, \
+             got {foreground_fraction:.3}"
+        );
+        assert!(
+            foreground_fraction > background_fraction,
+            "Foreground middle-class assignment must yield more foreground pixels than \
+             Background: foreground={foreground_fraction:.3}, background={background_fraction:.3}"
+        );
+        Ok(())
     }
 
     #[test]

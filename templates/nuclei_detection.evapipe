@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "meta": {
     "name": "Nuclei detection",
     "shortDescription": "Nuclei detection",
@@ -13,7 +14,7 @@
     {
       "enabled": true,
       "command": {
-        "type": "rollingBall",
+        "type": "ROLLING_BALL",
         "radius": 4.0,
         "ballType": "PARABOLOID",
         "preSmooth": true
@@ -22,24 +23,26 @@
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "threshold",
+        "type": "THRESHOLD",
         "thresholds": [
           {
-            "method": "TRIANGLE",
+            "method": {
+              "type": "TRIANGLE"
+            },
             "minThreshold": 0.0,
             "maxThreshold": 65535.0,
             "unit": "bit",
@@ -51,13 +54,13 @@
     {
       "enabled": true,
       "command": {
-        "type": "connectedComponents"
+        "type": "CONNECTED_COMPONENTS"
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "watershed",
+        "type": "WATERSHED",
         "maximumFinderTolerance": 0.5,
         "smoothingSigma": 0.0,
         "minObjectSize": 0
@@ -66,14 +69,14 @@
     {
       "enabled": true,
       "command": {
-        "type": "extractObjects",
+        "type": "EXTRACT_OBJECTS",
         "maxObjectsBeforeFail": 100000
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "classifyObjects",
+        "type": "CLASSIFY_OBJECTS",
         "inputClasses": [
           {
             "VALID": 2

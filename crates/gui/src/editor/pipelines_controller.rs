@@ -950,32 +950,64 @@ impl PipelinesController {
                     let params = cmd.parameters.clone();
 
                     if let Some((group_name, idx, field_name)) = nested_path {
-                        // Nested group field: find the group CommandParameter, then
-                        // update fields[k].value inside group_items[idx].
-                        let new_param_value = params_now
+                        // Nested group field: find the group CommandParameter, then either
+                        // patch fields[k].value inside group_items[idx], or - if changing this
+                        // field altered *which* fields that group item has (e.g. a
+                        // "thresholds.0.method" switch to Otsu adding a "method.classes"
+                        // dropdown, or a "thresholds.0.method.classes" switch to Three adding
+                        // "method.classes.middleClass") - fall back to a full resync, the same
+                        // "field set changed" guard the flat (non-grouped) case below already
+                        // has. Without this, a nested rich-enum variant switch inside a group
+                        // item only took effect after some *other*, unrelated change happened
+                        // to trigger a full resync.
+                        let new_group_fields = params_now
                             .iter()
                             .find(|p| p.name == group_name)
-                            .and_then(|p| p.groups.get(idx))
-                            .and_then(|item| item.iter().find(|fd| fd.name == field_name))
-                            .map(|fd| fd.value.clone())
+                            .and_then(|p| p.groups.get(idx));
+                        let new_field_names: Vec<String> = new_group_fields
+                            .map(|fields| fields.iter().map(|fd| fd.name.clone()).collect())
                             .unwrap_or_default();
+
+                        let mut old_field_names = Vec::new();
+                        let mut old_fields_model = None;
                         for i in 0..params.row_count() {
                             if let Some(p) = params.row_data(i) {
                                 if p.name.as_str() == group_name {
-                                    let items = p.group_items.clone();
-                                    if let Some(item) = items.row_data(idx) {
+                                    if let Some(item) = p.group_items.row_data(idx) {
                                         let fields = item.fields.clone();
-                                        for k in 0..fields.row_count() {
-                                            if let Some(mut lp) = fields.row_data(k) {
-                                                if lp.name.as_str() == field_name {
-                                                    lp.value = new_param_value.clone().into();
-                                                    fields.set_row_data(k, lp);
-                                                    break;
-                                                }
-                                            }
-                                        }
+                                        old_field_names = (0..fields.row_count())
+                                            .filter_map(|k| {
+                                                fields.row_data(k).map(|fd| fd.name.to_string())
+                                            })
+                                            .collect();
+                                        old_fields_model = Some(fields);
                                     }
                                     break;
+                                }
+                            }
+                        }
+
+                        if old_field_names != new_field_names {
+                            manager.sync_steps_of_selected_pipeline_to_slint(
+                                PipelineId(pipeline_id),
+                                false,
+                            );
+                            manager.pipeline_settings_changed();
+                            return;
+                        }
+
+                        let new_param_value = new_group_fields
+                            .and_then(|item| item.iter().find(|fd| fd.name == field_name))
+                            .map(|fd| fd.value.clone())
+                            .unwrap_or_default();
+                        if let Some(fields) = old_fields_model {
+                            for k in 0..fields.row_count() {
+                                if let Some(mut lp) = fields.row_data(k) {
+                                    if lp.name.as_str() == field_name {
+                                        lp.value = new_param_value.clone().into();
+                                        fields.set_row_data(k, lp);
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -2427,6 +2459,7 @@ mod tests {
                 ..Default::default()
             },
             pipeline_steps: steps,
+            ..Default::default()
         }
     }
 
