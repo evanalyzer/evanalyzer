@@ -271,6 +271,22 @@ impl From<SegmentationThresholdThresholdMethodSettings> for ThresholdMethod {
     }
 }
 
+impl From<SegmentationThresholdThresholdValueSourceSettings> for ThresholdValueSource {
+    fn from(_s: SegmentationThresholdThresholdValueSourceSettings) -> Self {
+        match _s {
+            SegmentationThresholdThresholdValueSourceSettings::ActualImage => {
+                ThresholdValueSource::ActualImage
+            }
+            SegmentationThresholdThresholdValueSourceSettings::RawImage => {
+                ThresholdValueSource::RawImage
+            }
+            SegmentationThresholdThresholdValueSourceSettings::Memory(v) => {
+                ThresholdValueSource::Memory(v)
+            }
+        }
+    }
+}
+
 impl From<ClassificationTransformObjectsTransformFunctionSettings> for TransformFunction {
     fn from(_s: ClassificationTransformObjectsTransformFunctionSettings) -> Self {
         match _s {
@@ -707,6 +723,7 @@ impl From<ThresholdEntrySettings> for ThresholdEntry {
             max_threshold: _s.max_threshold.clamp(0.0, 65535.0),
             unit: _s.unit,
             object_class_id: _s.object_class_id,
+            value_source: ThresholdValueSource::from(_s.value_source),
         }
     }
 }

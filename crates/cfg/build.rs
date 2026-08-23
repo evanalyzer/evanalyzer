@@ -30,6 +30,7 @@ mod types {
 }
 mod core_types {
     pub use super::types::ids::ImageAddress;
+    pub use super::types::ids::MemoryId;
     pub use super::types::units::{PixelUnits, SizeUnits};
 }
 mod modules {

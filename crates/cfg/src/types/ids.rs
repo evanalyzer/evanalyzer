@@ -9,9 +9,11 @@ pub type MemorySlot = u32;
 
 // Image addressins -----------
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "camelCase")]
 pub enum MemoryId {
+    #[serde(alias = "PIPELINE_CONTEXT", alias = "pipeline_context")]
     PipelineContext(MemorySlot),
+    #[serde(alias = "PROJECT_CACHE", alias = "project_cache")]
     ProjectCache(MemorySlot),
 }
 
@@ -22,11 +24,14 @@ impl Default for MemoryId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "camelCase")]
 pub enum ImageAddress {
+    #[serde(rename = "SCRATCHPAD", alias = "scratchpad", alias = "Scratchpad")]
     Scratchpad,
+    #[serde(alias = "MEMORY", alias = "memory")]
     Memory(MemoryId), // Memory slot
-    Channel(i32),     // Initial based on image channel
+    #[serde(alias = "CHANNEL", alias = "channel")]
+    Channel(i32), // Initial based on image channel
 }
 
 impl Default for ImageAddress {
@@ -121,10 +126,86 @@ mod tests {
     }
 
     #[test]
+    fn memory_id_serializes_as_camel_case() {
+        let json = serde_json::to_value(MemoryId::PipelineContext(3)).unwrap();
+        assert_eq!(json, serde_json::json!({"pipelineContext": 3}));
+    }
+
+    /// `camelCase` is the on-disk shape (see `memory_id_serializes_as_camel_case`),
+    /// but SCREAMING_SNAKE_CASE and snake_case must still deserialize - e.g.
+    /// older documents, or ones hand-authored using either casing.
+    #[test]
+    fn memory_id_deserializes_every_variant_alias_casing() {
+        for (json, expected) in [
+            (
+                serde_json::json!({"pipelineContext": 2}),
+                MemoryId::PipelineContext(2),
+            ),
+            (
+                serde_json::json!({"PIPELINE_CONTEXT": 2}),
+                MemoryId::PipelineContext(2),
+            ),
+            (
+                serde_json::json!({"pipeline_context": 2}),
+                MemoryId::PipelineContext(2),
+            ),
+            (
+                serde_json::json!({"projectCache": 5}),
+                MemoryId::ProjectCache(5),
+            ),
+            (
+                serde_json::json!({"PROJECT_CACHE": 5}),
+                MemoryId::ProjectCache(5),
+            ),
+            (
+                serde_json::json!({"project_cache": 5}),
+                MemoryId::ProjectCache(5),
+            ),
+        ] {
+            let parsed: MemoryId = serde_json::from_value(json.clone())
+                .unwrap_or_else(|e| panic!("{json} failed to deserialize: {e}"));
+            assert_eq!(parsed, expected, "for input {json}");
+        }
+    }
+
+    #[test]
     fn image_address_default_is_memory_pipeline_context_slot_one() {
         assert_eq!(
             ImageAddress::default(),
             ImageAddress::Memory(MemoryId::PipelineContext(1))
+        );
+    }
+
+    /// `Scratchpad` deliberately serializes as SCREAMING_SNAKE_CASE
+    /// (`"SCRATCHPAD"`), unlike `Memory`/`Channel` which follow the enum's
+    /// `camelCase` default - a per-variant `rename` override.
+    #[test]
+    fn image_address_scratchpad_serializes_as_screaming_snake_case() {
+        let json = serde_json::to_value(ImageAddress::Scratchpad).unwrap();
+        assert_eq!(json, serde_json::json!("SCRATCHPAD"));
+    }
+
+    #[test]
+    fn image_address_scratchpad_deserializes_both_casings() {
+        assert_eq!(
+            serde_json::from_value::<ImageAddress>(serde_json::json!("SCRATCHPAD")).unwrap(),
+            ImageAddress::Scratchpad
+        );
+        assert_eq!(
+            serde_json::from_value::<ImageAddress>(serde_json::json!("scratchpad")).unwrap(),
+            ImageAddress::Scratchpad
+        );
+    }
+
+    #[test]
+    fn image_address_memory_and_channel_still_serialize_as_camel_case() {
+        assert_eq!(
+            serde_json::to_value(ImageAddress::Memory(MemoryId::PipelineContext(1))).unwrap(),
+            serde_json::json!({"memory": {"pipelineContext": 1}})
+        );
+        assert_eq!(
+            serde_json::to_value(ImageAddress::Channel(3)).unwrap(),
+            serde_json::json!({"channel": 3})
         );
     }
 
