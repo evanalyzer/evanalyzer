@@ -64,6 +64,21 @@ pub struct Watershed {
     /// Use it to drop tiny fragments left by very ragged masks.
     #[cmdsmeta(default = 0, min = 0, max = 100000, step = 1)]
     pub min_object_size: i32,
+
+    /// What surface local maxima are seeded from.
+    ///
+    /// `DistanceMap` is default behaviour emulating ImageJ's watershed implemention.
+    /// `Intensity` finds seeds on the (optionally smoothed) grayscale image instead,
+    ///  restricted to the foreground mask - the fix for diffusely-connected regions
+    /// whose *shape* has no separate peaks but whose *brightness* clearly does.
+    #[cmdsmeta(default = SeedSource::DistanceMap)]
+    pub seed_source: SeedSource,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SeedSource {
+    DistanceMap,
+    Intensity,
 }
 
 impl ImageAlgorithm for Watershed {
@@ -350,6 +365,7 @@ mod tests {
                 maximum_finder_tolerance: 0.5,
                 smoothing_sigma: 0.0,
                 min_object_size: 0,
+                seed_source: SeedSource::DistanceMap,
             }
             .execute(&mut ctx, &mut cache)
             .expect("Watershed failed");
@@ -430,6 +446,7 @@ mod tests {
                 maximum_finder_tolerance: 0.5,
                 smoothing_sigma: 0.0,
                 min_object_size: 0,
+                seed_source: SeedSource::DistanceMap,
             }
             .execute(&mut ctx, &mut cache)
             .expect("Watershed failed");
@@ -472,6 +489,7 @@ mod tests {
                 maximum_finder_tolerance: tolerance,
                 smoothing_sigma: 0.0,
                 min_object_size: 0,
+                seed_source: SeedSource::DistanceMap,
             };
             cmd.execute(&mut ctx, &mut cache).unwrap();
 
@@ -526,6 +544,7 @@ mod tests {
             maximum_finder_tolerance: 0.1,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -609,6 +628,7 @@ mod tests {
             maximum_finder_tolerance: 0.8,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
 
         // Execute CCL
@@ -854,6 +874,7 @@ mod tests {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -925,6 +946,7 @@ mod tests {
             maximum_finder_tolerance: 3.0,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -990,6 +1012,7 @@ mod tests {
             maximum_finder_tolerance: 1.0,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -1053,6 +1076,7 @@ mod tests {
                 maximum_finder_tolerance: 0.1,
                 smoothing_sigma: 0.0,
                 min_object_size,
+                seed_source: SeedSource::DistanceMap,
             }
             .execute(&mut ctx, &mut cache)
             .expect("Watershed failed");
@@ -1112,6 +1136,7 @@ mod tests {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 1.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         }
         .execute(&mut ctx, &mut cache)
         .expect("Watershed failed");
@@ -1172,6 +1197,7 @@ mod tests {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
 
         watershed
@@ -1258,6 +1284,7 @@ mod tests {
             maximum_finder_tolerance: 0.5, // ImageJ default
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         }
         .execute(&mut ctx, &mut cache)
         .expect("Watershed failed");
@@ -1327,6 +1354,7 @@ mod tests {
             maximum_finder_tolerance: 1.0,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         }
         .execute(&mut ctx, &mut cache)
         .expect("Watershed failed");

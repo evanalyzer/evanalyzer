@@ -1187,6 +1187,7 @@ impl PipelinesController {
                 settings: project.images.settings.clone(),
             },
             pipelines: project.pipelines.clone(),
+            tile_merge: project.tile_merge.clone(),
         }
     }
 

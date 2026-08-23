@@ -212,6 +212,15 @@ impl From<FiltersRankFilterRankFilterTypeSettings> for RankFilterType {
     }
 }
 
+impl From<SegmentationWatershedSeedSourceSettings> for SeedSource {
+    fn from(_s: SegmentationWatershedSeedSourceSettings) -> Self {
+        match _s {
+            SegmentationWatershedSeedSourceSettings::DistanceMap => SeedSource::DistanceMap,
+            SegmentationWatershedSeedSourceSettings::Intensity => SeedSource::Intensity,
+        }
+    }
+}
+
 impl From<FiltersIlluminationCorrectionSmoothingMethodSettings> for SmoothingMethod {
     fn from(_s: FiltersIlluminationCorrectionSmoothingMethodSettings) -> Self {
         match _s {
@@ -783,6 +792,7 @@ impl From<WatershedSettings> for Watershed {
             maximum_finder_tolerance: _s.maximum_finder_tolerance.clamp(0.1, 20.0),
             smoothing_sigma: _s.smoothing_sigma.clamp(0.0, 10.0),
             min_object_size: _s.min_object_size,
+            seed_source: SeedSource::from(_s.seed_source),
         }
     }
 }

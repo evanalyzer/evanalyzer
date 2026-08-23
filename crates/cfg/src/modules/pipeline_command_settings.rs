@@ -427,6 +427,16 @@ pub enum FiltersRankFilterRankFilterTypeSettings {
     Outliers(f32),
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SegmentationWatershedSeedSourceSettings {
+    #[default]
+    #[serde(alias = "distance-map", alias = "distanceMap", alias = "distance_map")]
+    DistanceMap,
+    #[serde(alias = "intensity")]
+    Intensity,
+}
+
 /// Smoothing applied to the block-reduced field to remove blockiness before
 /// it is used as the correction field.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
@@ -1729,6 +1739,13 @@ pub struct WatershedSettings {
     /// Use it to drop tiny fragments left by very ragged masks.
     #[schemars(range(min = 0, max = 100000))]
     pub min_object_size: i32,
+    /// What surface local maxima are seeded from.
+    ///
+    /// `DistanceMap` is default behaviour emulating ImageJ's watershed implemention.
+    /// `Intensity` finds seeds on the (optionally smoothed) grayscale image instead,
+    /// restricted to the foreground mask - the fix for diffusely-connected regions
+    /// whose *shape* has no separate peaks but whose *brightness* clearly does.
+    pub seed_source: SegmentationWatershedSeedSourceSettings,
 }
 
 impl Default for WatershedSettings {
@@ -1737,6 +1754,7 @@ impl Default for WatershedSettings {
             maximum_finder_tolerance: 0.5f32,
             smoothing_sigma: 0.0f32,
             min_object_size: 0i32,
+            seed_source: SegmentationWatershedSeedSourceSettings::DistanceMap,
         }
     }
 }

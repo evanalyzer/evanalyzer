@@ -645,7 +645,9 @@ component ClassDropdown inherits Rectangle {
 // Multi-select class dropdown - fires changed("toggle:N") on each row click.
 // selection-flags is a 33-element [string] ("1"/"0") for classes 0–32,
 // populated by the generator via to_parameters() and kept live by the controller.
-component MultiClassDropdown inherits Rectangle {
+// Exported so other dialogs (e.g. project_settings_dialog.slint's tile-merge
+// class exclusion list) can reuse the same picker instead of a bespoke one.
+export component MultiClassDropdown inherits Rectangle {
         in property <bool> is-seg: false;
         in-out property <string> value: "";
         in property <[string]> selection-flags: [];

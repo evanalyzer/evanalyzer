@@ -84,6 +84,7 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
         plate: convert_plate(&old.project_settings, warnings),
         images,
         pipelines: convert_pipelines(old, warnings),
+        tile_merge: crate::settings::project_settings::TileMergeSettings::default(),
     }
 }
 
@@ -845,6 +846,9 @@ fn convert_watershed(s: &LegacyWatershedSettings) -> PipelineCommand {
         maximum_finder_tolerance: s.maximum_finder_tolerance.max(0.1),
         smoothing_sigma: 0.0,
         min_object_size: 0,
+        // Old watershed only ever seeded from the distance map - the new
+        // `Intensity` option didn't exist yet, so this preserves old behavior.
+        seed_source: SegmentationWatershedSeedSourceSettings::DistanceMap,
     })
 }
 
