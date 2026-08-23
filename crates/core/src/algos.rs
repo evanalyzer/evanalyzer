@@ -73,6 +73,7 @@ pub use self::morphology::morphological_transformation::KernelShapes;
 pub use self::morphology::morphological_transformation::MorphOps;
 pub use self::morphology::morphological_transformation::MorphologicalCommand;
 pub use self::segmentation::connected_components::ConnectedComponents;
+pub use self::segmentation::threshold::Averaging;
 pub use self::segmentation::threshold::OtsuClasses;
 pub use self::segmentation::threshold::OtsuMiddleClass;
 pub use self::segmentation::threshold::Threshold;

@@ -2252,6 +2252,13 @@
         "objectClassId"
       ]
     },
+    "SegmentationThresholdAveragingSettings": {
+      "type": "string",
+      "enum": [
+        "MEAN",
+        "MEDIAN"
+      ]
+    },
     "SegmentationThresholdOtsuClassesSettings": {
       "description": "How many populations Otsu splits the histogram into.\n\n`Three` needs a second, jointly-optimized cut - see [`ThresholdMethod::Otsu`].\nNot generalized past three: a fourth class would need a genuine \"which of the\nK-1 cuts\" selector in place of `middle_class`, not just a wider range - see\nthe multilevel-thresholding note on `thresh_otsu_multi`.",
       "oneOf": [
@@ -2519,6 +2526,38 @@
           },
           "required": [
             "type"
+          ]
+        },
+        {
+          "description": "Trims outliers from both ends of the sorted pixel distribution, then\nsets the threshold at `deviations_above_average` standard deviations\n(or MADs) above the trimmed mean (or median). A port of CellProfiler's\n\"Robust Background\" method - well suited to images with a clean, low\nbackground and sparse foreground, since the outlier trim keeps bright\nforeground pixels from dragging the background estimate upward.",
+          "type": "object",
+          "properties": {
+            "averagingMethod": {
+              "$ref": "#/$defs/SegmentationThresholdAveragingSettings"
+            },
+            "deviationsAboveAverage": {
+              "type": "number",
+              "format": "float"
+            },
+            "lowerOutlierFraction": {
+              "type": "number",
+              "format": "float"
+            },
+            "type": {
+              "type": "string",
+              "const": "ROBUST_BACKGROUND"
+            },
+            "upperOutlierFraction": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "required": [
+            "type",
+            "lowerOutlierFraction",
+            "upperOutlierFraction",
+            "averagingMethod",
+            "deviationsAboveAverage"
           ]
         }
       ]
