@@ -34,8 +34,8 @@ const OBJECT_CACHE_MARGIN_DIVISOR: u64 = 16;
 pub const MAX_TILE_SIZE: usize = 4096;
 
 /// Bound on the `sync_channel::<PipelineCache>` handoff to the DB writer
-/// thread (see both `analyze_image` and `analyze_image_tiles_parallel`
-/// below). This is the number that actually decides a worker's worst-case
+/// thread (see `analyze_image` in `job_executor.rs`). This is the number
+/// that actually decides a worker's worst-case
 /// memory footprint: if the writer falls behind, this many completed
 /// `PipelineCache`s (cached channel planes plus every object mask/metadata
 /// for that tile) can queue up in memory before a worker blocks on send,
