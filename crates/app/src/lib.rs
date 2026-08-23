@@ -1,10 +1,10 @@
 pub mod ai_learning;
 pub mod bioimageio;
 pub mod crash_log;
+pub mod export;
 pub mod extensions;
 pub mod frontend;
 mod project_owner;
-pub mod publisher;
 mod results;
 pub mod settings;
 pub mod templates;
@@ -42,4 +42,8 @@ pub mod result {
     pub use crate::results::results_window::{
         DEFAULT_WINDOW_PAGES, EvictEdge, PageRowCounts, RowWindow,
     };
+}
+
+pub mod exporter {
+    pub use crate::export::cite_project::cite_project;
 }

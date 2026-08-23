@@ -2284,4 +2284,82 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    #[ignore = "debug probe, requires tests/Slide1_distal_zoom_40x.vsi"]
+    fn debug_vsi_series1_full_read_dump_png() {
+        let path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/Slide1_distal_zoom_40x.vsi"
+        ));
+        let reader = ImageReader::new(&path, ReadMode::SplitChannels).unwrap();
+        let meta = reader.get_image_meta();
+        let series_info = meta.series.get(&1).unwrap();
+        let pyr = series_info.resolutions.get(&0).unwrap();
+        println!(
+            "series1: {}x{} color_channels={} nr_c_stacks={}",
+            pyr.width, pyr.height, pyr.color_channels, series_info.nr_c_stacks
+        );
+
+        let tile = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: pyr.width as usize,
+            height: pyr.height as usize,
+        };
+        let channels = reader
+            .read_image_tile_combined(1, 0, ZProjection::None, &None, 0, None, &tile)
+            .unwrap();
+
+        let mut img = image::RgbImage::new(pyr.width as u32, pyr.height as u32);
+        for ch in &channels {
+            let (r_i, g_i, b_i) = match ch.c_stack {
+                0 => (0usize, usize::MAX, usize::MAX),
+                1 => (usize::MAX, 0usize, usize::MAX),
+                2 => (usize::MAX, usize::MAX, 0usize),
+                _ => continue,
+            };
+            if let ImageContainer::F32Gray(gray) = &*ch.image {
+                let slice = gray.as_slice();
+                println!(
+                    "channel {} len={} expected={}",
+                    ch.c_stack,
+                    slice.len(),
+                    pyr.width as usize * pyr.height as usize
+                );
+                if ch.c_stack == 0 {
+                    let w = pyr.width as usize;
+                    for (x, y) in [
+                        (0usize, 0usize),
+                        (10, 10),
+                        (2000, 500),
+                        (1365, 0),
+                        (0, 1000),
+                        (2730, 2000),
+                        (4000, 2999),
+                    ] {
+                        let v = (slice[y * w + x] * 255.0).round() as u8;
+                        println!("  sample ({x},{y}) = {v}");
+                    }
+                }
+                for y in 0..pyr.height as usize {
+                    for x in 0..pyr.width as usize {
+                        let v = (slice[y * pyr.width as usize + x].clamp(0.0, 1.0) * 255.0) as u8;
+                        let px = img.get_pixel_mut(x as u32, y as u32);
+                        if r_i == 0 {
+                            px[0] = v;
+                        } else if g_i == 0 {
+                            px[1] = v;
+                        } else if b_i == 0 {
+                            px[2] = v;
+                        }
+                    }
+                }
+            }
+        }
+        let out = "/tmp/claude-0/-workspaces-evanalyzer/cb8008d2-7ac2-4035-bc41-92420ecb4a39/scratchpad/scratch_series1_full.png";
+        img.save(out).unwrap();
+        println!("saved to {out}");
+        panic!("debug output above");
+    }
 }
