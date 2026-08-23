@@ -820,9 +820,14 @@ fn apply_param_change_threshold_entry_otsu_classes_and_middle_class_round_trip()
         .find(|p| p.name == "method.classes")
         .expect("selecting Otsu must expose a method.classes dropdown");
     assert_eq!(classes.value, "Two", "OtsuClasses defaults to Two");
-    assert_eq!(classes.options, vec!["Two".to_string(), "Three".to_string()]);
+    assert_eq!(
+        classes.options,
+        vec!["Two".to_string(), "Three".to_string()]
+    );
     assert!(
-        !after_otsu.iter().any(|p| p.name == "method.classes.middle_class"),
+        !after_otsu
+            .iter()
+            .any(|p| p.name == "method.classes.middle_class"),
         "middle_class must not appear while classes is still Two"
     );
 
