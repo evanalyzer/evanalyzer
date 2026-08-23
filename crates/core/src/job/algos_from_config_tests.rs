@@ -854,6 +854,7 @@ fn threshold_entry_settings_convert_and_clamp_thresholds() {
         max_threshold: 999999.0,
         unit: PixelUnits::Percent,
         object_class_id: SegmentationClass(6),
+        value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
     };
     let result = ThresholdEntry::from(settings);
     assert!(matches!(result.method, ThresholdMethod::Manual));

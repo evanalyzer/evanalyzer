@@ -265,7 +265,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     // Header - only config/serde imports, no core
     out.push_str("// @generated - do not edit by hand\n");
     // out.push_str("use indexmap::IndexMap;\n");
-    out.push_str("use crate::{core_types::{ImageAddress,PixelUnits, SizeUnits}, types::classes::{ObjectClass, SegmentationClass}};\n");
+    out.push_str("use crate::{core_types::{ImageAddress,MemoryId,PixelUnits, SizeUnits}, types::classes::{ObjectClass, SegmentationClass}};\n");
     out.push_str("use std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
@@ -2523,7 +2523,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("use crate::modules::pipeline_command_settings::*;\n");
     out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
-    out.push_str("use crate::core_types::{PixelUnits, SizeUnits};\n");
+    out.push_str("use crate::core_types::{MemoryId, PixelUnits, SizeUnits};\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 

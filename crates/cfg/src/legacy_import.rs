@@ -828,6 +828,7 @@ fn convert_threshold(
                 max_threshold: t.threshold_max,
                 unit: crate::core_types::PixelUnits::Bit,
                 object_class_id: SegmentationClass(t.pixel_class_id.max(0) as u32),
+                value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
             }
         })
         .collect();

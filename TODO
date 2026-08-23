@@ -13,6 +13,8 @@
 - [x] Allow to train pixel classifier
 - [x] Add fill holes command
 - [x] Add AI Object classifier command
+- [ ] Support for sam-vit
+- [ ] Merge tiled objects (See docs(tile_merge_plan-md))
 
 ## GUI review (Slint/gui crate)
 

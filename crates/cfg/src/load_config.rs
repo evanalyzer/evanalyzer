@@ -40,8 +40,14 @@ pub fn load_project_settings(raw: Value) -> Result<ProjectSettings, InternalErro
 }
 
 /// Migration steps for [`AiLearningSettings`] - see [`PROJECT_MIGRATIONS`].
-/// Nothing to migrate yet.
-const AI_LEARNING_SETTINGS_MIGRATIONS: &[MigrationStep] = &[|_raw| {}];
+/// Nothing to migrate yet; both steps are no-ops, but the list's length must
+/// still track `CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION` (currently 2) -
+/// `migrate_and_deserialize` slices `steps[from_version..]`, which panics for
+/// a file already at the current version if this list is shorter than that.
+const AI_LEARNING_SETTINGS_MIGRATIONS: &[MigrationStep] = &[
+    |_raw| {}, // 0 -> 1: nothing to do yet
+    |_raw| {}, // 1 -> 2: nothing to do yet
+];
 
 /// Loads an [`AiLearningSettings`] from its raw on-disk JSON (a standalone
 /// `--settings` file, or embedded in a saved classifier), migrating it
@@ -151,6 +157,23 @@ mod tests {
 
         let err = load_ai_learning_settings(raw).expect_err("newer version must be rejected");
         assert!(err.to_string().contains("newer version"));
+    }
+
+    /// Regression test: `AI_LEARNING_SETTINGS_MIGRATIONS` must have one entry
+    /// per version bump (matching `CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION`),
+    /// same as `PROJECT_MIGRATIONS` - a file already at the current version
+    /// (the common case: anything freshly saved) must load without running
+    /// any migration step, not panic on an out-of-range slice.
+    #[test]
+    fn load_ai_learning_settings_accepts_the_current_version() {
+        let mut raw = serde_json::to_value(sample_ai_learning_settings()).unwrap();
+        raw["schemaVersion"] = serde_json::json!(CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION);
+
+        let settings = load_ai_learning_settings(raw).expect("current version must load");
+        assert_eq!(
+            settings.schema_version,
+            CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION
+        );
     }
 
     #[test]

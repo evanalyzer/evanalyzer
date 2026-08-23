@@ -1258,26 +1258,26 @@
         {
           "type": "object",
           "properties": {
-            "MEMORY": {
+            "memory": {
               "$ref": "#/$defs/MemoryId"
             }
           },
           "additionalProperties": false,
           "required": [
-            "MEMORY"
+            "memory"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "CHANNEL": {
+            "channel": {
               "type": "integer",
               "format": "int32"
             }
           },
           "additionalProperties": false,
           "required": [
-            "CHANNEL"
+            "channel"
           ]
         }
       ]
@@ -1565,7 +1565,7 @@
         {
           "type": "object",
           "properties": {
-            "PIPELINE_CONTEXT": {
+            "pipelineContext": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -1573,13 +1573,13 @@
           },
           "additionalProperties": false,
           "required": [
-            "PIPELINE_CONTEXT"
+            "pipelineContext"
           ]
         },
         {
           "type": "object",
           "properties": {
-            "PROJECT_CACHE": {
+            "projectCache": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0
@@ -1587,7 +1587,7 @@
           },
           "additionalProperties": false,
           "required": [
-            "PROJECT_CACHE"
+            "projectCache"
           ]
         }
       ]
@@ -2934,6 +2934,34 @@
         }
       ]
     },
+    "SegmentationThresholdThresholdValueSourceSettings": {
+      "description": "Which image the threshold *value* is calculated from. Mirrors CellProfiler's\n ability to calculate a threshold on one image (e.g. the raw, unblurred\n image) and apply it to another (the blurred image actually being\n segmented): the cut-off computed here is always applied against the\n pipeline's actual current image - see [`ThresholdEntry::value_source`].",
+      "oneOf": [
+        {
+          "description": "Calculate the threshold from the pipeline's current image - the same\nimage the threshold is applied to. This is the historical behavior.",
+          "type": "string",
+          "const": "ACTUAL_IMAGE"
+        },
+        {
+          "description": "Calculate the threshold from the unedited image this channel started\nthe pipeline with, ignoring any preprocessing (blur, illumination\ncorrection, ...) applied so far. Looked up in the pipeline cache under\n`ImageAddress::Channel` for the current image's channel.",
+          "type": "string",
+          "const": "RAW_IMAGE"
+        },
+        {
+          "description": "Calculate the threshold from a user-defined snapshot stored earlier in\nthe pipeline (e.g. via the `ImageCache` command), addressed by\n`MemoryId`.",
+          "type": "object",
+          "properties": {
+            "MEMORY": {
+              "$ref": "#/$defs/MemoryId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "MEMORY"
+          ]
+        }
+      ]
+    },
     "SeriesSettings": {
       "type": "object",
       "properties": {
@@ -3130,6 +3158,11 @@
           "description": "Unit used for the threshold value.\n\n bit: 0 - 255/65535\n %: 0 - 100.0\n rel: 0 - 1.0",
           "$ref": "#/$defs/PixelUnits",
           "default": "bit"
+        },
+        "valueSource": {
+          "description": "Defines which image should be taken for calculating the threhold value.\n\n This is the source which is used to calculate the threshold value.\n The value itself is applied to the actual image the pipeline stands.",
+          "$ref": "#/$defs/SegmentationThresholdThresholdValueSourceSettings",
+          "default": "ACTUAL_IMAGE"
         }
       }
     },

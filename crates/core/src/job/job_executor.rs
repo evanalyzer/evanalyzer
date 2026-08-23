@@ -1989,6 +1989,7 @@ mod full_run_integration_tests {
     use super::*;
     use crate::algos::{
         ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod,
+        ThresholdValueSource,
     };
     use crate::pipeline::pipeline::CorePipelineSettings;
     use crate::storage::memory::MemoryExporter;
@@ -2016,6 +2017,7 @@ mod full_run_integration_tests {
                 max_threshold: 255.0,
                 unit: PixelUnits::Bit,
                 object_class_id: SegmentationClass(1),
+                value_source: ThresholdValueSource::ActualImage,
             }],
         }));
         pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));

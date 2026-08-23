@@ -1,6 +1,6 @@
 // @generated - do not edit by hand
 use crate::{
-    core_types::{ImageAddress, PixelUnits, SizeUnits},
+    core_types::{ImageAddress, MemoryId, PixelUnits, SizeUnits},
     types::classes::{ObjectClass, SegmentationClass},
 };
 use schemars::JsonSchema;
@@ -579,6 +579,32 @@ impl Default for SegmentationThresholdThresholdMethodSettings {
     fn default() -> Self {
         Self::None {}
     }
+}
+
+///  Which image the threshold *value* is calculated from. Mirrors CellProfiler's
+///  ability to calculate a threshold on one image (e.g. the raw, unblurred
+///  image) and apply it to another (the blurred image actually being
+///  segmented): the cut-off computed here is always applied against the
+///  pipeline's actual current image - see [`ThresholdEntry::value_source`].
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SegmentationThresholdThresholdValueSourceSettings {
+    /// Calculate the threshold from the pipeline's current image - the same
+    /// image the threshold is applied to. This is the historical behavior.
+    #[default]
+    #[serde(alias = "actual-image", alias = "actualImage", alias = "actual_image")]
+    ActualImage,
+    /// Calculate the threshold from the unedited image this channel started
+    /// the pipeline with, ignoring any preprocessing (blur, illumination
+    /// correction, ...) applied so far. Looked up in the pipeline cache under
+    /// `ImageAddress::Channel` for the current image's channel.
+    #[serde(alias = "raw-image", alias = "rawImage", alias = "raw_image")]
+    RawImage,
+    /// Calculate the threshold from a user-defined snapshot stored earlier in
+    /// the pipeline (e.g. via the `ImageCache` command), addressed by
+    /// `MemoryId`.
+    #[serde(alias = "memory")]
+    Memory(MemoryId),
 }
 
 ///  Each variant carries only the parameters it actually uses, so there's no shared field whose
@@ -1482,6 +1508,10 @@ pub struct ThresholdSettings {
     pub thresholds: Vec<ThresholdEntrySettings>,
 }
 
+fn _serde_default_thresholdentry_value_source() -> SegmentationThresholdThresholdValueSourceSettings
+{
+    SegmentationThresholdThresholdValueSourceSettings::ActualImage
+}
 ///  Configuration for a single thresholding operation within a multi-threshold stack.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 #[schemars(default)]
@@ -1505,6 +1535,12 @@ pub struct ThresholdEntrySettings {
     pub unit: PixelUnits,
     ///  The classification ID assigned to pixels falling within this threshold range.
     pub object_class_id: SegmentationClass,
+    ///  Defines which image should be taken for calculating the threhold value.
+    ///
+    ///  This is the source which is used to calculate the threshold value.
+    ///  The value itself is applied to the actual image the pipeline stands.
+    #[serde(default = "_serde_default_thresholdentry_value_source")]
+    pub value_source: SegmentationThresholdThresholdValueSourceSettings,
 }
 
 impl Default for ThresholdEntrySettings {
@@ -1515,6 +1551,7 @@ impl Default for ThresholdEntrySettings {
             max_threshold: 65535.0f32,
             unit: PixelUnits::Bit,
             object_class_id: SegmentationClass::default(),
+            value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
         }
     }
 }
