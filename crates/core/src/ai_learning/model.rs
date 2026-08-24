@@ -126,7 +126,7 @@ mod tests {
             classifier,
             settings: AiLearningSettings {
                 schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-                metadata: MetaData {
+                meta: MetaData {
                     name: "test-model".into(),
                     ..Default::default()
                 },
@@ -149,7 +149,7 @@ mod tests {
         let loaded = load_from_file(&path).unwrap();
 
         assert_eq!(loaded.version, CURRENT_SAVED_CLASSIFIER_VERSION);
-        assert_eq!(loaded.settings.metadata.name, "test-model");
+        assert_eq!(loaded.settings.meta.name, "test-model");
 
         let before = saved.classifier.predict(&[vec![0.5, 0.5]]).unwrap();
         let after = loaded.classifier.predict(&[vec![0.5, 0.5]]).unwrap();

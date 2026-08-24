@@ -10,7 +10,7 @@
       "description": "The collection of images and their associated processing states.",
       "$ref": "#/$defs/ImageSettings"
     },
-    "metadata": {
+    "meta": {
       "description": "Descriptive information about the project (name, version, etc.).",
       "$ref": "#/$defs/MetaData"
     },
@@ -32,7 +32,7 @@
       "minimum": 0
     },
     "tileMerge": {
-      "description": "Setting to reassemble objects split across an internal tile boundary\nback into one correct object - on by default, matching what a user\nexpects without needing to configure anything. Absent on files\nwritten before this feature existed, which `serde(default)` also\nreads as enabled - see `TileMergeSettings`.",
+      "description": "Setting to reassemble objects split across an internal tile boundary",
       "$ref": "#/$defs/TileMergeSettings",
       "default": {
         "classesToNotMerge": [],
@@ -43,7 +43,7 @@
     }
   },
   "required": [
-    "metadata",
+    "meta",
     "classification",
     "plate",
     "images",
@@ -2428,6 +2428,13 @@
     "PipelineSettings": {
       "type": "object",
       "properties": {
+        "description": {
+          "description": "Description on the pipeline",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "enabled": {
           "description": "Pipelines which are enabled are executed, pipelines, which are disabled are skipt during analysis.",
           "type": "boolean"
@@ -2442,10 +2449,7 @@
         },
         "name": {
           "description": "Display name of the pipeline",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "steps": {
           "description": "The steps which are execute in the given order when the pipeline runs",
@@ -2457,6 +2461,7 @@
       },
       "required": [
         "id",
+        "name",
         "imageSource",
         "enabled",
         "steps"

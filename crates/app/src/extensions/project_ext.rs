@@ -1073,7 +1073,7 @@ impl ProjectExt for ProjectWithRuntime {
         // whether it was ever loaded from disk at all - e.g. a brand-new
         // project still has `schema_version: 0` from `Default`).
         self.settings.schema_version = evanalyzer_cfg::CURRENT_PROJECT_SCHEMA_VERSION;
-        self.settings.metadata.app_version = env!("CARGO_PKG_VERSION").to_string();
+        self.settings.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
 
         // Every command's file-path field (AI model paths today - see
         // `relativize_file_paths`'s doc comment for why this isn't limited to
@@ -1111,18 +1111,7 @@ impl ProjectExt for ProjectWithRuntime {
             meta,
             classification: self.classification.clone(),
             plate: self.plate.clone(),
-            pipelines: self
-                .pipelines
-                .iter()
-                .map(|pipeline| PipelineTemplate {
-                    schema_version: CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION,
-                    meta: MetaData {
-                        name: pipeline.name.clone().unwrap_or_default(),
-                        ..Default::default()
-                    },
-                    pipeline_steps: pipeline.steps.clone(),
-                })
-                .collect(),
+            pipelines: self.pipelines.clone(),
         };
 
         let mut final_path = path.clone();
@@ -1154,7 +1143,7 @@ impl ProjectExt for ProjectWithRuntime {
         let template = PipelineTemplate {
             schema_version: CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION,
             meta,
-            pipeline_steps: pipeline.steps.clone(),
+            steps: pipeline.steps.clone(),
         };
 
         let mut final_path = path.clone();
@@ -1236,43 +1225,21 @@ impl ProjectExt for ProjectWithRuntime {
         };
 
         let next_id = self.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
-        let name = if template.meta.name.is_empty() {
-            None
-        } else {
-            Some(template.meta.name)
-        };
 
         self.add_pipeline(PipelineSettings {
             id: PipelineId(next_id),
-            name,
+            name: template.meta.name,
+            description: Some(template.meta.short_description),
             image_source: ImageAddress::default(),
             enabled: true,
-            steps: template.pipeline_steps,
+            steps: template.steps,
         });
     }
 
     fn apply_project_template(&mut self, template: &ProjectTemplate) {
         self.classification = template.classification.clone();
         self.plate = template.plate.clone();
-        self.pipelines = template
-            .pipelines
-            .iter()
-            .enumerate()
-            .map(|(idx, pipeline)| {
-                let name = if pipeline.meta.name.is_empty() {
-                    None
-                } else {
-                    Some(pipeline.meta.name.clone())
-                };
-                PipelineSettings {
-                    id: PipelineId((idx + 1) as u32),
-                    name,
-                    image_source: ImageAddress::default(),
-                    enabled: true,
-                    steps: pipeline.pipeline_steps.clone(),
-                }
-            })
-            .collect();
+        self.pipelines = template.pipelines.clone();
     }
 
     fn toggle_class_visibility(&mut self, class_id: ObjectClass) {
@@ -1776,7 +1743,7 @@ mod tests {
     fn save_project_as_appends_the_extension_and_records_the_path() {
         let dir = tempfile::tempdir().unwrap();
         let mut project = ProjectWithRuntime::default();
-        project.metadata.name = "Round Trip Project".into();
+        project.meta.name = "Round Trip Project".into();
 
         // No extension given - save_project_as should append the project one.
         let requested = dir.path().join("myproject");
@@ -1794,7 +1761,7 @@ mod tests {
         assert_eq!(project.tmp_settings.current_project, Some(expected.clone()));
 
         // save_project() (no path arg) should now reuse that recorded path.
-        project.metadata.name = "Changed After Save As".into();
+        project.meta.name = "Changed After Save As".into();
         assert_eq!(project.save_project(), SaveProjectActions::Success);
 
         let written = std::fs::read_to_string(&expected).unwrap();
@@ -1878,7 +1845,8 @@ mod tests {
     fn pipeline(id: u32) -> PipelineSettings {
         PipelineSettings {
             id: PipelineId(id),
-            name: None,
+            name: "".into(),
+            description: None,
             image_source: ImageAddress::default(),
             enabled: true,
             steps: vec![],
@@ -1986,7 +1954,7 @@ mod tests {
                 name: "Imported".into(),
                 ..Default::default()
             },
-            pipeline_steps: vec![],
+            steps: vec![],
             ..Default::default()
         };
         std::fs::write(&path, serde_json::to_string(&template).unwrap()).unwrap();
@@ -2001,7 +1969,7 @@ mod tests {
             PipelineId(6),
             "next id must be max(existing) + 1"
         );
-        assert_eq!(project.pipelines[1].name.as_deref(), Some("Imported"));
+        assert_eq!(project.pipelines[1].name, "Imported");
     }
 
     #[test]
@@ -2034,13 +2002,13 @@ mod tests {
                 evanalyzer_cfg::settings::classification_settings::ClassificationSettings::new_from_existing(
                    vec![class(9, "Fresh")]),
             plate: Default::default(),
-            pipelines: vec![evanalyzer_cfg::settings::templates::PipelineTemplate {
-                meta: evanalyzer_cfg::settings::meta_data::MetaData {
-                    name: "P1".into(),
-                    ..Default::default()
-                },
-                pipeline_steps: vec![],
-                ..Default::default()
+            pipelines: vec![PipelineSettings {
+                id: PipelineId(0),
+                enabled: true,
+                name:"P1".into(),
+                description: None,
+                steps: vec![],
+                image_source: ImageAddress::Scratchpad
             }],
             ..Default::default()
         };
@@ -2052,10 +2020,10 @@ mod tests {
         assert_eq!(project.pipelines.len(), 1);
         assert_eq!(
             project.pipelines[0].id,
-            PipelineId(1),
-            "ids are renumbered from 1, not carried over from the old pipelines"
+            PipelineId(0),
+            "the template's own id is used as-is, not renumbered"
         );
-        assert_eq!(project.pipelines[0].name.as_deref(), Some("P1"));
+        assert_eq!(project.pipelines[0].name, "P1");
     }
 
     // -- Image existence / root checks ------------------------------------
@@ -2601,7 +2569,7 @@ mod tests {
         let mut project = ProjectWithRuntime::default();
         project.classification.classes_mut().push(class(1, "A"));
         let mut p = pipeline(1);
-        p.name = Some("MyPipe".into());
+        p.name = "MyPipe".into();
         project.add_pipeline(p);
 
         let meta = evanalyzer_cfg::settings::meta_data::MetaData {
@@ -2623,7 +2591,7 @@ mod tests {
         assert_eq!(parsed.classification.classes().len(), 2);
         assert_eq!(parsed.classification.classes()[1].name, "A");
         assert_eq!(parsed.pipelines.len(), 1);
-        assert_eq!(parsed.pipelines[0].meta.name, "MyPipe");
+        assert_eq!(parsed.pipelines[0].name, "MyPipe");
     }
 
     #[test]
@@ -2651,7 +2619,7 @@ mod tests {
         assert!(expected.exists());
         let content = std::fs::read_to_string(&expected).unwrap();
         let parsed: PipelineTemplate = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed.pipeline_steps.len(), 1);
+        assert_eq!(parsed.steps.len(), 1);
     }
 
     #[test]
@@ -2747,7 +2715,7 @@ mod tests {
 
         let (project, _warnings, legacy_image_folder) =
             import_legacy_project(&path).expect("should parse");
-        assert_eq!(project.metadata.name, "Legacy Demo");
+        assert_eq!(project.meta.name, "Legacy Demo");
         assert_eq!(legacy_image_folder, Some("images".to_string()));
         assert!(project.tmp_settings.current_project.is_none());
     }

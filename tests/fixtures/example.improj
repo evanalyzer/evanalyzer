@@ -167,7 +167,7 @@
   "pipelines": [
     {
       "id": 2,
-      "name": null,
+      "name": "",
       "imageSource": {
         "CHANNEL": 2
       },

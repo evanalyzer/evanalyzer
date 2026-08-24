@@ -234,7 +234,8 @@ pub struct AiLearningSettings {
     /// browsable-artifact metadata project templates already use, so a
     /// future "pick a model" UI can list/search/filter saved models the same
     /// way the template picker already does.
-    pub metadata: MetaData,
+    #[serde(alias = "metadata")]
+    pub meta: MetaData,
 
     /// Backend used for AI training (RandomForest, Knn, MLP, ...)
     pub backend: AiLearningBackendSettings,

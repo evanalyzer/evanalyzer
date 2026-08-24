@@ -21,7 +21,10 @@ pub struct PipelineSettings {
     pub id: PipelineId,
 
     /// Display name of the pipeline
-    pub name: Option<String>,
+    pub name: String,
+
+    /// Description on the pipeline
+    pub description: Option<String>,
 
     /// This is the image which is used as initial image for this pipeline.
     /// Use Scratchpad if this is just a object manipulation pipeline

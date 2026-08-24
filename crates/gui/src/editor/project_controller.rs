@@ -335,7 +335,7 @@ impl ProjectController {
             let manager = Arc::clone(self);
             ui.global::<ToolbarState>()
                 .on_save_project_as_template_clicked(move || {
-                    let name = manager.app_state.get_project().metadata.name.clone();
+                    let name = manager.app_state.get_project().meta.name.clone();
                     manager
                         .template_controller
                         .start_project_template_save(name);
@@ -945,8 +945,10 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
     use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
+    use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
     use evanalyzer_cfg::settings::plate_settings::PlateSettings;
     use slint::Model;
 
@@ -956,10 +958,13 @@ mod tests {
             classification: ClassificationSettings::default(),
             plate: PlateSettings::default(),
             pipelines: (0..pipeline_count)
-                .map(|_| evanalyzer_cfg::settings::templates::PipelineTemplate {
-                    meta: MetaData::default(),
-                    pipeline_steps: Vec::new(),
-                    ..Default::default()
+                .map(|_| PipelineSettings {
+                    name: "".into(),
+                    steps: Vec::new(),
+                    id: PipelineId(0),
+                    description: None,
+                    image_source: ImageAddress::Scratchpad,
+                    enabled: true,
                 })
                 .collect(),
             ..Default::default()
@@ -1171,7 +1176,7 @@ mod tests {
         let (ui_state, controller) = make_controller();
         {
             let mut project = ui_state.get_project_write();
-            project.metadata.name = "should not be overwritten".to_string();
+            project.meta.name = "should not be overwritten".to_string();
         }
 
         controller
@@ -1179,7 +1184,7 @@ mod tests {
             .open_new_project(&PathBuf::from("/nonexistent/does_not_exist.evaproj"));
 
         assert_eq!(
-            ui_state.get_project().metadata.name,
+            ui_state.get_project().meta.name,
             "should not be overwritten"
         );
     }
@@ -1189,13 +1194,13 @@ mod tests {
         let (ui_state, controller) = make_controller();
         ui_state.mark_dirty();
         let mut settings = evanalyzer_cfg::settings::project_settings::ProjectSettings::default();
-        settings.metadata.name = "Loaded Project".to_string();
+        settings.meta.name = "Loaded Project".to_string();
         let path = temp_project_file(&settings);
 
         controller.clone().open_new_project(&path);
 
         let project = ui_state.get_project();
-        assert_eq!(project.metadata.name, "Loaded Project");
+        assert_eq!(project.meta.name, "Loaded Project");
         assert!(
             !ui_state.is_dirty(),
             "opening a project must clear the dirty flag"
@@ -1229,7 +1234,7 @@ mod tests {
         let (ui_state, controller) = make_controller();
         {
             let mut project = ui_state.get_project_write();
-            project.metadata.name = "should not be overwritten".to_string();
+            project.meta.name = "should not be overwritten".to_string();
         }
 
         controller
@@ -1237,7 +1242,7 @@ mod tests {
             .import_legacy_project_file(&PathBuf::from("/nonexistent/does_not_exist.icproj"));
 
         assert_eq!(
-            ui_state.get_project().metadata.name,
+            ui_state.get_project().meta.name,
             "should not be overwritten"
         );
         assert!(

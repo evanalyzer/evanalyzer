@@ -12,7 +12,7 @@
       "description": "Whether a pixel or object classifier was trained, its feature recipe,\nand the classes it predicts.",
       "$ref": "#/$defs/AiLearningClassifierSettings"
     },
-    "metadata": {
+    "meta": {
       "description": "Name, description, author, creation time, category/tags - the same\nbrowsable-artifact metadata project templates already use, so a\nfuture \"pick a model\" UI can list/search/filter saved models the same\nway the template picker already does.",
       "$ref": "#/$defs/MetaData"
     },
@@ -25,7 +25,7 @@
     }
   },
   "required": [
-    "metadata",
+    "meta",
     "backend",
     "classifier"
   ],

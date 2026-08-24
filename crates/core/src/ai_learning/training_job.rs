@@ -282,7 +282,7 @@ mod tests {
             fit_classifier(&backend, &rows, &labels, 2, &progress, &cancel).unwrap();
         let settings = AiLearningSettings {
             schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-            metadata: MetaData {
+            meta: MetaData {
                 name: "test".into(),
                 ..Default::default()
             },
@@ -296,7 +296,7 @@ mod tests {
         let saved = finish(settings, classifier);
 
         assert_eq!(saved.version, CURRENT_SAVED_CLASSIFIER_VERSION);
-        assert_eq!(saved.settings.metadata.name, "test");
+        assert_eq!(saved.settings.meta.name, "test");
     }
 
     #[test]
@@ -318,7 +318,7 @@ mod tests {
             Ok(finish(
                 AiLearningSettings {
                     schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-                    metadata: MetaData::default(),
+                    meta: MetaData::default(),
                     backend: AiLearningBackendSettings::RandomForest(
                         RandomForestSettings::default(),
                     ),

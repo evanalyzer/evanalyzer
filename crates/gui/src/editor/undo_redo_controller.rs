@@ -206,19 +206,19 @@ mod tests {
         controller.attach_callbacks();
 
         // Make an edit so there's a checkpoint to undo.
-        ui_state.get_project_write().metadata.name = "edited".to_string();
-        assert_eq!(ui_state.get_project().metadata.name, "edited");
+        ui_state.get_project_write().meta.name = "edited".to_string();
+        assert_eq!(ui_state.get_project().meta.name, "edited");
 
         ui.global::<ToolbarState>().invoke_undo_clicked();
         assert_eq!(
-            ui_state.get_project().metadata.name,
+            ui_state.get_project().meta.name,
             "",
             "the wired undo button must call UiState::undo() and restore the pre-edit state"
         );
 
         ui.global::<ToolbarState>().invoke_redo_clicked();
         assert_eq!(
-            ui_state.get_project().metadata.name,
+            ui_state.get_project().meta.name,
             "edited",
             "the wired redo button must call UiState::redo() and reapply the edit"
         );
@@ -232,6 +232,6 @@ mod tests {
 
         ui.global::<ToolbarState>().invoke_undo_clicked();
 
-        assert_eq!(ui_state.get_project().metadata.name, "");
+        assert_eq!(ui_state.get_project().meta.name, "");
     }
 }

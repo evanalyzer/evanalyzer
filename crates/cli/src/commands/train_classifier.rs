@@ -33,7 +33,7 @@ pub fn run(args: TrainClassifierArgs) -> Result<(), InternalErrors> {
     let model_name = args
         .model_name
         .clone()
-        .unwrap_or_else(|| settings.metadata.name.clone());
+        .unwrap_or_else(|| settings.meta.name.clone());
     if model_name.trim().is_empty() {
         return Err(InternalErrors::InvalidArgument(
             "No model name given - pass --model-name or set metadata.name in --settings".into(),
@@ -177,7 +177,7 @@ mod tests {
     fn empty_object_settings() -> AiLearningSettings {
         AiLearningSettings {
             schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-            metadata: Default::default(),
+            meta: Default::default(),
             backend: AiLearningBackendSettings::RandomForest(Default::default()),
             classifier: AiLearningClassifierSettings::Object {
                 feature_spec: AiLearningObjectFeatureSettings { metrics: vec![] },
@@ -233,7 +233,7 @@ mod tests {
 
         AiLearningSettings {
             schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-            metadata: Default::default(),
+            meta: Default::default(),
             backend: AiLearningBackendSettings::RandomForest(Default::default()),
             classifier: AiLearningClassifierSettings::Object {
                 feature_spec: AiLearningObjectFeatureSettings {
@@ -294,7 +294,7 @@ mod tests {
         let file = TempProjectFile::new(&project_with_two_labeled_objects());
         let settings_path = file.path.parent().unwrap().join("settings.json");
         let mut settings = two_class_object_settings();
-        settings.metadata.name = "from-metadata".into();
+        settings.meta.name = "from-metadata".into();
         std::fs::write(&settings_path, serde_json::to_string(&settings).unwrap()).unwrap();
 
         let result = run(TrainClassifierArgs {
@@ -319,7 +319,7 @@ mod tests {
             .join("from-metadata.evamodel");
         assert!(
             model_path.exists(),
-            "--model-name omitted must fall back to settings.metadata.name"
+            "--model-name omitted must fall back to settings.meta.name"
         );
     }
 

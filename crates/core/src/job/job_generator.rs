@@ -96,7 +96,7 @@ pub fn generate_analyze_job_from_project_settings(
         }
     };
 
-    config.metadata.app_version = env!("CARGO_PKG_VERSION").to_string();
+    config.meta.app_version = env!("CARGO_PKG_VERSION").to_string();
     write_project_snapshot(&config, &output_path, &job_name);
 
     generate_job_from_project_settings_intenal(config, project_path, output_path, database_storage)
@@ -224,7 +224,8 @@ mod tests {
     fn pipeline(id: u32, enabled: bool, steps: Vec<PipelineStepSettings>) -> PipelineSettings {
         PipelineSettings {
             id: PipelineId(id),
-            name: None,
+            name: "".into(),
+            description: None,
             image_source: ImageAddress::Channel(0),
             enabled,
             steps,
@@ -417,7 +418,7 @@ mod tests {
         let restored: ProjectSettings = serde_json::from_str(&content)
             .expect("the snapshot must deserialize back into ProjectSettings");
 
-        assert_eq!(restored.metadata.app_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(restored.meta.app_version, env!("CARGO_PKG_VERSION"));
         assert_eq!(
             restored.pipelines.len(),
             1,

@@ -98,6 +98,33 @@ mod tests {
         assert_eq!(project.classification.classes().len(), 3);
     }
 
+    /// `PipelineSettings.name` went from `Option<String>` to `String` with no
+    /// migration step added. This is an accepted, deliberate break: real
+    /// project files (schema versions 1 and 2) that have a pipeline with
+    /// `"name": null` - as `example.improj` itself did, before this test's
+    /// sibling fixed that up to keep exercising the rest of the v1-to-v2
+    /// migration - no longer load. If this starts passing, either a migration
+    /// was added (this test can be deleted) or the null case was
+    /// reintroduced silently (worth double-checking that was intentional).
+    #[test]
+    fn null_pipeline_name_is_rejected_not_migrated() {
+        let raw = serde_json::json!({
+            "pipelines": [{
+                "id": 1,
+                "name": null,
+                "imageSource": "SCRATCHPAD",
+                "enabled": true,
+                "steps": []
+            }]
+        });
+        let err =
+            load_project_settings(raw).expect_err("null pipeline name should fail to load");
+        assert!(
+            err.to_string().contains("invalid type: null, expected a string"),
+            "unexpected error: {err}"
+        );
+    }
+
     /// All shipped `.evapt`/`.evapipe` template files must deserialize into
     /// `ProjectTemplate`/`PipelineTemplate` - the same types and the same
     /// `serde_json::from_str` call the GUI/CLI actually use to load them. Unlike

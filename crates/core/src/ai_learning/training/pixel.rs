@@ -580,7 +580,7 @@ mod tests {
         PixelTrainingJob {
             settings: AiLearningSettings {
                 schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-                metadata: MetaData::default(),
+                meta: MetaData::default(),
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier: AiLearningClassifierSettings::Pixel {
                     feature_spec: AiLearningPixelFeatureSettings { channels: vec![] },
