@@ -1,5 +1,6 @@
 use crate::modules::classification_settings::ClassificationSettings;
 use crate::modules::meta_data::MetaData;
+use crate::modules::pipeline_settings::PipelineSettings;
 use crate::modules::pipeline_settings::PipelineStepSettings;
 use crate::modules::plate_settings::PlateSettings;
 use schemars::JsonSchema;
@@ -22,7 +23,7 @@ pub struct PipelineTemplate {
     pub meta: MetaData,
 
     /// The pipeline settings
-    pub pipeline_steps: Vec<PipelineStepSettings>,
+    pub steps: Vec<PipelineStepSettings>,
 }
 
 #[allow(unused)]
@@ -48,5 +49,5 @@ pub struct ProjectTemplate {
     pub plate: PlateSettings,
 
     /// Pipelines to execute
-    pub pipelines: Vec<PipelineTemplate>,
+    pub pipelines: Vec<PipelineSettings>,
 }

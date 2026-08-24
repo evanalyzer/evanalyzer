@@ -86,17 +86,14 @@
   },
   "pipelines": [
     {
-      "schemaVersion": 2,
-      "meta": {
-        "name": "EV Detection",
-        "shortDescription": "EV Detection",
-        "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select EV image channel\n3. Adapt manual threshold\n4. Object can be gated by size/circularity in \"Classifier\"\n",
-        "authorFirstName": "EVAnalyzer",
-        "authorLastName": "Team",
-        "authorOrganization": "evanalyzer.org",
-        "creationTime": "2026-06-11T00:00:00Z"
+      "id": 1,
+      "name": "EV Detection",
+      "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select EV image channel\n3. Adapt manual threshold\n4. Object can be gated by size/circularity in \"Classifier\"\n",
+      "imageSource": {
+        "channel": 0
       },
-      "pipelineSteps": [
+      "enabled": true,
+      "steps": [
         {
           "enabled": true,
           "command": {
@@ -192,17 +189,14 @@
       ]
     },
     {
-      "schemaVersion": 2,
-      "meta": {
-        "name": "Tetraspeck",
-        "shortDescription": "Tetraspeck",
-        "description": "This pipeline steps enables the removal of calibration beads (e.g. tetraspeck) that are fluorescent in all channels. \n1. Enable pipeline\n2. Select Tetraspeck image channel (channel showing only tetraspecks)\n3. Adapt (manual) threshold \n4. Within the *Reclassify* command select the channels where tetraspeck need to be removed.",
-        "authorFirstName": "EVAnalyzer",
-        "authorLastName": "Team",
-        "authorOrganization": "evanalyzer.org",
-        "creationTime": "2026-06-11T00:00:00Z"
+      "id": 2,
+      "name": "Tetraspeck",
+      "description": "This pipeline steps enables the removal of calibration beads (e.g. tetraspeck) that are fluorescent in all channels. \n1. Enable pipeline\n2. Select Tetraspeck image channel (channel showing only tetraspecks)\n3. Adapt (manual) threshold \n4. Within the *Reclassify* command select the channels where tetraspeck need to be removed.",
+      "imageSource": {
+        "channel": 1
       },
-      "pipelineSteps": [
+      "enabled": true,
+      "steps": [
         {
           "enabled": true,
           "command": {

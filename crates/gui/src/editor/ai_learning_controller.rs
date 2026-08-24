@@ -351,13 +351,13 @@ impl AiLearningController {
         let state = ui.global::<AiLearningState>();
         let mut settings = state.get_settings();
         settings.loaded_model_path = path.to_string_lossy().to_string().into();
-        settings.model_name = if saved.settings.metadata.name.trim().is_empty() {
+        settings.model_name = if saved.settings.meta.name.trim().is_empty() {
             path.file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default()
                 .into()
         } else {
-            saved.settings.metadata.name.clone().into()
+            saved.settings.meta.name.clone().into()
         };
         apply_loaded_backend_settings(&mut settings, &saved.settings.backend);
 
@@ -992,7 +992,7 @@ fn build_ai_learning_settings(
 
     AiLearningSettings {
         schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-        metadata: MetaData {
+        meta: MetaData {
             name: settings.model_name.to_string(),
             ..Default::default()
         },

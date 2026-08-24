@@ -304,17 +304,14 @@
   },
   "pipelines": [
     {
-      "schemaVersion": 2,
-      "meta": {
-        "name": "Channel1",
-        "shortDescription": "Channel1",
-        "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
-        "authorFirstName": "EVAnalyzer",
-        "authorLastName": "Team",
-        "authorOrganization": "evanalyzer.org",
-        "creationTime": "2026-06-11T00:00:00Z"
+      "id": 1,
+      "name": "Channel1",
+      "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
+      "imageSource": {
+        "channel": 0
       },
-      "pipelineSteps": [
+      "enabled": true,
+      "steps": [
         {
           "enabled": true,
           "command": {
@@ -410,17 +407,14 @@
       ]
     },
     {
-      "schemaVersion": 2,
-      "meta": {
-        "name": "Channel2",
-        "shortDescription": "Channel2",
-        "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
-        "authorFirstName": "EVAnalyzer",
-        "authorLastName": "Team",
-        "authorOrganization": "evanalyzer.org",
-        "creationTime": "2026-06-11T00:00:00Z"
+      "id": 2,
+      "name": "Channel2",
+      "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
+      "imageSource": {
+        "channel": 1
       },
-      "pipelineSteps": [
+      "enabled": true,
+      "steps": [
         {
           "enabled": true,
           "command": {
@@ -516,17 +510,14 @@
       ]
     },
     {
-      "schemaVersion": 2,
-      "meta": {
-        "name": "Channel3",
-        "shortDescription": "Channel3",
-        "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
-        "authorFirstName": "EVAnalyzer",
-        "authorLastName": "Team",
-        "authorOrganization": "evanalyzer.org",
-        "creationTime": "2026-06-11T00:00:00Z"
+      "id": 3,
+      "name": "Channel3",
+      "description": "1. output class can be renamed in classification tab (ch1@.. can be e.g. GFP@...)\n2. Select  output class\n3. Select EV image channel\n4. Adapt manual threshold\n5. Object can be gated by size/circularity in \"Classifier\"\n",
+      "imageSource": {
+        "channel": 2
       },
-      "pipelineSteps": [
+      "enabled": true,
+      "steps": [
         {
           "enabled": true,
           "command": {
@@ -622,17 +613,14 @@
       ]
     },
     {
-      "schemaVersion": 2,
-      "meta": {
-        "name": "Tetraspeck",
-        "shortDescription": "Tetraspeck",
-        "description": "This pipeline steps enables the removal of calibration beads (e.g. tetraspeck) that are fluorescent in all channels. \n1. Enable pipeline \ud83d\udc41\n2. Select Tetraspeck image channel (channel showing only tetraspecks)\n3. Adapt (manual) threshold \n4. Within the *Reclassify* command select the channels where tetraspeck need to be removed. Approximation notes: $reclassify was approximated via Colocalization",
-        "authorFirstName": "EVAnalyzer",
-        "authorLastName": "Team",
-        "authorOrganization": "evanalyzer.org",
-        "creationTime": "2026-06-11T00:00:00Z"
+      "id": 4,
+      "name": "Tetraspeck",
+      "description": "This pipeline steps enables the removal of calibration beads (e.g. tetraspeck) that are fluorescent in all channels. \n1. Enable pipeline \ud83d\udc41\n2. Select Tetraspeck image channel (channel showing only tetraspecks)\n3. Adapt (manual) threshold \n4. Within the *Reclassify* command select the channels where tetraspeck need to be removed. Approximation notes: $reclassify was approximated via Colocalization",
+      "imageSource": {
+        "channel": 3
       },
-      "pipelineSteps": [
+      "enabled": true,
+      "steps": [
         {
           "enabled": true,
           "command": {
@@ -747,17 +735,12 @@
       ]
     },
     {
-      "schemaVersion": 2,
-      "meta": {
-        "name": "Coloc ",
-        "shortDescription": "Coloc ",
-        "description": "Colocalisation is set to 0.1 (0.1-1) as default and may be changed.\n\nWith these settings you will find the following groups:\nall spots: includes coloc and non-coloc spots\n- non colocalising ch1, ch2, ch3: spots only detected in the one respective channel\n- 2 channel coloc spots: e.g. ch1and 2 includes all spots that have channel 1 and 2 and also includes spots that might have ch3\n- 3 channel coloc spots: spots recognized in ch1, 2 and 3\n Approximation notes: $reclassify was approximated via Colocalization $reclassify was approximated via Colocalization $reclassify was approximated via Colocalization $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry)",
-        "authorFirstName": "EVAnalyzer",
-        "authorLastName": "Team",
-        "authorOrganization": "evanalyzer.org",
-        "creationTime": "2026-06-11T00:00:00Z"
-      },
-      "pipelineSteps": [
+      "id": 5,
+      "name": "Coloc ",
+      "description": "Colocalisation is set to 0.1 (0.1-1) as default and may be changed.\n\nWith these settings you will find the following groups:\nall spots: includes coloc and non-coloc spots\n- non colocalising ch1, ch2, ch3: spots only detected in the one respective channel\n- 2 channel coloc spots: e.g. ch1and 2 includes all spots that have channel 1 and 2 and also includes spots that might have ch3\n- 3 channel coloc spots: spots recognized in ch1, 2 and 3\n Approximation notes: $reclassify was approximated via Colocalization $reclassify was approximated via Colocalization $reclassify was approximated via Colocalization $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry) $colocalization N-way matrix approximated as pairwise Colocalization steps (each non-Undefined entry paired with the first other non-Undefined entry)",
+      "imageSource": "SCRATCHPAD",
+      "enabled": true,
+      "steps": [
         {
           "enabled": true,
           "command": {

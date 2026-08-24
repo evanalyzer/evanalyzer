@@ -88,8 +88,10 @@ fn load_templates_from_folder<T: serde::de::DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evanalyzer_cfg::core_types::{ImageAddress, PipelineId};
     use evanalyzer_cfg::settings::classification_settings::ClassificationSettings;
     use evanalyzer_cfg::settings::meta_data::MetaData;
+    use evanalyzer_cfg::settings::pipeline_settings::PipelineSettings;
     use evanalyzer_cfg::settings::plate_settings::PlateSettings;
 
     fn pipeline_template(name: &str) -> PipelineTemplate {
@@ -98,8 +100,19 @@ mod tests {
                 name: name.into(),
                 ..Default::default()
             },
-            pipeline_steps: vec![],
+            steps: vec![],
             ..Default::default()
+        }
+    }
+
+    fn inline_pipeline(id: PipelineId, name: &str) -> PipelineSettings {
+        PipelineSettings {
+            name: name.into(),
+            id,
+            description: None,
+            image_source: ImageAddress::Scratchpad,
+            enabled: true,
+            steps: vec![],
         }
     }
 
@@ -186,7 +199,7 @@ mod tests {
             },
             classification: ClassificationSettings::default(),
             plate: PlateSettings::default(),
-            pipelines: vec![pipeline_template("Inner")],
+            pipelines: vec![inline_pipeline(PipelineId(0), "Inner")],
             ..Default::default()
         };
         write(
@@ -201,6 +214,6 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].1.meta.name, "Proj");
         assert_eq!(out[0].1.pipelines.len(), 1);
-        assert_eq!(out[0].1.pipelines[0].meta.name, "Inner");
+        assert_eq!(out[0].1.pipelines[0].name, "Inner");
     }
 }

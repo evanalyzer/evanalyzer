@@ -92,7 +92,8 @@ pub struct ProjectSettings {
     pub schema_version: u32,
 
     /// Descriptive information about the project (name, version, etc.).
-    pub metadata: MetaData,
+    #[serde(alias = "metadata")]
+    pub meta: MetaData,
 
     // Defined classes, labels, names and measurment
     pub classification: ClassificationSettings,
@@ -100,17 +101,13 @@ pub struct ProjectSettings {
     // Plate settings
     pub plate: PlateSettings,
 
+    /// Setting to reassemble objects split across an internal tile boundary
+    #[serde(default)]
+    pub tile_merge: TileMergeSettings,
+
     /// The collection of images and their associated processing states.
     pub images: ImageSettings,
 
     /// Pipelines to execute
     pub pipelines: Vec<PipelineSettings>,
-
-    /// Setting to reassemble objects split across an internal tile boundary
-    /// back into one correct object - on by default, matching what a user
-    /// expects without needing to configure anything. Absent on files
-    /// written before this feature existed, which `serde(default)` also
-    /// reads as enabled - see `TileMergeSettings`.
-    #[serde(default)]
-    pub tile_merge: TileMergeSettings,
 }

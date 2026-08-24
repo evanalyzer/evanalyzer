@@ -10,10 +10,7 @@ pub fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
         .pipelines
         .iter()
         .map(|p| {
-            let name = p
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("Pipeline {}", p.id.0));
+            let name = p.name.clone();
             (name, p.enabled, p.steps.len())
         })
         .collect();
@@ -28,7 +25,7 @@ pub fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
     if args.json {
         let out = json!({
             "project": args.project,
-            "name": project.metadata.name,
+            "name": project.meta.name,
             "image_root": project.images.root,
             "images": project.images.list.len(),
             "reachable": reachable,
@@ -44,8 +41,8 @@ pub fn run(args: ProjectInfoArgs) -> Result<(), InternalErrors> {
     }
 
     println!("Project:    {}", args.project.display());
-    if !project.metadata.name.is_empty() {
-        println!("Name:       {}", project.metadata.name);
+    if !project.meta.name.is_empty() {
+        println!("Name:       {}", project.meta.name);
     }
     println!(
         "Image root: {}",

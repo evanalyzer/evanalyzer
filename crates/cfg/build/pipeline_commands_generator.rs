@@ -167,9 +167,9 @@ fn format_default_for_type(ty: &str, val: f64) -> String {
 /// variant's generated `Default` impl (both assemble a field-by-field literal).
 fn field_default_expr(field: &FieldInfo, enums: &[EnumInfo], commands: &[CommandInfo]) -> String {
     let field_type = map_to_settings_type(&field.ty, enums, commands);
-    if let Some(ref expr) = field.metadata.default_expr {
+    if let Some(ref expr) = field.meta.default_expr {
         remap_default_expr(expr, enums, commands)
-    } else if let Some(val) = field.metadata.default {
+    } else if let Some(val) = field.meta.default {
         format_default_for_type(&field.ty, val)
     } else if field_type.starts_with("Vec<") {
         "vec![]".to_string()
@@ -190,7 +190,7 @@ fn field_value_expr(
     enums: &[EnumInfo],
     commands: &[CommandInfo],
 ) -> String {
-    let meta = &field.metadata;
+    let meta = &field.meta;
     if field.ty == "f32" || field.ty == "f64" {
         match (meta.min, meta.max) {
             (Some(min), Some(max)) => format!("{}.clamp({:?}, {:?})", field_access, min, max),
@@ -314,10 +314,10 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                         out.push_str(&format!("        /// {}\n", doc));
                     }
                     let mut range_parts = Vec::new();
-                    if let Some(min) = field.metadata.min {
+                    if let Some(min) = field.meta.min {
                         range_parts.push(format!("min = {}", min));
                     }
-                    if let Some(max) = field.metadata.max {
+                    if let Some(max) = field.meta.max {
                         range_parts.push(format!("max = {}", max));
                     }
                     if !range_parts.is_empty() {
@@ -385,7 +385,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                 let has_explicit_defaults = cmd
                     .fields
                     .iter()
-                    .any(|f| f.metadata.default.is_some() || f.metadata.default_expr.is_some());
+                    .any(|f| f.meta.default.is_some() || f.meta.default_expr.is_some());
 
                 // Generate serde default helper functions for optional fields that
                 // carry an explicit default value. A plain `#[serde(default)]` would
@@ -393,7 +393,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                 // wrong. The helper makes serde call the exact cmdsmeta default.
                 let prefix = cmd.struct_name.to_ascii_lowercase();
                 for field in &cmd.fields {
-                    if !field.metadata.optional {
+                    if !field.meta.optional {
                         continue;
                     }
                     let field_type = map_to_settings_type(&field.ty, enums, commands);
@@ -428,7 +428,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                     }
 
                     // schemars constraints
-                    let meta = &field.metadata;
+                    let meta = &field.meta;
                     let mut range_parts = Vec::new();
                     if let Some(min) = meta.min {
                         range_parts.push(format!("min = {}", min));
@@ -753,7 +753,7 @@ struct FieldInfo {
     name: String,
     ty: String,
     doc_comments: Vec<String>,
-    metadata: FieldMetadata,
+    meta: FieldMetadata,
 }
 
 #[derive(Debug, Clone)]
@@ -1048,7 +1048,7 @@ fn extract_fields(item_struct: &ItemStruct) -> Vec<FieldInfo> {
                     name: ident.to_string(),
                     ty,
                     doc_comments,
-                    metadata,
+                    meta: metadata,
                 });
             }
         }
@@ -1101,7 +1101,7 @@ fn extract_enum_variants(item_enum: &ItemEnum) -> Vec<EnumVariant> {
                                 name: ident.to_string(),
                                 ty: type_to_string(&f.ty),
                                 doc_comments: extract_doc_comments(&f.attrs),
-                                metadata: parse_custom_meta(f),
+                                meta: parse_custom_meta(f),
                             })
                         })
                         .collect();
@@ -1763,11 +1763,11 @@ fn enum_variant_param_defs(
                 let field_exprs: Vec<String> = v
                     .named_fields
                     .iter()
-                    .filter(|f| f.metadata.visible)
+                    .filter(|f| f.meta.visible)
                     .flat_map(|f| {
                         let routing_name = format!("{routing_prefix}.{}", f.name);
                         let display_label = f
-                            .metadata
+                            .meta
                             .display_name
                             .as_deref()
                             .map(|s| s.to_string())
@@ -1777,7 +1777,7 @@ fn enum_variant_param_defs(
                             if nested_enum.has_variant_payload() {
                                 let dropdown = leaf_param_def_literal(
                                     &f.ty,
-                                    &f.metadata,
+                                    &f.meta,
                                     &f.name,
                                     &routing_name,
                                     &display_label,
@@ -1796,7 +1796,7 @@ fn enum_variant_param_defs(
                         }
                         leaf_param_def_literal(
                             &f.ty,
-                            &f.metadata,
+                            &f.meta,
                             &f.name,
                             &routing_name,
                             &display_label,
@@ -1901,7 +1901,7 @@ fn field_to_param_def(
 ) -> Vec<String> {
     let ty = &field.ty;
     let name = &field.name;
-    let meta = &field.metadata;
+    let meta = &field.meta;
 
     if !meta.visible {
         return vec![];
@@ -2024,7 +2024,7 @@ fn collect_summary_exprs(
 ) -> Vec<(String, String)> {
     let ty = &field.ty;
     let name = &field.name;
-    let meta = &field.metadata;
+    let meta = &field.meta;
 
     if !meta.visible {
         return vec![];
@@ -2108,7 +2108,7 @@ fn field_to_apply_change(
     let name = &field.name;
     let display_name = format!("{}{}", name_prefix, name);
 
-    if !field.metadata.visible {
+    if !field.meta.visible {
         return vec![];
     }
 
@@ -2342,7 +2342,7 @@ fn enum_variant_apply_change(
                     name: "0".to_string(),
                     ty: data_ty.clone(),
                     doc_comments: vec![],
-                    metadata: FieldMetadata::default(),
+                    meta: FieldMetadata::default(),
                 };
                 format!(
                     "{settings_name}::{}({})",
@@ -2374,7 +2374,7 @@ fn enum_variant_apply_change(
             let inner: Vec<String> = v
                 .named_fields
                 .iter()
-                .filter(|f| f.metadata.visible)
+                .filter(|f| f.meta.visible)
                 .filter_map(|f| {
                     let condition = format!("{display_name}.{}", f.name);
                     let assign = format!("*{}", f.name);

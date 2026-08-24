@@ -283,7 +283,7 @@ mod tests {
         ObjectTrainingJob {
             settings: AiLearningSettings {
                 schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-                metadata: MetaData::default(),
+                meta: MetaData::default(),
                 backend: AiLearningBackendSettings::Knn(KnnSettings {
                     k: 2,
                     ..Default::default()

@@ -15,7 +15,7 @@
       "description": "Pipelines to execute",
       "type": "array",
       "items": {
-        "$ref": "#/$defs/PipelineTemplate"
+        "$ref": "#/$defs/PipelineSettings"
       }
     },
     "plate": {
@@ -2053,6 +2053,53 @@
         }
       ]
     },
+    "PipelineId": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "PipelineSettings": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Description on the pipeline",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Pipelines which are enabled are executed, pipelines, which are disabled are skipt during analysis.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Unique pipeline ID",
+          "$ref": "#/$defs/PipelineId"
+        },
+        "imageSource": {
+          "description": "This is the image which is used as initial image for this pipeline.\nUse Scratchpad if this is just a object manipulation pipeline",
+          "$ref": "#/$defs/ImageAddress"
+        },
+        "name": {
+          "description": "Display name of the pipeline",
+          "type": "string"
+        },
+        "steps": {
+          "description": "The steps which are execute in the given order when the pipeline runs",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PipelineStepSettings"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "imageSource",
+        "enabled",
+        "steps"
+      ]
+    },
     "PipelineStepSettings": {
       "type": "object",
       "properties": {
@@ -2068,33 +2115,6 @@
       "required": [
         "enabled",
         "command"
-      ]
-    },
-    "PipelineTemplate": {
-      "type": "object",
-      "properties": {
-        "meta": {
-          "description": "Metadata of this pipeline template",
-          "$ref": "#/$defs/MetaData"
-        },
-        "pipelineSteps": {
-          "description": "The pipeline settings",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PipelineStepSettings"
-          }
-        },
-        "schemaVersion": {
-          "description": "On-disk format version of this pipeline template (`.evapipe`). Absent\non files written before versioning was introduced, which\n`serde(default)` reads as `0` - see `CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION`.\nUnlike `ProjectSettings.schema_version`, nothing currently rejects a\ntoo-new version or migrates an old one forward on load - this field\nonly reserves the seam for that.",
-          "type": "integer",
-          "format": "uint32",
-          "default": 0,
-          "minimum": 0
-        }
-      },
-      "required": [
-        "meta",
-        "pipelineSteps"
       ]
     },
     "PixelClassifierSettings": {
