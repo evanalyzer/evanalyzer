@@ -7,24 +7,24 @@
       "description": "Metadata of this pipeline template",
       "$ref": "#/$defs/MetaData"
     },
-    "pipelineSteps": {
-      "description": "The pipeline settings",
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/PipelineStepSettings"
-      }
-    },
     "schemaVersion": {
       "description": "On-disk format version of this pipeline template (`.evapipe`). Absent\non files written before versioning was introduced, which\n`serde(default)` reads as `0` - see `CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION`.\nUnlike `ProjectSettings.schema_version`, nothing currently rejects a\ntoo-new version or migrates an old one forward on load - this field\nonly reserves the seam for that.",
       "type": "integer",
       "format": "uint32",
       "default": 0,
       "minimum": 0
+    },
+    "steps": {
+      "description": "The pipeline settings",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PipelineStepSettings"
+      }
     }
   },
   "required": [
     "meta",
-    "pipelineSteps"
+    "steps"
   ],
   "$defs": {
     "AiObjectClassifierSettings": {

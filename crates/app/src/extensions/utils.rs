@@ -230,7 +230,7 @@ mod tests {
 
         PipelineSettings {
             id: PipelineId(0),
-            name: None,
+            name: "".into(),
             image_source: ImageAddress::Channel(0),
             enabled: true,
             steps: vec![
@@ -239,6 +239,7 @@ mod tests {
                     command,
                 },
             ],
+            description: None,
         }
     }
 

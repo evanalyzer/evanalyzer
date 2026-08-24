@@ -244,10 +244,11 @@ impl PipelinesController {
                     let name = format!("Pipeline {}", next_id);
                     project.add_pipeline(PipelineSettings {
                         id: PipelineId(next_id),
-                        name: Some(name.clone()),
+                        name: name.clone(),
                         image_source: ImageAddress::Channel(0),
                         enabled: true,
                         steps: vec![],
+                        description: None,
                     });
                     (next_id, name)
                 };
@@ -293,7 +294,7 @@ impl PipelinesController {
                                     }
                                     ImageAddress::Channel(c) => (2, 1, c),
                                 };
-                                (p.name.clone().unwrap_or_default(), stype, slot, ch)
+                                (p.name.clone(), stype, slot, ch)
                             })
                     };
                     let Some((name, stype, slot, ch)) = state else {
@@ -327,10 +328,7 @@ impl PipelinesController {
                                     project.pipelines.iter().map(|p| p.id.0).max().unwrap_or(0) + 1;
                                 let mut clone = p.clone();
                                 clone.id = PipelineId(next_id);
-                                clone.name = Some(format!(
-                                    "{} (Copy)",
-                                    p.name.as_deref().unwrap_or(&format!("Pipeline {}", p.id.0))
-                                ));
+                                clone.name = format!("{} (Copy)", p.name);
                                 clone
                             })
                     };
@@ -357,13 +355,13 @@ impl PipelinesController {
             let manager = self.clone();
             ui.global::<PipelinesPanelState>()
                 .on_delete_pipeline(move |pipeline_id| {
-                    let pipeline_name = {
+                    let pipeline_name: String = {
                         let project = manager.app_state.get_project();
                         project
                             .pipelines
                             .iter()
                             .find(|p| p.id.0 == pipeline_id as u32)
-                            .and_then(|p| p.name.clone())
+                            .and_then(|p| Some(p.name.clone()))
                             .unwrap_or_else(|| format!("Pipeline {}", pipeline_id))
                     };
                     let Some(ui) = manager.ui.upgrade() else {
@@ -462,7 +460,7 @@ impl PipelinesController {
                 {
                     let mut project = manager.app_state.get_project_write();
                     if let Some(p) = project.pipelines.iter_mut().find(|p| p.id.0 == pipeline_id) {
-                        p.name = if name.is_empty() { None } else { Some(name) };
+                        p.name = name;
                         p.image_source = image_source;
                     }
                 }
@@ -615,10 +613,7 @@ impl PipelinesController {
                             .iter()
                             .find(|p| p.id.0 == pipeline_id as u32)
                         {
-                            let name = p
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| format!("Pipeline {}", p.id.0));
+                            let name = p.name.clone();
                             // Find the category of the last step at or before the insertion point.
                             // step_after_idx is the 0-based index of the step we insert AFTER.
                             // A value >= steps.len() means "append at end".
@@ -736,7 +731,7 @@ impl PipelinesController {
                             warn!("picker confirm: unknown template id {}", command_id);
                             return;
                         };
-                        template.pipeline_steps.clone()
+                        template.steps.clone()
                     } else {
                         let Some(cmd) = default_command(command_id) else {
                             warn!("picker confirm: unknown command id {}", command_id);
@@ -1178,7 +1173,7 @@ impl PipelinesController {
         list.insert(image_path, image_settings);
         ProjectSettings {
             schema_version: project.schema_version,
-            metadata: project.metadata.clone(),
+            meta: project.meta.clone(),
             classification: project.classification.clone(),
             plate: project.plate.clone(),
             images: ImageSettings {
@@ -1531,11 +1526,7 @@ impl PipelinesController {
                     let enabled_steps = p.steps.iter().filter(|s| s.enabled).count() as i32;
                     Pipeline {
                         id: p.id.0 as i32,
-                        name: p
-                            .name
-                            .clone()
-                            .unwrap_or_else(|| format!("Pipeline {}", p.id.0))
-                            .into(),
+                        name: p.name.clone().into(),
                         image_source: match p.image_source {
                             ImageAddress::Scratchpad => "Scratchpad".into(),
                             ImageAddress::Memory(MemoryId::PipelineContext(s)) => {
@@ -1831,10 +1822,7 @@ impl PipelinesController {
                 .filter(|s| s.enabled)
                 .count() as i32;
             if let Some(pipeline) = project.pipelines.iter().find(|p| p.id == pipeline_id) {
-                let name = pipeline
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("Pipeline {}", pipeline.id.0));
+                let name = pipeline.name.clone();
                 let image_src = match pipeline.image_source {
                     ImageAddress::Scratchpad => "Scratchpad".to_string(),
                     ImageAddress::Memory(MemoryId::PipelineContext(s)) => format!("Memory[{s}]"),
@@ -2104,7 +2092,7 @@ impl PipelinesController {
 /// by [`all_command_meta`].
 fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDef {
     let category = template
-        .pipeline_steps
+        .steps
         .first()
         .map(|s| match s.command.category() {
             CommandCategory::Preprocess => StepCategory::Preprocess,
@@ -2297,7 +2285,7 @@ fn reconcile_ai_object_classifier_mapping(settings: &mut AiObjectClassifierSetti
 /// Formats a `SavedClassifier`'s metadata + declared classes for the
 /// PixelClassifier/AiObjectClassifier step's info dialog.
 fn format_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> String {
-    let meta = &saved.settings.metadata;
+    let meta = &saved.settings.meta;
     let mut out = format!("{}\n", meta.name);
     if !meta.short_description.is_empty() {
         out.push_str(&format!("{}\n", meta.short_description));
@@ -2368,7 +2356,7 @@ mod tests {
             );
         }
         ProjectSettings {
-            metadata: MetaData {
+            meta: MetaData {
                 name: "test-project".into(),
                 ..Default::default()
             },
@@ -2423,7 +2411,7 @@ mod tests {
             selected,
         );
 
-        assert_eq!(preview.metadata.name, "test-project");
+        assert_eq!(preview.meta.name, "test-project");
         assert_eq!(preview.images.root, project.images.root);
     }
 
@@ -2459,7 +2447,7 @@ mod tests {
                 authors: vec!["Ada Lovelace".into()],
                 ..Default::default()
             },
-            pipeline_steps: steps,
+            steps: steps,
             ..Default::default()
         }
     }
@@ -2617,7 +2605,7 @@ mod tests {
 
     fn saved_classifier_with(
         classifier: AiLearningClassifierSettings,
-        metadata: evanalyzer_cfg::settings::meta_data::MetaData,
+        meta: evanalyzer_cfg::settings::meta_data::MetaData,
     ) -> evanalyzer_core::SavedClassifier {
         use evanalyzer_cfg::settings::ai_learning_settings::{
             AiLearningBackendSettings, AiLearningSettings, RandomForestSettings,
@@ -2633,7 +2621,7 @@ mod tests {
             classifier: model,
             settings: AiLearningSettings {
                 schema_version: evanalyzer_cfg::CURRENT_AI_LEARNING_SETTINGS_SCHEMA_VERSION,
-                metadata,
+                meta,
                 backend: AiLearningBackendSettings::RandomForest(RandomForestSettings::default()),
                 classifier,
             },
@@ -2757,7 +2745,8 @@ mod tests {
             let mut project = ui_state.get_project_write();
             project.add_pipeline(PipelineSettings {
                 id: PipelineId(1),
-                name: Some("Pipeline 1".into()),
+                name: "Pipeline 1".into(),
+                description: None,
                 image_source: ImageAddress::Channel(0),
                 enabled: true,
                 steps: vec![PipelineStepSettings {
@@ -2797,7 +2786,8 @@ mod tests {
             let mut project = ui_state.get_project_write();
             project.add_pipeline(PipelineSettings {
                 id: PipelineId(1),
-                name: Some("Pipeline 1".into()),
+                name: "Pipeline 1".into(),
+                description: None,
                 image_source: ImageAddress::Channel(0),
                 enabled: true,
                 steps: vec![PipelineStepSettings {
@@ -2953,7 +2943,8 @@ mod tests {
         let mut project = ui_state.get_project_write();
         project.add_pipeline(PipelineSettings {
             id: PipelineId(id),
-            name: Some(format!("Pipeline {id}")),
+            name: format!("Pipeline {id}"),
+            description: None,
             image_source: ImageAddress::Channel(0),
             enabled: true,
             steps: vec![],

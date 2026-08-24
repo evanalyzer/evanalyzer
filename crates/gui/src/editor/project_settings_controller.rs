@@ -134,7 +134,7 @@ impl ProjectSettingsController {
 
             // Meta settings
             {
-                let meta = &mut project.metadata;
+                let meta = &mut project.meta;
                 let full_name: String = project_settings.author_name.clone().into();
                 // This field only ever edits the primary author (authors[0]);
                 // any co-authors past that (only settable today by
@@ -195,7 +195,7 @@ impl ProjectSettingsController {
         let results_ui_handle = self.results_ui.clone();
 
         let (author_name, organization) = {
-            let addr = &project.metadata;
+            let addr = &project.meta;
             let full_name = addr.authors.first().cloned().unwrap_or_default();
             (full_name, addr.author_organization.clone())
         };
@@ -215,7 +215,7 @@ impl ProjectSettingsController {
             )
         };
 
-        let expirment_name = project.metadata.name.clone();
+        let expirment_name = project.meta.name.clone();
 
         let (tile_merge_enabled, tile_merge_flags, tile_merge_connectivity, tile_merge_cap) = {
             let tile_merge = &project.tile_merge;
@@ -541,9 +541,9 @@ mod tests {
         controller.update_project_settings_in_project(&sample_settings());
 
         let project = ui_state.get_project();
-        assert_eq!(project.metadata.authors, vec!["Ada Lovelace".to_string()]);
-        assert_eq!(project.metadata.author_organization, "Analytical Engines");
-        assert_eq!(project.metadata.name, "Test Project");
+        assert_eq!(project.meta.authors, vec!["Ada Lovelace".to_string()]);
+        assert_eq!(project.meta.author_organization, "Analytical Engines");
+        assert_eq!(project.meta.name, "Test Project");
         assert_eq!(project.plate.well_rows, 2);
         assert_eq!(project.plate.well_cols, 3);
         // well_size_index=1 -> index_to_well_size(1) == (2, 3), see the test above.

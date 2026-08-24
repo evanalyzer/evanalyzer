@@ -456,15 +456,15 @@ mod tests {
         drop(_read_guard);
 
         // The lock is genuinely usable afterwards, not just "didn't panic".
-        handle.get_project_write().metadata.name = "recovered".into();
-        assert_eq!(handle.get_project().metadata.name, "recovered");
+        handle.get_project_write().meta.name = "recovered".into();
+        assert_eq!(handle.get_project().meta.name, "recovered");
     }
 
     #[test]
     fn save_project_writes_json_and_records_current_path() {
         let owner = ProjectOwner::new();
         let handle = owner.handle();
-        handle.get_project_write().metadata.name = "My Project".into();
+        handle.get_project_write().meta.name = "My Project".into();
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.evaproj");
@@ -483,7 +483,7 @@ mod tests {
 
         // Write with one owner...
         let writer = ProjectOwner::new();
-        writer.handle().get_project_write().metadata.name = "Round Trip".into();
+        writer.handle().get_project_write().meta.name = "Round Trip".into();
         writer.save_project(&path).unwrap();
 
         // ...and read back with a fresh one, as a real app restart would.
@@ -491,7 +491,7 @@ mod tests {
         reader.load_project(&path).expect("load should succeed");
 
         assert_eq!(reader.current_path(), Some(path));
-        assert_eq!(reader.handle().get_project().metadata.name, "Round Trip");
+        assert_eq!(reader.handle().get_project().meta.name, "Round Trip");
     }
 
     #[test]

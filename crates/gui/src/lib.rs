@@ -472,11 +472,11 @@ mod ui_state_tests {
     // -- undo / redo ----------------------------------------------------------
 
     fn set_name(ui_state: &UiState, name: &str) {
-        ui_state.get_project_write().metadata.name = name.to_string();
+        ui_state.get_project_write().meta.name = name.to_string();
     }
 
     fn name(ui_state: &UiState) -> String {
-        ui_state.get_project().metadata.name.clone()
+        ui_state.get_project().meta.name.clone()
     }
 
     #[test]

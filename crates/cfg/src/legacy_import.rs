@@ -79,7 +79,7 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
         // Built fresh from the current-shape fields below, so it's already
         // current - no migration needed, unlike a file loaded from disk.
         schema_version: crate::CURRENT_PROJECT_SCHEMA_VERSION,
-        metadata: convert_metadata(old),
+        meta: convert_metadata(old),
         classification: convert_classification(&old.project_settings.classification, warnings),
         plate: convert_plate(&old.project_settings, warnings),
         images,
@@ -391,7 +391,8 @@ fn convert_pipeline(id: u32, old: &LegacyPipeline, warnings: &mut Vec<String>) -
 
     PipelineSettings {
         id: PipelineId(id),
-        name: (!old.meta.name.is_empty()).then(|| old.meta.name.clone()),
+        name: old.meta.name.clone(),
+        description: None,
         image_source,
         enabled: !old.disabled,
         steps,
@@ -1117,9 +1118,9 @@ mod tests {
         let outcome = import_legacy_project(&sample_project_json()).expect("should parse");
         let p = &outcome.project;
 
-        assert_eq!(p.metadata.name, "Legacy Demo");
-        assert_eq!(p.metadata.authors, vec!["Joachim Danmayr".to_string()]);
-        assert_eq!(p.metadata.author_organization, "evanalyzer.org");
+        assert_eq!(p.meta.name, "Legacy Demo");
+        assert_eq!(p.meta.authors, vec!["Joachim Danmayr".to_string()]);
+        assert_eq!(p.meta.author_organization, "evanalyzer.org");
 
         // classes()[0] is always the auto-prepended Background class - see
         // `ClassificationSettings::new_from_existing`.
@@ -1559,10 +1560,10 @@ mod tests {
             "pipelines": []
         }"##;
         let outcome = import_legacy_project(json).unwrap();
-        assert_eq!(outcome.project.metadata.name, "Fallback Name");
-        assert_eq!(outcome.project.metadata.description, "fallback notes");
-        assert!(outcome.project.metadata.authors.is_empty());
-        assert_eq!(outcome.project.metadata.author_organization, "");
+        assert_eq!(outcome.project.meta.name, "Fallback Name");
+        assert_eq!(outcome.project.meta.description, "fallback notes");
+        assert!(outcome.project.meta.authors.is_empty());
+        assert_eq!(outcome.project.meta.author_organization, "");
     }
 
     #[test]
@@ -1577,7 +1578,7 @@ mod tests {
         let expected = chrono::DateTime::parse_from_rfc3339("2020-01-02T03:04:05Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        assert_eq!(outcome.project.metadata.creation_time, expected);
+        assert_eq!(outcome.project.meta.creation_time, expected);
     }
 
     #[test]
@@ -1591,8 +1592,8 @@ mod tests {
         let before = chrono::Utc::now();
         let outcome = import_legacy_project(json).unwrap();
         let after = chrono::Utc::now();
-        assert!(outcome.project.metadata.creation_time >= before);
-        assert!(outcome.project.metadata.creation_time <= after);
+        assert!(outcome.project.meta.creation_time >= before);
+        assert!(outcome.project.meta.creation_time <= after);
     }
 
     // ---- classification edge cases ----
@@ -1690,7 +1691,7 @@ mod tests {
                 "pipelineSteps": [ { "$houghTransform": {} } ] } ]
         }"##;
         let outcome = import_legacy_project(json).unwrap();
-        assert_eq!(outcome.project.pipelines[0].name, None);
+        assert_eq!(outcome.project.pipelines[0].name, "".to_string());
         assert!(outcome.warnings.iter().any(|w| w.contains("pipeline #0")));
     }
 
