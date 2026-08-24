@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
@@ -147,6 +147,24 @@ impl ImageAlgorithm for Stardist {
 
     fn name(&self) -> &'static str {
         "Stardist"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "schmidt2018stardist",
+            title: "Cell Detection with Star-Convex Polygons",
+            authors: &[
+                "Uwe Schmidt",
+                "Martin Weigert",
+                "Coleman Broaddus",
+                "Gene Myers",
+            ],
+            year: 2018,
+            container: Some("Medical Image Computing and Computer-Assisted Intervention (MICCAI)"),
+            doi: Some("10.1007/978-3-030-00934-2_30"),
+            url: Some("https://doi.org/10.1007/978-3-030-00934-2_30"),
+            pages: Some("265-273"),
+        })
     }
 }
 
@@ -484,6 +502,9 @@ impl Stardist {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algos::ai_segmentation::test_support::trace_and_save_model;
+    use kornia_image::{Image, ImageSize};
+    use kornia_tensor::CpuAllocator;
 
     fn stardist(probability_threshold: f32, nms_threshold: f32) -> Stardist {
         Stardist {
@@ -492,6 +513,112 @@ mod tests {
             probability_threshold,
             nms_threshold,
         }
+    }
+
+    fn gray_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
+        let img =
+            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, values, CpuAllocator)
+                .unwrap();
+        PipelineContext::new_from_image_test(img).unwrap()
+    }
+
+    // ---- execute() - real TorchScript load + inference, see `test_support`.
+    // Only the "single concatenated [1, 1+n_rays, H, W] tensor" output
+    // convention is exercisable this way - `create_by_tracing` can't produce
+    // a saveable module with the "two separate tensors" convention (see
+    // `test_support`'s doc comment), so `split_outputs`'s `[_, _, ..]` branch
+    // stays untested here. ----
+
+    #[test]
+    fn execute_errors_when_the_model_path_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = Stardist {
+            model_path: dir.path().join("missing.pt"),
+            ..stardist(0.5, 0.3)
+        };
+        let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
+        let mut cache = PipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+        assert!(matches!(err, InternalErrors::Generic(_)));
+    }
+
+    #[test]
+    fn execute_end_to_end_rasterizes_a_candidate_around_a_high_probability_pixel() {
+        // Grid resolution == image resolution (no downsampling), so the
+        // scale factor is 1 and ray distances are plain pixel radii. Channel
+        // 0 (probability) is the input value directly - a single interior
+        // pixel is 1.0 (comfortably above the default 0.5 threshold), every
+        // other pixel is 0.0. The 4 ray-distance channels are a constant
+        // radius-2 disc around that one surviving grid cell; the exact
+        // polygon shape is already covered precisely by
+        // `build_candidates_scales_ray_distance_by_the_grid_to_image_ratio`
+        // et al. above, so this only checks that real inference correctly
+        // drives *some* object into existence around the intended pixel and
+        // leaves a far corner untouched.
+        const N_RAYS: i64 = 4;
+        let (_dir, model_path) = trace_and_save_model(1, 6, 6, |x| {
+            let prob = x.shallow_clone();
+            let radius = x.zeros_like() + 2.0;
+            let mut channels = vec![prob];
+            channels.extend((0..N_RAYS).map(|_| radius.shallow_clone()));
+            Tensor::cat(&channels, 1)
+        });
+        let cmd = Stardist {
+            model_path,
+            ..stardist(0.5, 0.3)
+        };
+
+        let mut values = vec![0.0f32; 36];
+        values[3 * 6 + 3] = 1.0; // row 3, col 3
+        let mut ctx = gray_ctx(6, 6, values);
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        let inst = ctx.get_instance_map().unwrap();
+        assert_eq!(
+            seg.as_slice()[3 * 6 + 3],
+            1,
+            "the high-probability pixel itself must be claimed by the object"
+        );
+        assert_ne!(inst.as_slice()[3 * 6 + 3], 0);
+        assert_eq!(
+            seg.as_slice()[0],
+            0,
+            "a far corner outside the radius-2 disc must stay background"
+        );
+        assert_eq!(inst.as_slice()[0], 0);
+    }
+
+    #[test]
+    fn execute_errors_when_the_model_output_has_too_few_dimensions() {
+        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| x.squeeze_dim(0).squeeze_dim(0));
+        let cmd = Stardist {
+            model_path,
+            ..stardist(0.5, 0.3)
+        };
+        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
+        let mut cache = PipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+        assert!(matches!(err, InternalErrors::Generic(msg) if msg.contains("too few dimensions")));
+    }
+
+    #[test]
+    fn execute_errors_when_the_model_output_has_fewer_than_two_channels() {
+        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| x.shallow_clone());
+        let cmd = Stardist {
+            model_path,
+            ..stardist(0.5, 0.3)
+        };
+        let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
+        let mut cache = PipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+        assert!(
+            matches!(err, InternalErrors::Generic(msg) if msg.contains("fewer than 2 channels"))
+        );
     }
 
     fn square(min_x: i64, min_y: i64, side: i64, score: f32) -> Candidate {
@@ -620,6 +747,41 @@ mod tests {
     }
 
     #[test]
+    fn iou_is_zero_when_bboxes_overlap_but_the_masks_share_no_pixel() {
+        // A occupies only the top-left 2x2 of its 4x4 bbox [0,0,3,3]; B
+        // occupies only the bottom-right 2x2 of its 4x4 bbox [2,2,5,5]. The
+        // two *bboxes* overlap (in [2,3]x[2,3]), but neither mask is filled
+        // there - `iou`'s own bbox fast-path (checked by
+        // `iou_is_zero_for_disjoint_candidates` above) can't catch this; only
+        // the mask intersection loop finding zero true pixels does.
+        let mut a_mask = vec![false; 16];
+        for row in 0..2 {
+            for col in 0..2 {
+                a_mask[row * 4 + col] = true;
+            }
+        }
+        let a = Candidate {
+            score: 0.9,
+            bbox: [0, 0, 3, 3],
+            mask: a_mask,
+            area: 4,
+        };
+        let mut b_mask = vec![false; 16];
+        for row in 2..4 {
+            for col in 2..4 {
+                b_mask[row * 4 + col] = true;
+            }
+        }
+        let b = Candidate {
+            score: 0.5,
+            bbox: [2, 2, 5, 5],
+            mask: b_mask,
+            area: 4,
+        };
+        assert_eq!(Stardist::iou(&a, &b), 0.0);
+    }
+
+    #[test]
     fn iou_is_one_for_identical_candidates() {
         let a = square(0, 0, 4, 0.9);
         let b = square(0, 0, 4, 0.5);
@@ -727,6 +889,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn write_instances_skips_the_false_cells_of_a_non_rectangular_mask() {
+        // A 2x2 bbox candidate whose mask is true only on its diagonal -
+        // unlike every other `write_instances` test above, which uses
+        // `square()`'s fully-true mask and so never exercises the per-cell
+        // `!candidate.mask[local_idx]` skip.
+        let candidate = Candidate {
+            score: 0.9,
+            bbox: [0, 0, 1, 1],
+            mask: vec![true, false, false, true], // (0,0) and (1,1) only
+            area: 2,
+        };
+        let mut seg = vec![0u32; 4];
+        let mut inst = vec![0u32; 4];
+        Stardist::write_instances(&[candidate], 2, 7, &mut seg, &mut inst);
+
+        assert_eq!(
+            inst,
+            vec![1, 0, 0, 1],
+            "only the diagonal cells are claimed"
+        );
+        assert_eq!(seg, vec![7, 0, 0, 7]);
+    }
+
+    #[test]
+    fn write_instances_first_candidate_wins_a_contested_pixel() {
+        // Two overlapping 2x2 squares passed directly (bypassing
+        // `non_max_suppress`, which would normally drop one of them) - the
+        // pixel they both claim must go to whichever candidate appears
+        // first in `kept`, not be overwritten by the second.
+        let candidates = vec![square(0, 0, 2, 0.9), square(1, 0, 2, 0.5)];
+        let mut seg = vec![0u32; 9]; // 3x3 image
+        let mut inst = vec![0u32; 9];
+        Stardist::write_instances(&candidates, 3, 7, &mut seg, &mut inst);
+
+        // Column 1, rows 0-1 is covered by both candidates - instance 1
+        // (the first candidate) must own it.
+        assert_eq!(
+            inst[0 * 3 + 1],
+            1,
+            "the first candidate must win the contested pixel"
+        );
+        assert_eq!(inst[1 * 3 + 1], 1);
+        // The first candidate's own exclusive column (x=0) is untouched by the contest.
+        assert_eq!(inst[0 * 3 + 0], 1);
+        // The second candidate's exclusive column (x=2) still gets its own instance id.
+        assert_eq!(inst[0 * 3 + 2], 2);
     }
 
     // ---- NaN model output no longer panics ----

@@ -1,8 +1,12 @@
-use evanalyzer_cfg::core_types::{InternalErrors, PixelUnits, SegmentationClass};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, MemoryId, PixelUnits, SegmentationClass,
+};
 use macros::CommandsMeta;
+use std::collections::HashMap;
 
 use crate::{
     algos::ImageAlgorithm,
+    image::ImageContainer,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -10,6 +14,7 @@ use crate::{
 ///
 /// Most methods analyze the image histogram to find a "cut-off" point that
 /// best separates the foreground from the background.
+#[derive(Debug, Clone, Copy, PartialEq, CommandsMeta)]
 pub enum ThresholdMethod {
     /// No threshold applied; typically used for bypass logic.
     None,
@@ -35,8 +40,18 @@ pub enum ThresholdMethod {
     Mean,
     /// Pre-smooths the histogram until there are only two peaks; finds the minimum between them.
     Minimum,
-    /// Most common method. Minimizes intra-class variance (maximizes inter-class variance).
-    Otsu,
+    /// Minimizes intra-class variance (maximizes inter-class variance).
+    ///
+    /// `Two` behaves exactly as before - one cut, `thresh_otsu`. `Three` jointly
+    /// finds two simultaneous cuts (Otsu's variance criterion is additive across
+    /// classes, so this is the same search one level deeper - see `thresh_otsu_multi`)
+    /// and returns whichever cut `middle_class` selects. Mirrors CellProfiler's
+    /// "Two-class or three-class thresholding?" + "Assign pixels in the middle
+    /// intensity class to the foreground or the background?" pair.
+    Otsu {
+        #[cmdsmeta(default = OtsuClasses::Two)]
+        classes: OtsuClasses,
+    },
     /// Assumes a fixed percentage of pixels belong to the foreground.
     Percentile,
     /// Based on the Renyi entropy of the histogram; a generalization of MaxEntropy.
@@ -45,6 +60,71 @@ pub enum ThresholdMethod {
     Shanbhag,
     /// Minimizes a cost function based on the discrepancy between two classes.
     Yen,
+    /// Trims outliers from both ends of the sorted pixel distribution, then
+    /// sets the threshold at `deviations_above_average` standard deviations
+    /// (or MADs) above the trimmed mean (or median). A port of CellProfiler's
+    /// "Robust Background" method - well suited to images with a clean, low
+    /// background and sparse foreground, since the outlier trim keeps bright
+    /// foreground pixels from dragging the background estimate upward.
+    RobustBackground {
+        #[cmdsmeta(default = 0.05)]
+        lower_outlier_fraction: f32,
+        #[cmdsmeta(default = 0.05)]
+        upper_outlier_fraction: f32,
+        #[cmdsmeta(default = Averaging::Mean)]
+        averaging_method: Averaging,
+        #[cmdsmeta(default = 2.0)]
+        deviations_above_average: f32,
+    },
+}
+
+/// How many populations Otsu splits the histogram into.
+///
+/// `Three` needs a second, jointly-optimized cut - see [`ThresholdMethod::Otsu`].
+/// Not generalized past three: a fourth class would need a genuine "which of the
+/// K-1 cuts" selector in place of `middle_class`, not just a wider range - see
+/// the multilevel-thresholding note on `thresh_otsu_multi`.
+#[derive(Debug, Clone, Copy, PartialEq, CommandsMeta)]
+pub enum OtsuClasses {
+    Two,
+    Three {
+        #[cmdsmeta(default = OtsuMiddleClass::Background)]
+        middle_class: OtsuMiddleClass,
+    },
+}
+
+/// Which side of a three-class Otsu split the middle-intensity population joins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtsuMiddleClass {
+    Foreground,
+    Background,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Averaging {
+    Mean,
+    Median,
+}
+
+/// Which image the threshold *value* is calculated from. Mirrors CellProfiler's
+/// ability to calculate a threshold on one image (e.g. the raw, unblurred
+/// image) and apply it to another (the blurred image actually being
+/// segmented): the cut-off computed here is always applied against the
+/// pipeline's actual current image - see [`ThresholdEntry::value_source`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThresholdValueSource {
+    /// Calculate the threshold from the pipeline's current image - the same
+    /// image the threshold is applied to. This is the historical behavior.
+    ActualImage,
+    /// Calculate the threshold from the unedited image this channel started
+    /// the pipeline with, ignoring any preprocessing (blur, illumination
+    /// correction, ...) applied so far. Looked up in the pipeline cache under
+    /// `ImageAddress::Channel` for the current image's channel.
+    RawImage,
+    /// Calculate the threshold from a user-defined snapshot stored earlier in
+    /// the pipeline (e.g. via the `ImageCache` command), addressed by
+    /// `MemoryId`.
+    Memory(MemoryId),
 }
 
 /// Configuration for a single thresholding operation within a multi-threshold stack.
@@ -74,6 +154,13 @@ pub struct ThresholdEntry {
 
     /// The classification ID assigned to pixels falling within this threshold range.
     pub object_class_id: SegmentationClass,
+
+    /// Defines which image should be taken for calculating the threhold value.
+    ///
+    /// This is the source which is used to calculate the threshold value.
+    /// The value itself is applied to the actual image the pipeline stands.
+    #[cmdsmeta(default = ThresholdValueSource::ActualImage, optional = true)]
+    pub value_source: ThresholdValueSource,
 }
 
 /// A filter that segments an image into discrete classes based on intensity.
@@ -93,14 +180,18 @@ impl ImageAlgorithm for Threshold {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors> {
         let nr_of_bits = ctx.image_meta.nr_of_bits;
+        // Resolved before the mutable borrow below, since `RawImage` needs to
+        // know which channel the pipeline's current image belongs to.
+        let channel = ctx.get_image_plane().map(|p| p.c);
         let (input_data, segmentation_map) = ctx.get_f32_gray_and_segmentation_mask_mut()?;
+        let actual_slice = input_data.as_slice();
 
-        // Build a 256-bin histogram once if any entry needs it, rescaled to the
-        // image's *actual observed* min/max (mirroring the C++ reference's
-        // `cv::minMaxLoc` + linear rescale in docs/threshold/threshold.hpp).
+        // Histograms are rescaled to the source image's *actual observed*
+        // min/max (mirroring the C++ reference's `cv::minMaxLoc` + linear
+        // rescale in docs/threshold/threshold.hpp).
         //
         // Real images rarely use the full theoretical bit-depth range (e.g. a
         // 12-bit sensor stored in a 16-bit container), so binning directly off
@@ -108,56 +199,78 @@ impl ImageAlgorithm for Threshold {
         // into a handful of low bins - degenerate input for methods like Li,
         // whose log-mean formula breaks down once the background mean lands
         // exactly on bin 0.
-        let needs_hist = self
-            .thresholds
-            .iter()
-            .any(|s| !matches!(s.method, ThresholdMethod::None | ThresholdMethod::Manual));
-        let hist_ctx = needs_hist.then(|| {
-            let data = input_data.as_slice();
-            let mut dmin = f32::MAX;
-            let mut dmax = f32::MIN;
-            for &v in data {
-                dmin = dmin.min(v);
-                dmax = dmax.max(v);
-            }
-            let hist = build_histogram(data, dmin, dmax);
-            (hist, dmin, dmax)
-        });
+        //
+        // Each entry's `value_source` picks which image that histogram (and
+        // therefore the computed cut-off) is built from - mirroring
+        // CellProfiler's ability to calculate a threshold on one image (e.g.
+        // the raw, unblurred image) and apply it to another. The cut-off
+        // itself is always applied against `actual_slice` below, never the
+        // source image, so entries sharing a `value_source` share one
+        // memoized histogram instead of rebuilding it per entry.
+        let mut hist_memo: HashMap<ThresholdValueSource, ([f32; 256], f32, f32)> = HashMap::new();
 
         // Pre-resolve each entry's [min, max] range in relative (0.0–1.0) space.
-        let normalized: Vec<(f32, f32, u32)> = self
-            .thresholds
-            .iter()
-            .map(|s| {
-                let floor = s.unit.to_relative(s.min_threshold, nr_of_bits);
-                let ceiling = s.unit.to_relative(s.max_threshold, nr_of_bits);
-                let min = match &s.method {
-                    ThresholdMethod::None | ThresholdMethod::Manual => floor,
-                    method => {
-                        let (hist, dmin, dmax) = hist_ctx.as_ref().unwrap();
-                        // The reference (`docs/threshold/threshold.hpp`,
-                        // `scaleAndSetThreshold(0, calcThresholdValue(...) + 1
-                        // + cValue, ...)`) always maps the raw split bin one
-                        // bin *above* itself before rescaling: the split bin
-                        // is background, the next bin up is where foreground
-                        // starts. Omitting this "+1" makes the threshold one
-                        // bin too permissive, letting background-adjacent
-                        // noise through as foreground.
-                        let bin = compute_auto_threshold(method, hist) + 1;
-                        let relative = if *dmax > *dmin {
-                            dmin + (bin as f32 / 255.0) * (dmax - dmin)
-                        } else {
-                            *dmin
-                        };
-                        relative.clamp(floor, ceiling)
+        let mut normalized: Vec<(f32, f32, u32)> = Vec::with_capacity(self.thresholds.len());
+        for s in &self.thresholds {
+            let floor = s.unit.to_relative(s.min_threshold, nr_of_bits);
+            let ceiling = s.unit.to_relative(s.max_threshold, nr_of_bits);
+            let min = match &s.method {
+                ThresholdMethod::None | ThresholdMethod::Manual => floor,
+                // Unlike every other auto method below, `RobustBackground` is
+                // computed directly from the sorted pixel population rather
+                // than a 256-bin histogram - CellProfiler's own
+                // `get_robust_background_threshold` (`centrosome/threshold.py`)
+                // sorts and trims the *exact* pixel values, and quantizing
+                // through the shared histogram first (which many distinct
+                // values collapse into the same bin) would lose the precision
+                // needed to reproduce its output bit-for-bit. No `+1`/rescale
+                // step either: the trimmed-mean-plus-deviations formula
+                // already yields a threshold value in the same relative units
+                // as `actual_slice`, not a bin index to map back.
+                ThresholdMethod::RobustBackground {
+                    lower_outlier_fraction,
+                    upper_outlier_fraction,
+                    averaging_method,
+                    deviations_above_average,
+                } => with_source_slice(s.value_source, channel, cache, actual_slice, |data| {
+                    thresh_robust_background(
+                        data,
+                        *lower_outlier_fraction,
+                        *upper_outlier_fraction,
+                        *averaging_method,
+                        *deviations_above_average,
+                    )
+                })?
+                .clamp(floor, ceiling),
+                method => {
+                    if !hist_memo.contains_key(&s.value_source) {
+                        let hist =
+                            build_source_histogram(s.value_source, channel, cache, actual_slice)?;
+                        hist_memo.insert(s.value_source, hist);
                     }
-                };
-                (min, ceiling, s.object_class_id.as_u32())
-            })
-            .collect();
+                    let (hist, dmin, dmax) = hist_memo.get(&s.value_source).unwrap();
+                    // The reference (`docs/threshold/threshold.hpp`,
+                    // `scaleAndSetThreshold(0, calcThresholdValue(...) + 1
+                    // + cValue, ...)`) always maps the raw split bin one
+                    // bin *above* itself before rescaling: the split bin
+                    // is background, the next bin up is where foreground
+                    // starts. Omitting this "+1" makes the threshold one
+                    // bin too permissive, letting background-adjacent
+                    // noise through as foreground.
+                    let bin = compute_auto_threshold(method, hist) + 1;
+                    let relative = if *dmax > *dmin {
+                        dmin + (bin as f32 / 255.0) * (dmax - dmin)
+                    } else {
+                        *dmin
+                    };
+                    relative.clamp(floor, ceiling)
+                }
+            };
+            normalized.push((min, ceiling, s.object_class_id.as_u32()));
+        }
 
         let output_slice = segmentation_map.as_slice_mut();
-        for (out_pixel, &in_pixel) in output_slice.iter_mut().zip(input_data.as_slice().iter()) {
+        for (out_pixel, &in_pixel) in output_slice.iter_mut().zip(actual_slice.iter()) {
             let mut assigned_id = SegmentationClass::BACKGROUND.as_u32();
             for &(min, max, class_id) in &normalized {
                 // Matches the reference's `cv::threshold(..., THRESH_BINARY)`
@@ -175,6 +288,94 @@ impl ImageAlgorithm for Threshold {
     fn name(&self) -> &'static str {
         "Threshold"
     }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
+    }
+}
+
+/// Resolves `source` to a 256-bin histogram (plus its observed min/max),
+/// mirroring the `dmin`/`dmax` rescale `Threshold::execute` used to only do
+/// against the pipeline's current image.
+fn build_source_histogram(
+    source: ThresholdValueSource,
+    channel: Option<i32>,
+    cache: &PipelineCache,
+    actual_data: &[f32],
+) -> Result<([f32; 256], f32, f32), InternalErrors> {
+    with_source_slice(source, channel, cache, actual_data, histogram_from_slice)
+}
+
+/// Resolves `source` to a pixel slice and applies `f` to it while the slice
+/// is still valid, returning `f`'s result. `RawImage` and `Memory` look up an
+/// `Arc<ImageContainer>` from the pipeline cache; `f` runs while it's alive
+/// so no borrow of the cache needs to outlive this call - shared by every
+/// per-entry computation that needs `source`'s pixels, whether that's
+/// `build_source_histogram`'s binning or `RobustBackground`'s direct
+/// sorted-population statistics.
+fn with_source_slice<R>(
+    source: ThresholdValueSource,
+    channel: Option<i32>,
+    cache: &PipelineCache,
+    actual_data: &[f32],
+    f: impl FnOnce(&[f32]) -> R,
+) -> Result<R, InternalErrors> {
+    match source {
+        ThresholdValueSource::ActualImage => Ok(f(actual_data)),
+        ThresholdValueSource::RawImage => {
+            let channel = channel.ok_or_else(|| {
+                InternalErrors::Generic(
+                    "Threshold: cannot resolve RawImage - current image has no channel/plane \
+                     information"
+                        .into(),
+                )
+            })?;
+            let raw = cache
+                .image_cache
+                .get_image_from_channel_cache(channel)
+                .ok_or_else(|| {
+                    InternalErrors::CacheMiss(format!(
+                        "Threshold: no raw image cached for channel {channel}"
+                    ))
+                })?;
+            gray_slice(&raw).map(f)
+        }
+        ThresholdValueSource::Memory(id) => {
+            let snapshot = cache
+                .image_cache
+                .get_image_from_memory_cache(id)
+                .ok_or_else(|| {
+                    InternalErrors::CacheMiss(format!(
+                        "Threshold: no image found in memory cache at {id:?}"
+                    ))
+                })?;
+            gray_slice(&snapshot).map(f)
+        }
+    }
+}
+
+/// Extracts the pixel slice of a gray image container, erroring for any other
+/// format - `Threshold` only ever operates on single-channel images.
+fn gray_slice(container: &ImageContainer) -> Result<&[f32], InternalErrors> {
+    match container {
+        ImageContainer::F32Gray(img) => Ok(img.as_slice()),
+        other => Err(InternalErrors::FormatMismatch {
+            expected: "F32Gray".into(),
+            found: format!("{other:?}"),
+        }),
+    }
+}
+
+/// Builds a histogram rescaled to `data`'s own observed min/max, alongside
+/// that min/max (needed to map the winning bin back to a relative value).
+fn histogram_from_slice(data: &[f32]) -> ([f32; 256], f32, f32) {
+    let mut dmin = f32::MAX;
+    let mut dmax = f32::MIN;
+    for &v in data {
+        dmin = dmin.min(v);
+        dmax = dmax.max(v);
+    }
+    (build_histogram(data, dmin, dmax), dmin, dmax)
 }
 
 // ── Histogram ────────────────────────────────────────────────────────────────
@@ -214,12 +415,33 @@ fn compute_auto_threshold(method: &ThresholdMethod, hist: &[f32; 256]) -> usize 
         ThresholdMethod::MaxEntropy => thresh_max_entropy(hist),
         ThresholdMethod::Mean => thresh_mean(hist),
         ThresholdMethod::Minimum => thresh_minimum(hist),
-        ThresholdMethod::Otsu => thresh_otsu(hist),
+        ThresholdMethod::Otsu { classes } => match classes {
+            OtsuClasses::Two => thresh_otsu(hist),
+            OtsuClasses::Three { middle_class } => {
+                let (t1, t2) = thresh_otsu_multi(hist);
+                match middle_class {
+                    // Middle class joins the background: only the brightest
+                    // population is foreground, so the *higher* cut is used.
+                    OtsuMiddleClass::Background => t2,
+                    // Middle class joins the foreground: everything above the
+                    // darkest population is foreground, so the *lower* cut
+                    // is used.
+                    OtsuMiddleClass::Foreground => t1,
+                }
+            }
+        },
         ThresholdMethod::Percentile => thresh_percentile(hist),
         ThresholdMethod::RenyiEntropy => thresh_renyi_entropy(hist),
         ThresholdMethod::Shanbhag => thresh_shanbhag(hist),
         ThresholdMethod::Yen => thresh_yen(hist),
-        ThresholdMethod::None | ThresholdMethod::Manual => 0,
+        // Never actually reached: `Threshold::execute` carves `RobustBackground`
+        // out into its own direct-on-pixels code path (see `with_source_slice`
+        // + `thresh_robust_background`) before it would otherwise land here,
+        // same as `None`/`Manual` above - kept only so this match stays
+        // exhaustive against `ThresholdMethod`.
+        ThresholdMethod::None
+        | ThresholdMethod::Manual
+        | ThresholdMethod::RobustBackground { .. } => 0,
     }
 }
 
@@ -255,6 +477,62 @@ fn thresh_otsu(hist: &[f32; 256]) -> usize {
         }
     }
     k_star
+}
+
+/// Three-class Otsu: jointly searches for the two simultaneous cuts `(t1,
+/// t2)`, `t1 < t2`, that maximize the between-class variance across three
+/// populations (0..=t1, t1+1..=t2, t2+1..255). Otsu's variance criterion is
+/// additive across classes - `thresh_otsu`'s single-cut `bcv` is just
+/// `w0*mu0² + w1*mu1²` with the constant `n*muT²` term dropped, since it
+/// doesn't affect which cut wins - so the three-class case is the same
+/// maximization one level deeper: `w0*mu0² + w1*mu1² + w2*mu2²`, searched
+/// over both cuts.
+///
+/// Each returned cut is the *last* bin of its (lower) class, exactly like
+/// `thresh_otsu`'s return value, so the same "+1" scaling in
+/// `Threshold::execute` applies unchanged to whichever cut ends up selected.
+fn thresh_otsu_multi(hist: &[f32; 256]) -> (usize, usize) {
+    let n: f64 = hist.iter().map(|&v| v as f64).sum();
+    if n == 0.0 {
+        return (0, 0);
+    }
+
+    // Prefix count/sum through (and including) bin i.
+    let mut p = [0.0f64; 256];
+    let mut s = [0.0f64; 256];
+    let mut cum_p = 0.0f64;
+    let mut cum_s = 0.0f64;
+    for i in 0..256 {
+        cum_p += hist[i] as f64;
+        cum_s += i as f64 * hist[i] as f64;
+        p[i] = cum_p;
+        s[i] = cum_s;
+    }
+    let total_s = s[255];
+
+    // w*mu² = (sum)²/w for a class of total weight `w` and weighted sum
+    // `sum`; contributes 0 for an empty class.
+    let class_term = |w: f64, sum: f64| -> f64 { if w > 0.0 { sum * sum / w } else { 0.0 } };
+
+    let mut best = (0usize, 1usize);
+    let mut best_bcv = f64::MIN;
+    for t1 in 0..255usize {
+        let w0 = p[t1];
+        let s0 = s[t1];
+        let term0 = class_term(w0, s0);
+        for t2 in (t1 + 1)..255usize {
+            let w1 = p[t2] - w0;
+            let s1 = s[t2] - s0;
+            let w2 = n - p[t2];
+            let s2 = total_s - s[t2];
+            let bcv = term0 + class_term(w1, s1) + class_term(w2, s2);
+            if bcv > best_bcv {
+                best_bcv = bcv;
+                best = (t1, t2);
+            }
+        }
+    }
+    best
 }
 
 fn thresh_li(hist: &[f32; 256]) -> usize {
@@ -901,6 +1179,91 @@ fn thresh_yen(hist: &[f32; 256]) -> usize {
     threshold
 }
 
+/// CellProfiler's "Robust Background" method
+/// (`centrosome.threshold.get_robust_background_threshold`): sorts `data`,
+/// trims `lower_outlier_fraction`/`upper_outlier_fraction` of the population
+/// off each end, then returns the trimmed population's average plus
+/// `deviations_above_average` times its spread. `averaging_method` picks
+/// *both* halves of that pair at once, exactly as CellProfiler does: `Mean`
+/// pairs with the standard deviation, `Median` pairs with the median
+/// absolute deviation (no `1.4826` normal-consistency scaling - CellProfiler
+/// uses the raw MAD).
+///
+/// Deliberately operates on the raw pixel population instead of a
+/// pre-binned histogram - see the call site in `Threshold::execute` for why.
+fn thresh_robust_background(
+    data: &[f32],
+    lower_outlier_fraction: f32,
+    upper_outlier_fraction: f32,
+    averaging_method: Averaging,
+    deviations_above_average: f32,
+) -> f32 {
+    // Mirrors the reference's `if n_pixels < 3: return 0`.
+    if data.len() < 3 {
+        return 0.0;
+    }
+
+    let mut sorted: Vec<f32> = data.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let n = sorted.len();
+    let n_f = n as f32;
+
+    // "if lower_outlier_fraction * n_pixels < 1: lower_outlier_fraction = 1 /
+    // n_pixels" (and the same for the upper fraction) - guarantees at least
+    // one pixel is trimmed off each end regardless of how small the
+    // requested fraction is, as long as there are enough pixels to trim.
+    let lower_fraction = if lower_outlier_fraction * n_f < 1.0 {
+        1.0 / n_f
+    } else {
+        lower_outlier_fraction
+    };
+    let upper_fraction = if upper_outlier_fraction * n_f < 1.0 {
+        1.0 / n_f
+    } else {
+        upper_outlier_fraction
+    };
+
+    let lower_bound = (n_f * lower_fraction) as usize;
+    let upper_bound = n - (n_f * upper_fraction) as usize;
+
+    // "if len(trimmed_image) == 0: return cropped_image[0]".
+    if upper_bound <= lower_bound {
+        return sorted[0];
+    }
+    let trimmed = &sorted[lower_bound..upper_bound];
+
+    match averaging_method {
+        Averaging::Mean => {
+            let mean = trimmed.iter().sum::<f32>() / trimmed.len() as f32;
+            // Population variance (divide by N, not N-1) - matches numpy's
+            // `.std()` default (`ddof=0`), which the reference uses.
+            let variance =
+                trimmed.iter().map(|&v| (v - mean).powi(2)).sum::<f32>() / trimmed.len() as f32;
+            mean + variance.sqrt() * deviations_above_average
+        }
+        Averaging::Median => {
+            let median = median_of_sorted(trimmed);
+            let mut abs_deviations: Vec<f32> =
+                trimmed.iter().map(|&v| (v - median).abs()).collect();
+            abs_deviations.sort_by(|a, b| a.total_cmp(b));
+            let mad = median_of_sorted(&abs_deviations);
+            median + mad * deviations_above_average
+        }
+    }
+}
+
+/// The median of an already-sorted slice - averages the two middle elements
+/// for an even-length slice, matching `numpy.median`. Panics on an empty
+/// slice; every caller here only ever passes a non-empty trimmed population.
+fn median_of_sorted(sorted: &[f32]) -> f32 {
+    let n = sorted.len();
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -909,6 +1272,7 @@ mod tests {
     use crate::image::{ImageContainer, ImageDebugExt};
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
+    use std::sync::Arc;
 
     #[test]
     fn test_multi_range_thresholding() -> Result<(), Box<dyn std::error::Error>> {
@@ -927,6 +1291,7 @@ mod tests {
                 max_threshold: 0.2,
                 object_class_id: SegmentationClass(10),
                 unit: PixelUnits::Relative,
+                value_source: ThresholdValueSource::ActualImage,
             },
             ThresholdEntry {
                 method: ThresholdMethod::Manual,
@@ -934,6 +1299,7 @@ mod tests {
                 max_threshold: 0.6,
                 object_class_id: SegmentationClass(20),
                 unit: PixelUnits::Relative,
+                value_source: ThresholdValueSource::ActualImage,
             },
             ThresholdEntry {
                 method: ThresholdMethod::Manual,
@@ -941,6 +1307,7 @@ mod tests {
                 max_threshold: 1.0,
                 object_class_id: SegmentationClass(30),
                 unit: PixelUnits::Relative,
+                value_source: ThresholdValueSource::ActualImage,
             },
         ];
 
@@ -1084,6 +1451,7 @@ mod tests {
             max_threshold: 1.0,
             object_class_id: SegmentationClass(1),
             unit: PixelUnits::Relative,
+            value_source: ThresholdValueSource::ActualImage,
         }];
 
         let cmd = Threshold {
@@ -1149,7 +1517,12 @@ mod tests {
         let size = ImageSize { width, height };
 
         let methods = [
-            ("Otsu", ThresholdMethod::Otsu),
+            (
+                "Otsu",
+                ThresholdMethod::Otsu {
+                    classes: OtsuClasses::Two,
+                },
+            ),
             ("MinError", ThresholdMethod::MinError),
             ("Triangle", ThresholdMethod::Triangle),
             ("Moments", ThresholdMethod::Moments),
@@ -1189,6 +1562,7 @@ mod tests {
                 max_threshold: 1.0,
                 object_class_id: SegmentationClass(1),
                 unit: PixelUnits::Relative,
+                value_source: ThresholdValueSource::ActualImage,
             }];
             let cmd = Threshold {
                 thresholds: settings,
@@ -1235,6 +1609,143 @@ mod tests {
     #[test]
     fn test_otsu_matches_reference() {
         assert_eq!(thresh_otsu(&bimodal_reference_histogram()), 159);
+    }
+
+    /// Three well-separated populations (bins 20-40, 110-130, 200-220), for
+    /// exercising three-class Otsu. Deliberately *not* built by adding a
+    /// third cluster on top of [`bimodal_reference_histogram`]'s two - its
+    /// second cluster (160-200) would directly adjoin a cluster added at
+    /// 200-220, merging them into one contiguous block with no valley
+    /// between them.
+    fn trimodal_reference_histogram() -> [f32; 256] {
+        let mut h = [0.0f32; 256];
+        for i in 20..=40 {
+            h[i] = 50.0;
+        }
+        for i in 110..=130 {
+            h[i] = 50.0;
+        }
+        for i in 200..=220 {
+            h[i] = 50.0;
+        }
+        h
+    }
+
+    /// `ThresholdMethod::Otsu { classes: OtsuClasses::Two }` must still
+    /// dispatch to the exact same `thresh_otsu` the plain two-class case
+    /// always used, on both a two- and a three-population histogram -
+    /// wiring the new `classes` field in must not change Otsu's original
+    /// (two-class) behavior at all.
+    #[test]
+    fn test_otsu_two_class_dispatch_matches_original_thresh_otsu() {
+        let two_class = ThresholdMethod::Otsu {
+            classes: OtsuClasses::Two,
+        };
+        for hist in [
+            bimodal_reference_histogram(),
+            trimodal_reference_histogram(),
+        ] {
+            assert_eq!(
+                compute_auto_threshold(&two_class, &hist),
+                thresh_otsu(&hist),
+                "OtsuClasses::Two must reproduce plain thresh_otsu exactly"
+            );
+        }
+    }
+
+    /// Three well-separated, equal-weight populations (bins 20-40, 110-130,
+    /// 200-220 - built by adding a third cluster on top of
+    /// `bimodal_reference_histogram`'s two) give an unambiguous ground truth
+    /// for the joint two-cut search: Otsu's between-class variance is flat
+    /// across any of the empty gaps separating the clusters, so the true
+    /// optimum sits anywhere each cluster ends - `thresh_otsu_multi`'s
+    /// tie-breaking (first cut reached, via strict `>`) should land exactly
+    /// on the end of the first cluster (40) and the end of the second (130).
+    /// Cross-checked with an independent Python re-implementation of the same
+    /// prefix-sum/variance formula.
+    #[test]
+    fn test_otsu_multi_matches_reference() {
+        assert_eq!(
+            thresh_otsu_multi(&trimodal_reference_histogram()),
+            (40, 130)
+        );
+    }
+
+    /// End-to-end regression for CellProfiler's "Three-class thresholding" +
+    /// "Assign pixels in the middle intensity class to the foreground or the
+    /// background?" pair: with three roughly equal-sized populations, setting
+    /// `middle_class` to `Background` must classify only the *brightest*
+    /// population as foreground (~1/3 of pixels), while `Foreground` must
+    /// classify the middle *and* brightest populations as foreground (~2/3) -
+    /// exactly mirroring how CellProfiler's middle-class assignment changes
+    /// which of the two jointly-optimized cuts becomes the final threshold.
+    #[test]
+    fn test_otsu_three_class_middle_assignment_mirrors_cellprofiler()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Three equal-sized, well-separated populations: dark, mid, bright.
+        let per_cluster = 100;
+        let mut input_data = Vec::with_capacity(per_cluster * 3);
+        for _ in 0..per_cluster {
+            input_data.push(30.0 / 255.0);
+        }
+        for _ in 0..per_cluster {
+            input_data.push(120.0 / 255.0);
+        }
+        for _ in 0..per_cluster {
+            input_data.push(210.0 / 255.0);
+        }
+        let size = ImageSize {
+            width: input_data.len(),
+            height: 1,
+        };
+
+        let run = |middle_class: OtsuMiddleClass| -> Result<f32, Box<dyn std::error::Error>> {
+            let input_img =
+                Image::<f32, 1, CpuAllocator>::new(size, input_data.clone(), CpuAllocator)?;
+            let settings = vec![ThresholdEntry {
+                method: ThresholdMethod::Otsu {
+                    classes: OtsuClasses::Three { middle_class },
+                },
+                min_threshold: 0.0,
+                max_threshold: 1.0,
+                object_class_id: SegmentationClass(1),
+                unit: PixelUnits::Relative,
+                value_source: ThresholdValueSource::ActualImage,
+            }];
+            let cmd = Threshold {
+                thresholds: settings,
+            };
+            let mut ctx = PipelineContext::new_from_image_test(input_img)?;
+            let mut cache = PipelineCache::default();
+            cmd.execute(&mut ctx, &mut cache)?;
+            let result_pixels = ctx
+                .segmentation_map
+                .as_ref()
+                .expect("No labels found")
+                .as_slice();
+            Ok(result_pixels.iter().filter(|&&v| v == 1).count() as f32
+                / result_pixels.len() as f32)
+        };
+
+        let background_fraction = run(OtsuMiddleClass::Background)?;
+        let foreground_fraction = run(OtsuMiddleClass::Foreground)?;
+
+        assert!(
+            (0.25..0.40).contains(&background_fraction),
+            "middle_class=Background should classify only the brightest ~1/3 as foreground, \
+             got {background_fraction:.3}"
+        );
+        assert!(
+            (0.55..0.75).contains(&foreground_fraction),
+            "middle_class=Foreground should classify the middle+brightest ~2/3 as foreground, \
+             got {foreground_fraction:.3}"
+        );
+        assert!(
+            foreground_fraction > background_fraction,
+            "Foreground middle-class assignment must yield more foreground pixels than \
+             Background: foreground={foreground_fraction:.3}, background={background_fraction:.3}"
+        );
+        Ok(())
     }
 
     #[test]
@@ -1310,6 +1821,140 @@ mod tests {
     #[test]
     fn test_yen_matches_reference() {
         assert_eq!(thresh_yen(&bimodal_reference_histogram()), 164);
+    }
+
+    /// Bit-exact regression for `Averaging::Mean` against CellProfiler's
+    /// `centrosome.threshold.get_robust_background_threshold`:
+    ///
+    /// ```python
+    /// def get_robust_background_threshold(data, lower_frac, upper_frac, k):
+    ///     n = len(data)
+    ///     s = sorted(data)
+    ///     if lower_frac * n < 1: lower_frac = 1.0 / n
+    ///     if upper_frac * n < 1: upper_frac = 1.0 / n
+    ///     lb = int(n * lower_frac)
+    ///     ub = n - int(n * upper_frac)
+    ///     trimmed = s[lb:ub]
+    ///     avg = sum(trimmed) / len(trimmed)
+    ///     sd = (sum((v - avg) ** 2 for v in trimmed) / len(trimmed)) ** 0.5
+    ///     return avg + sd * k
+    /// ```
+    ///
+    /// 20 pixels: one low outlier (-100), nine 0s, nine 10s, one high
+    /// outlier (200). `lower_outlier_fraction`/`upper_outlier_fraction` of
+    /// 0.05 trim exactly the two outliers (`int(20 * 0.05) == 1` off each
+    /// end), leaving the symmetric nine-0/nine-10 population: mean = 5.0,
+    /// population variance = ((0-5)² · 9 + (10-5)² · 9) / 18 = 25.0, so the
+    /// standard deviation is exactly 5.0 - no irrational intermediate value,
+    /// so the `sqrt` and every other step lands on an exactly-representable
+    /// `f32` regardless of evaluation order, giving a genuinely bit-exact
+    /// expected result (`5.0 + 5.0 * 2.0 == 15.0`) rather than one that only
+    /// matches within some epsilon.
+    #[test]
+    fn test_robust_background_mean_matches_cellprofiler_reference() {
+        let mut data = vec![-100.0f32];
+        data.extend(std::iter::repeat_n(0.0f32, 9));
+        data.extend(std::iter::repeat_n(10.0f32, 9));
+        data.push(200.0);
+
+        let result = thresh_robust_background(&data, 0.05, 0.05, Averaging::Mean, 2.0);
+
+        assert_eq!(result, 15.0, "must match CellProfiler's reference exactly");
+    }
+
+    /// Bit-exact regression for `Averaging::Median`, same reference formula
+    /// as above but with `avg = median(trimmed)` and `sd =
+    /// median(abs(trimmed - avg))` (CellProfiler's raw MAD, no `1.4826`
+    /// normal-consistency scaling).
+    ///
+    /// 20 pixels, values 1..=20. `int(20 * 0.05) == 1` trims the single
+    /// lowest (1) and single highest (20) value, leaving 2..=19 (18 values).
+    /// Every step here - the median of an 18-element run of consecutive
+    /// integers, the median of the resulting symmetric `.5`-valued absolute
+    /// deviations - only ever averages two values that are exactly
+    /// representable in `f32` (halves of small integers), so the expected
+    /// result (`10.5 + 4.5 * 2.0 == 19.5`) is exact independent of
+    /// evaluation order.
+    ///
+    /// Cross-checked against an independent Python re-implementation of the
+    /// reference formula on this exact input, which likewise prints `19.5`.
+    #[test]
+    fn test_robust_background_median_matches_cellprofiler_reference() {
+        let data: Vec<f32> = (1..=20).map(|v| v as f32).collect();
+
+        let result = thresh_robust_background(&data, 0.05, 0.05, Averaging::Median, 2.0);
+
+        assert_eq!(result, 19.5, "must match CellProfiler's reference exactly");
+    }
+
+    /// Fewer than 3 pixels short-circuits to `0.0`, matching the reference's
+    /// `if n_pixels < 3: return 0`.
+    #[test]
+    fn test_robust_background_too_few_pixels_returns_zero() {
+        assert_eq!(
+            thresh_robust_background(&[0.1, 0.9], 0.05, 0.05, Averaging::Mean, 2.0),
+            0.0
+        );
+    }
+
+    /// End-to-end regression through `Threshold::execute`: a
+    /// `RobustBackground` entry must compute its cut-off from the exact
+    /// pixel population (not the shared 256-bin histogram every other
+    /// method uses) and apply it with the same
+    /// exclusive-lower/inclusive-upper comparison as the rest of `Threshold`.
+    /// Reuses `test_robust_background_mean_matches_cellprofiler_reference`'s
+    /// dataset (threshold value 15.0) scaled into a tiny image so pixels
+    /// above 15.0 land in one class and everything else in another.
+    #[test]
+    fn test_threshold_execute_robust_background_end_to_end()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Same 20-value population as the direct unit test above (threshold
+        // = 15.0). `PixelUnits::Relative` passes `min_threshold`/
+        // `max_threshold` through unchanged (see `PixelUnits::to_relative`),
+        // so they can be given in the same arbitrary units as this data
+        // without any bit-depth rescaling to account for.
+        let mut input_data = vec![-100.0f32];
+        input_data.extend(std::iter::repeat_n(0.0f32, 9));
+        input_data.extend(std::iter::repeat_n(10.0f32, 9));
+        input_data.push(200.0);
+
+        let size = ImageSize {
+            width: input_data.len(),
+            height: 1,
+        };
+        let input_img = Image::<f32, 1, CpuAllocator>::new(size, input_data, CpuAllocator)?;
+
+        let settings = vec![ThresholdEntry {
+            method: ThresholdMethod::RobustBackground {
+                lower_outlier_fraction: 0.05,
+                upper_outlier_fraction: 0.05,
+                averaging_method: Averaging::Mean,
+                deviations_above_average: 2.0,
+            },
+            min_threshold: 0.0,
+            max_threshold: 255.0,
+            object_class_id: SegmentationClass(1),
+            unit: PixelUnits::Relative,
+            value_source: ThresholdValueSource::ActualImage,
+        }];
+        let cmd = Threshold {
+            thresholds: settings,
+        };
+        let mut ctx = PipelineContext::new_from_image_test(input_img)?;
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache)?;
+
+        let result_pixels = ctx
+            .segmentation_map
+            .as_ref()
+            .expect("No labels found")
+            .as_slice();
+
+        // Only the trailing 200.0 pixel (> 15.0) is foreground; everything
+        // else (-100, the nine 0s, the nine 10s) is <= 15.0.
+        let expected = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        assert_eq!(result_pixels, &expected[..]);
+        Ok(())
     }
 
     /// Golden-data regression for the `Threshold::execute` pipeline
@@ -1454,6 +2099,7 @@ mod tests {
                 max_threshold: 65535.0,
                 unit: PixelUnits::Bit,
                 object_class_id: SegmentationClass(1),
+                value_source: ThresholdValueSource::ActualImage,
             }],
         };
         let mut cache = PipelineCache::default();
@@ -1474,6 +2120,249 @@ mod tests {
             fg, 658,
             "Threshold::execute foreground pixel count does not match the C++ reference"
         );
+        Ok(())
+    }
+
+    // ── value_source ─────────────────────────────────────────────────────
+
+    /// Builds a 2x2 constant-value gray image, standing in for the pipeline's
+    /// current (e.g. blurred) image.
+    fn constant_gray_image(
+        value: f32,
+    ) -> Result<Image<f32, 1, CpuAllocator>, Box<dyn std::error::Error>> {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        Ok(Image::<f32, 1, CpuAllocator>::new(
+            size,
+            vec![value; 4],
+            CpuAllocator,
+        )?)
+    }
+
+    /// A single `Mean`-thresholded entry over the full relative range, with
+    /// the given `value_source`.
+    fn mean_threshold_entry(value_source: ThresholdValueSource) -> ThresholdEntry {
+        ThresholdEntry {
+            method: ThresholdMethod::Mean,
+            min_threshold: 0.0,
+            max_threshold: 1.0,
+            unit: PixelUnits::Relative,
+            object_class_id: SegmentationClass(1),
+            value_source,
+        }
+    }
+
+    fn foreground_count(ctx: &PipelineContext) -> usize {
+        ctx.segmentation_map
+            .as_ref()
+            .expect("no segmentation map")
+            .as_slice()
+            .iter()
+            .filter(|&&v| v != 0)
+            .count()
+    }
+
+    /// `ActualImage` (the default) computes the threshold from the same
+    /// constant image it's applied to: `Mean` on a constant image degenerates
+    /// to `dmin == dmax`, so the cut-off equals the pixel value itself and
+    /// the strict `>` comparison excludes every pixel. This is the baseline
+    /// `RawImage`/`Memory` are contrasted against below.
+    #[test]
+    fn test_value_source_actual_image_is_the_default_behavior()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
+        let mut cache = PipelineCache::default();
+        let cmd = Threshold {
+            thresholds: vec![mean_threshold_entry(ThresholdValueSource::ActualImage)],
+        };
+        cmd.execute(&mut ctx, &mut cache)?;
+
+        assert_eq!(foreground_count(&ctx), 0);
+        Ok(())
+    }
+
+    /// `RawImage` must calculate the cut-off from the unedited image cached
+    /// for the current channel (`ImageAddress::Channel`), not from the
+    /// pipeline's current (here: constant 0.5) image - while still
+    /// classifying the *current* image's pixels against that cut-off. The
+    /// raw image here is skewed low (mean bin threshold well under 0.5), so
+    /// every actual-image pixel (0.5) ends up foreground - the opposite of
+    /// what `ActualImage` produces on the same constant image above.
+    #[test]
+    fn test_value_source_raw_image_computes_threshold_from_the_channel_cache()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
+        let channel = ctx.get_image_plane().expect("test image has plane info").c;
+
+        let raw_size = ImageSize {
+            width: 4,
+            height: 1,
+        };
+        let raw_image =
+            Image::<f32, 1, CpuAllocator>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0], CpuAllocator)?;
+        let mut cache = PipelineCache::default();
+        cache.image_cache.add_to_channel_cache(
+            Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),
+            channel,
+        );
+
+        let cmd = Threshold {
+            thresholds: vec![mean_threshold_entry(ThresholdValueSource::RawImage)],
+        };
+        cmd.execute(&mut ctx, &mut cache)?;
+
+        assert_eq!(
+            foreground_count(&ctx),
+            4,
+            "all 4 actual-image pixels should be foreground"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_value_source_raw_image_missing_from_cache_is_a_cache_miss()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
+        let mut cache = PipelineCache::default();
+        let cmd = Threshold {
+            thresholds: vec![mean_threshold_entry(ThresholdValueSource::RawImage)],
+        };
+
+        let result = cmd.execute(&mut ctx, &mut cache);
+        assert!(matches!(result, Err(InternalErrors::CacheMiss(_))));
+        Ok(())
+    }
+
+    /// `Memory(id)` mirrors `RawImage`, but the source image is a
+    /// user-defined snapshot addressed by `MemoryId` rather than the
+    /// channel's raw image.
+    #[test]
+    fn test_value_source_memory_computes_threshold_from_the_addressed_snapshot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
+
+        let snapshot_size = ImageSize {
+            width: 4,
+            height: 1,
+        };
+        let snapshot_image = Image::<f32, 1, CpuAllocator>::new(
+            snapshot_size,
+            vec![0.0, 0.0, 0.0, 1.0],
+            CpuAllocator,
+        )?;
+        let memory_id = MemoryId::PipelineContext(7);
+        let mut cache = PipelineCache::default();
+        cache.image_cache.images.insert(
+            evanalyzer_cfg::core_types::ImageAddress::Memory(memory_id),
+            Arc::new(ImageContainer::new_f32_gray_from_image_test(snapshot_image)),
+        );
+
+        let cmd = Threshold {
+            thresholds: vec![mean_threshold_entry(ThresholdValueSource::Memory(
+                memory_id,
+            ))],
+        };
+        cmd.execute(&mut ctx, &mut cache)?;
+
+        assert_eq!(
+            foreground_count(&ctx),
+            4,
+            "all 4 actual-image pixels should be foreground"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_value_source_memory_missing_from_cache_is_a_cache_miss()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
+        let mut cache = PipelineCache::default();
+        let cmd = Threshold {
+            thresholds: vec![mean_threshold_entry(ThresholdValueSource::Memory(
+                MemoryId::PipelineContext(9),
+            ))],
+        };
+
+        let result = cmd.execute(&mut ctx, &mut cache);
+        assert!(matches!(result, Err(InternalErrors::CacheMiss(_))));
+        Ok(())
+    }
+
+    /// A source image that isn't `F32Gray` (e.g. RGB) must be rejected
+    /// instead of silently misreading its pixel buffer.
+    #[test]
+    fn test_value_source_raw_image_rejects_a_non_gray_cached_image()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
+        let channel = ctx.get_image_plane().expect("test image has plane info").c;
+
+        let rgb_size = ImageSize {
+            width: 1,
+            height: 1,
+        };
+        let rgb_image =
+            Image::<f32, 3, CpuAllocator>::new(rgb_size, vec![0.1, 0.2, 0.3], CpuAllocator)?;
+        let mut cache = PipelineCache::default();
+        cache.image_cache.add_to_channel_cache(
+            Arc::new(ImageContainer::new_f32_rgb_from_image_test(rgb_image)),
+            channel,
+        );
+
+        let cmd = Threshold {
+            thresholds: vec![mean_threshold_entry(ThresholdValueSource::RawImage)],
+        };
+
+        let result = cmd.execute(&mut ctx, &mut cache);
+        assert!(matches!(result, Err(InternalErrors::FormatMismatch { .. })));
+        Ok(())
+    }
+
+    /// Multiple entries sharing the same `value_source` must reuse one
+    /// memoized histogram instead of resolving/rebuilding it per entry - the
+    /// entries below use different methods (`Mean` vs `Otsu`) on the same
+    /// `RawImage`, so this also guards against the memo being keyed on
+    /// something other than the source itself.
+    #[test]
+    fn test_value_source_shared_across_entries_is_resolved_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
+        let channel = ctx.get_image_plane().expect("test image has plane info").c;
+
+        let raw_size = ImageSize {
+            width: 4,
+            height: 1,
+        };
+        let raw_image =
+            Image::<f32, 1, CpuAllocator>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0], CpuAllocator)?;
+        let mut cache = PipelineCache::default();
+        cache.image_cache.add_to_channel_cache(
+            Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),
+            channel,
+        );
+
+        let cmd = Threshold {
+            thresholds: vec![
+                mean_threshold_entry(ThresholdValueSource::RawImage),
+                ThresholdEntry {
+                    method: ThresholdMethod::Otsu {
+                        classes: OtsuClasses::Two,
+                    },
+                    min_threshold: 0.0,
+                    max_threshold: 1.0,
+                    unit: PixelUnits::Relative,
+                    object_class_id: SegmentationClass(2),
+                    value_source: ThresholdValueSource::RawImage,
+                },
+            ],
+        };
+
+        // Would panic/error on a broken memo lookup (e.g. re-resolving a
+        // cache entry that was only inserted once) well before reaching this
+        // assertion.
+        cmd.execute(&mut ctx, &mut cache)?;
+        assert_eq!(foreground_count(&ctx), 4);
         Ok(())
     }
 }

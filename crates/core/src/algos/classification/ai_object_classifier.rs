@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId, SegmentationClass};
+use evanalyzer_cfg::core_types::{
+    CitationMetadata, InternalErrors, ObjectClass, ObjectId, SegmentationClass,
+};
 use evanalyzer_cfg::settings::ai_learning_settings::AiLearningClassifierSettings;
 use macros::CommandsMeta;
 
@@ -164,7 +166,11 @@ impl ImageAlgorithm for AiObjectClassifier {
     }
 
     fn name(&self) -> &'static str {
-        "AiObjectClassifier"
+        "Ai Object Classifier"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -571,7 +577,7 @@ mod tests {
             input_classes: vec![],
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
         };
-        assert_eq!(cmd.name(), "AiObjectClassifier");
+        assert_eq!(cmd.name(), "Ai Object Classifier");
     }
 
     #[test]

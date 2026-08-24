@@ -6,9 +6,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[allow(unused)]
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineTemplate {
+    /// On-disk format version of this pipeline template (`.evapipe`). Absent
+    /// on files written before versioning was introduced, which
+    /// `serde(default)` reads as `0` - see `CURRENT_PIPELINE_TEMPLATE_SCHEMA_VERSION`.
+    /// Unlike `ProjectSettings.schema_version`, nothing currently rejects a
+    /// too-new version or migrates an old one forward on load - this field
+    /// only reserves the seam for that.
+    #[serde(default)]
+    pub schema_version: u32,
+
     /// Metadata of this pipeline template
     pub meta: MetaData,
 
@@ -17,9 +26,18 @@ pub struct PipelineTemplate {
 }
 
 #[allow(unused)]
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectTemplate {
+    /// On-disk format version of this project template (`.evapt`). Absent on
+    /// files written before versioning was introduced, which `serde(default)`
+    /// reads as `0` - see `CURRENT_PROJECT_TEMPLATE_SCHEMA_VERSION`. Unlike
+    /// `ProjectSettings.schema_version`, nothing currently rejects a too-new
+    /// version or migrates an old one forward on load - this field only
+    /// reserves the seam for that.
+    #[serde(default)]
+    pub schema_version: u32,
+
     /// Metadata of this project template
     pub meta: MetaData,
 

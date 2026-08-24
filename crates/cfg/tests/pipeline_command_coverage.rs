@@ -349,7 +349,7 @@ fn command_category_suggested_next_advances_and_terminates_at_classify() {
 #[test]
 fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
-    let expected: [(&str, &[CommandCategory]); 34] = [
+    let expected: [(&str, &[CommandCategory]); 35] = [
         ("AI Object Classifier", &[Classify]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
@@ -369,6 +369,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("FillHoles", &[Object]),
         ("GaussianBlur", &[Segment, Preprocess]),
         ("Hessian", &[Segment, Preprocess]),
+        ("IlluminationCorrection", &[Segment, Preprocess]),
         ("ImageCache", &[Segment, Preprocess]),
         ("ImageMath", &[Segment, Preprocess]),
         ("IntensityTransformation", &[Segment, Preprocess]),
@@ -378,7 +379,7 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("ObjectMath", &[Classify]),
         ("AI Pixel Classifier", &[Object]),
         ("RankFilter", &[Segment, Preprocess]),
-        ("RollingBall", &[Segment, Preprocess]),
+        ("Rolling Ball", &[Segment, Preprocess]),
         ("SaveImage", &[Segment, Preprocess]),
         ("AI Stardist Segmentation", &[Measure]),
         ("StructureTensor", &[Segment, Preprocess]),
@@ -496,7 +497,7 @@ fn apply_param_change_dropdown_fields_cycle_through_every_option() {
         // `apply_param_change_rank_filter_ignores_unknown_filter_type_value`
         // below), so cycling through every option would fail here.
         ("ObjectMath", "operation"),
-        ("RollingBall", "ball_type"),
+        ("Rolling Ball", "ball_type"),
         ("SaveImage", "source"),
         ("StructureTensor", "mode"),
         ("ClassifyObjects", "match_handling"),
@@ -704,7 +705,7 @@ fn apply_param_change_dropdown_fields_ignore_unknown_values() {
         ("MorphologicalCommand", "op", "Erode"),
         ("MorphologicalCommand", "kernel_shape", "Ellipse"),
         ("ObjectMath", "operation", "Or"),
-        ("RollingBall", "ball_type", "Paraboloid"),
+        ("Rolling Ball", "ball_type", "Paraboloid"),
         ("SaveImage", "source", "Instance Map"),
         ("StructureTensor", "mode", "Coherence"),
         (
@@ -787,6 +788,89 @@ fn apply_param_change_threshold_entry_cycles_through_method_options() {
         let value = &nested.iter().find(|p| p.name == "method").unwrap().value;
         assert_eq!(value, method);
     }
+}
+
+/// Regression test for a nested rich enum *inside* a group item's own rich
+/// enum field - `ThresholdMethod::Otsu`'s `classes: OtsuClasses` field, which
+/// itself has a data-carrying `Three { middle_class }` variant. This is two
+/// levels of rich-enum nesting inside a `ParamType::Group` row
+/// (`thresholds.0.method` -> `OtsuClasses` -> `Three.middle_class`), the
+/// deepest nesting anywhere in the schema. Before the generator recursed
+/// into a group item field's own active variant, switching `classes` to
+/// `Three` silently no-op'd (falling into the generic "unknown value, keep
+/// current" arm) and `middle_class` was never reachable at all.
+#[test]
+fn apply_param_change_threshold_entry_otsu_classes_and_middle_class_round_trip() {
+    let mut cmd = default_command(id_of("Threshold")).unwrap();
+    cmd.add_group_item("thresholds");
+
+    cmd.apply_param_change("thresholds.0.method", "Otsu");
+    let nested = |cmd: &PipelineCommand| {
+        cmd.to_parameters()
+            .into_iter()
+            .find(|p| p.name == "thresholds")
+            .unwrap()
+            .groups[0]
+            .clone()
+    };
+
+    let after_otsu = nested(&cmd);
+    let classes = after_otsu
+        .iter()
+        .find(|p| p.name == "method.classes")
+        .expect("selecting Otsu must expose a method.classes dropdown");
+    assert_eq!(classes.value, "Two", "OtsuClasses defaults to Two");
+    assert_eq!(
+        classes.options,
+        vec!["Two".to_string(), "Three".to_string()]
+    );
+    assert!(
+        !after_otsu
+            .iter()
+            .any(|p| p.name == "method.classes.middle_class"),
+        "middle_class must not appear while classes is still Two"
+    );
+
+    cmd.apply_param_change("thresholds.0.method.classes", "Three");
+    let after_three = nested(&cmd);
+    assert_eq!(
+        after_three
+            .iter()
+            .find(|p| p.name == "method.classes")
+            .unwrap()
+            .value,
+        "Three",
+        "switching classes to Three must actually take effect, not silently no-op"
+    );
+    let middle_class = after_three
+        .iter()
+        .find(|p| p.name == "method.classes.middle_class")
+        .expect("classes = Three must expose a method.classes.middle_class dropdown");
+    assert_eq!(
+        middle_class.options,
+        vec!["Foreground".to_string(), "Background".to_string()]
+    );
+
+    cmd.apply_param_change("thresholds.0.method.classes.middle_class", "Foreground");
+    let after_middle = nested(&cmd);
+    assert_eq!(
+        after_middle
+            .iter()
+            .find(|p| p.name == "method.classes.middle_class")
+            .unwrap()
+            .value,
+        "Foreground"
+    );
+
+    // Switching back to Two must remove both nested fields again.
+    cmd.apply_param_change("thresholds.0.method.classes", "Two");
+    let after_back_to_two = nested(&cmd);
+    assert!(
+        !after_back_to_two
+            .iter()
+            .any(|p| p.name == "method.classes.middle_class"),
+        "middle_class must disappear once classes is switched back to Two"
+    );
 }
 
 #[test]

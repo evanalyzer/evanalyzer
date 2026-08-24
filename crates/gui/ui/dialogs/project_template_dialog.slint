@@ -37,6 +37,7 @@ export struct ProjectTemplateDef {
     short-description: string,
     description: string,
     author: string,
+    co-authors: string,
     organization: string,
     creation-time: string,
     pipeline-count: int,
@@ -272,6 +273,24 @@ component ProjectTemplateDetailPane inherits Rectangle {
 
                 Text {
                     text: tmpl.author;
+                    color: Theme.text-dim;
+                    font-size: 10.5px;
+                    font-family: Theme.font-mono;
+                    overflow: elide;
+                }
+            }
+
+            if tmpl.co-authors != "": HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                Text {
+                    text: "Co-authors";
+                    color: Theme.text-mute;
+                    font-size: 10.5px;
+                }
+
+                Text {
+                    text: tmpl.co-authors;
                     color: Theme.text-dim;
                     font-size: 10.5px;
                     font-family: Theme.font-mono;

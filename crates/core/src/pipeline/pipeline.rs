@@ -195,7 +195,7 @@ mod tests {
         ManagedImage, Object,
         algos::{ExtractObjects, Voronoi},
     };
-    use evanalyzer_cfg::core_types::{ImageAddress, ObjectClass, SizeUnits};
+    use evanalyzer_cfg::core_types::{CitationMetadata, ImageAddress, ObjectClass, SizeUnits};
     use kornia_apriltag::utils::Point2d;
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
@@ -235,6 +235,10 @@ mod tests {
 
         fn name(&self) -> &'static str {
             "FakeSegmenter"
+        }
+
+        fn cite(&self) -> Option<&'static CitationMetadata> {
+            None
         }
     }
 
@@ -416,6 +420,10 @@ mod tests {
 
         fn name(&self) -> &'static str {
             "SetFirstPixel"
+        }
+
+        fn cite(&self) -> Option<&'static CitationMetadata> {
+            None
         }
     }
 

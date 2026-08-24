@@ -209,7 +209,22 @@ fn field_value_expr(
     }
 }
 
-fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
+/// Every field type referenced anywhere a settings/from-impl might need to
+/// name it: every command struct's own fields (every `pub struct` in the
+/// workspace is pushed into `commands` regardless of whether it implements
+/// `ImageAlgorithm` - see `extract_command_structs` - so this already reaches
+/// fields on non-command structs like `ThresholdEntry` too), *and* every rich
+/// enum variant's named fields. The latter matters whenever a variant field's
+/// type is itself a user enum (e.g. `ThresholdMethod::Otsu { classes:
+/// OtsuClasses }`): `extract_fields` only walks a struct's own fields, so
+/// without this, a type referenced solely from inside a variant - not from
+/// any struct field - would never make it into `used_type_names`, and the
+/// settings code generated for it in `generate_from_impls` would reference an
+/// enum that `generate_config_code` never actually emitted.
+fn collect_used_type_names(
+    commands: &[CommandInfo],
+    enums: &[EnumInfo],
+) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
 
     let mut used_type_names: HashSet<String> = HashSet::new();
@@ -218,6 +233,18 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
             used_type_names.insert(field.ty.clone());
         }
     }
+    for e in enums {
+        for variant in &e.variants {
+            for field in &variant.named_fields {
+                used_type_names.insert(field.ty.clone());
+            }
+        }
+    }
+    used_type_names
+}
+
+fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
+    let used_type_names = collect_used_type_names(commands, enums);
 
     let filtered_enums: Vec<&EnumInfo> = enums
         .iter()
@@ -238,7 +265,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     // Header - only config/serde imports, no core
     out.push_str("// @generated - do not edit by hand\n");
     // out.push_str("use indexmap::IndexMap;\n");
-    out.push_str("use crate::{core_types::{ImageAddress,PixelUnits, SizeUnits}, types::classes::{ObjectClass, SegmentationClass}};\n");
+    out.push_str("use crate::{core_types::{ImageAddress,MemoryId,PixelUnits, SizeUnits}, types::classes::{ObjectClass, SegmentationClass}};\n");
     out.push_str("use std::path::PathBuf;\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
@@ -260,7 +287,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
             out.push_str(
                 "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]\n",
             );
-            out.push_str("#[serde(tag = \"type\", rename_all = \"camelCase\")]\n");
+            out.push_str("#[serde(tag = \"type\", rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
         } else {
             out.push_str(
                 "#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]\n",
@@ -280,6 +307,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                 // fields of a struct-like variant — each variant needs its own rename_all
                 // to keep field names camelCase, consistent with every other settings struct.
                 out.push_str("    #[serde(rename_all = \"camelCase\")]\n");
+                out.push_str(&serde_variant_alias_attr(&variant.name));
                 out.push_str(&format!("    {} {{\n", variant.name));
                 for field in &variant.named_fields {
                     for doc in &field.doc_comments {
@@ -303,8 +331,10 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
                 }
                 out.push_str("    },\n");
             } else if let Some(ref data_type) = variant.data_type {
+                out.push_str(&serde_variant_alias_attr(&variant.name));
                 out.push_str(&format!("    {}({}),\n", variant.name, data_type));
             } else {
+                out.push_str(&serde_variant_alias_attr(&variant.name));
                 out.push_str(&format!("    {},\n", variant.name));
             }
         }
@@ -456,14 +486,7 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
 // ============================================================
 
 fn generate_from_impls(commands: &[CommandInfo], enums: &[EnumInfo]) -> String {
-    use std::collections::HashSet;
-
-    let mut used_type_names: HashSet<String> = HashSet::new();
-    for cmd in commands {
-        for field in &cmd.fields {
-            used_type_names.insert(field.ty.clone());
-        }
-    }
+    let used_type_names = collect_used_type_names(commands, enums);
 
     let filtered_enums: Vec<&EnumInfo> = enums
         .iter()
@@ -987,7 +1010,14 @@ fn extract_doc_comments(attrs: &[syn::Attribute]) -> Vec<String> {
                     ..
                 }) = &nv.value
                 {
-                    docs.push(s.value().trim_end().to_string());
+                    // `/// text` lowers to `#[doc = " text"]` - the leading
+                    // space is part of the attribute value, not a stylistic
+                    // choice. Trimming only the end (as this used to) leaves
+                    // it in, so re-emitting via `format!("/// {}\n", doc)`
+                    // below doubles it up into `///  text`. `trim()` (both
+                    // ends) strips it, matching `extract_enum_variants`,
+                    // which already gets this right for variant docs.
+                    docs.push(s.value().trim().to_string());
                 }
             }
         }
@@ -1299,6 +1329,51 @@ fn to_camel_case(s: &str) -> String {
         }
     }
     result
+}
+
+fn pascal_to_snake_case(s: &str) -> String {
+    pascal_to_title_case(s)
+        .split(' ')
+        .map(|w| w.to_lowercase())
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+fn pascal_to_kebab_case(s: &str) -> String {
+    pascal_to_title_case(s)
+        .split(' ')
+        .map(|w| w.to_lowercase())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Extra accepted spellings for one enum variant's serialized tag/value,
+/// emitted as a `#[serde(alias = "...")]` line right above the variant.
+/// The *canonical* form that actually gets written out is always whatever
+/// the enclosing enum's `#[serde(rename_all = "SCREAMING_SNAKE_CASE")]`
+/// produces - these aliases only widen what's *accepted* on read, so
+/// hand-edited pipeline/project files (or ones saved by an older build that
+/// wrote camelCase) still parse. Returns `""` if every alternate spelling
+/// collapses to the same string (single-word variant names - e.g. "None" -
+/// camelCase, snake_case and kebab-case are all just "none"), since a bare
+/// `#[serde(alias = ...)]` with only duplicate values would be noise.
+fn serde_variant_alias_attr(variant_name: &str) -> String {
+    let mut aliases = vec![
+        to_camel_case(variant_name),
+        pascal_to_snake_case(variant_name),
+        pascal_to_kebab_case(variant_name),
+    ];
+    aliases.sort();
+    aliases.dedup();
+    if aliases.is_empty() {
+        return String::new();
+    }
+    let attrs: String = aliases
+        .iter()
+        .map(|a| format!("alias = \"{a}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("    #[serde({attrs})]\n")
 }
 
 fn is_user_enum(ty: &str, all_enums: &[EnumInfo]) -> bool {
@@ -1677,11 +1752,19 @@ fn enum_variant_param_defs(
                     v.name,
                     field_names.join(", ")
                 );
-                let field_literals: Vec<String> = v
+                // One `Vec<ParameterDef>`-typed expression per visible field, concatenated
+                // below - mirrors `field_to_param_def`'s own two-expression treatment of a
+                // rich-enum-typed field (dropdown + a recursive match over its active
+                // variant's own sibling fields). Without recursing here, a field whose type
+                // is itself a variant-payload-carrying enum (e.g. `OtsuClasses`, nested
+                // inside `ThresholdMethod::Otsu`) would only ever expose its own discriminant
+                // dropdown - switching *that* dropdown's variant (e.g. `Two` -> `Three`)
+                // would never surface `Three`'s own `middle_class` field.
+                let field_exprs: Vec<String> = v
                     .named_fields
                     .iter()
                     .filter(|f| f.metadata.visible)
-                    .filter_map(|f| {
+                    .flat_map(|f| {
                         let routing_name = format!("{routing_prefix}.{}", f.name);
                         let display_label = f
                             .metadata
@@ -1690,6 +1773,27 @@ fn enum_variant_param_defs(
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| snake_to_title_case(&f.name));
                         let description = escape_doc_comments(&f.doc_comments);
+                        if let Some(nested_enum) = enums.iter().find(|e| e.enum_name == f.ty) {
+                            if nested_enum.has_variant_payload() {
+                                let dropdown = leaf_param_def_literal(
+                                    &f.ty,
+                                    &f.metadata,
+                                    &f.name,
+                                    &routing_name,
+                                    &display_label,
+                                    &description,
+                                    enums,
+                                )
+                                .expect("enum dropdown literal is always Some");
+                                let nested_fields = enum_variant_param_defs(
+                                    nested_enum,
+                                    &f.name,
+                                    &routing_name,
+                                    enums,
+                                );
+                                return vec![format!("vec![{dropdown}]"), nested_fields];
+                            }
+                        }
                         leaf_param_def_literal(
                             &f.ty,
                             &f.metadata,
@@ -1699,9 +1803,11 @@ fn enum_variant_param_defs(
                             &description,
                             enums,
                         )
+                        .map(|lit| vec![format!("vec![{lit}]")])
+                        .unwrap_or_default()
                     })
                     .collect();
-                return format!("{pattern} => vec![{}]", field_literals.join(", "));
+                return format!("{pattern} => {}", concat_param_vecs(&field_exprs));
             }
             if let Some(data_ty) = &v.data_type {
                 let pattern = format!("{settings_name}::{}(__inner)", v.name);
@@ -2179,7 +2285,15 @@ fn leaf_apply_change_branch(
                         format!("\"{}\" => {}::{}, ", label, settings_name, v.name)
                     })
                     .collect();
-                format!("{assign} = match value {{ {arms}_ => {assign}.clone() }};")
+                // `assign` is sometimes a bare place (`item.method`) and
+                // sometimes a deref (`*classes`, for a field nested inside a
+                // rich enum variant - see `enum_variant_apply_change`'s
+                // `nested_branches`). Method-call precedence binds tighter
+                // than prefix `*`, so an unparenthesized `*classes.clone()`
+                // would parse as `*(classes.clone())` - deref-ing the already
+                // *owned* clone, not cloning the dereferenced place. Wrapping
+                // `assign` keeps both cases correct.
+                format!("{assign} = match value {{ {arms}_ => ({assign}).clone() }};")
             } else {
                 return None;
             }
@@ -2241,8 +2355,12 @@ fn enum_variant_apply_change(
             format!("\"{label}\" => {construct}, ")
         })
         .collect();
+    // See the matching comment in `leaf_apply_change_branch`: `access` can be
+    // a deref (`*field`) when this is reached for a field nested inside
+    // another rich enum variant, so `.clone()` must apply to the
+    // parenthesized place, not to `access` textually as written.
     let switch_branch = format!(
-        "if param_name == \"{display_name}\" {{ {access} = match value {{ {switch_arms}_ => {access}.clone() }}; }}"
+        "if param_name == \"{display_name}\" {{ {access} = match value {{ {switch_arms}_ => ({access}).clone() }}; }}"
     );
 
     let mut nested_branches = String::new();
@@ -2260,6 +2378,25 @@ fn enum_variant_apply_change(
                 .filter_map(|f| {
                     let condition = format!("{display_name}.{}", f.name);
                     let assign = format!("*{}", f.name);
+                    // A field whose own type is itself a variant-payload-carrying enum
+                    // (e.g. `OtsuClasses`, nested inside `ThresholdMethod::Otsu`) needs the
+                    // same recursive treatment `field_to_apply_change` gives a top-level
+                    // field of that shape: a switch branch for the field itself, PLUS
+                    // nested branches for its own active variant's sibling fields.
+                    // `leaf_apply_change_branch`'s fallback only supports picking a plain
+                    // unit variant by label - it would silently no-op switching `classes`
+                    // to `Three`, and could never reach `Three`'s own `middle_class` field.
+                    if let Some(nested_enum) = enums.iter().find(|e| e.enum_name == f.ty) {
+                        if nested_enum.has_variant_payload() {
+                            return Some(enum_variant_apply_change(
+                                nested_enum,
+                                &assign,
+                                &condition,
+                                enums,
+                                commands,
+                            ));
+                        }
+                    }
                     leaf_apply_change_branch(&f.ty, &assign, &condition, enums)
                 })
                 .collect();
@@ -2393,7 +2530,7 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("use crate::modules::pipeline_command_settings::*;\n");
     out.push_str("use crate::modules::parameter_def::{ParamType, ParameterDef};\n");
     out.push_str("use crate::types::classes::{ObjectClass, SegmentationClass};\n");
-    out.push_str("use crate::core_types::{PixelUnits, SizeUnits};\n");
+    out.push_str("use crate::core_types::{MemoryId, PixelUnits, SizeUnits};\n");
     out.push_str("use schemars::JsonSchema;\n");
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
 
@@ -2447,10 +2584,11 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
 
     // --- PipelineCommand enum ---
     out.push_str("#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]\n");
-    out.push_str("#[serde(tag = \"type\", rename_all = \"camelCase\")]\n");
+    out.push_str("#[serde(tag = \"type\", rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
     out.push_str("pub enum PipelineCommand {\n");
     for cmd in &algo_commands {
         let settings_name = format!("{}Settings", cmd.struct_name);
+        out.push_str(&serde_variant_alias_attr(&cmd.struct_name));
         out.push_str(&format!("    {}({}),\n", cmd.struct_name, settings_name));
     }
     out.push_str("}\n\n");

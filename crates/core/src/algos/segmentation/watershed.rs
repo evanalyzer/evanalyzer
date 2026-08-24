@@ -9,13 +9,16 @@
 
 use crate::{
     algos::{
-        ImageAlgorithm, segmentation::maximum_finder::watershed_segment_edm,
+        ImageAlgorithm,
+        segmentation::maximum_finder::{
+            find_intensity_seeds, watershed_segment_edm, watershed_segment_from_seeds,
+        },
         spartial_transform::edm::DistanceTransform,
     },
     image::ImageContainer,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_imgproc::filter::gaussian_blur;
 use kornia_tensor::CpuAllocator;
@@ -35,11 +38,18 @@ use std::sync::Arc;
 /// surviving basins. The split blob is then re-labeled into separate instances.
 #[derive(CommandsMeta)]
 pub struct Watershed {
-    /// Prominence tolerance for the maximum finder, in pixels of distance.
+    /// Prominence tolerance for the maximum finder, in pixels of distance -
+    /// **or**, when `seed_source == Intensity`, CellProfiler's "typical
+    /// object diameter"-derived maxima-suppression radius, in pixels (its
+    /// disk-shaped local-maximum search footprint is `max(1, this - 0.5)`).
+    /// Same field, two meanings depending on which surface seeds come from -
+    /// both are fundamentally a spatial scale over the *seed-finding*
+    /// surface, only the surface itself changes.
     ///
-    /// A local maximum of the distance map is treated as a separate object only
-    /// if it protrudes more than this value above the ridge connecting it to a
-    /// higher maximum. This is ImageJ's "prominence"/"noise tolerance" parameter.
+    /// For `DistanceMap`: a local maximum of the distance map is treated as
+    /// a separate object only if it protrudes more than this value above
+    /// the ridge connecting it to a higher maximum. This is ImageJ's
+    /// "prominence"/"noise tolerance" parameter.
     ///
     /// * **Low values**: more sensitive; may over-segment ragged objects.
     /// * **High values**: more robust; may fail to split genuinely touching objects.
@@ -49,12 +59,16 @@ pub struct Watershed {
     #[cmdsmeta(default = 0.5, min = 0.1, max = 20.0, step = 0.5)]
     pub maximum_finder_tolerance: f32,
 
-    /// Standard deviation (px) of an optional Gaussian blur applied to the
-    /// distance map *before* the maximum finder. `0` disables it.
+    /// Standard deviation (px) of an optional Gaussian blur applied *before*
+    /// seed-finding, to the surface `seed_source` seeds from - the distance
+    /// map for `DistanceMap`, or the grayscale intensity image for
+    /// `Intensity` (matching CellProfiler's own smoothing step ahead of its
+    /// "Intensity" unclumping). `0` disables it. The watershed *flood*
+    /// always runs on the (unsmoothed-by-this-field) distance map either way.
     ///
     /// ImageJ's `trueEdmHeight` correction already handles ordinary ragged mask
-    /// boundaries, so this is rarely needed; for extremely noisy AI masks a value
-    /// of `1.0`–`2.0` can further suppress spurious maxima.
+    /// boundaries, so this is rarely needed for `DistanceMap`; for extremely
+    /// noisy AI masks a value of `1.0`–`2.0` can further suppress spurious maxima.
     #[cmdsmeta(default = 0.0, min = 0.0, max = 10.0, step = 0.5)]
     pub smoothing_sigma: f32,
 
@@ -64,6 +78,27 @@ pub struct Watershed {
     /// Use it to drop tiny fragments left by very ragged masks.
     #[cmdsmeta(default = 0, min = 0, max = 100000, step = 1)]
     pub min_object_size: i32,
+
+    /// What surface local maxima are seeded from. The watershed *flood*
+    /// itself is unaffected either way - it always runs on the distance
+    /// map, matching CellProfiler's "Shape" watershed method.
+    ///
+    /// `DistanceMap` (default) emulates ImageJ's watershed implementation:
+    /// seeds and flood both come from the distance map. `Intensity` instead
+    /// finds seeds as local maxima of the (optionally smoothed) grayscale
+    /// image, restricted to each object's own footprint - a faithful port
+    /// of CellProfiler `IdentifyPrimaryObjects`' "Intensity" unclumping
+    /// method (see [`crate::algos::segmentation::maximum_finder::find_intensity_seeds`]),
+    /// the fix for diffusely-connected regions whose *shape* has no separate
+    /// peaks but whose *brightness* clearly does.
+    #[cmdsmeta(default = SeedSource::DistanceMap, optional = true)]
+    pub seed_source: SeedSource,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SeedSource {
+    DistanceMap,
+    Intensity,
 }
 
 impl ImageAlgorithm for Watershed {
@@ -94,6 +129,15 @@ impl ImageAlgorithm for Watershed {
         // Get references to labels. We clone seed_labels because DistanceTransform
         // will overwrite the context's 'image' slot.
         let seed_instances = ctx.get_instance_map()?.clone();
+
+        // For Intensity seeding, also clone the current grayscale image before
+        // it's overwritten below - it's the surface seeds are found on, kept
+        // entirely separate from the distance map the flood always uses.
+        let intensity_image = if self.seed_source == SeedSource::Intensity {
+            Some(ctx.get_f32_gray_image()?.clone())
+        } else {
+            None
+        };
 
         // Reuse the scratch_pad to create the F32 input for DistanceTransform
         // This avoids the 'f32_data' Vec allocation.
@@ -143,7 +187,34 @@ impl ImageAlgorithm for Watershed {
         };
 
         // ImageJ MaximumFinder watershed: particles = 255, watershed lines = 0.
-        let mask = watershed_segment_edm(edm, width, height, self.maximum_finder_tolerance);
+        // `DistanceMap` seeds and floods on the EDM in one pass, unchanged
+        // from before `seed_source` existed. `Intensity` finds seeds on the
+        // (optionally smoothed) grayscale image instead, then floods that
+        // marker set on the exact same EDM the `DistanceMap` path uses.
+        let mask = match self.seed_source {
+            SeedSource::DistanceMap => {
+                watershed_segment_edm(edm, width, height, self.maximum_finder_tolerance)
+            }
+            SeedSource::Intensity => {
+                let intensity_image =
+                    intensity_image.expect("captured above whenever seed_source == Intensity");
+                let intensity_smoothed;
+                let intensity: &[f32] = if self.smoothing_sigma > 0.0 {
+                    intensity_smoothed = Self::smooth_edm(&intensity_image, self.smoothing_sigma)?;
+                    intensity_smoothed.as_slice()
+                } else {
+                    intensity_image.as_slice()
+                };
+                let seeds = find_intensity_seeds(
+                    intensity,
+                    seed_instances.as_slice(),
+                    width,
+                    height,
+                    self.maximum_finder_tolerance,
+                );
+                watershed_segment_from_seeds(edm, &seeds, width, height)
+            }
+        };
 
         // Re-label the cut foreground into separate instances.
         let final_instances = self.label_cut_foreground(
@@ -162,6 +233,19 @@ impl ImageAlgorithm for Watershed {
 
     fn name(&self) -> &'static str {
         "Watershed"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "vincent1991watersheds",
+            title: "Watersheds in Digital Spaces: An Efficient Algorithm Based on Immersion Simulations",
+            authors: &["Luc Vincent", "Pierre Soille"],
+            year: 1991,
+            container: Some("IEEE Transactions on Pattern Analysis and Machine Intelligence"),
+            doi: Some("10.1109/34.87344"),
+            url: Some("https://doi.org/10.1109/34.87344"),
+            pages: Some("583-598"),
+        })
     }
 }
 
@@ -266,6 +350,226 @@ mod tests {
     use crate::{F32Gray, image::ImageDebugExt};
     use kornia_image::ImageSize;
 
+    /// xorshift32 - deterministic, no external dep needed for scattering
+    /// noise specks reproducibly.
+    struct Rng(u32);
+    impl Rng {
+        fn next(&mut self) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 17;
+            self.0 ^= self.0 << 5;
+            self.0
+        }
+        fn range(&mut self, n: usize) -> usize {
+            (self.next() as usize) % n
+        }
+    }
+
+    /// Scatters `n_specks` small (1-2px radius) non-zero blobs across a
+    /// `size x size` grid - simulating a noisy image's thresholded mask
+    /// (many tiny spurious objects) rather than a real image's real objects.
+    fn noisy_mask(size: usize, n_specks: usize, seed: u32) -> Vec<u32> {
+        let mut mask = vec![0u32; size * size];
+        let mut rng = Rng(seed.max(1));
+        for _ in 0..n_specks {
+            let cx = 3 + rng.range(size - 6);
+            let cy = 3 + rng.range(size - 6);
+            let r = 1 + rng.range(2);
+            for dy in -(r as i64)..=(r as i64) {
+                for dx in -(r as i64)..=(r as i64) {
+                    if dx * dx + dy * dy <= (r * r) as i64 {
+                        let x = (cx as i64 + dx) as usize;
+                        let y = (cy as i64 + dy) as usize;
+                        if x < size && y < size {
+                            mask[y * size + x] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        mask
+    }
+
+    /// Manual repro/benchmark for the user's hypothesis that a noisy image
+    /// with thousands of small objects could make `ConnectedComponents`
+    /// and/or `Watershed` pathologically slow, explaining a pipeline that
+    /// stalls for up to an hour on one image. Not a `#[test]`-asserted
+    /// regression guard (there's no known-good baseline to assert against
+    /// yet) - run manually with:
+    ///   cargo test --release -p evanalyzer_core --features ai -- --ignored \
+    ///     repro_noisy_image_connected_components_and_watershed_timing --nocapture
+    #[test]
+    #[ignore]
+    fn repro_noisy_image_connected_components_and_watershed_timing() {
+        let size = 2048usize;
+        for &n_specks in &[200usize, 1_000, 4_000, 12_000, 30_000, 80_000] {
+            let mask = noisy_mask(size, n_specks, 12345);
+            let image_size = ImageSize {
+                width: size,
+                height: size,
+            };
+            let mut ctx = PipelineContext::new_test::<F32Gray>(image_size).unwrap();
+            ctx.segmentation_map =
+                Some(Image::<u32, 1, CpuAllocator>::new(image_size, mask, CpuAllocator).unwrap());
+            let mut cache = PipelineCache::default();
+
+            let t0 = std::time::Instant::now();
+            crate::algos::segmentation::connected_components::ConnectedComponents { min_size: 0 }
+                .execute(&mut ctx, &mut cache)
+                .expect("ConnectedComponents failed");
+            let cc_elapsed = t0.elapsed();
+
+            let n_objects = ctx
+                .instance_map
+                .as_ref()
+                .unwrap()
+                .as_slice()
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+
+            let t1 = std::time::Instant::now();
+            Watershed {
+                maximum_finder_tolerance: 0.5,
+                smoothing_sigma: 0.0,
+                min_object_size: 0,
+                seed_source: SeedSource::DistanceMap,
+            }
+            .execute(&mut ctx, &mut cache)
+            .expect("Watershed failed");
+            let ws_elapsed = t1.elapsed();
+
+            println!(
+                "specks={n_specks:6} -> {n_objects:6} objects | ConnectedComponents: {cc_elapsed:8.2?} | Watershed: {ws_elapsed:8.2?}"
+            );
+        }
+    }
+
+    /// Scatters `n_bumps` overlapping same-radius discs so they merge into a
+    /// few large *connected* blobs (touching/clumped, like crowded nuclei) -
+    /// unlike `noisy_mask`'s isolated specks, `ConnectedComponents` here
+    /// reports only a handful of components, so `Watershed` has to find and
+    /// resolve thousands of local maxima *within one region*, which is the
+    /// actual scenario the algorithm's neck-splitting exists for and a much
+    /// more realistic stress case for "many small objects" than pre-
+    /// separated specks.
+    fn clumped_mask(size: usize, n_bumps: usize, radius: i64, seed: u32) -> Vec<u32> {
+        let mut mask = vec![0u32; size * size];
+        let mut rng = Rng(seed.max(1));
+        for _ in 0..n_bumps {
+            let cx = radius + 1 + rng.range(size - 2 * (radius as usize + 1)) as i64;
+            let cy = radius + 1 + rng.range(size - 2 * (radius as usize + 1)) as i64;
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    if dx * dx + dy * dy <= radius * radius {
+                        let x = (cx + dx) as usize;
+                        let y = (cy + dy) as usize;
+                        if x < size && y < size {
+                            mask[y * size + x] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        mask
+    }
+
+    /// See `repro_noisy_image_connected_components_and_watershed_timing`'s
+    /// doc comment - same purpose, but with `clumped_mask` (thousands of
+    /// maxima packed into a few large connected regions) instead of
+    /// isolated specks, which is the harder case for `Watershed`
+    /// specifically. Run manually with:
+    ///   cargo test --release -p evanalyzer_core --features ai -- --ignored \
+    ///     repro_clumped_noisy_image_watershed_timing --nocapture
+    #[test]
+    #[ignore]
+    fn repro_clumped_noisy_image_watershed_timing() {
+        let size = 2048usize;
+        for &n_bumps in &[200usize, 1_000, 4_000, 12_000, 30_000] {
+            let mask = clumped_mask(size, n_bumps, 12, 12345);
+            let image_size = ImageSize {
+                width: size,
+                height: size,
+            };
+            let mut ctx = PipelineContext::new_test::<F32Gray>(image_size).unwrap();
+            ctx.segmentation_map =
+                Some(Image::<u32, 1, CpuAllocator>::new(image_size, mask, CpuAllocator).unwrap());
+            let mut cache = PipelineCache::default();
+
+            crate::algos::segmentation::connected_components::ConnectedComponents { min_size: 0 }
+                .execute(&mut ctx, &mut cache)
+                .expect("ConnectedComponents failed");
+            let n_components = ctx
+                .instance_map
+                .as_ref()
+                .unwrap()
+                .as_slice()
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+
+            let t1 = std::time::Instant::now();
+            Watershed {
+                maximum_finder_tolerance: 0.5,
+                smoothing_sigma: 0.0,
+                min_object_size: 0,
+                seed_source: SeedSource::DistanceMap,
+            }
+            .execute(&mut ctx, &mut cache)
+            .expect("Watershed failed");
+            let ws_elapsed = t1.elapsed();
+
+            let n_split = ctx
+                .instance_map
+                .as_ref()
+                .unwrap()
+                .as_slice()
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+
+            println!(
+                "bumps={n_bumps:6} -> {n_components:5} connected regions -> {n_split:6} objects after split | Watershed: {ws_elapsed:8.2?}"
+            );
+        }
+    }
+
+    #[test]
+    fn execute_is_a_noop_when_tolerance_is_not_positive() {
+        // `maximum_finder_tolerance <= 0.0` short-circuits before touching
+        // the instance map at all - a `0.0` (the boundary itself, `<=` not
+        // `<`) and a negative tolerance must both leave existing instance
+        // labels completely untouched.
+        let size = ImageSize {
+            width: 3,
+            height: 3,
+        };
+        let seed = vec![1u32, 1, 0, 0, 2, 2, 0, 0, 0];
+        for tolerance in [0.0f32, -1.0] {
+            let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+            ctx.instance_map =
+                Some(Image::<u32, 1, CpuAllocator>::new(size, seed.clone(), CpuAllocator).unwrap());
+            let mut cache = PipelineCache::default();
+
+            let cmd = Watershed {
+                maximum_finder_tolerance: tolerance,
+                smoothing_sigma: 0.0,
+                min_object_size: 0,
+                seed_source: SeedSource::DistanceMap,
+            };
+            cmd.execute(&mut ctx, &mut cache).unwrap();
+
+            assert_eq!(
+                ctx.instance_map.as_ref().unwrap().as_slice(),
+                seed.as_slice(),
+                "tolerance {tolerance} must leave the instance map unchanged"
+            );
+        }
+    }
+
     #[test]
     fn test_watershed_multi_class_boundaries() {
         let size = ImageSize {
@@ -309,6 +613,7 @@ mod tests {
             maximum_finder_tolerance: 0.1,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -392,6 +697,7 @@ mod tests {
             maximum_finder_tolerance: 0.8,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
 
         // Execute CCL
@@ -637,6 +943,7 @@ mod tests {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -708,6 +1015,7 @@ mod tests {
             maximum_finder_tolerance: 3.0,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -773,6 +1081,7 @@ mod tests {
             maximum_finder_tolerance: 1.0,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
         watershed
             .execute(&mut ctx, &mut cache)
@@ -836,6 +1145,7 @@ mod tests {
                 maximum_finder_tolerance: 0.1,
                 smoothing_sigma: 0.0,
                 min_object_size,
+                seed_source: SeedSource::DistanceMap,
             }
             .execute(&mut ctx, &mut cache)
             .expect("Watershed failed");
@@ -895,6 +1205,7 @@ mod tests {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 1.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         }
         .execute(&mut ctx, &mut cache)
         .expect("Watershed failed");
@@ -955,6 +1266,7 @@ mod tests {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         };
 
         watershed
@@ -1041,6 +1353,7 @@ mod tests {
             maximum_finder_tolerance: 0.5, // ImageJ default
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         }
         .execute(&mut ctx, &mut cache)
         .expect("Watershed failed");
@@ -1110,6 +1423,7 @@ mod tests {
             maximum_finder_tolerance: 1.0,
             smoothing_sigma: 0.0,
             min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
         }
         .execute(&mut ctx, &mut cache)
         .expect("Watershed failed");
@@ -1138,6 +1452,231 @@ mod tests {
             2,
             "expected exactly 2 instances, found {}",
             unique.len()
+        );
+    }
+
+    /// Builds a single-instance rectangle (one connected blob, no internal
+    /// gaps), padded with a background margin so `DistanceTransform` has
+    /// real background to measure against, with a two-peak intensity
+    /// profile along its width - a two-ramp shape up to `peak1`, down to a
+    /// valley, and back up to `peak2` (both given in absolute canvas
+    /// coordinates), matching `intensity_seeding_tests::
+    /// two_separated_peaks_in_one_label_each_get_a_seed`'s shape (a real
+    /// valley, not a flat plateau, so there's no spurious interior maximum).
+    /// Also sets the actual grayscale image (`ctx.image`), which
+    /// `SeedSource::Intensity` reads and `SeedSource::DistanceMap` never
+    /// touches.
+    fn diffuse_blob_with_two_intensity_peaks(
+        canvas_width: usize,
+        canvas_height: usize,
+        margin: usize,
+        peak1: i32,
+        peak2: i32,
+    ) -> PipelineContext {
+        let size = ImageSize {
+            width: canvas_width,
+            height: canvas_height,
+        };
+        let mut intensity = vec![0f32; canvas_width * canvas_height];
+        let mut instances = vec![0u32; canvas_width * canvas_height];
+        for y in margin..(canvas_height - margin) {
+            for x in margin..(canvas_width - margin) {
+                let i = y * canvas_width + x;
+                instances[i] = 1;
+                let d1 = (x as i32 - peak1).abs();
+                let d2 = (x as i32 - peak2).abs();
+                let v = (1.0 - 0.1 * d1 as f32).max(1.0 - 0.1 * d2 as f32);
+                intensity[i] = v.max(0.05);
+            }
+        }
+        let mut ctx = PipelineContext::new_from_image_test(
+            Image::<f32, 1, CpuAllocator>::new(size, intensity, CpuAllocator).unwrap(),
+        )
+        .unwrap();
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, instances, CpuAllocator).unwrap());
+        ctx
+    }
+
+    /// The CellProfiler `IdentifyPrimaryObjects` "Intensity unclumping +
+    /// Shape watershed" scenario this feature exists for: one diffusely-
+    /// connected region (a solid rectangle - its distance map is a flat
+    /// ridge along most of its width, with no separable peak to split on)
+    /// whose *brightness* has two clear, well-separated peaks.
+    ///
+    /// `SeedSource::DistanceMap` (shape alone) must find only one object -
+    /// there is nothing in the shape to seed a split from. `SeedSource::
+    /// Intensity` must find the two brightness peaks as independent seeds
+    /// and split the same blob into two, flooding on the very same distance
+    /// map `DistanceMap` mode used - this is the concrete "detects nothing"
+    /// vs "splits correctly" contrast the feature was built to fix.
+    #[test]
+    fn intensity_seeding_splits_a_diffuse_blob_that_distance_map_seeding_cannot() {
+        let margin = 2usize;
+        let canvas_width = 28usize;
+        let canvas_height = 14usize;
+        let (peak1, peak2) = (5i32, 22i32);
+
+        // Shape alone: no separable peak in a solid rectangle's distance map.
+        let mut ctx_shape = diffuse_blob_with_two_intensity_peaks(
+            canvas_width,
+            canvas_height,
+            margin,
+            peak1,
+            peak2,
+        );
+        let mut cache = PipelineCache::default();
+        Watershed {
+            maximum_finder_tolerance: 1.0,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
+        }
+        .execute(&mut ctx_shape, &mut cache)
+        .expect("Watershed (DistanceMap) failed");
+        let shape_result = ctx_shape.instance_map.expect("no instance map");
+        let shape_unique: HashSet<u32> = shape_result
+            .as_slice()
+            .iter()
+            .copied()
+            .filter(|&v| v > 0)
+            .collect();
+        assert_eq!(
+            shape_unique.len(),
+            1,
+            "a diffuse rectangle's shape alone has no peak to split on, \
+             expected 1 object from DistanceMap seeding, found {}",
+            shape_unique.len()
+        );
+
+        // Intensity: the same blob, but seeded from its two brightness peaks.
+        let mut ctx_intensity = diffuse_blob_with_two_intensity_peaks(
+            canvas_width,
+            canvas_height,
+            margin,
+            peak1,
+            peak2,
+        );
+        let mut cache = PipelineCache::default();
+        Watershed {
+            maximum_finder_tolerance: 2.0,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+            seed_source: SeedSource::Intensity,
+        }
+        .execute(&mut ctx_intensity, &mut cache)
+        .expect("Watershed (Intensity) failed");
+        let intensity_result = ctx_intensity.instance_map.expect("no instance map");
+        let out = intensity_result.as_slice();
+
+        let label1 = out[(canvas_height / 2) * canvas_width + peak1 as usize];
+        let label2 = out[(canvas_height / 2) * canvas_width + peak2 as usize];
+        assert_ne!(label1, 0, "peak 1's own pixel should be labeled");
+        assert_ne!(label2, 0, "peak 2's own pixel should be labeled");
+        assert_ne!(
+            label1, label2,
+            "Intensity seeding must split the diffuse blob at its two \
+             brightness peaks, matching CellProfiler's Intensity-unclumping \
+             + Shape-watershed combination"
+        );
+
+        let intensity_unique: HashSet<u32> = out.iter().copied().filter(|&v| v > 0).collect();
+        assert_eq!(
+            intensity_unique.len(),
+            2,
+            "expected exactly 2 instances after Intensity-seeded split, found {}",
+            intensity_unique.len()
+        );
+    }
+
+    /// Regression guard for the claim in `SeedSource::DistanceMap`'s own doc
+    /// comment: adding `Intensity` seeding must not change `DistanceMap`
+    /// behavior at all. Runs the exact two-touching-discs geometry from
+    /// `test_watershed_matches_imagej_two_touching_discs` through both the
+    /// direct `watershed_segment_edm` API and `Watershed::execute` with
+    /// `seed_source: DistanceMap`, and asserts the final instance map is
+    /// identical to what that pre-existing, still-passing test already
+    /// asserts - not just "no test currently fails" but an explicit,
+    /// permanent pixel-for-pixel comparison.
+    #[test]
+    fn distance_map_seed_source_produces_byte_identical_output_to_the_unseeded_path() {
+        let width = 17usize;
+        let height = 13usize;
+        let size = ImageSize { width, height };
+
+        let c1 = (5i32, 6i32);
+        let c2 = (11i32, 6i32);
+        let r: i32 = 4;
+        let mut data = vec![0u32; width * height];
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                let in1 = (x - c1.0).pow(2) + (y - c1.1).pow(2) <= r * r;
+                let in2 = (x - c2.0).pow(2) + (y - c2.1).pow(2) <= r * r;
+                if in1 || in2 {
+                    data[y as usize * width + x as usize] = 1;
+                }
+            }
+        }
+
+        // Reference: the lower-level EDM watershed API directly (unaffected
+        // by `seed_source` - it doesn't exist at that layer).
+        let mut ctx_ref = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx_ref.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, data.clone(), CpuAllocator).unwrap());
+        let mut cache_ref = PipelineCache::default();
+        let seed_instances_ref = ctx_ref.get_instance_map().unwrap().clone();
+        {
+            let scratch = ctx_ref.get_f32_gray_image_mut().unwrap();
+            for (f, &l) in scratch.as_slice_mut().iter_mut().zip(data.iter()) {
+                *f = if l > 0 { 1.0 } else { 0.0 };
+            }
+        }
+        DistanceTransform {
+            threshold: 0.0,
+            edges_are_background: false,
+        }
+        .execute(&mut ctx_ref, &mut cache_ref)
+        .unwrap();
+        let edm_image = ctx_ref.get_f32_gray_image().unwrap();
+        let edm_width = edm_image.width();
+        let edm_height = edm_image.height();
+        let reference_mask =
+            watershed_segment_edm(edm_image.as_slice(), edm_width, edm_height, 0.5);
+        let reference_instances = Watershed {
+            maximum_finder_tolerance: 0.5,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
+        }
+        .label_cut_foreground(
+            &reference_mask,
+            seed_instances_ref.as_slice(),
+            edm_width,
+            edm_height,
+            0,
+        );
+
+        // Actual: the real `Watershed::execute` entry point, `DistanceMap`.
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
+        ctx.instance_map =
+            Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
+        let mut cache = PipelineCache::default();
+        Watershed {
+            maximum_finder_tolerance: 0.5,
+            smoothing_sigma: 0.0,
+            min_object_size: 0,
+            seed_source: SeedSource::DistanceMap,
+        }
+        .execute(&mut ctx, &mut cache)
+        .expect("Watershed failed");
+        let actual = ctx.instance_map.expect("no instance map");
+
+        assert_eq!(
+            actual.as_slice(),
+            reference_instances.as_slice(),
+            "SeedSource::DistanceMap must produce byte-identical output to the \
+             lower-level watershed_segment_edm path, unaffected by the addition \
+             of SeedSource::Intensity"
         );
     }
 }

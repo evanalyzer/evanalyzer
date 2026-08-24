@@ -84,6 +84,7 @@ fn convert_project(old: &LegacyAnalyzeSettings, warnings: &mut Vec<String>) -> P
         plate: convert_plate(&old.project_settings, warnings),
         images,
         pipelines: convert_pipelines(old, warnings),
+        tile_merge: crate::settings::project_settings::TileMergeSettings::default(),
     }
 }
 
@@ -112,15 +113,19 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
-    let (author_first_name, author_last_name) =
-        split_author_name(m.author.as_deref().unwrap_or(""));
+    let authors = m
+        .author
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| vec![s.to_string()])
+        .unwrap_or_default();
 
     MetaData {
         name,
         short_description: String::new(),
         description,
-        author_first_name,
-        author_last_name,
+        authors,
         author_organization: m.organization.clone().unwrap_or_default(),
         creation_time,
         category: String::new(),
@@ -128,19 +133,6 @@ fn convert_metadata(old: &LegacyAnalyzeSettings) -> MetaData {
         // Stamped for real by `save_project_as` once the imported project is
         // actually saved - this legacy file predates the field entirely.
         app_version: String::new(),
-    }
-}
-
-/// The old format stored the author as one free-text string; the new format
-/// wants first/last name separately. Splits on the first space as a best effort.
-fn split_author_name(full: &str) -> (String, String) {
-    let full = full.trim();
-    if full.is_empty() {
-        return (String::new(), String::new());
-    }
-    match full.split_once(' ') {
-        Some((first, last)) => (first.to_string(), last.to_string()),
-        None => (full.to_string(), String::new()),
     }
 }
 
@@ -794,7 +786,11 @@ fn map_threshold_method(old: &str) -> SegmentationThresholdThresholdMethodSettin
         "MaxEntropy" => M::MaxEntropy,
         "Mean" => M::Mean,
         "Minimum" => M::Minimum,
-        "Otsu" => M::Otsu,
+        // Legacy projects predate three-class Otsu; they always meant the
+        // original two-class split.
+        "Otsu" => M::Otsu {
+            classes: SegmentationThresholdOtsuClassesSettings::Two,
+        },
         // Old's JSON strings were misspelled ("Percentil", "TenyiEntropy").
         "Percentil" => M::Percentile,
         "TenyiEntropy" => M::RenyiEntropy,
@@ -833,6 +829,7 @@ fn convert_threshold(
                 max_threshold: t.threshold_max,
                 unit: crate::core_types::PixelUnits::Bit,
                 object_class_id: SegmentationClass(t.pixel_class_id.max(0) as u32),
+                value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
             }
         })
         .collect();
@@ -849,6 +846,9 @@ fn convert_watershed(s: &LegacyWatershedSettings) -> PipelineCommand {
         maximum_finder_tolerance: s.maximum_finder_tolerance.max(0.1),
         smoothing_sigma: 0.0,
         min_object_size: 0,
+        // Old watershed only ever seeded from the distance map - the new
+        // `Intensity` option didn't exist yet, so this preserves old behavior.
+        seed_source: SegmentationWatershedSeedSourceSettings::DistanceMap,
     })
 }
 
@@ -1118,8 +1118,7 @@ mod tests {
         let p = &outcome.project;
 
         assert_eq!(p.metadata.name, "Legacy Demo");
-        assert_eq!(p.metadata.author_first_name, "Joachim");
-        assert_eq!(p.metadata.author_last_name, "Danmayr");
+        assert_eq!(p.metadata.authors, vec!["Joachim Danmayr".to_string()]);
         assert_eq!(p.metadata.author_organization, "evanalyzer.org");
 
         // classes()[0] is always the auto-prepended Background class - see
@@ -1412,35 +1411,6 @@ mod tests {
         }
     }
 
-    // ---- small pure helpers, tested directly ----
-
-    #[test]
-    fn split_author_name_splits_on_the_first_space() {
-        assert_eq!(
-            split_author_name("Ada Lovelace"),
-            ("Ada".to_string(), "Lovelace".to_string())
-        );
-        // Extra words all land in the last-name half.
-        assert_eq!(
-            split_author_name("Mary Wollstonecraft Shelley"),
-            ("Mary".to_string(), "Wollstonecraft Shelley".to_string())
-        );
-    }
-
-    #[test]
-    fn split_author_name_handles_a_single_word_and_empty_input() {
-        assert_eq!(
-            split_author_name("Cher"),
-            ("Cher".to_string(), String::new())
-        );
-        assert_eq!(split_author_name(""), (String::new(), String::new()));
-        assert_eq!(
-            split_author_name("   "),
-            (String::new(), String::new()),
-            "must trim whitespace-only input to empty"
-        );
-    }
-
     #[test]
     fn parse_numeric_class_id_accepts_plain_digits_and_rejects_everything_else() {
         assert_eq!(parse_numeric_class_id("7"), Some(7));
@@ -1565,7 +1535,12 @@ mod tests {
         use SegmentationThresholdThresholdMethodSettings as M;
         assert_eq!(map_threshold_method("Percentil"), M::Percentile);
         assert_eq!(map_threshold_method("TenyiEntropy"), M::RenyiEntropy);
-        assert_eq!(map_threshold_method("Otsu"), M::Otsu);
+        assert_eq!(
+            map_threshold_method("Otsu"),
+            M::Otsu {
+                classes: SegmentationThresholdOtsuClassesSettings::Two
+            }
+        );
         assert_eq!(map_threshold_method("SomethingUnknown"), M::None);
     }
 
@@ -1586,8 +1561,7 @@ mod tests {
         let outcome = import_legacy_project(json).unwrap();
         assert_eq!(outcome.project.metadata.name, "Fallback Name");
         assert_eq!(outcome.project.metadata.description, "fallback notes");
-        assert_eq!(outcome.project.metadata.author_first_name, "");
-        assert_eq!(outcome.project.metadata.author_last_name, "");
+        assert!(outcome.project.metadata.authors.is_empty());
         assert_eq!(outcome.project.metadata.author_organization, "");
     }
 

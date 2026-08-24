@@ -60,6 +60,187 @@ pub fn watershed_segment_edm(edm: &[f32], width: usize, height: usize, tolerance
     mf.find_maxima_segmented(edm, tolerance)
 }
 
+/// Runs a marker-controlled watershed flood on `flood_surface` (always the
+/// Euclidean distance map in this codebase), seeded from externally-supplied
+/// `seed_mask` points instead of the surface's own local maxima.
+///
+/// Used for [`crate::algos::segmentation::watershed::SeedSource::Intensity`]
+/// (paired with [`find_intensity_seeds`]): seeds come from a *different*
+/// image (the grayscale intensity), but the flood itself reuses exactly the
+/// same fate-table constrained dilation [`watershed_segment_edm`] uses for
+/// `SeedSource::DistanceMap` - this only skips `analyze_and_mark_maxima`'s
+/// tolerance-based peak search and `cleanup_maxima`'s sub-tolerance
+/// elimination pass, since the supplied seeds are already final (one per
+/// real marker, nothing left to merge).
+pub fn watershed_segment_from_seeds(
+    flood_surface: &[f32],
+    seed_mask: &[bool],
+    width: usize,
+    height: usize,
+) -> Vec<u8> {
+    let mf = MaximumFinder::new(width, height);
+    let n = width * height;
+
+    let mut global_max = -f32::MAX;
+    for &v in flood_surface {
+        if v > global_max {
+            global_max = v;
+        }
+    }
+    if global_max <= 0.0 {
+        return vec![0u8; n];
+    }
+
+    let mut types = vec![0u8; n];
+    for (i, &is_seed) in seed_mask.iter().enumerate() {
+        if is_seed {
+            types[i] = MAX_AREA;
+        }
+    }
+
+    let mut out = mf.make8bit(flood_surface, &types, global_max);
+    mf.watershed_segment(&mut out);
+    mf.watershed_post_process(&mut out);
+    out
+}
+
+/// Finds CellProfiler `IdentifyPrimaryObjects` "Intensity" unclumping seeds:
+/// local maxima of `intensity` within a disk-shaped neighborhood of
+/// `suppression_size` pixels, restricted to each pixel's own
+/// `instance_labels` blob (so a maximum can never be "stolen" by a brighter
+/// pixel belonging to an already-separate object). A faithful port of
+/// centrosome's `is_local_maximum` run over `strel_disk`: same disk
+/// footprint (`radius = max(1, suppression_size - 0.5)`, `iradius =
+/// radius as i64` truncating like Python's `int()`), same same-label/tie-
+/// tolerant comparison rule - a strictly *greater* same-label neighbor
+/// disqualifies a pixel, an *equal* one does not, so flat plateaus survive
+/// as one connected candidate region rather than being arbitrarily broken up.
+///
+/// Deliberately not a full port of centrosome's `binary_shrink` (a general
+/// topology-preserving thinning transform driven by a 512-entry lookup
+/// table) - connected plateaus of tied maxima are instead reduced to their
+/// single centroid-nearest pixel. This produces the same *count* of seeds
+/// (one per connected 8-neighbor plateau, exactly like `binary_shrink`
+/// followed by `scipy.ndimage.label`'s 8-connectivity) and therefore the
+/// same watershed split, without porting an entire specialized
+/// morphological subsystem for a result that already reduces to one unique
+/// marker per plateau either way.
+pub fn find_intensity_seeds(
+    intensity: &[f32],
+    instance_labels: &[u32],
+    width: usize,
+    height: usize,
+    suppression_size: f32,
+) -> Vec<bool> {
+    let radius = (suppression_size - 0.5).max(1.0);
+    let iradius = radius as i64;
+    let radius2 = radius * radius;
+
+    let mut offsets: Vec<(i64, i64)> = Vec::new();
+    for dy in -iradius..=iradius {
+        for dx in -iradius..=iradius {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            if (dx * dx + dy * dy) as f32 <= radius2 {
+                offsets.push((dx, dy));
+            }
+        }
+    }
+
+    let n = width * height;
+    let mut is_max = vec![false; n];
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            let i = (y as usize) * width + x as usize;
+            let label = instance_labels[i];
+            let v = intensity[i];
+            if label == 0 || v <= 0.0 {
+                continue;
+            }
+            let mut max_here = true;
+            for &(dx, dy) in &offsets {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= width as i64 || ny >= height as i64 {
+                    continue;
+                }
+                let ni = (ny as usize) * width + nx as usize;
+                if instance_labels[ni] == label && intensity[ni] > v {
+                    max_here = false;
+                    break;
+                }
+            }
+            is_max[i] = max_here;
+        }
+    }
+
+    reduce_plateaus_to_centroid_points(&is_max, width, height)
+}
+
+/// Connected-component (8-neighbor) reduction of a boolean mask down to one
+/// `true` pixel per component - the pixel nearest that component's centroid.
+/// See [`find_intensity_seeds`]'s doc comment for why this stands in for
+/// centrosome's `binary_shrink`.
+fn reduce_plateaus_to_centroid_points(mask: &[bool], width: usize, height: usize) -> Vec<bool> {
+    let n = width * height;
+    let mut seed_mask = vec![false; n];
+    let mut visited = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+
+    for start in 0..n {
+        if !mask[start] || visited[start] {
+            continue;
+        }
+        visited[start] = true;
+        stack.push(start);
+        let mut members = vec![start];
+        while let Some(p) = stack.pop() {
+            let x = (p % width) as i64;
+            let y = (p / width) as i64;
+            for dy in -1..=1i64 {
+                for dx in -1..=1i64 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= width as i64 || ny >= height as i64 {
+                        continue;
+                    }
+                    let q = (ny as usize) * width + nx as usize;
+                    if mask[q] && !visited[q] {
+                        visited[q] = true;
+                        stack.push(q);
+                        members.push(q);
+                    }
+                }
+            }
+        }
+
+        let (mut cx, mut cy) = (0.0f64, 0.0f64);
+        for &m in &members {
+            cx += (m % width) as f64;
+            cy += (m / width) as f64;
+        }
+        cx /= members.len() as f64;
+        cy /= members.len() as f64;
+
+        let mut best = members[0];
+        let mut best_dist = f64::MAX;
+        for &m in &members {
+            let dx = (m % width) as f64 - cx;
+            let dy = (m / width) as f64 - cy;
+            let dist = dx * dx + dy * dy;
+            if dist < best_dist {
+                best_dist = dist;
+                best = m;
+            }
+        }
+        seed_mask[best] = true;
+    }
+
+    seed_mask
+}
+
 impl MaximumFinder {
     fn new(width: usize, height: usize) -> Self {
         let w = width as i32;
@@ -1005,5 +1186,256 @@ mod cpp_reference_tests {
         let expected = parse_expected(PEANUT_EXPECTED);
         let actual = run_pipeline(&mask, w, h, 0.5);
         assert_masks_eq(&actual, &expected, w, h, "peanut");
+    }
+}
+
+/// Unit tests for [`find_intensity_seeds`] and [`watershed_segment_from_seeds`]
+/// - the two building blocks behind `Watershed`'s `SeedSource::Intensity`,
+/// a port of CellProfiler `IdentifyPrimaryObjects`' "Intensity" unclumping
+/// method (`centrosome.cpmorphology.is_local_maximum` over a `strel_disk`
+/// footprint). These test the seed-finding/flooding primitives directly,
+/// independent of the `Watershed` command; `watershed::tests` covers the
+/// same algorithm through the real `Watershed::execute` entry point.
+#[cfg(test)]
+mod intensity_seeding_tests {
+    use super::*;
+
+    /// Counts and returns the true entries of a seed mask, as (x, y) pairs -
+    /// convenient for asserting exactly which pixels a plateau reduced to.
+    fn seed_points(mask: &[bool], width: usize) -> Vec<(usize, usize)> {
+        mask.iter()
+            .enumerate()
+            .filter(|&(_, &s)| s)
+            .map(|(i, _)| (i % width, i / width))
+            .collect()
+    }
+
+    /// A flat plateau of tied-maximum pixels must reduce to exactly one seed,
+    /// at its centroid-nearest member - the stand-in for centrosome's
+    /// `binary_shrink` (see `find_intensity_seeds`'s doc comment).
+    #[test]
+    fn a_flat_plateau_reduces_to_one_centroid_seed() {
+        let width = 5;
+        let height = 5;
+        let labels = vec![1u32; width * height]; // all one instance
+        let intensity = vec![1.0f32; width * height]; // perfectly flat
+
+        let seeds = find_intensity_seeds(&intensity, &labels, width, height, 1.5);
+        let points = seed_points(&seeds, width);
+
+        assert_eq!(points.len(), 1, "a single flat plateau must yield one seed");
+        // The plateau is the whole 5x5 square; its centroid is (2, 2), which
+        // is itself a member pixel, so it must be the exact seed chosen.
+        assert_eq!(points[0], (2, 2));
+    }
+
+    /// Reproduces a reported failure mode: two genuinely separate bright
+    /// "heads" (e.g. two touching comets in a comet assay) whose connecting
+    /// region is *also* clipped/saturated to the same maximum value - as
+    /// happens with overexposed or coarsely-quantized real images - must
+    /// still collapse to a single seed, and that collapse is independent of
+    /// `suppression_size` (tested across the same 0.5/5/20 sweep a tolerance
+    /// tuning session would try).
+    ///
+    /// This is the tie rule's documented behavior, not a bug in
+    /// `seed_source` wiring: a same-label neighbor only disqualifies a pixel
+    /// from being a local max if it's *strictly* greater (see
+    /// `find_intensity_seeds`'s doc comment), so a tied plateau bridging two
+    /// real peaks is indistinguishable from one big peak - no suppression
+    /// radius can separate pixels that never differ. Contrast with
+    /// `two_separated_peaks_in_one_label_each_get_a_seed` below, which is
+    /// the same two-peak layout but with a genuine (unclipped) dip between
+    /// the peaks, and correctly yields two seeds at every tested tolerance.
+    #[test]
+    fn two_heads_bridged_by_a_saturated_plateau_collapse_to_one_seed_at_every_tolerance() {
+        let width = 20;
+        let height = 5;
+        let labels = vec![1u32; width * height]; // one connected blob, e.g. two fused comets
+        let peak1 = 3i32;
+        let peak2 = 16i32;
+        let mut intensity = vec![0f32; width * height];
+        for y in 0..height {
+            for x in 0..width as i32 {
+                // Everything from head to head reads at the sensor's clip
+                // ceiling - the same physical value a genuine, shallower
+                // valley would saturate to. Only outside the two heads does
+                // intensity fall off normally (giving the blob an edge at
+                // all, rather than being saturated everywhere).
+                let v = if x >= peak1 && x <= peak2 {
+                    1.0
+                } else {
+                    let d = if x < peak1 { peak1 - x } else { x - peak2 };
+                    (1.0 - 0.1 * d as f32).max(0.05)
+                };
+                intensity[y * width + x as usize] = v;
+            }
+        }
+
+        for tolerance in [0.5f32, 5.0, 20.0] {
+            let seeds = find_intensity_seeds(&intensity, &labels, width, height, tolerance);
+            let points = seed_points(&seeds, width);
+            assert_eq!(
+                points.len(),
+                1,
+                "a saturated bridge between two real peaks must still collapse to \
+                 one seed regardless of tolerance ({tolerance}), got {points:?}"
+            );
+        }
+    }
+
+    /// Two distinct, well-separated intensity peaks within the *same*
+    /// instance label must each produce their own seed - this is the whole
+    /// point of Intensity unclumping: a diffusely-connected region (one
+    /// blob, no separable *shape*) whose *brightness* has two clear peaks.
+    ///
+    /// The profile between the peaks is a genuine monotonic ramp down to a
+    /// valley and back up (not a flat plateau) - a wide *flat* middle
+    /// region would itself be "locally maximal" within its own footprint
+    /// (correctly, matching CellProfiler: nothing nearby is strictly
+    /// higher), which is a real property of the algorithm, not something
+    /// this test is trying to exercise.
+    #[test]
+    fn two_separated_peaks_in_one_label_each_get_a_seed() {
+        let width = 20;
+        let height = 5;
+        let labels = vec![1u32; width * height]; // one connected blob
+        let peak1 = 3i32;
+        let peak2 = 16i32;
+        let mut intensity = vec![0f32; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                let d1 = (x as i32 - peak1).abs();
+                let d2 = (x as i32 - peak2).abs();
+                let v = (1.0 - 0.1 * d1 as f32).max(1.0 - 0.1 * d2 as f32);
+                intensity[y * width + x] = v.max(0.05);
+            }
+        }
+
+        let seeds = find_intensity_seeds(&intensity, &labels, width, height, 2.0);
+        let points = seed_points(&seeds, width);
+
+        assert_eq!(
+            points.len(),
+            2,
+            "two well-separated peaks must yield two seeds, got {points:?}"
+        );
+        assert!(points.iter().any(|&(x, _)| x == peak1 as usize));
+        assert!(points.iter().any(|&(x, _)| x == peak2 as usize));
+    }
+
+    /// The same two-peak layout, but with different *instance labels* on
+    /// each half (as if `ConnectedComponents` had already separated them) -
+    /// seed-finding must stay confined to each pixel's own label, same as
+    /// centrosome's `is_local_maximum(image, labels, footprint)`.
+    #[test]
+    fn seed_finding_never_crosses_instance_labels() {
+        let width = 20;
+        let height = 5;
+        let mut labels = vec![0u32; width * height];
+        let mut intensity = vec![0.0f32; width * height];
+        for y in 0..height {
+            for x in 0..8 {
+                labels[y * width + x] = 1;
+                intensity[y * width + x] = 0.5;
+            }
+            for x in 12..20 {
+                labels[y * width + x] = 2;
+                intensity[y * width + x] = 0.9; // brighter, but a different label
+            }
+        }
+
+        let seeds = find_intensity_seeds(&intensity, &labels, width, height, 1.5);
+        let points = seed_points(&seeds, width);
+
+        assert_eq!(
+            points.len(),
+            2,
+            "each label must get its own seed regardless of the other label's intensity"
+        );
+        assert!(
+            points.iter().any(|&(x, _)| x < 8),
+            "label 1 must have a seed"
+        );
+        assert!(
+            points.iter().any(|&(x, _)| x >= 12),
+            "label 2 must have a seed"
+        );
+    }
+
+    /// Background (`label == 0`) and non-positive-intensity pixels are never
+    /// seed candidates, matching centrosome's `binary_maxima_image[image <=
+    /// 0] = 0` and its `labels > 0` gate.
+    #[test]
+    fn background_and_non_positive_intensity_are_never_seeds() {
+        let width = 3;
+        let height = 3;
+        let labels = vec![0u32; width * height]; // all background
+        let intensity = vec![1.0f32; width * height];
+        let seeds = find_intensity_seeds(&intensity, &labels, width, height, 1.5);
+        assert!(seeds.iter().all(|&s| !s), "background must never seed");
+
+        let labels = vec![1u32; width * height];
+        let intensity = vec![0.0f32; width * height]; // non-positive everywhere
+        let seeds = find_intensity_seeds(&intensity, &labels, width, height, 1.5);
+        assert!(
+            seeds.iter().all(|&s| !s),
+            "non-positive intensity must never seed"
+        );
+    }
+
+    /// `watershed_segment_from_seeds` floods a *different* surface than the
+    /// one seeds were found on: two markers placed on a flat EDM plateau
+    /// (which alone would never split under tolerance-based `DistanceMap`
+    /// seeding) still produce two particles when given two external seeds.
+    #[test]
+    fn watershed_segment_from_seeds_splits_a_flat_surface_given_two_markers() {
+        let width = 10;
+        let height = 4;
+        let edm = vec![1.0f32; width * height]; // perfectly flat "distance map"
+        let mut seed_mask = vec![false; width * height];
+        seed_mask[2] = true; // (x=2, y=0)
+        seed_mask[7] = true; // (x=7, y=0)
+
+        let mask = watershed_segment_from_seeds(&edm, &seed_mask, width, height);
+
+        // Re-flood-fill the 255-region touching each seed and confirm they
+        // don't share any pixel (i.e. a watershed line separates them).
+        let mut visited = vec![false; width * height];
+        let region_of = |start: usize, mask: &[u8], visited: &mut Vec<bool>| -> Vec<usize> {
+            let mut stack = vec![start];
+            let mut region = Vec::new();
+            visited[start] = true;
+            while let Some(p) = stack.pop() {
+                region.push(p);
+                let x = (p % width) as i64;
+                let y = (p / width) as i64;
+                for dy in -1..=1i64 {
+                    for dx in -1..=1i64 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let (nx, ny) = (x + dx, y + dy);
+                        if nx < 0 || ny < 0 || nx >= width as i64 || ny >= height as i64 {
+                            continue;
+                        }
+                        let q = (ny as usize) * width + nx as usize;
+                        if mask[q] == 255 && !visited[q] {
+                            visited[q] = true;
+                            stack.push(q);
+                        }
+                    }
+                }
+            }
+            region
+        };
+
+        assert_eq!(mask[2], 255, "seed 1's own pixel must be foreground");
+        assert_eq!(mask[7], 255, "seed 2's own pixel must be foreground");
+        let region1 = region_of(2, &mask, &mut visited);
+        let region1_set: std::collections::HashSet<usize> = region1.into_iter().collect();
+        assert!(
+            !region1_set.contains(&7),
+            "the two seeded regions must be separated by a watershed line, not merged"
+        );
     }
 }

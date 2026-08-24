@@ -1,3 +1,4 @@
+pub(crate) mod cite;
 pub(crate) mod classes;
 pub(crate) mod errors;
 pub(crate) mod ids;

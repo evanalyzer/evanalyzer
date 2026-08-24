@@ -10,7 +10,7 @@
 use crate::algos::ImageAlgorithm;
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
 
 /// Removes non-uniform background illumination by calculating a local intensity baseline.
@@ -21,7 +21,7 @@ use macros::CommandsMeta;
 /// curves of background variations. The path traced by the ball establishes a local
 /// baseline map that is subtracted from the original image to isolate foreground features.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "Preprocessing")]
+#[cmdsmeta(category = "Preprocessing", display_name = "Rolling Ball")]
 pub struct RollingBall {
     /// The radius of the ball or paraboloid in pixels.
     ///
@@ -307,7 +307,20 @@ impl ImageAlgorithm for RollingBall {
     }
 
     fn name(&self) -> &'static str {
-        "RollingBall"
+        "Rolling Ball"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "sternberg1983biomedical",
+            title: "Biomedical Image Processing",
+            authors: &["Stanley R. Sternberg"],
+            year: 1983,
+            container: Some("IEEE Computer"),
+            doi: Some("10.1109/MC.1983.1654163"),
+            url: Some("https://doi.org/10.1109/MC.1983.1654163"),
+            pages: Some("22-34"),
+        })
     }
 }
 
@@ -1297,6 +1310,141 @@ mod tests {
             assert!(
                 (got - want).abs() < 1e-3,
                 "background at ({x},{y}): got {got}, expected {want} (C++ reference)"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Golden-data regression for `BallType::Ball` with `shrink_factor > 1` -
+    /// the one part of the algorithm the two tests above never exercise
+    /// (`test_rolling_ball_matches_cpp_reference_border_touching_peak` uses
+    /// radius 10, which keeps `shrinkFactor == 1`), specifically covering
+    /// `build_ball`'s shrink-factor selection, the min-pooling `shrinkImage`
+    /// downsample, and the bilinear `enlargeImage`/`makeInterpolationArrays`
+    /// upsample - the step this file's own "Enlarge and Subtract" comment
+    /// flags as deliberately *not* a literal port of the C++ reference
+    /// (which has an unrelated `memcpy` byte-count bug there), making this
+    /// exactly the path most likely to have quietly diverged from ImageJ.
+    ///
+    /// ImageJ itself ships no unit tests for `BackgroundSubtracter`
+    /// (checked directly against `imagej/ImageJ`'s `tests/ij` tree on
+    /// GitHub, which covers `ij.process`/`ij.gui`/etc. but has no
+    /// `ij.plugin.filter` coverage at all) - "reuse ImageJ's own unit
+    /// tests" isn't possible. Instead, the expected values below come from
+    /// `buildRollingBall`/`shrinkImage`/`rollBall`/`enlargeImage`/
+    /// `makeInterpolationArrays`, transcribed line-for-line from the actual
+    /// current `ij.plugin.filter.BackgroundSubtracter.java`
+    /// (`https://raw.githubusercontent.com/imagej/ImageJ/master/ij/plugin/filter/BackgroundSubtracter.java`)
+    /// into a standalone Python reference (not derived from - or shared
+    /// with - this crate's Rust implementation or the `docs/rolling_ball`
+    /// C++ port, so a bug shared between the Rust port and its own C++
+    /// reference can't hide from this one), then run on the fixture below
+    /// (radius 15.0 -> `shrinkFactor == 2`, 17x13 so neither dimension is a
+    /// multiple of the shrink factor, `preSmooth = false`, `nrOfBits = 0` so
+    /// `scaleFactor == 1` and the ball heights stay in the same raw units
+    /// the Java reference uses). The fixture (a gentle background plane plus
+    /// one circular bump) is deliberately chosen so the true background
+    /// never exceeds the original signal anywhere - unlike the Java
+    /// `FloatProcessor` path, this crate's `execute` clamps the final
+    /// subtraction to `>= 0.0`, which would otherwise mask a real mismatch
+    /// at any pixel where the unclamped values go negative.
+    #[test]
+    fn test_rolling_ball_shrink_and_enlarge_matches_imagej_java_reference()
+    -> Result<(), Box<dyn std::error::Error>> {
+        const WIDTH: usize = 17;
+        const HEIGHT: usize = 13;
+
+        #[rustfmt::skip]
+        const INPUT: &[f32] = &[
+            100.0, 100.3, 100.6, 100.9, 101.2, 101.5, 101.8, 102.1, 102.4, 102.7, 103.0, 103.3, 103.6, 103.9, 104.2, 104.5, 104.8,
+            100.2, 100.5, 100.8, 101.1, 101.4, 101.7, 102.0, 102.3, 102.6, 102.9, 103.2, 103.5, 103.8, 104.1, 104.4, 104.7, 105.0,
+            100.4, 100.7, 101.0, 101.3, 101.6, 101.9, 102.2, 102.5, 102.8, 103.1, 103.4, 103.7, 104.0, 104.3, 104.6, 104.9, 105.2,
+            100.6, 100.9, 101.2, 101.5, 101.8, 102.1, 102.4, 102.7, 103.0, 103.3, 103.6, 103.9, 104.2, 104.5, 104.8, 105.1, 105.4,
+            100.8, 101.1, 101.4, 101.7, 102.0, 102.3, 102.6, 102.9, 103.2, 103.5, 103.8, 104.1, 104.4, 104.7, 105.0, 105.3, 105.6,
+            101.0, 101.3, 101.6, 101.9, 102.2, 102.5, 102.8, 143.1, 143.4, 143.7, 104.0, 104.3, 104.6, 104.9, 105.2, 105.5, 105.8,
+            101.2, 101.5, 101.8, 102.1, 102.4, 102.7, 103.0, 143.3, 143.6, 143.9, 104.2, 104.5, 104.8, 105.1, 105.4, 105.7, 106.0,
+            101.4, 101.7, 102.0, 102.3, 102.6, 102.9, 103.2, 143.5, 143.8, 144.1, 104.4, 104.7, 105.0, 105.3, 105.6, 105.9, 106.2,
+            101.6, 101.9, 102.2, 102.5, 102.8, 103.1, 103.4, 103.7, 104.0, 104.3, 104.6, 104.9, 105.2, 105.5, 105.8, 106.1, 106.4,
+            101.8, 102.1, 102.4, 102.7, 103.0, 103.3, 103.6, 103.9, 104.2, 104.5, 104.8, 105.1, 105.4, 105.7, 106.0, 106.3, 106.6,
+            102.0, 102.3, 102.6, 102.9, 103.2, 103.5, 103.8, 104.1, 104.4, 104.7, 105.0, 105.3, 105.6, 105.9, 106.2, 106.5, 106.8,
+            102.2, 102.5, 102.8, 103.1, 103.4, 103.7, 104.0, 104.3, 104.6, 104.9, 105.2, 105.5, 105.8, 106.1, 106.4, 106.7, 107.0,
+            102.4, 102.7, 103.0, 103.3, 103.6, 103.9, 104.2, 104.5, 104.8, 105.1, 105.4, 105.7, 106.0, 106.3, 106.6, 106.9, 107.2,
+        ];
+
+        // background = INPUT - EXPECTED_RESULT (the actual `rollingBallFloatBackground`
+        // output isn't asserted directly since Rust's `execute` only exposes the
+        // already-subtracted result).
+        #[rustfmt::skip]
+        const EXPECTED_RESULT: &[f32] = &[
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.2481, 40.2443, 40.2443, 0.248086, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.2443, 40.2328, 40.2328, 0.244257, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.2443, 40.2328, 40.2328, 0.244257, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.248086, 0.244257, 0.244257, 0.248086, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+        ];
+
+        let image = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            INPUT.to_vec(),
+            CpuAllocator,
+        )?;
+        let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
+            PipelineImageMeta {
+                image_tile_info: crate::ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: WIDTH,
+                    height: HEIGHT,
+                },
+                full_image_width: ImageSize {
+                    width: WIDTH,
+                    height: HEIGHT,
+                },
+                is_rgb: false,
+                // nr_of_bits: 0 -> scale_factor 1, raw units matching the Java reference.
+                nr_of_bits: 0,
+                pixel_sizes: PixelSizes {
+                    px_size_x: 1.0,
+                    px_size_y: 1.0,
+                    px_size_z: 1.0,
+                },
+            },
+            Arc::new(ImageContainer::new_f32_gray_from_image_test(image)),
+        )?;
+
+        let rb = RollingBall {
+            radius: 15.0,
+            ball_type: BallType::Ball,
+            pre_smooth: false,
+        };
+        let mut cache = PipelineCache::default();
+        rb.execute(&mut ctx, &mut cache)?;
+
+        let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() else {
+            panic!("expected F32Gray output");
+        };
+        let out = out_img.as_slice();
+
+        for (i, (&got, &want)) in out.iter().zip(EXPECTED_RESULT.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-3,
+                "pixel {} (x={}, y={}): got {got}, expected {want} (ImageJ Java reference)",
+                i,
+                i % WIDTH,
+                i / WIDTH
             );
         }
 

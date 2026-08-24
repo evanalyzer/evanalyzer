@@ -1,3 +1,4 @@
+use super::tile_merge::{PendingFragment, merge_pending_fragments, touches_tile_edge};
 use crate::{
     ImageInfo, ZProjection,
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
@@ -5,6 +6,7 @@ use crate::{
         pipeline::{Pipeline, PipelineImageMeta},
         pipeline_cache::{ImageCache, ImageMap, PipelineCache},
     },
+    resources::{CACHE_QUEUE_DEPTH, MAX_TILE_SIZE},
     storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
@@ -14,6 +16,7 @@ use evanalyzer_cfg::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
         },
         object_settings::ObjectMetricSettings,
+        project_settings::TileMergeSettings,
     },
 };
 use indexmap::IndexMap;
@@ -86,8 +89,9 @@ pub enum ProgressEvent {
 
 /// Controls tile selection when running a preview on a single image.
 ///
-/// Only used by `analyze_image_tiles_parallel`; full multi-image runs always
-/// process every tile regardless of this setting.
+/// Only meaningful for `analyze_image`'s interactive calling context (see its
+/// doc comment); a batch run's `self.preview_tile_settings` is always `None`,
+/// so this setting has no effect there and every tile is always processed.
 pub struct PreviewTileSettings {
     /// Current pan offset (screen pixels from the image's top-left corner).
     pub offset_x: f32,
@@ -146,6 +150,12 @@ pub struct JobExecutor {
 
     /// Debugging settings, if set the pipeline stops at this point and returns the actual image
     pub breakpoint: Option<BreakpointSettings>,
+
+    /// Opt-in setting to reassemble objects that got split across an
+    /// internal tile boundary back into one correct object - see
+    /// `docs/tile_merge_plan.md`. Defaults to disabled (a complete no-op);
+    /// set by `job_generator` from the project's own `ProjectSettings`.
+    pub tile_merge: TileMergeSettings,
 }
 
 impl<'a> JobExecutor {
@@ -169,7 +179,12 @@ impl<'a> JobExecutor {
             override_pixel_sizes,
             preview_tile_settings: None,
             breakpoint: None,
+            tile_merge: TileMergeSettings::default(),
         }
+    }
+
+    pub fn add_pipeline(&mut self, p: Pipeline) {
+        self.pipelines.insert(p.id, p);
     }
 
     /// Runs all images through the configured pipelines, blocking until complete.
@@ -209,6 +224,7 @@ impl<'a> JobExecutor {
         cancel: Arc<AtomicBool>,
     ) -> Result<(), InternalErrors> {
         info!("Starting pipeline with {} parallel threads", parallelism);
+        let start = Instant::now();
 
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(parallelism)
@@ -226,14 +242,14 @@ impl<'a> JobExecutor {
                 // Single image: parallelize over tiles instead of images
                 let (rel_path, image_info) = self.images.iter().next().unwrap();
                 let abs_path = self.image_base_path.join(rel_path);
-                match self.analyze_image_tiles_parallel(
+                match self.analyze_image(
                     rel_path,
                     &abs_path,
                     image_info,
                     &order,
                     self.result_storage.clone(),
-                    progress.clone(),
                     cancel,
+                    Some(progress.clone()),
                 ) {
                     Ok(()) => {
                         progress
@@ -282,6 +298,7 @@ impl<'a> JobExecutor {
                         &order,
                         self.result_storage.clone(),
                         cancel.clone(),
+                        None,
                     ) {
                         Ok(()) => {
                             let index = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -327,6 +344,7 @@ impl<'a> JobExecutor {
             }
         });
 
+        info!("Pipeline completed in {:?}", start.elapsed());
         progress.send(ProgressEvent::Finished).ok();
         result
     }
@@ -381,86 +399,42 @@ impl<'a> JobExecutor {
         (handle, rx, cancel)
     }
 
-    pub fn add_pipeline(&mut self, p: Pipeline) {
-        self.pipelines.insert(p.id, p);
-    }
-
-    /// Picks the tile size for a single-image preview run.
+    /// Analyzes one whole image, including all configured time and z-stacks,
+    /// splitting it into tiles and running every tile's full pipeline chain
+    /// through rayon's `par_iter`.
     ///
-    /// At higher zoom the viewport covers a smaller area of the full image, so
-    /// using the same fixed 4096px tile means re-reading and re-analyzing a lot
-    /// of pixels the user can't see just to get the small visible patch. Shrinking
-    /// the tile as zoom increases keeps the analyzed area closer to what's on
-    /// screen, so feedback for that area arrives faster.
-    fn preview_tile_size(&self) -> usize {
-        const BASE_TILE_SIZE: usize = 4096;
-        let Some(zoom) = self.preview_tile_settings.as_ref().map(|s| s.zoom) else {
-            return BASE_TILE_SIZE;
-        };
-        if zoom >= 8.0 {
-            512
-        } else if zoom >= 4.0 {
-            1024
-        } else if zoom >= 2.0 {
-            2048
-        } else {
-            BASE_TILE_SIZE
-        }
-    }
-
-    /// Pure tile-count math, factored out of [`count_preview_visible_tiles`] so it
-    /// can be unit-tested without needing a real image file on disk.
-    fn count_visible_tiles_for_image(&self, full_width: usize, full_height: usize) -> usize {
-        let tile_size = self.preview_tile_size();
-        let tiles = self.prepare_tile_iterator(full_width, full_height, tile_size);
-        match &self.preview_tile_settings {
-            Some(settings) => tiles.filter(|t| settings.is_tile_visible(t)).count(),
-            None => tiles.count(),
-        }
-    }
-
-    /// Counts how many tiles a preview run would actually process, without running
-    /// the pipeline. Mirrors the tile-size and viewport-visibility logic
-    /// `analyze_image_tiles_parallel` uses (same `preview_tile_size`/`prepare_tile_iterator`/
-    /// `is_tile_visible` calls), so callers can gate on the same number the real run
-    /// would use before paying for a full pipeline dispatch.
+    /// Tile processing **always** runs in parallel, regardless of `progress` -
+    /// it shares the same rayon pool that [`run`](Self::run) uses to
+    /// parallelize over images (nested `par_iter` calls share one pool via
+    /// work stealing: when there are fewer images than cores, the otherwise-idle
+    /// cores pick up tile work for the images that *are* running, instead of
+    /// sitting idle). There is no "single-threaded tiles" mode - what differs
+    /// between the two calling contexts below is only which optional,
+    /// UI-facing behaviors are active, not whether tiles run in parallel.
     ///
-    /// Only reads image metadata (dimensions), not pixel data, so this is cheap
-    /// enough to call synchronously before starting a preview.
-    pub fn count_preview_visible_tiles(&self) -> Result<usize, InternalErrors> {
-        const RES_IDX: i32 = 0;
-        let mut total = 0usize;
-        for (rel_path, image_entry) in &self.images {
-            let abs_path = self.image_base_path.join(rel_path);
-            let reader = ImageReader::new(&abs_path, ReadMode::Default)?;
-            let series_info = reader
-                .image_meta
-                .series
-                .get(&image_entry.selected_series)
-                .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
-            let py_meta = series_info
-                .resolutions
-                .get(&RES_IDX)
-                .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
-
-            total +=
-                self.count_visible_tiles_for_image(py_meta.width as usize, py_meta.height as usize);
-        }
-        Ok(total)
-    }
-
-    /// Analyze one image
+    /// `progress` distinguishes those two contexts:
+    /// - `None` - a plain batch run ([`run`](Self::run)'s multi-image branch,
+    ///   which already reports progress per whole image once this call
+    ///   returns). Tiles use the full analysis size ([`MAX_TILE_SIZE`]), in
+    ///   one single pass, with no breakpoint/preview events sent.
+    /// - `Some(sender)` - an interactive single-image run ([`run`](Self::run)'s
+    ///   single-image branch). Additionally: tiles are sized for live preview
+    ///   (see [`preview_tile_size`](Self::preview_tile_size)), the viewport's
+    ///   visible tiles are processed before the rest so first results arrive
+    ///   fast, and per-tile [`ProgressEvent::TileCompleted`]/[`ProgressEvent::BreakpointReached`]
+    ///   events are sent on `sender`.
     ///
-    /// This function analyzes one whole image, including all configured time and z-stacks.
-    /// If this is whole slide image, which is too big to load to RAM at once, the function
-    /// splits the image into tiles and analyzes tiles in parallel.
-    ///
-    /// Tile processing runs on the same rayon pool that [`run`](Self::run) uses to
-    /// parallelize over images. Nested `par_iter` calls share that pool via work
-    /// stealing, so when there are fewer images than cores the otherwise-idle
-    /// cores pick up tile work for the images that *are* running instead of
-    /// sitting idle - no manual thread-budget split between "image parallelism"
-    /// and "tile parallelism" is needed.
+    /// # Where "every tile is done" actually is
+    /// The tile loop below (`first_pass`/`second_pass`) is the only place
+    /// tiles are processed; `tile_result` holds its combined outcome, and by
+    /// the time `writer_handle.join()` returns, every tile's pipeline output
+    /// has been handed to `exporter`. The line below marked
+    /// `// -- ALL TILES FINISHED --` is the single point (reached by both
+    /// calling contexts) where every tile of *this* image is guaranteed
+    /// done and exported - the place to add anything that must run exactly
+    /// once per image after all its tiles finish (e.g. merging objects that
+    /// spanned a tile boundary), without duplicating that logic for both
+    /// contexts.
     fn analyze_image(
         &self,
         image_rel_path: &PathBuf,
@@ -469,16 +443,20 @@ impl<'a> JobExecutor {
         order: &[PipelineId],
         exporter: Arc<Mutex<dyn PipelineResultExporter>>,
         cancel: Arc<AtomicBool>,
+        progress: Option<Sender<ProgressEvent>>,
     ) -> Result<(), InternalErrors> {
-        const RES_IDX: i32 = 0;
-        const TILE_SIZE: usize = 4096;
         let start_image = Instant::now();
+        const RES_IDX: i32 = 0;
+        let tile_size = match &progress {
+            Some(_) => self.preview_tile_size(),
+            None => MAX_TILE_SIZE,
+        };
 
         // Extract everything needed from the reader in a scoped block so the
         // borrow ends before tiles are processed in parallel - each tile work
         // item below opens its own reader so concurrent threads never share
-        // mutable file-handle state (see analyze_image_tiles_parallel).
-        let (full_size, z_proj, z_handling, z_stacks, t_stacks, is_rgb, nr_bits, pixel_sizes) = {
+        // mutable file-handle state.
+        let (full_size, z_proj, z_handling, z_range, t_stacks, is_rgb, nr_bits, pixel_sizes) = {
             let start = Instant::now();
             let reader = ImageReader::new(image_path, ReadMode::Default)?;
             let duration = start.elapsed();
@@ -490,206 +468,6 @@ impl<'a> JobExecutor {
                 .get(&image_entry.selected_series)
                 .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
 
-            let py_meta = series_info
-                .resolutions
-                .get(&RES_IDX)
-                .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
-
-            let full_size = ImageSize {
-                width: py_meta.width as usize,
-                height: py_meta.height as usize,
-            };
-            let (z_proj, z_handling, z_range) =
-                self.prepare_z_stack_iterator(series_info, image_entry);
-            let z_stacks: Vec<i32> = z_range.collect();
-            let t_stacks: Vec<i32> = self
-                .prepare_t_stack_iterator(series_info, image_entry)
-                .collect();
-            let pixel_sizes = match &self.override_pixel_sizes {
-                Some(from_user) => from_user.clone(),
-                None => PixelSizes {
-                    px_size_x: series_info.pixel_sizes.px_size_x,
-                    px_size_y: series_info.pixel_sizes.px_size_y,
-                    px_size_z: series_info.pixel_sizes.px_size_z,
-                },
-            };
-            (
-                full_size,
-                z_proj,
-                z_handling,
-                z_stacks,
-                t_stacks,
-                py_meta.is_rgb,
-                py_meta.nr_bits,
-                pixel_sizes,
-            )
-        };
-
-        let tiles: Vec<ImageTile> = self
-            .prepare_tile_iterator(full_size.width, full_size.height, TILE_SIZE)
-            .collect();
-
-        // Flat (t, z, tile) work list, processed in parallel below.
-        let mut all_work: Vec<(i32, i32, ImageTile)> =
-            Vec::with_capacity(t_stacks.len() * z_stacks.len() * tiles.len());
-        for &t in &t_stacks {
-            for &z in &z_stacks {
-                for tile in &tiles {
-                    all_work.push((t, z, tile.clone()));
-                }
-            }
-        }
-
-        // Spawn a dedicated DB writer thread so one tile's image loading and
-        // pipeline execution can overlap with another tile's DuckDB insert.
-        let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<PipelineCache>(4);
-        let writer_handle = {
-            let exporter = exporter.clone();
-            std::thread::spawn(move || -> Result<(), InternalErrors> {
-                for cache in cache_rx {
-                    let t0 = Instant::now();
-                    // Recover from poison rather than propagating the panic: this
-                    // mutex is shared across every concurrently-running image's
-                    // writer thread, so one image's writer panicking must not
-                    // crash every other image's export too.
-                    exporter
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .export(&cache)?;
-                    info!("DB write: {:.1?}", t0.elapsed());
-                }
-                Ok(())
-            })
-        };
-
-        let tile_result =
-            all_work
-                .into_par_iter()
-                .try_for_each(|(t, z, tile)| -> Result<(), InternalErrors> {
-                    if cancel.load(Ordering::Relaxed) {
-                        return Err(InternalErrors::Cancelled);
-                    }
-
-                    let reader = ImageReader::new(image_path, ReadMode::Default)?;
-                    let z_range_in = matches!(
-                        z_handling,
-                        ZStackHandling::AllStacks | ZStackHandling::SingleStack
-                    )
-                    .then(|| z..=z);
-
-                    let mut cache = self.prepare_pipeline_cache(
-                        &reader,
-                        Arc::new(image_entry.clone()),
-                        &tile,
-                        t,
-                        &z_proj,
-                        &z_range_in,
-                        RES_IDX,
-                        full_size,
-                        is_rgb,
-                        image_rel_path,
-                        nr_bits,
-                        pixel_sizes.clone(),
-                    )?;
-
-                    let mut bp_hit = false;
-                    for pipe_id in order {
-                        if bp_hit {
-                            break;
-                        }
-                        if let Some(p) = self.pipelines.get(pipe_id) {
-                            let (bp_step, snapshot_mode) = self
-                                .breakpoint
-                                .as_ref()
-                                .filter(|b| b.pipeline_id == *pipe_id)
-                                .map(|b| {
-                                    (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot)
-                                })
-                                .unwrap_or((None, false));
-                            let result =
-                                p.run(self.output_path.clone(), cache, bp_step, snapshot_mode)?;
-                            bp_hit = result.breakpoint_hit;
-                            cache = result.cache;
-                        }
-                    }
-                    if bp_hit {
-                        // Skip DB write for a Stop breakpoint run.
-                        return Ok(());
-                    }
-
-                    match cache_tx.try_send(cache) {
-                        Ok(()) => {}
-                        Err(std::sync::mpsc::TrySendError::Full(cache)) => {
-                            warn!("DB writer backpressure: channel full, tile stalling");
-                            cache_tx.send(cache).map_err(|e| {
-                                InternalErrors::Io(format!("DB writer exited: {e}"))
-                            })?;
-                        }
-                        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                            return Err(InternalErrors::Io(
-                                "DB writer thread exited unexpectedly".into(),
-                            ));
-                        }
-                    }
-                    Ok(())
-                });
-
-        drop(cache_tx);
-        let writer_result = writer_handle.join().expect("DB writer thread panicked");
-
-        let duration = start_image.elapsed();
-        info!("Executed image pipeline in {:?}", duration);
-
-        // Record the image was processed even if it produced zero objects -
-        // run regardless of tile/writer errors so a partially-failed image
-        // still shows up rather than vanishing entirely. The error (if any)
-        // is passed through so it's recorded as failed rather than looking
-        // identical to a genuinely complete image.
-        let combined_error = tile_result
-            .as_ref()
-            .and(writer_result.as_ref())
-            .err()
-            .map(|e| e.to_string());
-        let finalize_result = exporter
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .finalize_image(image_rel_path, combined_error.as_deref());
-
-        tile_result.and(writer_result).and(finalize_result)
-    }
-
-    /// Like [`analyze_image`] but processes tiles in parallel.
-    ///
-    /// Used when only a single image is being processed so that parallelism is
-    /// applied across tiles rather than across images.  A fresh [`ImageReader`]
-    /// is created per work item so that concurrent threads do not share mutable
-    /// file-handle state.
-    ///
-    /// After each tile completes a [`ProgressEvent::TileCompleted`] event is sent on
-    /// `progress` carrying the ROIs found in that tile, allowing callers to update
-    /// an incremental preview without waiting for all tiles to finish.
-    fn analyze_image_tiles_parallel(
-        &self,
-        image_rel_path: &PathBuf,
-        image_path: &PathBuf,
-        image_entry: &ImageEntry,
-        order: &[PipelineId],
-        exporter: Arc<Mutex<dyn PipelineResultExporter>>,
-        progress: Sender<ProgressEvent>,
-        cancel: Arc<AtomicBool>,
-    ) -> Result<(), InternalErrors> {
-        const RES_IDX: i32 = 0;
-        let tile_size = self.preview_tile_size();
-
-        // Extract everything we need from the reader in a scoped block so the
-        // borrow of `reader` ends before we enter the parallel section.
-        let (full_size, z_proj, z_handling, z_range, t_stacks, is_rgb, nr_bits, pixel_sizes) = {
-            let reader = ImageReader::new(image_path, ReadMode::Default)?;
-            let series_info = reader
-                .image_meta
-                .series
-                .get(&image_entry.selected_series)
-                .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
             let py_meta = series_info
                 .resolutions
                 .get(&RES_IDX)
@@ -731,6 +509,9 @@ impl<'a> JobExecutor {
 
         // Pre-select the breakpoint target tile before building work items so
         // we can mark exactly one tile as the event sender deterministically.
+        // Only meaningful when `progress.is_some()` (interactive run); in a
+        // batch run `self.breakpoint` is never set, so this is always `None`
+        // there.
         //
         // Strategy: among visible tiles, pick the one whose centre is closest
         // to the viewport centre (in image-pixel space).  When no viewport
@@ -773,13 +554,14 @@ impl<'a> JobExecutor {
             None
         };
 
-        // Build a flat list of every (t, z, tile) combination.
-        // Each work item carries its own Sender clone because Sender is not Sync.
-        // The fifth element marks the single tile that should emit BreakpointReached.
+        // Build a flat list of every (t, z, tile) combination. Each work item
+        // carries its own `Option<Sender>` clone because `Sender` is not
+        // `Sync` - it can't be captured by shared reference in the `Fn + Sync`
+        // closure rayon needs, only moved in per item (cloning `None` is free).
         let total_tiles = tiles.len() * z_stacks.len() * t_stacks.len();
         let completed = Arc::new(AtomicUsize::new(0));
 
-        let mut all_work: Vec<(i32, i32, ImageTile, Sender<ProgressEvent>, bool)> =
+        let mut all_work: Vec<(i32, i32, ImageTile, bool, Option<Sender<ProgressEvent>>)> =
             Vec::with_capacity(total_tiles);
         for &t in &t_stacks {
             for &z in &z_stacks {
@@ -787,13 +569,15 @@ impl<'a> JobExecutor {
                     let is_bp_target = breakpoint_target
                         .map(|(ox, oy)| tile.offset_x == ox && tile.offset_y == oy)
                         .unwrap_or(false);
-                    all_work.push((t, z, tile.clone(), progress.clone(), is_bp_target));
+                    all_work.push((t, z, tile.clone(), is_bp_target, progress.clone()));
                 }
             }
         }
 
         // When preview tile settings are present, split into visible / hidden
         // so the viewport area is processed first, giving fast first results.
+        // In a batch run `self.preview_tile_settings` is never set, so this
+        // always degenerates to one pass over every tile.
         let (first_pass, second_pass) = match &self.preview_tile_settings {
             Some(settings) => {
                 let (visible, hidden): (Vec<_>, Vec<_>) = all_work
@@ -811,15 +595,35 @@ impl<'a> JobExecutor {
 
         // Recalculate so progress events reflect only the tiles actually being processed.
         let total_tiles = first_pass.len() + second_pass.len();
-        progress
-            .send(ProgressEvent::TilesScheduled { total_tiles })
-            .ok();
+        if let Some(progress) = &progress {
+            progress
+                .send(ProgressEvent::TilesScheduled { total_tiles })
+                .ok();
+        }
 
-        // Spawn a dedicated DB writer thread. Rayon workers send their completed
-        // caches through a bounded channel instead of locking a mutex — they
-        // block only when the channel is full (backpressure), not for the
-        // entire duration of a DuckDB insert.
-        let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<PipelineCache>(4);
+        // Buffer for objects that touch their own tile's edge (but not the
+        // full image's edge) and don't carry a class in
+        // `tile_merge.classes_to_not_merge` - held back from the normal
+        // per-tile export path and matched/merged once every tile of this
+        // image has finished, see
+        // `docs/tile_merge_plan.md`. `None` when the feature is off, which
+        // must be a complete no-op on the existing per-tile export path -
+        // every `run_tile` invocation below checks this once and does
+        // nothing extra when it's `None`. One buffer per image (not global):
+        // merging is per-image, and `analyze_image` itself is already the
+        // per-image unit of work.
+        let pending: Option<Arc<Mutex<Vec<PendingFragment>>>> = self
+            .tile_merge
+            .enabled
+            .then(|| Arc::new(Mutex::new(Vec::new())));
+
+        // Spawn a dedicated DB writer thread so one tile's image loading and
+        // pipeline execution can overlap with another tile's DuckDB insert.
+        // Rayon workers send their completed caches through a bounded channel
+        // instead of locking a mutex - they block only when the channel is
+        // full (backpressure), not for the entire duration of a DuckDB insert.
+        let (cache_tx, cache_rx) =
+            std::sync::mpsc::sync_channel::<PipelineCache>(CACHE_QUEUE_DEPTH);
         let writer_handle = {
             let exporter = exporter.clone();
             std::thread::spawn(move || -> Result<(), InternalErrors> {
@@ -839,15 +643,15 @@ impl<'a> JobExecutor {
             })
         };
 
-        // Closure that processes one (t, z, tile, sender, is_bp_target) work item.
-        // `cache_tx: SyncSender` is Sync, so the closure is Fn + Send + Sync
-        // and can be shared across all Rayon workers.
-        let run_tile = |(t, z, tile, sender, is_bp_target): (
+        // Closure that processes one (t, z, tile, is_bp_target, sender) work
+        // item. `cache_tx: SyncSender` is `Sync`, so the closure itself is
+        // `Fn + Send + Sync` and can be shared across all rayon workers.
+        let run_tile = |(t, z, tile, is_bp_target, sender): (
             i32,
             i32,
             ImageTile,
-            Sender<ProgressEvent>,
             bool,
+            Option<Sender<ProgressEvent>>,
         )|
          -> Result<(), InternalErrors> {
             if cancel.load(Ordering::Relaxed) {
@@ -915,7 +719,7 @@ impl<'a> JobExecutor {
 
             // Snapshot: send the captured buffers but continue to DB write.
             if let Some(capture) = snapshot_capture {
-                if is_bp_target {
+                if is_bp_target && let Some(sender) = &sender {
                     sender
                         .send(ProgressEvent::BreakpointReached {
                             image: (*capture.image).clone(),
@@ -935,7 +739,7 @@ impl<'a> JobExecutor {
 
             // Stop: send the buffers and skip DB write.
             if let Some(capture) = stop_capture {
-                if is_bp_target {
+                if is_bp_target && let Some(sender) = &sender {
                     sender
                         .send(ProgressEvent::BreakpointReached {
                             image: (*capture.image).clone(),
@@ -953,19 +757,62 @@ impl<'a> JobExecutor {
                 return Ok(());
             }
 
-            let tile_objects: Vec<ObjectMetricSettings> = cache
-                .object_cache
-                .values()
-                .map(|r| r.to_object_settings())
-                .collect();
+            // Split out tile-edge-touching, merge-eligible objects into
+            // `pending` instead of letting them flow through the normal
+            // per-tile export below - they're matched against fragments from
+            // other tiles and (re-)exported once every tile of this image
+            // has finished, see `docs/tile_merge_plan.md`. A no-op whenever
+            // `pending` is `None` (`tile_merge.enabled == false`). Every
+            // class merges by default - `classes_to_not_merge` is an
+            // opt-out deny-list, not an opt-in allow-list, since a user
+            // turning this on has no reason to know about tiles at all and
+            // just expects their objects to be detected correctly.
+            if let Some(pending) = &pending {
+                let fragment_ids: Vec<_> = cache
+                    .object_cache
+                    .iter()
+                    .filter(|(_, object)| {
+                        !object.touches_edge
+                            && touches_tile_edge(object.bbox, &tile)
+                            && !object
+                                .object_class
+                                .iter()
+                                .any(|c| self.tile_merge.classes_to_not_merge.contains(c))
+                    })
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                if !fragment_ids.is_empty() {
+                    let mut buffer = pending.lock().unwrap_or_else(|e| e.into_inner());
+                    for id in fragment_ids {
+                        if let Some(object) = cache.object_cache.remove(&id) {
+                            buffer.push(PendingFragment {
+                                object,
+                                tile: tile.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Only interactive runs consume per-tile objects (for the
+            // TileCompleted event below) - skip the clone/collect otherwise.
+            let tile_objects: Vec<ObjectMetricSettings> = if sender.is_some() {
+                cache
+                    .object_cache
+                    .values()
+                    .map(|r| r.to_object_settings())
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
             match cache_tx.try_send(cache) {
                 Ok(()) => {}
                 Err(std::sync::mpsc::TrySendError::Full(cache)) => {
                     warn!("DB writer backpressure: channel full, tile stalling");
-                    cache_tx.send(cache).map_err(|_| {
-                        InternalErrors::Io("DB writer thread exited unexpectedly".into())
-                    })?;
+                    cache_tx
+                        .send(cache)
+                        .map_err(|e| InternalErrors::Io(format!("DB writer exited: {e}")))?;
                 }
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                     return Err(InternalErrors::Io(
@@ -974,21 +821,23 @@ impl<'a> JobExecutor {
                 }
             }
 
-            let tile_index = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            sender
-                .send(ProgressEvent::TileCompleted {
-                    tile_index,
-                    total_tiles,
-                    objects: tile_objects,
-                })
-                .ok();
+            if let Some(sender) = &sender {
+                let tile_index = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                sender
+                    .send(ProgressEvent::TileCompleted {
+                        tile_index,
+                        total_tiles,
+                        objects: tile_objects,
+                    })
+                    .ok();
+            }
 
             Ok(())
         };
 
         // Run both passes; collect the combined result before touching the
         // channel so the writer always has a chance to drain cleanly.
-        let pass_result = first_pass
+        let tile_result = first_pass
             .into_par_iter()
             .try_for_each(&run_tile)
             .and_then(|()| second_pass.into_par_iter().try_for_each(&run_tile));
@@ -997,14 +846,66 @@ impl<'a> JobExecutor {
         // The closure borrows &cache_tx by reference (it's Copy); NLL ends that
         // borrow at the last try_for_each call above, so drop(cache_tx) is valid.
         drop(cache_tx);
-
         let writer_result = writer_handle.join().expect("DB writer thread panicked");
 
+        // -- ALL TILES FINISHED -- every tile of this image has been
+        // processed and its output handed to `exporter` by this point,
+        // regardless of which calling context (`progress` above) got us here.
+
+        // Match/merge every tile-edge fragment buffered above (a no-op when
+        // `pending` is `None`) and export the merged objects via a synthetic
+        // whole-image `PipelineCache` - see `docs/tile_merge_plan.md`. Must
+        // run before `finalize_image` below, which the exporter uses as the
+        // "this image is done" signal.
+        let merge_result: Result<(), InternalErrors> = match &pending {
+            Some(pending) => {
+                let fragments =
+                    std::mem::take(&mut *pending.lock().unwrap_or_else(|e| e.into_inner()));
+                if fragments.is_empty() {
+                    Ok(())
+                } else {
+                    merge_pending_fragments(fragments, &self.tile_merge).and_then(|merged| {
+                        if merged.is_empty() {
+                            return Ok(());
+                        }
+                        let synthetic_cache = PipelineCache {
+                            image_cache: ImageCache {
+                                image_meta: PipelineImageMeta {
+                                    image_tile_info: ImageTile {
+                                        offset_x: 0,
+                                        offset_y: 0,
+                                        width: full_size.width,
+                                        height: full_size.height,
+                                    },
+                                    full_image_width: full_size,
+                                    is_rgb,
+                                    nr_of_bits: nr_bits,
+                                    pixel_sizes: pixel_sizes.clone(),
+                                },
+                                images: ImageMap::new(),
+                            },
+                            object_cache: merged.into_iter().map(|o| (o.id.clone(), o)).collect(),
+                            image_rel_path: image_rel_path.clone(),
+                        };
+                        exporter
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .export(&synthetic_cache)
+                    })
+                }
+            }
+            None => Ok(()),
+        };
+
         // Record the image was processed even if it produced zero objects -
-        // see the equivalent call in `analyze_image`.
-        let combined_error = pass_result
+        // run regardless of tile/writer/merge errors so a partially-failed
+        // image still shows up rather than vanishing entirely. The error (if
+        // any) is passed through so it's recorded as failed rather than
+        // looking identical to a genuinely complete image.
+        let combined_error = tile_result
             .as_ref()
             .and(writer_result.as_ref())
+            .and(merge_result.as_ref())
             .err()
             .map(|e| e.to_string());
         let finalize_result = exporter
@@ -1012,7 +913,13 @@ impl<'a> JobExecutor {
             .unwrap_or_else(|e| e.into_inner())
             .finalize_image(image_rel_path, combined_error.as_deref());
 
-        pass_result.and(writer_result).and(finalize_result)
+        let duration = start_image.elapsed();
+        info!("Executed image pipeline in {:?}", duration);
+
+        tile_result
+            .and(writer_result)
+            .and(merge_result)
+            .and(finalize_result)
     }
 
     /// Generates an iterator over image tiles for processing large images.
@@ -1226,6 +1133,47 @@ impl<'a> JobExecutor {
         })
     }
 
+    /// Pure tile-count math, factored out of [`count_preview_visible_tiles`] so it
+    /// can be unit-tested without needing a real image file on disk.
+    fn count_visible_tiles_for_image(&self, full_width: usize, full_height: usize) -> usize {
+        let tile_size = self.preview_tile_size();
+        let tiles = self.prepare_tile_iterator(full_width, full_height, tile_size);
+        match &self.preview_tile_settings {
+            Some(settings) => tiles.filter(|t| settings.is_tile_visible(t)).count(),
+            None => tiles.count(),
+        }
+    }
+
+    /// Counts how many tiles a preview run would actually process, without running
+    /// the pipeline. Mirrors the tile-size and viewport-visibility logic
+    /// `analyze_image`'s interactive calling context uses (same `preview_tile_size`/
+    /// `prepare_tile_iterator`/`is_tile_visible` calls), so callers can gate on the
+    /// same number the real run would use before paying for a full pipeline dispatch.
+    ///
+    /// Only reads image metadata (dimensions), not pixel data, so this is cheap
+    /// enough to call synchronously before starting a preview.
+    pub fn count_preview_visible_tiles(&self) -> Result<usize, InternalErrors> {
+        const RES_IDX: i32 = 0;
+        let mut total = 0usize;
+        for (rel_path, image_entry) in &self.images {
+            let abs_path = self.image_base_path.join(rel_path);
+            let reader = ImageReader::new(&abs_path, ReadMode::Default)?;
+            let series_info = reader
+                .image_meta
+                .series
+                .get(&image_entry.selected_series)
+                .ok_or_else(|| InternalErrors::ImageReadError("Series not found".into()))?;
+            let py_meta = series_info
+                .resolutions
+                .get(&RES_IDX)
+                .ok_or_else(|| InternalErrors::ImageReadError("Resolution not found".into()))?;
+
+            total +=
+                self.count_visible_tiles_for_image(py_meta.width as usize, py_meta.height as usize);
+        }
+        Ok(total)
+    }
+
     /// Determines the correct order to run pipelines based on dependencies
     fn get_execution_order(&self) -> Vec<PipelineId> {
         let mut order = Vec::new();
@@ -1265,6 +1213,65 @@ impl<'a> JobExecutor {
             );
         }
         order
+    }
+
+    /// Picks the tile size for a single-image preview run.
+    ///
+    /// At higher zoom the viewport covers a smaller area of the full image, so
+    /// using the same fixed 4096px tile means re-reading and re-analyzing a lot
+    /// of pixels the user can't see just to get the small visible patch. Shrinking
+    /// the tile as zoom increases keeps the analyzed area closer to what's on
+    /// screen, so feedback for that area arrives faster.
+    fn preview_tile_size(&self) -> usize {
+        let Some(zoom) = self.preview_tile_settings.as_ref().map(|s| s.zoom) else {
+            return MAX_TILE_SIZE;
+        };
+        if zoom >= 8.0 {
+            512
+        } else if zoom >= 4.0 {
+            1024
+        } else if zoom >= 2.0 {
+            2048
+        } else {
+            MAX_TILE_SIZE
+        }
+    }
+
+    /// Estimates the peak RAM one parallel worker in this job can need, from
+    /// the images actually being analyzed - for [`recommended_parallelism`](crate::recommended_parallelism)
+    /// instead of a flat guess that either over-commits on a large/many-channel
+    /// image or needlessly caps a small one down to a single thread on a
+    /// low-RAM machine.
+    ///
+    /// Takes the worst case across every image in the job (the largest by
+    /// tile pixel count and channel count, not necessarily the same image for
+    /// both), since parallelism is decided once up front for the whole batch,
+    /// not per image. Each image's own dimensions/channel count come from
+    /// already-scanned metadata (`ImageEntry`/`SeriesSettings`) - this never
+    /// reopens a file, so it's cheap to call before starting a run.
+    pub fn estimate_ram_per_worker_bytes(&self) -> u64 {
+        self.images
+            .values()
+            .filter_map(|entry| entry.series.get(&entry.selected_series))
+            .map(|series| {
+                let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
+                let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
+                crate::resources::estimate_ram_per_worker_bytes(
+                    tile_width,
+                    tile_height,
+                    series.channels.len(),
+                    CACHE_QUEUE_DEPTH,
+                )
+            })
+            .max()
+            .unwrap_or_else(|| {
+                crate::resources::estimate_ram_per_worker_bytes(
+                    MAX_TILE_SIZE,
+                    MAX_TILE_SIZE,
+                    1,
+                    CACHE_QUEUE_DEPTH,
+                )
+            })
     }
 }
 
@@ -2083,8 +2090,8 @@ mod execution_order_tests {
     }
 }
 
-/// End-to-end coverage for `run`/`analyze_image_tiles_parallel`/
-/// `prepare_pipeline_cache` - the paths above only exercise the pure helper
+/// End-to-end coverage for `run`/`analyze_image`/`prepare_pipeline_cache` -
+/// the paths above only exercise the pure helper
 /// methods (tile math, precedence resolution, execution ordering), never the
 /// actual image-loading-through-DB-export flow. Uses the same real image
 /// fixture as `image_reader`'s tests.
@@ -2093,6 +2100,7 @@ mod full_run_integration_tests {
     use super::*;
     use crate::algos::{
         ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod,
+        ThresholdValueSource,
     };
     use crate::pipeline::pipeline::CorePipelineSettings;
     use crate::storage::memory::MemoryExporter;
@@ -2120,6 +2128,7 @@ mod full_run_integration_tests {
                 max_threshold: 255.0,
                 unit: PixelUnits::Bit,
                 object_class_id: SegmentationClass(1),
+                value_source: ThresholdValueSource::ActualImage,
             }],
         }));
         pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
@@ -2258,6 +2267,160 @@ mod full_run_integration_tests {
     }
 
     #[test]
+    fn run_on_a_single_invalid_image_names_it_in_the_propagated_error() {
+        // Mirrors `run_on_a_real_fixture_image_writes_extracted_objects_through_the_exporter`
+        // but with a nonexistent path, exercising the single-image branch's
+        // *error* arm (the success arm is already covered by that test).
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let job = make_multi_image_job(
+            out_objects.clone(),
+            vec![PathBuf::from("does-not-exist.ome.tif")],
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = job.run(1, tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        let err = result.expect_err("the only image failed, so the whole run must fail");
+        assert!(
+            err.to_string().contains("does-not-exist.ome.tif"),
+            "error should name the failing image, got: {err}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageFailed { .. }))
+        );
+        assert!(out_objects.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_on_multiple_valid_images_succeeds_and_exports_every_images_objects() {
+        // `run_still_processes_the_rest_of_the_batch_after_one_image_fails`
+        // covers the multi-image branch's failure-aggregation path; this
+        // covers its `Ok(())` path (every image in the batch succeeding).
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let a = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let b = PathBuf::from("slice_Z0_C0_T0.tif");
+        let job = make_multi_image_job(out_objects.clone(), vec![a.clone(), b.clone()]);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = job.run(2, tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        result.expect("both images are valid, the whole batch should succeed");
+        for path in [&a, &b] {
+            assert!(
+                events.iter().any(
+                    |e| matches!(e, ProgressEvent::ImageCompleted { path: p, .. } if p == path)
+                ),
+                "{path:?} should have completed"
+            );
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageFailed { .. }))
+        );
+        assert!(!out_objects.lock().unwrap().is_empty());
+    }
+
+    // -- Breakpoint handling through the batch (multi-image, `analyze_image`'s
+    // `progress: None`) path -- `analyze_image` used to have its own simpler
+    // `bp_hit`-only breakpoint check before it was unified with the
+    // interactive path's richer stop/snapshot capture handling; these two
+    // tests are the regression guard that the unification didn't change
+    // either mode's observable behavior for a batch run, since `Pipeline::run`
+    // guarantees `breakpoint_hit == true` only for `BreakpointMode::Stop`
+    // (`pipeline.rs`'s early-return branch) - `Snapshot` always falls through
+    // to the normal completion path with `breakpoint_hit: false`.
+
+    #[test]
+    fn breakpoint_stop_during_a_batch_run_skips_the_write_but_the_image_still_completes() {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let a = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let b = PathBuf::from("slice_Z0_C0_T0.tif");
+        let mut job = make_multi_image_job(out_objects.clone(), vec![a.clone(), b.clone()]);
+        job.breakpoint = Some(BreakpointSettings {
+            pipeline_id: PipelineId(1),
+            pipeline_step_id: 0, // right after Threshold, before ConnectedComponents/ExtractObjects
+            mode: BreakpointMode::Stop,
+        });
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        // 2 images -> total > 1 -> the batch path, not the single-image
+        // interactive path that already had this behavior.
+        let result = job.run(2, tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        result.expect("a breakpoint hit must not surface as a batch run error");
+        assert!(
+            out_objects.lock().unwrap().is_empty(),
+            "the pipeline stopped before ExtractObjects ever ran, so nothing should have been written"
+        );
+        for path in [&a, &b] {
+            assert!(
+                events.iter().any(
+                    |e| matches!(e, ProgressEvent::ImageCompleted { path: p, .. } if p == path)
+                ),
+                "{path:?} should still report as completed, not failed, when it only hit a Stop breakpoint"
+            );
+        }
+    }
+
+    #[test]
+    fn breakpoint_snapshot_during_a_batch_run_does_not_skip_the_write() {
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let a = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let b = PathBuf::from("slice_Z0_C0_T0.tif");
+        let mut job = make_multi_image_job(out_objects.clone(), vec![a, b]);
+        job.breakpoint = Some(BreakpointSettings {
+            pipeline_id: PipelineId(1),
+            pipeline_step_id: 0,
+            mode: BreakpointMode::Snapshot,
+        });
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let result = job.run(2, tx, Arc::new(AtomicBool::new(false)));
+        let _events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        result.expect("snapshot breakpoints must not fail the run");
+        assert!(
+            !out_objects.lock().unwrap().is_empty(),
+            "snapshot mode must still run the pipeline to completion and write results, \
+             unlike stop mode"
+        );
+    }
+
+    #[test]
+    fn run_on_multiple_images_stops_early_when_already_cancelled() {
+        // Setting `cancel` before the run starts must stop every per-image
+        // task from doing any work at all (the multi-image branch's
+        // per-item `if cancel.load(...) { return; }` check), and the run
+        // must report `Cancelled` rather than treating "nothing failed" as
+        // success.
+        let out_objects = Arc::new(Mutex::new(Vec::new()));
+        let a = PathBuf::from("multi-channel-4D-series.ome.tif");
+        let b = PathBuf::from("slice_Z0_C0_T0.tif");
+        let job = make_multi_image_job(out_objects.clone(), vec![a, b]);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(true));
+        let result = job.run(2, tx, cancel);
+        let events: Vec<ProgressEvent> = rx.into_iter().collect();
+
+        assert!(matches!(result, Err(InternalErrors::Cancelled)));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ProgressEvent::ImageCompleted { .. })
+                    || matches!(e, ProgressEvent::ImageFailed { .. })),
+            "a pre-cancelled run must not process any image"
+        );
+        assert!(out_objects.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn count_preview_visible_tiles_matches_the_real_fixture_images_single_tile_grid() {
         let job = make_single_image_job(Arc::new(Mutex::new(Vec::new())));
 
@@ -2266,6 +2429,356 @@ mod full_run_integration_tests {
         // exactly one tile.
         let count = job.count_preview_visible_tiles().unwrap();
         assert_eq!(count, 1);
+    }
+}
+
+/// The plan's strongest correctness check for `docs/tile_merge_plan.md`:
+/// a synthetic object deliberately split across a tile boundary must produce,
+/// after buffering + merging, the exact same area/bbox/intensity as running
+/// the identical pipeline on the same object *without* tiling at all.
+///
+/// Runs the real `Threshold -> ConnectedComponents -> ExtractObjects` chain
+/// (via `Pipeline::run`, bypassing file I/O) so this exercises the actual
+/// extraction path's `touches_edge`/bbox/intensity output feeding into
+/// `tile_merge`, not just hand-built `Object`s like `tile_merge`'s own unit
+/// tests. Doesn't go through `JobExecutor::analyze_image` itself (that needs
+/// a real multi-tile-sized image file on disk) - this instead replicates
+/// exactly what `analyze_image`'s tile loop does: run each tile's pipeline,
+/// split out tile-edge-touching fragments, buffer them, and merge once every
+/// tile is done.
+#[cfg(test)]
+mod tile_merge_end_to_end_tests {
+    use super::*;
+    use crate::ImagePlane;
+    use crate::algos::{
+        ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod,
+        ThresholdValueSource,
+    };
+    use crate::image::{ImageContainer, ManagedImage};
+    use crate::pipeline::pipeline::CorePipelineSettings;
+    use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass};
+    use kornia_apriltag::utils::Point2d;
+    use kornia_image::Image;
+    use kornia_tensor::CpuAllocator;
+
+    fn threshold_connected_components_extract_pipeline() -> Pipeline {
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        pipeline.add_command(Box::new(Threshold {
+            thresholds: vec![ThresholdEntry {
+                method: ThresholdMethod::Manual,
+                min_threshold: 0.0,
+                max_threshold: 255.0,
+                unit: PixelUnits::Bit,
+                object_class_id: SegmentationClass(1),
+                value_source: ThresholdValueSource::ActualImage,
+            }],
+        }));
+        pipeline.add_command(Box::new(ConnectedComponents { min_size: 0 }));
+        pipeline.add_command(Box::new(ExtractObjects {
+            max_objects_before_fail: 100_000,
+        }));
+        pipeline
+    }
+
+    /// A `PipelineCache` seeded with a single-channel gray image, as if it
+    /// were tile `(tile_offset_x, 0)` of a `(full_width, full_height)` image
+    /// - everything `Threshold`/`ConnectedComponents`/`ExtractObjects` need
+    /// to run exactly as `job_executor` would run them on a real tile.
+    fn gray_tile_cache(
+        data: Vec<f32>,
+        tile_width: usize,
+        tile_height: usize,
+        tile_offset_x: usize,
+        full_width: usize,
+        full_height: usize,
+    ) -> PipelineCache {
+        let image = Image::<f32, 1, CpuAllocator>::new(
+            ImageSize {
+                width: tile_width,
+                height: tile_height,
+            },
+            data,
+            CpuAllocator,
+        )
+        .unwrap();
+        let container = Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: image,
+            tile_offset: Point2d {
+                x: tile_offset_x,
+                y: 0,
+            },
+            plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
+        }));
+        let mut images: ImageMap = ImageMap::new();
+        images.insert(ImageAddress::Channel(0), container);
+        PipelineCache {
+            image_cache: ImageCache {
+                image_meta: PipelineImageMeta {
+                    image_tile_info: ImageTile {
+                        offset_x: tile_offset_x,
+                        offset_y: 0,
+                        width: tile_width,
+                        height: tile_height,
+                    },
+                    full_image_width: ImageSize {
+                        width: full_width,
+                        height: full_height,
+                    },
+                    is_rgb: false,
+                    nr_of_bits: 8,
+                    pixel_sizes: PixelSizes::default(),
+                },
+                images,
+            },
+            object_cache: BTreeMap::new(),
+            image_rel_path: PathBuf::new(),
+        }
+    }
+
+    fn run_pipeline(cache: PipelineCache) -> PipelineCache {
+        threshold_connected_components_extract_pipeline()
+            .run(PathBuf::new(), cache, None, false)
+            .expect("pipeline must run successfully")
+            .cache
+    }
+
+    /// Splits every tile-edge-touching, merge-eligible object out of `cache`
+    /// into `PendingFragment`s - the same filter `analyze_image`'s tile loop
+    /// applies before `cache_tx.try_send`. Every class merges unless it's on
+    /// `classes_to_not_merge`.
+    fn split_fragments(
+        cache: &mut PipelineCache,
+        tile: &ImageTile,
+        classes_to_not_merge: &[ObjectClass],
+    ) -> Vec<PendingFragment> {
+        let ids: Vec<_> = cache
+            .object_cache
+            .iter()
+            .filter(|(_, object)| {
+                !object.touches_edge
+                    && touches_tile_edge(object.bbox, tile)
+                    && !object
+                        .object_class
+                        .iter()
+                        .any(|c| classes_to_not_merge.contains(c))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                cache
+                    .object_cache
+                    .remove(&id)
+                    .map(|object| PendingFragment {
+                        object,
+                        tile: tile.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    /// 6x3 image, one horizontal 4-pixel-wide object at row y=1, columns
+    /// x=1..=4 - entirely interior to the full image (doesn't touch its
+    /// edges), but split by a tile boundary at x=3 into a 2px piece in each
+    /// of two 3-wide tiles. Reference: process the whole image as one tile.
+    fn whole_image_data() -> Vec<f32> {
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        data
+    }
+
+    #[test]
+    fn tiled_merge_reproduces_the_untiled_reference_object() {
+        // Reference: single tile covering the whole image.
+        let reference_cache = run_pipeline(gray_tile_cache(whole_image_data(), 6, 3, 0, 6, 3));
+        let reference_objects: Vec<_> = reference_cache.object_cache.values().collect();
+        assert_eq!(
+            reference_objects.len(),
+            1,
+            "the untiled reference must find exactly one object"
+        );
+        let reference = reference_objects[0];
+        assert_eq!(reference.bbox, [1, 1, 4, 1]);
+        assert_eq!(reference.area, 4);
+        let reference_sum = reference.intensities.get(&0).unwrap().sum_intensity;
+
+        // Tiled: split the same image into two 3-wide tiles at x=3, process
+        // each independently (exactly like two rayon workers would).
+        let full = whole_image_data();
+        let mut tile_a_data = Vec::with_capacity(9);
+        let mut tile_b_data = Vec::with_capacity(9);
+        for y in 0..3 {
+            let row = &full[y * 6..(y + 1) * 6];
+            tile_a_data.extend_from_slice(&row[0..3]);
+            tile_b_data.extend_from_slice(&row[3..6]);
+        }
+        let tile_a = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 3,
+            height: 3,
+        };
+        let tile_b = ImageTile {
+            offset_x: 3,
+            offset_y: 0,
+            width: 3,
+            height: 3,
+        };
+        let mut cache_a = run_pipeline(gray_tile_cache(tile_a_data, 3, 3, 0, 6, 3));
+        let mut cache_b = run_pipeline(gray_tile_cache(tile_b_data, 3, 3, 3, 6, 3));
+
+        assert_eq!(
+            cache_a.object_cache.len(),
+            1,
+            "tile A must find one fragment"
+        );
+        assert_eq!(
+            cache_b.object_cache.len(),
+            1,
+            "tile B must find one fragment"
+        );
+        let frag_a_bbox = cache_a.object_cache.values().next().unwrap().bbox;
+        let frag_b_bbox = cache_b.object_cache.values().next().unwrap().bbox;
+        assert_eq!(
+            frag_a_bbox,
+            [1, 1, 2, 1],
+            "tile A's fragment is its half of the blob"
+        );
+        assert_eq!(
+            frag_b_bbox,
+            [3, 1, 4, 1],
+            "tile B's fragment is its half of the blob"
+        );
+
+        // No `classes_to_not_merge` entries - every class merges by default.
+        let classes_to_not_merge: [ObjectClass; 0] = [];
+        let mut pending = split_fragments(&mut cache_a, &tile_a, &classes_to_not_merge);
+        pending.extend(split_fragments(
+            &mut cache_b,
+            &tile_b,
+            &classes_to_not_merge,
+        ));
+        assert_eq!(
+            pending.len(),
+            2,
+            "both tile-edge fragments must have been buffered, not exported per-tile"
+        );
+        assert!(
+            cache_a.object_cache.is_empty() && cache_b.object_cache.is_empty(),
+            "buffered fragments must be removed from their tile's own export"
+        );
+
+        let settings = TileMergeSettings {
+            enabled: true,
+            classes_to_not_merge: Vec::new(),
+            connectivity:
+                evanalyzer_cfg::settings::project_settings::TileMergeConnectivity::EightConnected,
+            max_fragments_per_group: 100,
+        };
+        let merged = merge_pending_fragments(pending, &settings).unwrap();
+
+        assert_eq!(
+            merged.len(),
+            1,
+            "the two fragments must merge into one object"
+        );
+        assert_eq!(
+            merged[0].bbox, reference.bbox,
+            "merged bbox must match the untiled reference exactly"
+        );
+        assert_eq!(
+            merged[0].area, reference.area,
+            "merged area must match the untiled reference exactly"
+        );
+        assert_eq!(
+            merged[0].intensities.get(&0).unwrap().sum_intensity,
+            reference_sum,
+            "merged intensity sum must match the untiled reference exactly"
+        );
+    }
+}
+
+#[cfg(test)]
+mod estimate_ram_per_worker_bytes_tests {
+    use super::*;
+    use crate::storage::memory::MemoryExporter;
+    use evanalyzer_cfg::settings::images_settings::{ChannelSettings, SeriesSettings};
+
+    fn image_entry(width: u64, height: u64, channel_count: usize) -> ImageEntry {
+        let channels = (0..channel_count as i32)
+            .map(|c| (c, ChannelSettings::default()))
+            .collect();
+        let mut series = BTreeMap::new();
+        series.insert(
+            0,
+            SeriesSettings {
+                image_width: width,
+                image_height: height,
+                channels,
+                ..Default::default()
+            },
+        );
+        ImageEntry {
+            selected_series: 0,
+            series,
+            ..Default::default()
+        }
+    }
+
+    fn job_with(images: IndexMap<PathBuf, ImageEntry>) -> JobExecutor {
+        JobExecutor::new(
+            PathBuf::new(),
+            PathBuf::new(),
+            images,
+            PathBuf::new(),
+            GlobalImageSettings::default(),
+            Arc::new(Mutex::new(MemoryExporter {
+                out_objects: Arc::new(Mutex::new(Vec::new())),
+            })),
+            None,
+        )
+    }
+
+    #[test]
+    fn matches_the_largest_image_in_the_job_not_the_first_or_smallest() {
+        let mut images = IndexMap::new();
+        images.insert(PathBuf::from("small.tif"), image_entry(512, 512, 1));
+        images.insert(PathBuf::from("large.tif"), image_entry(2048, 2048, 4));
+        let job = job_with(images);
+
+        let expected =
+            crate::resources::estimate_ram_per_worker_bytes(2048, 2048, 4, CACHE_QUEUE_DEPTH);
+        assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
+    }
+
+    #[test]
+    fn caps_tile_dimensions_to_the_max_analysis_tile_size() {
+        // A whole-slide image far larger than one analysis tile - the
+        // estimate must reflect one 4096x4096 tile's memory, not the whole
+        // image's, since a worker never holds more than one tile at a time
+        // regardless of the source image's total size.
+        let mut images = IndexMap::new();
+        images.insert(PathBuf::from("huge.tif"), image_entry(20_000, 20_000, 2));
+        let job = job_with(images);
+
+        let expected =
+            crate::resources::estimate_ram_per_worker_bytes(4096, 4096, 2, CACHE_QUEUE_DEPTH);
+        assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
+    }
+
+    #[test]
+    fn falls_back_sanely_when_the_job_has_no_images() {
+        let job = job_with(IndexMap::new());
+        assert!(job.estimate_ram_per_worker_bytes() > 0);
     }
 }
 
@@ -2279,9 +2792,9 @@ mod exporter_poison_tests {
     fn locking_the_shared_exporter_recovers_from_poison_instead_of_panicking() {
         // `exporter` (`Arc<Mutex<dyn PipelineResultExporter>>`) is shared
         // across every concurrently-running image's writer thread - see
-        // `analyze_image`/`analyze_image_tiles_parallel`. One image's writer
-        // panicking while holding this lock must not crash every other
-        // image's export/finalize_image call too.
+        // `analyze_image`. One image's writer panicking while holding this
+        // lock must not crash every other image's export/finalize_image
+        // call too.
         let exporter: Arc<Mutex<dyn PipelineResultExporter>> =
             Arc::new(Mutex::new(MemoryExporter {
                 out_objects: Arc::new(Mutex::new(Vec::new())),

@@ -10,7 +10,7 @@
 use crate::ImagePlane;
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage};
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
 use kornia_tensor::CpuAllocator;
@@ -165,6 +165,10 @@ impl ImageAlgorithm for ColorFilterCommand {
 
     fn name(&self) -> &'static str {
         "HsvColorFilter"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 

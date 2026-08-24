@@ -254,8 +254,34 @@ fn threshold_method_none_setting_converts() {
 
 #[test]
 fn threshold_method_otsu_setting_converts() {
-    let result: ThresholdMethod = SegmentationThresholdThresholdMethodSettings::Otsu.into();
-    assert!(matches!(result, ThresholdMethod::Otsu));
+    let result: ThresholdMethod = SegmentationThresholdThresholdMethodSettings::Otsu {
+        classes: SegmentationThresholdOtsuClassesSettings::Two,
+    }
+    .into();
+    assert!(matches!(
+        result,
+        ThresholdMethod::Otsu {
+            classes: OtsuClasses::Two
+        }
+    ));
+}
+
+#[test]
+fn threshold_method_otsu_three_class_setting_converts() {
+    let result: ThresholdMethod = SegmentationThresholdThresholdMethodSettings::Otsu {
+        classes: SegmentationThresholdOtsuClassesSettings::Three {
+            middle_class: SegmentationThresholdOtsuMiddleClassSettings::Foreground,
+        },
+    }
+    .into();
+    assert!(matches!(
+        result,
+        ThresholdMethod::Otsu {
+            classes: OtsuClasses::Three {
+                middle_class: OtsuMiddleClass::Foreground
+            }
+        }
+    ));
 }
 
 #[test]
@@ -795,7 +821,9 @@ fn threshold_settings_convert_vector_of_entries() {
     let settings = ThresholdSettings {
         thresholds: vec![
             ThresholdEntrySettings {
-                method: SegmentationThresholdThresholdMethodSettings::Otsu,
+                method: SegmentationThresholdThresholdMethodSettings::Otsu {
+                    classes: SegmentationThresholdOtsuClassesSettings::Two,
+                },
                 ..Default::default()
             },
             ThresholdEntrySettings {
@@ -806,7 +834,12 @@ fn threshold_settings_convert_vector_of_entries() {
     };
     let result = Threshold::from(settings);
     assert_eq!(result.thresholds.len(), 2);
-    assert!(matches!(result.thresholds[0].method, ThresholdMethod::Otsu));
+    assert!(matches!(
+        result.thresholds[0].method,
+        ThresholdMethod::Otsu {
+            classes: OtsuClasses::Two
+        }
+    ));
     assert!(matches!(
         result.thresholds[1].method,
         ThresholdMethod::Manual
@@ -821,6 +854,7 @@ fn threshold_entry_settings_convert_and_clamp_thresholds() {
         max_threshold: 999999.0,
         unit: PixelUnits::Percent,
         object_class_id: SegmentationClass(6),
+        value_source: SegmentationThresholdThresholdValueSourceSettings::ActualImage,
     };
     let result = ThresholdEntry::from(settings);
     assert!(matches!(result.method, ThresholdMethod::Manual));
@@ -904,6 +938,7 @@ fn watershed_settings_convert_and_clamp_tolerance_and_sigma() {
         maximum_finder_tolerance: 0.0,
         smoothing_sigma: 999.0,
         min_object_size: 30,
+        seed_source: SegmentationWatershedSeedSourceSettings::DistanceMap,
     };
     let result = Watershed::from(settings);
     assert_eq!(result.maximum_finder_tolerance, 0.1);
@@ -954,7 +989,7 @@ fn into_algorithm_classify_objects_dispatches_to_classify_objects_algorithm() {
         ClassifyObjectsSettings::default(),
     ))
     .expect("conversion should not fail");
-    assert_eq!(result.name(), "ClassifyObjects");
+    assert_eq!(result.name(), "Classify Objects");
 }
 
 #[test]
@@ -1000,9 +1035,9 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
     // Table-driven so every `PipelineCommand` variant not already covered above
     // is checked against the exact `name()` its algorithm reports - several of
     // these deliberately don't match their settings type name 1:1 (e.g.
-    // `ColorFilterCommand` -> "HsvColorFilter", `GaussianBlur` -> "Blur",
-    // `SaveImage` -> "Save Image"), so a generic "does it convert" test
-    // wouldn't catch a dispatch arm wired to the wrong algorithm.
+    // `ColorFilterCommand` -> "HsvColorFilter", `ConnectedComponents` ->
+    // "Connected Components"), so a generic "does it convert" test wouldn't
+    // catch a dispatch arm wired to the wrong algorithm.
     let cases: Vec<(PipelineCommand, &str)> = vec![
         (
             PipelineCommand::Colocalization(ColocalizationSettings::default()),
@@ -1014,31 +1049,31 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
         ),
         (
             PipelineCommand::ConnectedComponents(ConnectedComponentsSettings::default()),
-            "ConnectedComponents",
+            "Connected Components",
         ),
         (
             PipelineCommand::DistanceTransform(DistanceTransformSettings::default()),
-            "DistanceTransform",
+            "Distance Transform",
         ),
         (
             PipelineCommand::EdgeDetectionCanny(EdgeDetectionCannySettings::default()),
-            "EdgeDetectionCanny",
+            "Edge Detection Canny",
         ),
         (
             PipelineCommand::EdgeDetectionSobel(EdgeDetectionSobelSettings::default()),
-            "EdgeDetectionSobel",
+            "Edge Detection Sobel",
         ),
         (
             PipelineCommand::EnhanceContrast(EnhanceContrastSettings::default()),
-            "EnhanceContrast",
+            "Enhance Contrast",
         ),
         (
             PipelineCommand::ExtractObjects(ExtractObjectsSettings::default()),
-            "ExtractObjects",
+            "Extract Objects",
         ),
         (
             PipelineCommand::GaussianBlur(GaussianBlurSettings::default()),
-            "Blur",
+            "Gaussian Blur",
         ),
         (
             PipelineCommand::Hessian(HessianSettings::default()),
@@ -1046,15 +1081,15 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
         ),
         (
             PipelineCommand::ImageCache(ImageCacheSettings::default()),
-            "ImageCache",
+            "Image Cache",
         ),
         (
             PipelineCommand::ImageMath(ImageMathSettings::default()),
-            "ImageMath",
+            "Image Math",
         ),
         (
             PipelineCommand::IntensityTransformation(IntensityTransformationSettings::default()),
-            "IntensityTransformation",
+            "Intensity Transformation",
         ),
         (
             PipelineCommand::Laplacian(LaplacianSettings::default()),
@@ -1062,23 +1097,23 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
         ),
         (
             PipelineCommand::MedianSubtract(MedianSubtractSettings::default()),
-            "MedianSubtract",
+            "Median Subtract",
         ),
         (
             PipelineCommand::MorphologicalCommand(MorphologicalCommandSettings::default()),
-            "MorphologicalTransform",
+            "Morphological Transform",
         ),
         (
             PipelineCommand::ObjectMath(ObjectMathSettings::default()),
-            "ObjectMath",
+            "Object Math",
         ),
         (
             PipelineCommand::RankFilter(RankFilterSettings::default()),
-            "RankFilter",
+            "Rank Filter",
         ),
         (
             PipelineCommand::RollingBall(RollingBallSettings::default()),
-            "RollingBall",
+            "Rolling Ball",
         ),
         (
             PipelineCommand::SaveImage(SaveImageSettings::default()),
@@ -1086,15 +1121,15 @@ fn into_algorithm_dispatches_every_remaining_command_to_the_matching_algorithm()
         ),
         (
             PipelineCommand::StructureTensor(StructureTensorSettings::default()),
-            "StructureTensor",
+            "Structure Tensor",
         ),
         (
             PipelineCommand::TransformObjects(TransformObjectsSettings::default()),
-            "TransformObjects",
+            "Transform Objects",
         ),
         (
             PipelineCommand::WeightedDeviation(WeightedDeviationSettings::default()),
-            "WeightedDeviation",
+            "Weighted Deviation",
         ),
     ];
 

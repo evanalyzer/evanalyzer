@@ -17,9 +17,10 @@ use crate::{
     algos::ImageAlgorithm,
     image::PixelSizes,
     object::Object, // ... other imports
+    spatial_grid::BboxGrid,
 };
 use evanalyzer_cfg::core_types::{
-    InternalErrors,
+    CitationMetadata, InternalErrors,
     ObjectClass::{self, Unset},
     ObjectId, PixelUnits, SegmentationClass, SizeUnits,
 };
@@ -292,6 +293,9 @@ impl ImageAlgorithm for ClassifyObjects {
                 .map(|object| object.id.clone())
                 .collect()
         };
+        // Prunes `matches_overlap`'s per-object scan down from the full
+        // `overlap_candidates` list to a small candidate set - see `BboxGrid` docs.
+        let overlap_grid = BboxGrid::build(&overlap_candidates, cache);
 
         let evaluations: Vec<(ObjectId, bool)> = cache
             .object_cache
@@ -301,12 +305,7 @@ impl ImageAlgorithm for ClassifyObjects {
             })
             .map(|object| {
                 let matches = self.matches_criteria(object, px_size)
-                    && self.matches_overlap(
-                        object,
-                        cache,
-                        &overlap_candidates,
-                        min_intersection_px,
-                    );
+                    && self.matches_overlap(object, cache, &overlap_grid, min_intersection_px);
                 (object.id.clone(), matches)
             })
             .collect();
@@ -379,7 +378,11 @@ impl ImageAlgorithm for ClassifyObjects {
     }
 
     fn name(&self) -> &'static str {
-        "ClassifyObjects"
+        "Classify Objects"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -406,8 +409,18 @@ impl ClassifyObjects {
             return false;
         }
 
-        // Check circularity
-        let circularity = object.circularity();
+        // Check circularity. ImageJ's own particle analyzer (see
+        // `ParticleAnalyzer.analyzeParticle`) clamps circularity to 1.0 for
+        // this comparison specifically - not for the value it reports -
+        // since small/blocky shapes can legitimately compute to just above
+        // 1.0 (the traced-perimeter algorithm's corner correction slightly
+        // undercorrects them), and without the clamp a `max_circularity`
+        // left at its default of 1.0 would reject shapes ImageJ itself would
+        // still call "circularity 1.0" and keep.
+        let mut circularity = object.circularity();
+        if circularity > 1.0 && self.max_circularity <= 1.0 {
+            circularity = 1.0;
+        }
         if circularity < self.min_circularity || circularity > self.max_circularity {
             return false;
         }
@@ -441,21 +454,21 @@ impl ClassifyObjects {
         true
     }
 
-    /// Checks the `overlapping_with` criterion: whether `object` intersects at least one of
-    /// `candidates` (ROIs carrying the `overlapping_with` class) by at least
+    /// Checks the `overlapping_with` criterion: whether `object` intersects at least one
+    /// ROI carrying the `overlapping_with` class (indexed in `grid`) by at least
     /// `min_intersection_px`. Always true when `overlapping_with` is Unset (filter disabled).
     fn matches_overlap(
         &self,
         object: &Object,
         cache: &crate::pipeline::pipeline_cache::PipelineCache,
-        candidates: &[ObjectId],
+        grid: &BboxGrid,
         min_intersection_px: usize,
     ) -> bool {
         if self.overlapping_with == Unset {
             return true;
         }
 
-        candidates.iter().any(|other_id| {
+        grid.candidates(object.bbox).iter().any(|other_id| {
             *other_id != object.id
                 && cache
                     .object_cache
@@ -911,5 +924,97 @@ mod tests {
                 .has_object_class(&CLASS_A),
             "a lone object must not be considered as intersecting itself"
         );
+    }
+
+    /// End-to-end cross-check of the grid-pruned `matches_overlap` scan against an
+    /// independent naive O(N*M) reference computed directly here with `Object::overlaps`
+    /// (bypassing `BboxGrid` entirely) - across many randomized layouts with size and
+    /// position variance (small/large mixes, dense clusters, near-misses, wide empty
+    /// gaps). Complements
+    /// `spatial_grid::tests::randomized_layouts_never_miss_a_true_bbox_intersection`
+    /// (which only checks the grid's candidate lists in isolation, not this criterion
+    /// built on top of them).
+    #[test]
+    fn randomized_overlapping_with_matches_naive_pairwise_reference() {
+        struct Rng(u32);
+        impl Rng {
+            fn next(&mut self) -> u32 {
+                self.0 ^= self.0 << 13;
+                self.0 ^= self.0 >> 17;
+                self.0 ^= self.0 << 5;
+                self.0
+            }
+            fn range(&mut self, n: u32) -> u32 {
+                self.next() % n
+            }
+        }
+
+        for seed in 1..12u32 {
+            let mut rng = Rng(seed * 104_729 + 1);
+            let mut cache = PipelineCache::default();
+            let mut subject_ids = Vec::new();
+            let mut candidate_ids = Vec::new();
+            let mut next_id: u128 = 1;
+
+            // Subjects (CLASS_A) - the objects being classified.
+            for _ in 0..25 {
+                let w = 1 + rng.range(20);
+                let h = 1 + rng.range(20);
+                let x = rng.range(50);
+                let y = rng.range(50);
+                let object = make_filled_object(next_id, [x, y, x + w, y + h], CLASS_A);
+                next_id += 1;
+                subject_ids.push(object.id.clone());
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+            // Candidates (CLASS_B) - the `overlapping_with` ROIs.
+            for _ in 0..25 {
+                let w = 1 + rng.range(20);
+                let h = 1 + rng.range(20);
+                let x = rng.range(50);
+                let y = rng.range(50);
+                let object = make_filled_object(next_id, [x, y, x + w, y + h], CLASS_B);
+                next_id += 1;
+                candidate_ids.push(object.id.clone());
+                cache.object_cache.insert(object.id.clone(), object);
+            }
+
+            // Naive reference, computed before `execute` mutates anything: whether each
+            // subject truly overlaps at least one candidate.
+            let expected: std::collections::HashMap<ObjectId, bool> = subject_ids
+                .iter()
+                .map(|subject_id| {
+                    let subject = cache.object_cache.get(subject_id).unwrap();
+                    let overlaps_any = candidate_ids.iter().any(|candidate_id| {
+                        cache
+                            .object_cache
+                            .get(candidate_id)
+                            .and_then(|candidate| subject.overlaps(candidate))
+                            .is_some()
+                    });
+                    (subject_id.clone(), overlaps_any)
+                })
+                .collect();
+
+            let cmd = ClassifyObjects {
+                overlapping_with: CLASS_B,
+                match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
+                ..Default::default()
+            };
+            run(&cmd, &mut cache);
+
+            for subject_id in &subject_ids {
+                let still_has_class = cache
+                    .object_cache
+                    .get(subject_id)
+                    .unwrap()
+                    .has_object_class(&CLASS_A);
+                assert_eq!(
+                    still_has_class, expected[subject_id],
+                    "seed {seed}: subject {subject_id:?} - grid-pruned overlap result \
+                     diverged from the naive pairwise reference"
+                );
+            }
+        }
     }
 }

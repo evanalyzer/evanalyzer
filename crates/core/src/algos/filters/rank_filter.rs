@@ -9,7 +9,7 @@
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage};
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
@@ -116,7 +116,11 @@ impl ImageAlgorithm for RankFilter {
     }
 
     fn name(&self) -> &'static str {
-        "RankFilter"
+        "Rank Filter"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -441,7 +445,7 @@ mod tests {
             radius: 1.0,
             filter_type: RankFilterType::Median,
         };
-        assert_eq!(filter.name(), "RankFilter");
+        assert_eq!(filter.name(), "Rank Filter");
     }
 
     #[test]

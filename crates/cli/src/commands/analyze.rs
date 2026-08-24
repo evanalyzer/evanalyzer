@@ -42,9 +42,11 @@ pub fn run(args: AnalyzeArgs) -> Result<(), InternalErrors> {
 
     // Caps parallelism to available RAM as well as CPU cores, so a low-memory
     // machine doesn't try to run as many concurrent workers as it has cores.
-    let threads = args
-        .threads
-        .unwrap_or_else(evanalyzer_core::recommended_parallelism);
+    // The per-worker estimate is sized to the images actually being
+    // analyzed, not a flat guess - see `estimate_ram_per_worker_bytes`.
+    let threads = args.threads.unwrap_or_else(|| {
+        evanalyzer_core::recommended_parallelism(job.estimate_ram_per_worker_bytes())
+    });
     println!("Output:    {}", output_path.display());
     println!("Running with {threads} parallel thread(s) (Ctrl+C to cancel)...\n");
 

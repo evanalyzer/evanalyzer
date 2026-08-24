@@ -9,7 +9,7 @@
 
 use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
-use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
@@ -91,7 +91,11 @@ impl ImageAlgorithm for EnhanceContrast {
     }
 
     fn name(&self) -> &'static str {
-        "EnhanceContrast"
+        "Enhance Contrast"
+    }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        None
     }
 }
 
@@ -664,6 +668,6 @@ mod tests {
             equalize_histogram: false,
         };
         let name = enhancer.name();
-        assert_eq!(name, "EnhanceContrast");
+        assert_eq!(name, "Enhance Contrast");
     }
 }

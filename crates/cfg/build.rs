@@ -7,7 +7,7 @@
 // is include!()-d into this separate build-script crate root, so it needs its
 // own copy of anything from `crate::` that it references.
 #[allow(dead_code)]
-pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_PROJECT_SCHEMA_VERSION: u32 = 2;
 
 mod utils {
     pub mod hex_colors {
@@ -29,7 +29,9 @@ mod types {
     }
 }
 mod core_types {
+    pub use super::types::classes::{ObjectClass, SegmentationClass};
     pub use super::types::ids::ImageAddress;
+    pub use super::types::ids::MemoryId;
     pub use super::types::units::{PixelUnits, SizeUnits};
 }
 mod modules {
@@ -99,6 +101,24 @@ mod modules {
             "/src/modules/project_settings.rs"
         ));
     }
+    pub mod ai_learning_object_settings {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/modules/ai_learning_object_settings.rs"
+        ));
+    }
+    pub mod ai_learning_pixel_settings {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/modules/ai_learning_pixel_settings.rs"
+        ));
+    }
+    pub mod ai_learning_settings {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/modules/ai_learning_settings.rs"
+        ));
+    }
 }
 mod settings {
     pub use crate::modules::classification_settings;
@@ -133,6 +153,9 @@ fn main() {
     println!("cargo:rerun-if-changed=src/modules/project_settings.rs");
     println!("cargo:rerun-if-changed=src/modules/meta_data.rs");
     println!("cargo:rerun-if-changed=src/modules/templates.rs");
+    println!("cargo:rerun-if-changed=src/modules/ai_learning_object_settings.rs");
+    println!("cargo:rerun-if-changed=src/modules/ai_learning_pixel_settings.rs");
+    println!("cargo:rerun-if-changed=src/modules/ai_learning_settings.rs");
     // Input: algo structs the generator reads to produce pipeline_command*.rs
     println!("cargo:rerun-if-changed=../core/src/algos");
 
@@ -148,6 +171,11 @@ fn main() {
 
     if let Err(e) = schema_generator::generate_template_schemas() {
         eprintln!("Template schema generator Error: {}", e);
+        std::process::exit(1);
+    }
+
+    if let Err(e) = schema_generator::generate_ai_learning_settings_schema() {
+        eprintln!("AI learning settings schema generator Error: {}", e);
         std::process::exit(1);
     }
 }

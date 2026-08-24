@@ -10,6 +10,7 @@ mod job;
 mod object;
 mod pipeline;
 mod resources;
+mod spatial_grid;
 mod storage;
 
 // System resource sizing (parallelism, reader pool size) based on available RAM
@@ -39,16 +40,13 @@ pub use crate::image::SUPPORTED_IMAGE_FORMATS;
 pub use crate::image::ZProjection;
 
 // Object
-pub use crate::object::Object;
-// `ObjectInit`/`PipelineCache` are re-exported so downstream crates can build
-// `Object`/`DuckDbExporter` fixtures for their own tests (e.g. `evanalyzer_app`'s
-// exporter/aggregation integration tests), without duplicating the DuckDB
-// schema in hand-written SQL.
 pub use crate::object::Intensity;
+pub use crate::object::Object;
 pub use crate::object::ObjectInit;
 pub use crate::pipeline::pipeline_cache::PipelineCache;
 
 // Job execution
+pub use crate::job::algos_from_config::into_algorithm;
 pub use crate::job::job_executor::BreakpointMode;
 pub use crate::job::job_executor::BreakpointSettings;
 pub use crate::job::job_executor::JobExecutor;

@@ -16,11 +16,13 @@ use crate::editor::pipelines_controller::PipelinesController;
 use crate::editor::project_settings_controller::ProjectSettingsController;
 use crate::editor::results_list_controller::ResultsListController;
 use crate::editor::template_controller::TemplateController;
+use evanalyzer_app::exporter;
 use evanalyzer_app::extensions::project_ext::ProjectExt;
 use evanalyzer_app::extensions::project_ext::SaveProjectActions;
-use evanalyzer_app::templates::load_project_templates;
+use evanalyzer_app::templates::{load_project_template_from_file, load_project_templates};
 use evanalyzer_cfg::LEGACY_PROJECT_FILE_EXTENSION;
 use evanalyzer_cfg::PROJECT_FILE_EXTENSIONS;
+use evanalyzer_cfg::PROJECT_FILE_TEMPLATE_EXTENSIONS;
 use evanalyzer_cfg::settings::templates::ProjectTemplate;
 use evanalyzer_core::SUPPORTED_IMAGE_FORMATS;
 use log::{info, warn};
@@ -49,6 +51,7 @@ struct TemplateFilter {
 enum PendingAction {
     OpenProject(PathBuf),
     ImportLegacy(PathBuf),
+    OpenProjectTemplate(PathBuf),
     Quit,
 }
 
@@ -231,6 +234,31 @@ impl ProjectController {
         }
     }
 
+    /// Loads a `ProjectTemplate` from an arbitrary path (picked via the
+    /// generic "Open" dialog, unlike [`Self::apply_project_template`] which
+    /// picks from the bundled/user templates folders) and applies it to the
+    /// current project, same as confirming it in the "New from Project
+    /// Template" picker would.
+    pub fn open_project_template_file(self: Arc<Self>, path: &PathBuf) {
+        let template = match load_project_template_from_file(path) {
+            Ok(template) => template,
+            Err(e) => {
+                warn!("Could not load project template {:?}: {}", path, e);
+                self.show_warning(
+                    "Cannot open project template",
+                    &format!("Failed to load '{}': {e}", path.display()),
+                );
+                return;
+            }
+        };
+
+        let manager = self.clone();
+        slint::invoke_from_event_loop(move || {
+            manager.apply_project_template_value(&template);
+        })
+        .ok();
+    }
+
     /// Shows the generic warning dialog (error style) with `title`/`message`.
     fn show_warning(&self, title: &str, message: &str) {
         self.show_warning_with_style(title, message, false);
@@ -395,6 +423,13 @@ impl ProjectController {
                 });
             });
 
+            // Export project template for cite
+            let manager = Arc::clone(self);
+            ui.global::<ToolbarState>()
+                .on_cite_project_clicked(move || {
+                    manager.export_project_cite();
+                });
+
             // Unsaved-changes dialog: "Save" - save first, then only run the
             // pending action (if any) once the save actually succeeded. If
             // the user cancels the save-as file picker, or the save fails,
@@ -464,12 +499,17 @@ impl ProjectController {
         let mut allowed_files = SUPPORTED_IMAGE_FORMATS.to_vec();
         allowed_files.push(PROJECT_FILE_EXTENSIONS);
         allowed_files.push(LEGACY_PROJECT_FILE_EXTENSION);
+        allowed_files.push(PROJECT_FILE_TEMPLATE_EXTENSIONS);
 
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Supported Files", &allowed_files)
             .add_filter("Image Files", &SUPPORTED_IMAGE_FORMATS)
             .add_filter("Project Files", &[PROJECT_FILE_EXTENSIONS])
             .add_filter("Legacy Project Files", &[LEGACY_PROJECT_FILE_EXTENSION])
+            .add_filter(
+                "Project Template Files",
+                &[PROJECT_FILE_TEMPLATE_EXTENSIONS],
+            )
             .pick_file()
         {
             let manager = Arc::clone(self);
@@ -481,6 +521,8 @@ impl ProjectController {
                     manager.guard_discard(PendingAction::OpenProject(path));
                 } else if ext == Some(LEGACY_PROJECT_FILE_EXTENSION) {
                     manager.guard_discard(PendingAction::ImportLegacy(path));
+                } else if ext == Some(PROJECT_FILE_TEMPLATE_EXTENSIONS) {
+                    manager.guard_discard(PendingAction::OpenProjectTemplate(path));
                 } else {
                     manager.image_list_controller.open_new_image(&path);
                 }
@@ -537,6 +579,28 @@ impl ProjectController {
 
     fn save_project(self: &Arc<Self>) {
         self.save_project_then(|_saved| {});
+    }
+
+    fn export_project_cite(self: &Arc<Self>) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Markdown files", &["md"])
+            .save_file()
+        {
+            let in_thread = self.clone();
+            std::thread::spawn(move || {
+                let project_settings = &in_thread.app_state.get_project().settings;
+                let result = exporter::cite_project(project_settings, &path);
+                match result {
+                    Ok(_) => {
+                        info!("Project cite saved as: {}", path.display());
+                        in_thread.app_state.clear_dirty();
+                    }
+                    Err(msg) => {
+                        warn!("Project cite not saved: {}", msg);
+                    }
+                }
+            });
+        }
     }
 
     /// Saves the project (prompting for a path first if none is set yet,
@@ -648,6 +712,10 @@ impl ProjectController {
             PendingAction::ImportLegacy(path) => {
                 let manager = self.clone();
                 std::thread::spawn(move || manager.import_legacy_project_file(&path));
+            }
+            PendingAction::OpenProjectTemplate(path) => {
+                let manager = self.clone();
+                std::thread::spawn(move || manager.open_project_template_file(&path));
             }
             PendingAction::Quit => {
                 let ui_weak = self.ui.clone();
@@ -771,9 +839,6 @@ impl ProjectController {
     /// settings with the ones from the selected project template, then
     /// re-syncs the affected panels.
     fn apply_project_template(self: &Arc<Self>, id: i32) {
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
         let template = {
             let templates = self.project_templates.lock().expect("Poisoned");
             templates.get(id as usize).cloned()
@@ -785,10 +850,21 @@ impl ProjectController {
             );
             return;
         };
+        self.apply_project_template_value(&template);
+    }
+
+    /// Applies a `ProjectTemplate` (already loaded, from wherever) to the
+    /// current project and refreshes every affected UI panel. Must run on
+    /// the UI thread - touches Slint globals directly, not just through the
+    /// `sync_*_to_slint` methods.
+    fn apply_project_template_value(self: &Arc<Self>, template: &ProjectTemplate) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
 
         let first_pipeline_id = {
             let mut project = self.app_state.get_project_write();
-            project.apply_project_template(&template);
+            project.apply_project_template(template);
             project.pipelines.first().map(|p| p.id)
         };
         self.app_state.mark_dirty();
@@ -835,12 +911,8 @@ impl ProjectController {
 /// Builds the `ProjectTemplateDef` shown in the "New from Project Template"
 /// dialog for a loaded `ProjectTemplate`.
 fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTemplateDef {
-    let author = format!(
-        "{} {}",
-        template.meta.author_first_name, template.meta.author_last_name
-    )
-    .trim()
-    .to_string();
+    let author = template.meta.authors.first().cloned().unwrap_or_default();
+    let co_authors = template.meta.authors.get(1..).unwrap_or(&[]).join(", ");
 
     let tags: Vec<SharedString> = template
         .meta
@@ -856,6 +928,7 @@ fn project_template_to_def(id: i32, template: &ProjectTemplate) -> ProjectTempla
         short_description: template.meta.short_description.clone().into(),
         description: template.meta.description.clone().into(),
         author: author.into(),
+        co_authors: co_authors.into(),
         organization: template.meta.author_organization.clone().into(),
         creation_time: template
             .meta
@@ -886,8 +959,10 @@ mod tests {
                 .map(|_| evanalyzer_cfg::settings::templates::PipelineTemplate {
                     meta: MetaData::default(),
                     pipeline_steps: Vec::new(),
+                    ..Default::default()
                 })
                 .collect(),
+            ..Default::default()
         }
     }
 
@@ -901,27 +976,39 @@ mod tests {
     }
 
     #[test]
-    fn project_template_to_def_joins_first_and_last_author_name_with_a_space() {
+    fn project_template_to_def_uses_the_first_author_as_the_primary_author() {
         let meta = MetaData {
-            author_first_name: "Ada".into(),
-            author_last_name: "Lovelace".into(),
+            authors: vec!["Ada Lovelace".into()],
             ..Default::default()
         };
         let def = project_template_to_def(0, &template_with_meta(meta, 0));
 
         assert_eq!(def.author.as_str(), "Ada Lovelace");
+        assert_eq!(def.co_authors.as_str(), "");
     }
 
     #[test]
-    fn project_template_to_def_trims_a_missing_last_name_instead_of_leaving_trailing_whitespace() {
+    fn project_template_to_def_joins_remaining_authors_as_co_authors() {
         let meta = MetaData {
-            author_first_name: "Ada".into(),
-            author_last_name: "".into(),
+            authors: vec![
+                "Ada Lovelace".into(),
+                "Alan Turing".into(),
+                "Grace Hopper".into(),
+            ],
             ..Default::default()
         };
         let def = project_template_to_def(0, &template_with_meta(meta, 0));
 
-        assert_eq!(def.author.as_str(), "Ada");
+        assert_eq!(def.author.as_str(), "Ada Lovelace");
+        assert_eq!(def.co_authors.as_str(), "Alan Turing, Grace Hopper");
+    }
+
+    #[test]
+    fn project_template_to_def_leaves_author_empty_when_no_authors_are_set() {
+        let def = project_template_to_def(0, &template_with_meta(MetaData::default(), 0));
+
+        assert_eq!(def.author.as_str(), "");
+        assert_eq!(def.co_authors.as_str(), "");
     }
 
     #[test]

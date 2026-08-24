@@ -28,3 +28,12 @@ pub fn generate_template_schemas() -> Result<(), Box<dyn std::error::Error>> {
     write_schema::<crate::modules::templates::PipelineTemplate>("pipeline_template.schema.json")?;
     Ok(())
 }
+
+/// Generates `docs/ai_learning.schema.json` for `AiLearningSettings` - the
+/// standalone `--settings` file `train-classifier` reads, and the copy
+/// embedded in every saved `.evamodel` classifier.
+pub fn generate_ai_learning_settings_schema() -> Result<(), Box<dyn std::error::Error>> {
+    write_schema::<crate::modules::ai_learning_settings::AiLearningSettings>(
+        "ai_learning.schema.json",
+    )
+}

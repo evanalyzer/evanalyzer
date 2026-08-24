@@ -1,10 +1,12 @@
 {
+  "schemaVersion": 2,
   "meta": {
     "name": "EV in Cell",
     "shortDescription": "EV in cell detection",
     "description": "Detects extracellular vesicles inside cells using median background subtraction, blurring, Li thresholding and watershed splitting. The output object class can be remapped after import (default class id used during conversion: 1).",
-    "authorFirstName": "Melanie",
-    "authorLastName": "Schuerz",
+    "authors": [
+      "Melanie Schuerz"
+    ],
     "authorOrganization": "University of Salzburg",
     "creationTime": "2026-06-11T00:00:00Z"
   },
@@ -12,27 +14,29 @@
     {
       "enabled": true,
       "command": {
-        "type": "medianSubtract",
+        "type": "MEDIAN_SUBTRACT",
         "radius": 3.0
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "blur",
+        "type": "BLUR",
         "kernelSize": 3
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "threshold",
+        "type": "THRESHOLD",
         "thresholds": [
           {
-            "method": "LI",
+            "method": {
+              "type": "LI"
+            },
             "minThreshold": 0.0,
             "maxThreshold": 65535.0,
-            "unit": "bit",
+            "unit": "BIT",
             "objectClassId": 3
           }
         ]
@@ -41,7 +45,13 @@
     {
       "enabled": true,
       "command": {
-        "type": "watershed",
+        "type": "CONNECTED_COMPONENTS"
+      }
+    },
+    {
+      "enabled": true,
+      "command": {
+        "type": "WATERSHED",
         "maximumFinderTolerance": 0.5,
         "smoothingSigma": 0.0,
         "minObjectSize": 0
@@ -50,20 +60,14 @@
     {
       "enabled": true,
       "command": {
-        "type": "connectedComponents"
-      }
-    },
-    {
-      "enabled": true,
-      "command": {
-        "type": "extractObjects",
+        "type": "EXTRACT_OBJECTS",
         "maxObjectsBeforeFail": 100000
       }
     },
     {
       "enabled": true,
       "command": {
-        "type": "classifyObjects",
+        "type": "CLASSIFY_OBJECTS",
         "inputClasses": [
           {
             "VALID": 3

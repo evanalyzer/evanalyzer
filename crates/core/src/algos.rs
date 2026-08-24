@@ -47,6 +47,10 @@ pub use self::filters::edge_detection_sobel::EdgeDetectionSobel;
 pub use self::filters::enhance_contrast::EnhanceContrast;
 pub use self::filters::hessian::Hessian;
 pub use self::filters::hessian::HessianMode;
+pub use self::filters::illumination_correction::ApplyMethod;
+pub use self::filters::illumination_correction::CorrectionMethod;
+pub use self::filters::illumination_correction::IlluminationCorrection;
+pub use self::filters::illumination_correction::SmoothingMethod;
 pub use self::filters::intensity_transform::IntensityTransformMode;
 pub use self::filters::intensity_transform::IntensityTransformation;
 pub use self::filters::laplacian::Laplacian;
@@ -69,15 +73,21 @@ pub use self::morphology::morphological_transformation::KernelShapes;
 pub use self::morphology::morphological_transformation::MorphOps;
 pub use self::morphology::morphological_transformation::MorphologicalCommand;
 pub use self::segmentation::connected_components::ConnectedComponents;
+pub use self::segmentation::threshold::Averaging;
+pub use self::segmentation::threshold::OtsuClasses;
+pub use self::segmentation::threshold::OtsuMiddleClass;
 pub use self::segmentation::threshold::Threshold;
 pub use self::segmentation::threshold::ThresholdEntry;
 pub use self::segmentation::threshold::ThresholdMethod;
+pub use self::segmentation::threshold::ThresholdValueSource;
+pub use self::segmentation::watershed::SeedSource;
 pub use self::segmentation::watershed::Watershed;
 pub use self::spartial_transform::edm::DistanceTransform;
 
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 
+use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::InternalErrors;
 
 pub trait ImageAlgorithm: Send + Sync {
@@ -88,4 +98,5 @@ pub trait ImageAlgorithm: Send + Sync {
         cache: &mut PipelineCache,
     ) -> Result<(), InternalErrors>;
     fn name(&self) -> &'static str;
+    fn cite(&self) -> Option<&'static CitationMetadata>;
 }

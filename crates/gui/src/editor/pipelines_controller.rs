@@ -950,32 +950,64 @@ impl PipelinesController {
                     let params = cmd.parameters.clone();
 
                     if let Some((group_name, idx, field_name)) = nested_path {
-                        // Nested group field: find the group CommandParameter, then
-                        // update fields[k].value inside group_items[idx].
-                        let new_param_value = params_now
+                        // Nested group field: find the group CommandParameter, then either
+                        // patch fields[k].value inside group_items[idx], or - if changing this
+                        // field altered *which* fields that group item has (e.g. a
+                        // "thresholds.0.method" switch to Otsu adding a "method.classes"
+                        // dropdown, or a "thresholds.0.method.classes" switch to Three adding
+                        // "method.classes.middleClass") - fall back to a full resync, the same
+                        // "field set changed" guard the flat (non-grouped) case below already
+                        // has. Without this, a nested rich-enum variant switch inside a group
+                        // item only took effect after some *other*, unrelated change happened
+                        // to trigger a full resync.
+                        let new_group_fields = params_now
                             .iter()
                             .find(|p| p.name == group_name)
-                            .and_then(|p| p.groups.get(idx))
-                            .and_then(|item| item.iter().find(|fd| fd.name == field_name))
-                            .map(|fd| fd.value.clone())
+                            .and_then(|p| p.groups.get(idx));
+                        let new_field_names: Vec<String> = new_group_fields
+                            .map(|fields| fields.iter().map(|fd| fd.name.clone()).collect())
                             .unwrap_or_default();
+
+                        let mut old_field_names = Vec::new();
+                        let mut old_fields_model = None;
                         for i in 0..params.row_count() {
                             if let Some(p) = params.row_data(i) {
                                 if p.name.as_str() == group_name {
-                                    let items = p.group_items.clone();
-                                    if let Some(item) = items.row_data(idx) {
+                                    if let Some(item) = p.group_items.row_data(idx) {
                                         let fields = item.fields.clone();
-                                        for k in 0..fields.row_count() {
-                                            if let Some(mut lp) = fields.row_data(k) {
-                                                if lp.name.as_str() == field_name {
-                                                    lp.value = new_param_value.clone().into();
-                                                    fields.set_row_data(k, lp);
-                                                    break;
-                                                }
-                                            }
-                                        }
+                                        old_field_names = (0..fields.row_count())
+                                            .filter_map(|k| {
+                                                fields.row_data(k).map(|fd| fd.name.to_string())
+                                            })
+                                            .collect();
+                                        old_fields_model = Some(fields);
                                     }
                                     break;
+                                }
+                            }
+                        }
+
+                        if old_field_names != new_field_names {
+                            manager.sync_steps_of_selected_pipeline_to_slint(
+                                PipelineId(pipeline_id),
+                                false,
+                            );
+                            manager.pipeline_settings_changed();
+                            return;
+                        }
+
+                        let new_param_value = new_group_fields
+                            .and_then(|item| item.iter().find(|fd| fd.name == field_name))
+                            .map(|fd| fd.value.clone())
+                            .unwrap_or_default();
+                        if let Some(fields) = old_fields_model {
+                            for k in 0..fields.row_count() {
+                                if let Some(mut lp) = fields.row_data(k) {
+                                    if lp.name.as_str() == field_name {
+                                        lp.value = new_param_value.clone().into();
+                                        fields.set_row_data(k, lp);
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -1155,6 +1187,7 @@ impl PipelinesController {
                 settings: project.images.settings.clone(),
             },
             pipelines: project.pipelines.clone(),
+            tile_merge: project.tile_merge.clone(),
         }
     }
 
@@ -2082,12 +2115,8 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         })
         .unwrap_or(StepCategory::Preprocess);
 
-    let author = format!(
-        "{} {}",
-        template.meta.author_first_name, template.meta.author_last_name
-    )
-    .trim()
-    .to_string();
+    let author = template.meta.authors.first().cloned().unwrap_or_default();
+    let co_authors = template.meta.authors.get(1..).unwrap_or(&[]).join(", ");
 
     CommandDef {
         id: -(idx as i32) - 1,
@@ -2103,6 +2132,7 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         default_params: ModelRc::default(),
         is_template: true,
         author: author.into(),
+        co_authors: co_authors.into(),
         organization: template.meta.author_organization.clone().into(),
         creation_time: template
             .meta
@@ -2135,6 +2165,7 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
         default_params: ModelRc::default(),
         is_template: false,
         author: "".into(),
+        co_authors: "".into(),
         organization: "".into(),
         creation_time: "".into(),
     };
@@ -2274,11 +2305,8 @@ fn format_classifier_model_info(saved: &evanalyzer_core::SavedClassifier) -> Str
     if !meta.description.is_empty() {
         out.push_str(&format!("\n{}\n", meta.description));
     }
-    let author = format!("{} {}", meta.author_first_name, meta.author_last_name)
-        .trim()
-        .to_string();
-    if !author.is_empty() {
-        out.push_str(&format!("\nAuthor: {author}\n"));
+    if !meta.authors.is_empty() {
+        out.push_str(&format!("\nAuthor: {}\n", meta.authors.join(", ")));
     }
     match &saved.settings.classifier {
         AiLearningClassifierSettings::Pixel { class_labels, .. } => {
@@ -2428,11 +2456,11 @@ mod tests {
                 name: format!("Template {idx_seed}"),
                 short_description: "short".into(),
                 description: "long description".into(),
-                author_first_name: "Ada".into(),
-                author_last_name: "Lovelace".into(),
+                authors: vec!["Ada Lovelace".into()],
                 ..Default::default()
             },
             pipeline_steps: steps,
+            ..Default::default()
         }
     }
 
@@ -2465,18 +2493,25 @@ mod tests {
     }
 
     #[test]
-    fn template_to_command_def_joins_author_names_and_trims_when_empty() {
+    fn template_to_command_def_uses_the_first_author_and_joins_the_rest_as_co_authors() {
         let mut t = template("X", vec![]);
         let def = template_to_command_def(0, &t);
         assert_eq!(def.author, SharedString::from("Ada Lovelace"));
+        assert_eq!(def.co_authors, SharedString::from(""));
 
-        t.meta.author_first_name.clear();
-        t.meta.author_last_name.clear();
+        t.meta.authors.push("Alan Turing".into());
+        let def_with_co_author = template_to_command_def(0, &t);
+        assert_eq!(
+            def_with_co_author.co_authors,
+            SharedString::from("Alan Turing")
+        );
+
+        t.meta.authors.clear();
         let def_empty = template_to_command_def(0, &t);
         assert_eq!(
             def_empty.author,
             SharedString::from(""),
-            "no dangling space with both names empty"
+            "no author when the authors list is empty"
         );
     }
 
@@ -2677,8 +2712,7 @@ mod tests {
                 name: "Model".into(),
                 short_description: "A short summary".into(),
                 description: "A longer description.".into(),
-                author_first_name: "Ada".into(),
-                author_last_name: "Lovelace".into(),
+                authors: vec!["Ada Lovelace".into()],
                 ..Default::default()
             },
         );

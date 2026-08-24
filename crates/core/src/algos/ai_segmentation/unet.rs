@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use evanalyzer_cfg::core_types::{InternalErrors, SegmentationClass};
+use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, SegmentationClass};
 use macros::CommandsMeta;
 use tch::{CModule, Device, Kind, Tensor};
 
@@ -171,6 +171,19 @@ impl ImageAlgorithm for UNet {
     fn name(&self) -> &'static str {
         "UNet"
     }
+
+    fn cite(&self) -> Option<&'static CitationMetadata> {
+        Some(&CitationMetadata {
+            cite_key: "ronneberger2015unet",
+            title: "U-Net: Convolutional Networks for Biomedical Image Segmentation",
+            authors: &["Olaf Ronneberger", "Philipp Fischer", "Thomas Brox"],
+            year: 2015,
+            container: Some("Medical Image Computing and Computer-Assisted Intervention (MICCAI)"),
+            doi: Some("10.1007/978-3-319-24574-4_28"),
+            url: Some("https://doi.org/10.1007/978-3-319-24574-4_28"),
+            pages: Some("234-241"),
+        })
+    }
 }
 
 impl UNet {
@@ -225,10 +238,170 @@ impl UNet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algos::ai_segmentation::test_support::trace_and_save_model;
+    use kornia_image::{Image, ImageSize};
+    use kornia_tensor::CpuAllocator;
 
     const FG: u32 = 7;
     fn bg() -> u32 {
         SegmentationClass::BACKGROUND.as_u32()
+    }
+
+    fn gray_ctx(width: usize, height: usize, values: Vec<f32>) -> PipelineContext {
+        let img =
+            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, values, CpuAllocator)
+                .unwrap();
+        PipelineContext::new_from_image_test(img).unwrap()
+    }
+
+    fn unet(model_path: PathBuf) -> UNet {
+        UNet {
+            model_path,
+            object_class_id: SegmentationClass(FG),
+            probability_threshold: 0.5,
+            output_mode: UNetOutputMode::SoftmaxClasses,
+            foreground_channel: 1,
+            boundary_channel: -1,
+            boundary_threshold: 0.5,
+        }
+    }
+
+    // ---- execute() - real TorchScript load + inference, see `test_support` ----
+
+    #[test]
+    fn execute_errors_when_the_model_path_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = unet(dir.path().join("missing.pt"));
+        let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
+        let mut cache = PipelineCache::default();
+
+        let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
+        assert!(matches!(err, InternalErrors::Generic(_)));
+    }
+
+    #[test]
+    fn execute_single_channel_output_is_used_directly_as_the_foreground_probability() {
+        // A single-channel model output is documented as already-activated
+        // foreground probabilities (the model applies its own sigmoid), used
+        // directly with no softmax/channel-selection - so an identity model
+        // (output == input) makes the input pixel values themselves the
+        // probabilities under test.
+        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| x.shallow_clone());
+        let cmd = UNet {
+            output_mode: UNetOutputMode::SoftmaxClasses, // irrelevant for 1 channel
+            ..unet(model_path)
+        };
+        let mut ctx = gray_ctx(2, 1, vec![0.1, 0.9]);
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        assert_eq!(seg.as_slice(), &[bg(), FG]);
+    }
+
+    #[test]
+    fn execute_softmax_classes_selects_the_foreground_channel_after_softmax() {
+        // Two-channel logits built from the single input channel: a large
+        // negative/positive spread so softmax saturates close to 0/1,
+        // cleanly on either side of the default 0.5 threshold regardless of
+        // float rounding.
+        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| {
+            let bg_logit = x * -10.0;
+            let fg_logit = x * 10.0;
+            Tensor::cat(&[bg_logit, fg_logit], 1)
+        });
+        let cmd = UNet {
+            output_mode: UNetOutputMode::SoftmaxClasses,
+            foreground_channel: 1,
+            ..unet(model_path)
+        };
+        // x = -1 -> fg softmax ~0 (background); x = 1 -> fg softmax ~1 (foreground).
+        let mut ctx = gray_ctx(2, 1, vec![-1.0, 1.0]);
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        assert_eq!(seg.as_slice(), &[bg(), FG]);
+    }
+
+    #[test]
+    fn execute_independent_channels_uses_the_selected_channel_without_softmax() {
+        // Channel 0 carries the raw input value directly (no softmax), so an
+        // already-in-[0,1] probability passed as input round-trips exactly -
+        // unlike `SoftmaxClasses`, which would normalize a 1-channel-derived
+        // pair of logits instead.
+        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| {
+            let junk = x.zeros_like();
+            Tensor::cat(&[x.shallow_clone(), junk], 1)
+        });
+        let cmd = UNet {
+            output_mode: UNetOutputMode::IndependentChannels,
+            foreground_channel: 0,
+            ..unet(model_path)
+        };
+        let mut ctx = gray_ctx(2, 1, vec![0.1, 0.9]);
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        assert_eq!(seg.as_slice(), &[bg(), FG]);
+    }
+
+    #[test]
+    fn execute_boundary_channel_carves_out_pixels_whose_boundary_probability_is_high() {
+        // Channel 0 (foreground) saturates to 1.0 for any x >= 1 via clamp,
+        // so both test pixels have an equally "definite" foreground signal;
+        // channel 1 (boundary) keeps varying past that saturation point
+        // (sigmoid(x - 5)), so the two pixels differ only in boundary
+        // probability - isolating the boundary-carving behavior from the
+        // foreground-threshold behavior already covered by
+        // `classify_pixels_boundary_at_or_above_threshold_excludes_the_pixel` above.
+        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| {
+            let fg = x.clamp(0.0, 1.0);
+            let boundary = (x - 5.0).sigmoid();
+            Tensor::cat(&[fg, boundary], 1)
+        });
+        let cmd = UNet {
+            output_mode: UNetOutputMode::IndependentChannels,
+            foreground_channel: 0,
+            boundary_channel: 1,
+            boundary_threshold: 0.5,
+            ..unet(model_path)
+        };
+        // x=1: fg saturates to 1.0, boundary = sigmoid(-4) ~0 (open) -> foreground.
+        // x=20: fg saturates to 1.0, boundary = sigmoid(15) ~1 (closed) -> background.
+        let mut ctx = gray_ctx(2, 1, vec![1.0, 20.0]);
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        assert_eq!(
+            seg.as_slice(),
+            &[FG, bg()],
+            "equal foreground signal, but only the low-boundary pixel should survive"
+        );
+    }
+
+    #[test]
+    fn execute_foreground_channel_out_of_range_is_clamped_to_the_last_channel() {
+        // 2-channel output, but foreground_channel points past the end - must
+        // clamp to the last valid channel (index 1) instead of panicking.
+        let (_dir, model_path) = trace_and_save_model(1, 1, 2, |x| {
+            let bg_logit = x * -10.0;
+            let fg_logit = x * 10.0;
+            Tensor::cat(&[bg_logit, fg_logit], 1)
+        });
+        let cmd = UNet {
+            output_mode: UNetOutputMode::SoftmaxClasses,
+            foreground_channel: 99,
+            ..unet(model_path)
+        };
+        let mut ctx = gray_ctx(1, 1, vec![1.0]);
+        let mut cache = PipelineCache::default();
+        cmd.execute(&mut ctx, &mut cache).unwrap();
+
+        let seg = ctx.get_segmentation_map().unwrap();
+        assert_eq!(seg.as_slice(), &[FG]);
     }
 
     #[test]

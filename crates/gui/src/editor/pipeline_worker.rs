@@ -145,7 +145,10 @@ impl PipelineWorker {
 
             // Caps parallelism to available RAM as well as CPU cores, so a low-memory
             // machine doesn't try to run as many concurrent workers as it has cores.
-            let parallelism = evanalyzer_core::recommended_parallelism();
+            // The per-worker estimate is sized to the images actually being
+            // analyzed, not a flat guess - see `estimate_ram_per_worker_bytes`.
+            let ram_per_worker = job_exec.estimate_ram_per_worker_bytes();
+            let parallelism = evanalyzer_core::recommended_parallelism(ram_per_worker);
             let (handle, rx, cancel_flag) = job_exec.run_async(parallelism);
             *self
                 .pipeline_controller

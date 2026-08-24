@@ -1,6 +1,8 @@
 use crate::UiState;
 use crate::{AppWindow, ProjectSettingsSlint, ProjectSettingsState, ResultsWindow};
+use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::plate_settings::GroupingMode;
+use evanalyzer_cfg::settings::project_settings::TileMergeConnectivity;
 use slint::{ComponentHandle, Model};
 use std::sync::Arc;
 
@@ -62,6 +64,14 @@ impl ProjectSettingsController {
                         resize_well_values(ui.global::<ProjectSettingsState>(), rows, cols);
                     }
                 });
+
+            let ui_weak = self.ui.clone();
+            ui.global::<ProjectSettingsState>()
+                .on_tile_merge_class_toggled(move |value| {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        toggle_tile_merge_class(ui.global::<ProjectSettingsState>(), &value);
+                    }
+                });
         }
 
         if let Some(results_ui) = self.results_ui.upgrade() {
@@ -97,6 +107,18 @@ impl ProjectSettingsController {
                         resize_well_values(results_ui.global::<ProjectSettingsState>(), rows, cols);
                     }
                 });
+
+            let results_ui_weak = self.results_ui.clone();
+            results_ui
+                .global::<ProjectSettingsState>()
+                .on_tile_merge_class_toggled(move |value| {
+                    if let Some(results_ui) = results_ui_weak.upgrade() {
+                        toggle_tile_merge_class(
+                            results_ui.global::<ProjectSettingsState>(),
+                            &value,
+                        );
+                    }
+                });
         }
     }
 
@@ -114,9 +136,14 @@ impl ProjectSettingsController {
             {
                 let meta = &mut project.metadata;
                 let full_name: String = project_settings.author_name.clone().into();
-                let mut parts = full_name.split_whitespace();
-                meta.author_first_name = parts.next().unwrap_or("").into();
-                meta.author_last_name = parts.next().unwrap_or("").into();
+                // This field only ever edits the primary author (authors[0]);
+                // any co-authors past that (only settable today by
+                // hand-editing the project file) are left untouched.
+                match meta.authors.first_mut() {
+                    Some(primary) => *primary = full_name,
+                    None if !full_name.is_empty() => meta.authors.push(full_name),
+                    None => {}
+                }
                 meta.author_organization = project_settings.organization_name.clone().into();
                 meta.name = project_settings.project_name.clone().into();
             }
@@ -139,6 +166,18 @@ impl ProjectSettingsController {
                 plate.well_cols = project_settings.well_columns;
                 plate.well_image_order = project_settings.well_values.iter().collect();
             }
+
+            // Tile merging (docs/tile_merge_plan.md)
+            {
+                let tile_merge = &mut project.tile_merge;
+                tile_merge.enabled = project_settings.tile_merge_enabled;
+                tile_merge.classes_to_not_merge =
+                    flags_to_classes(&project_settings.tile_merge_classes_to_not_merge_flags);
+                tile_merge.connectivity =
+                    index_to_connectivity(project_settings.tile_merge_connectivity);
+                tile_merge.max_fragments_per_group =
+                    project_settings.tile_merge_max_fragments_per_group.max(1) as u32;
+            }
         }
 
         self.app_state.mark_dirty();
@@ -157,9 +196,7 @@ impl ProjectSettingsController {
 
         let (author_name, organization) = {
             let addr = &project.metadata;
-            let full_name = format!("{} {}", addr.author_first_name, addr.author_last_name)
-                .trim()
-                .to_string();
+            let full_name = addr.authors.first().cloned().unwrap_or_default();
             (full_name, addr.author_organization.clone())
         };
 
@@ -180,6 +217,16 @@ impl ProjectSettingsController {
 
         let expirment_name = project.metadata.name.clone();
 
+        let (tile_merge_enabled, tile_merge_flags, tile_merge_connectivity, tile_merge_cap) = {
+            let tile_merge = &project.tile_merge;
+            (
+                tile_merge.enabled,
+                classes_to_flags(&tile_merge.classes_to_not_merge),
+                connectivity_to_index(tile_merge.connectivity),
+                tile_merge.max_fragments_per_group as i32,
+            )
+        };
+
         slint::invoke_from_event_loop(move || {
             // Each window has its own independent `ProjectSettingsState`
             // instance (see the struct-level doc comment), so each needs its
@@ -198,6 +245,12 @@ impl ProjectSettingsController {
                 grouping_mode: mode_index,
                 well_size_index: well_size_to_idx(plate_rows, plate_cols),
                 plate_rows,
+                tile_merge_enabled,
+                tile_merge_classes_to_not_merge_flags: slint::ModelRc::from(std::rc::Rc::new(
+                    slint::VecModel::from(tile_merge_flags.clone()),
+                )),
+                tile_merge_connectivity,
+                tile_merge_max_fragments_per_group: tile_merge_cap,
                 plate_cols,
             };
 
@@ -244,6 +297,71 @@ fn resize_well_values(state: ProjectSettingsState<'_>, rows: i32, cols: i32) {
                 vec_model.remove(vec_model.row_count() - 1);
             }
         }
+    }
+}
+
+/// Converts `classes_to_not_merge` into the 33-element ("1"/"0" for classes
+/// 0-32) selection-flags shape `MultiClassDropdown` (shared with the
+/// pipeline command editor) expects. Class IDs >= 33 have no slot in this
+/// picker and are silently dropped, same as the pipeline editor's own
+/// multi-class fields.
+fn classes_to_flags(classes: &[ObjectClass]) -> Vec<slint::SharedString> {
+    let mut flags = vec![slint::SharedString::from("0"); 33];
+    for c in classes {
+        if let Some(id) = c.to_u32() {
+            if let Some(slot) = flags.get_mut(id as usize) {
+                *slot = "1".into();
+            }
+        }
+    }
+    flags
+}
+
+/// Inverse of `classes_to_flags`.
+fn flags_to_classes(flags: &slint::ModelRc<slint::SharedString>) -> Vec<ObjectClass> {
+    flags
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.as_str() == "1")
+        .map(|(i, _)| ObjectClass::Valid(i as u32))
+        .collect()
+}
+
+/// Flips one class's exclusion flag in response to a "toggle:N" event from
+/// the tile-merge exclude-classes `MultiClassDropdown` - shared by both
+/// windows' `on_tile_merge_class_toggled` handlers (see the struct-level doc
+/// comment).
+fn toggle_tile_merge_class(state: ProjectSettingsState<'_>, value: &str) {
+    let Some(index_str) = value.strip_prefix("toggle:") else {
+        return;
+    };
+    let Ok(index) = index_str.parse::<usize>() else {
+        return;
+    };
+    let model = state.get_settings().tile_merge_classes_to_not_merge_flags;
+    if let Some(vec_model) = model
+        .as_any()
+        .downcast_ref::<slint::VecModel<slint::SharedString>>()
+    {
+        if index < vec_model.row_count() {
+            let current = vec_model.row_data(index).unwrap_or_default();
+            let flipped: slint::SharedString = if current == "1" { "0" } else { "1" }.into();
+            vec_model.set_row_data(index, flipped);
+        }
+    }
+}
+
+fn index_to_connectivity(index: i32) -> TileMergeConnectivity {
+    match index {
+        0 => TileMergeConnectivity::FourConnected,
+        _ => TileMergeConnectivity::EightConnected,
+    }
+}
+
+fn connectivity_to_index(connectivity: TileMergeConnectivity) -> i32 {
+    match connectivity {
+        TileMergeConnectivity::FourConnected => 0,
+        TileMergeConnectivity::EightConnected => 1,
     }
 }
 
@@ -402,6 +520,12 @@ mod tests {
             well_size_index: 1,
             plate_rows: 0,
             plate_cols: 0,
+            tile_merge_enabled: true,
+            tile_merge_classes_to_not_merge_flags: slint::ModelRc::new(slint::VecModel::from(
+                vec![slint::SharedString::from("0"); 33],
+            )),
+            tile_merge_connectivity: 1,
+            tile_merge_max_fragments_per_group: 10000,
         }
     }
 
@@ -417,14 +541,97 @@ mod tests {
         controller.update_project_settings_in_project(&sample_settings());
 
         let project = ui_state.get_project();
-        assert_eq!(project.metadata.author_first_name, "Ada");
-        assert_eq!(project.metadata.author_last_name, "Lovelace");
+        assert_eq!(project.metadata.authors, vec!["Ada Lovelace".to_string()]);
         assert_eq!(project.metadata.author_organization, "Analytical Engines");
         assert_eq!(project.metadata.name, "Test Project");
         assert_eq!(project.plate.well_rows, 2);
         assert_eq!(project.plate.well_cols, 3);
         // well_size_index=1 -> index_to_well_size(1) == (2, 3), see the test above.
         assert_eq!((project.plate.plate_rows, project.plate.plate_cols), (2, 3));
+    }
+
+    // -- tile merging -----------------------------------------------------
+
+    #[test]
+    fn classes_to_flags_sets_only_the_given_classes_and_drops_out_of_range_ids() {
+        let flags = classes_to_flags(&[
+            ObjectClass::Valid(1),
+            ObjectClass::Valid(3),
+            ObjectClass::Valid(99), // out of the 0-32 picker range, dropped
+        ]);
+        assert_eq!(flags.len(), 33);
+        assert_eq!(flags[1], "1");
+        assert_eq!(flags[3], "1");
+        for (i, flag) in flags.iter().enumerate() {
+            if i != 1 && i != 3 {
+                assert_eq!(flag, "0", "index {i} must be unset");
+            }
+        }
+    }
+
+    #[test]
+    fn flags_to_classes_is_the_inverse_of_classes_to_flags() {
+        let classes = vec![ObjectClass::Valid(2), ObjectClass::Valid(5)];
+        let flags = classes_to_flags(&classes);
+        let model: slint::ModelRc<slint::SharedString> =
+            slint::ModelRc::new(slint::VecModel::from(flags));
+        assert_eq!(flags_to_classes(&model), classes);
+    }
+
+    #[test]
+    fn connectivity_index_round_trips_both_variants() {
+        for connectivity in [
+            TileMergeConnectivity::FourConnected,
+            TileMergeConnectivity::EightConnected,
+        ] {
+            assert_eq!(
+                index_to_connectivity(connectivity_to_index(connectivity)),
+                connectivity
+            );
+        }
+    }
+
+    #[test]
+    fn update_project_settings_in_project_writes_tile_merge_fields() {
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state.clone());
+
+        let mut settings = sample_settings();
+        settings.tile_merge_enabled = true;
+        settings.tile_merge_classes_to_not_merge_flags =
+            slint::ModelRc::new(slint::VecModel::from(classes_to_flags(&[
+                ObjectClass::Valid(1),
+                ObjectClass::Valid(2),
+            ])));
+        settings.tile_merge_connectivity = 0;
+        settings.tile_merge_max_fragments_per_group = 500;
+
+        controller.update_project_settings_in_project(&settings);
+
+        let project = ui_state.get_project();
+        assert!(project.tile_merge.enabled);
+        assert_eq!(
+            project.tile_merge.classes_to_not_merge,
+            vec![ObjectClass::Valid(1), ObjectClass::Valid(2)]
+        );
+        assert_eq!(
+            project.tile_merge.connectivity,
+            TileMergeConnectivity::FourConnected
+        );
+        assert_eq!(project.tile_merge.max_fragments_per_group, 500);
+    }
+
+    #[test]
+    fn update_project_settings_in_project_clamps_max_fragments_per_group_to_at_least_one() {
+        let ui_state = test_ui_state();
+        let controller = make_controller(ui_state.clone());
+
+        let mut settings = sample_settings();
+        settings.tile_merge_max_fragments_per_group = 0;
+
+        controller.update_project_settings_in_project(&settings);
+
+        assert_eq!(ui_state.get_project().tile_merge.max_fragments_per_group, 1);
     }
 
     #[test]
