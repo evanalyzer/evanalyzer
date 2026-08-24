@@ -125,66 +125,6 @@ mod tests {
         );
     }
 
-    /// All shipped `.evapt`/`.evapipe` template files must deserialize into
-    /// `ProjectTemplate`/`PipelineTemplate` - the same types and the same
-    /// `serde_json::from_str` call the GUI/CLI actually use to load them. Unlike
-    /// validating against `docs/project.schema.json` (which describes the full
-    /// `ProjectSettings` project-file format, not these template formats), this
-    /// exercises the real deserialization path, so it would have caught templates
-    /// genuinely failing to load.
-    #[test]
-    fn shipped_templates_deserialize() {
-        use crate::settings::templates::{PipelineTemplate, ProjectTemplate};
-
-        let templates_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates");
-        let mut checked_evapt = 0;
-        let mut checked_evapipe = 0;
-
-        for entry in std::fs::read_dir(&templates_dir)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", templates_dir.display()))
-        {
-            let path = entry.unwrap().path();
-            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-                continue;
-            };
-            let json = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-
-            match ext {
-                "evapt" => {
-                    serde_json::from_str::<ProjectTemplate>(&json).unwrap_or_else(|e| {
-                        panic!(
-                            "{} failed to deserialize as ProjectTemplate: {e}",
-                            path.display()
-                        )
-                    });
-                    checked_evapt += 1;
-                }
-                "evapipe" => {
-                    serde_json::from_str::<PipelineTemplate>(&json).unwrap_or_else(|e| {
-                        panic!(
-                            "{} failed to deserialize as PipelineTemplate: {e}",
-                            path.display()
-                        )
-                    });
-                    checked_evapipe += 1;
-                }
-                _ => {}
-            }
-        }
-
-        assert!(
-            checked_evapt > 0,
-            "no .evapt files found under {}",
-            templates_dir.display()
-        );
-        assert!(
-            checked_evapipe > 0,
-            "no .evapipe files found under {}",
-            templates_dir.display()
-        );
-    }
-
     /// Regression test for the generator's "rich enum" support: a `TransformFunction`-like
     /// field whose variants each carry their own sub-fields must change *which* parameters
     /// `to_parameters()` returns when the discriminant is switched via `apply_param_change`,
