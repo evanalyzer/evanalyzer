@@ -163,6 +163,44 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+  templates:
+    # Templates (`.evapipe`/`.evapt`) live in a separate repository
+    # (evanalyzer/evanalyzer-templates), not this one - see release.yml's
+    # "templates" job for how they're fetched/shipped. This checks every
+    # template there - not just the subset release.yml actually ships -
+    # still deserializes as PipelineTemplate/ProjectTemplate under this
+    # repo's current schema (crates/cfg/examples/check_templates.rs),
+    # catching a schema change breaking published templates as early as a
+    # push/PR here, rather than only at release time.
+    #
+    # `evanalyzer_cfg` has no native dependencies, so - like `fmt` - this
+    # doesn't need the libtorch/JRE downloads the `test` job pays for.
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.2.0
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64-check-templates
+
+      - name: Fetch every template (partial clone - no example images downloaded)
+        run: |
+          git clone --filter=blob:none --sparse --depth 1 \
+            https://github.com/evanalyzer/evanalyzer-templates.git evanalyzer-templates
+          git -C evanalyzer-templates sparse-checkout set --no-cone '*.evapipe' '*.evapt'
+
+      - name: Check every template against the current schema
+        run: cargo run -p evanalyzer_cfg --example check_templates -- evanalyzer-templates
+
   audit:
     # Dependency/license audit via cargo-audit (RUSTSEC advisory DB). Only
     # needs Cargo.lock, not a full build, so it's a separate lightweight job
