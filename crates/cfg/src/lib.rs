@@ -117,10 +117,10 @@ mod tests {
                 "steps": []
             }]
         });
-        let err =
-            load_project_settings(raw).expect_err("null pipeline name should fail to load");
+        let err = load_project_settings(raw).expect_err("null pipeline name should fail to load");
         assert!(
-            err.to_string().contains("invalid type: null, expected a string"),
+            err.to_string()
+                .contains("invalid type: null, expected a string"),
             "unexpected error: {err}"
         );
     }
