@@ -10,7 +10,62 @@ on:
   workflow_dispatch:
 
 jobs:
+  templates:
+    # Templates now live in evanalyzer/evanalyzer-templates, not this repo.
+    # Fetched once here (rather than in every build-* job below) and shared
+    # as an artifact, so five platform builds don't each pay for their own
+    # clone. Only files under an "evanalyzer/" folder ship with the app -
+    # the other top-level folders (e.g. cp_example_*) are worked examples
+    # with their own bundled sample images and are meant to be browsed in
+    # that repo, not shipped in the app's template picker.
+    #
+    # The partial clone (--filter=blob:none) plus a non-cone sparse-checkout
+    # pattern means the example images are never even fetched, not just
+    # filtered out afterwards - the server never sends those blobs.
+    #
+    # Every fetched template is also checked against this repo's current
+    # PipelineTemplate/ProjectTemplate types before anything is uploaded -
+    # see crates/cfg/examples/check_templates.rs for why that's stronger
+    # than a generic JSON Schema check. A failure here fails this job, which
+    # blocks every build-* job below (needs: [templates]) and the release
+    # itself - no need for a separate scheduled check, since "before the
+    # project is built and before it's released" is exactly this point.
+    runs-on: ubuntu-latest
+    container:
+      image: joda001/evanalyzer-toolchain:0.2.0
+      credentials:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64-check-templates
+
+      - name: Fetch templates
+        run: |
+          git clone --filter=blob:none --sparse --depth 1 \
+            https://github.com/evanalyzer/evanalyzer-templates.git evanalyzer-templates
+          git -C evanalyzer-templates sparse-checkout set --no-cone \
+            '**/evanalyzer/*.evapipe' '**/evanalyzer/*.evapt'
+          mkdir templates
+          find evanalyzer-templates -type f \( -name '*.evapipe' -o -name '*.evapt' \) -exec cp -t templates {} +
+
+      - name: Check templates against the current schema
+        run: cargo run -p evanalyzer_cfg --example check_templates -- templates
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: templates
+          path: templates/
+
   build-linux:
+    needs: [templates]
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.2.0
@@ -45,16 +100,21 @@ jobs:
       - name: Build
         run: cargo build-linux
 
+      - name: Download templates
+        uses: actions/download-artifact@v4
+        with:
+          name: templates
+          path: dist/templates
+
       - name: Package
         run: |
-          mkdir -p dist/templates
+          mkdir -p dist
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
           # libtorch is dynamically linked; ship every shared object next to the
           # binary so the $ORIGIN rpath (see .cargo/config.toml) finds them. The
           # glob must be *.so* (not *.so) to include versioned deps like
           # libgomp-<hash>.so.1 that libtorch_cpu.so requires.
           cp libs/libtorch/lib/*.so*                               dist/ 2>/dev/null || true
-          cp templates/*.evapipe templates/*.evapt                 dist/templates/
           tar -czf evanalyzer-linux-x86_64.tar.gz -C dist .
 
       - uses: actions/upload-artifact@v4
@@ -63,6 +123,7 @@ jobs:
           path: evanalyzer-linux-x86_64.tar.gz
 
   build-windows:
+    needs: [templates]
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.2.0
@@ -135,13 +196,18 @@ jobs:
       - name: Build
         run: cargo build-win
 
+      - name: Download templates
+        uses: actions/download-artifact@v4
+        with:
+          name: templates
+          path: dist/templates
+
       - name: Package
         run: |
-          mkdir -p dist/templates
+          mkdir -p dist
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
           cp libs/libtorch/lib/*.dll                           dist/
-          cp templates/*.evapipe templates/*.evapt                 dist/templates/
           (cd dist && zip -r ../evanalyzer-windows-x86_64.zip .)
 
       - uses: actions/upload-artifact@v4
@@ -150,6 +216,7 @@ jobs:
           path: evanalyzer-windows-x86_64.zip
 
   build-linux-cuda:
+    needs: [templates]
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.2.0
@@ -184,9 +251,15 @@ jobs:
       - name: Build
         run: cargo build-linux
 
+      - name: Download templates
+        uses: actions/download-artifact@v4
+        with:
+          name: templates
+          path: dist/templates
+
       - name: Package
         run: |
-          mkdir -p dist/templates
+          mkdir -p dist
           cp target/x86_64-unknown-linux-gnu/release/evanalyzer   dist/
           # CUDA libtorch ships its runtime as versioned objects (libcudart.so.12,
           # libcublas.so.12, libcudnn*.so.9, libnccl.so.2, libgomp-<hash>.so.1, …),
@@ -209,7 +282,6 @@ jobs:
               [ -e "$f" ] && rm -f "$f"
             done
           done < .github/NOT_SHIP_LIST.txt
-          cp templates/*.evapipe templates/*.evapt                 dist/templates/
           # The CUDA runtime is multiple GB even compressed, so pack with 7-Zip
           # at maximum compression (-mx=9) and split into <2 GiB volumes
           # (-v1900m) so no single asset exceeds GitHub's 2 GiB release limit.
@@ -224,6 +296,7 @@ jobs:
           path: evanalyzer-linux-x86_64-cuda.7z.*
 
   build-windows-cuda:
+    needs: [templates]
     runs-on: ubuntu-latest
     container:
       image: joda001/evanalyzer-toolchain:0.2.0
@@ -296,9 +369,15 @@ jobs:
       - name: Build
         run: cargo build-win
 
+      - name: Download templates
+        uses: actions/download-artifact@v4
+        with:
+          name: templates
+          path: dist/templates
+
       - name: Package
         run: |
-          mkdir -p dist/templates
+          mkdir -p dist
           cp target/x86_64-pc-windows-msvc/release/evanalyzer.exe dist/
           cp libs/libduckdb-windows-amd64/duckdb.dll           dist/
           cp libs/libtorch/lib/*.dll                           dist/
@@ -315,7 +394,6 @@ jobs:
               [ -e "$f" ] && rm -f "$f"
             done
           done < .github/NOT_SHIP_LIST.txt
-          cp templates/*.evapipe templates/*.evapt                 dist/templates/
           # The CUDA runtime DLLs are multiple GB even compressed, so pack with
           # 7-Zip at maximum compression (-mx=9) and split into <2 GiB volumes
           # (-v1900m) so no single asset exceeds GitHub's 2 GiB release limit.
@@ -330,6 +408,7 @@ jobs:
           path: evanalyzer-windows-x86_64-cuda.7z.*
 
   build-macos:
+    needs: [templates]
     runs-on: macos-14   # Apple Silicon (arm64)
     steps:
       - uses: actions/checkout@v4
@@ -366,15 +445,20 @@ jobs:
           DUCKDB_INCLUDE_DIR: ${{ github.workspace }}/libs/libduckdb-osx-universal
         run: cargo build-mac
 
+      - name: Download templates
+        uses: actions/download-artifact@v4
+        with:
+          name: templates
+          path: dist/templates
+
       - name: Package
         run: |
           set -euo pipefail
-          mkdir -p dist/templates
+          mkdir -p dist
           cp target/aarch64-apple-darwin/release/evanalyzer       dist/
           # Ship the libtorch + DuckDB dylibs flat next to the binary.
           cp libs/libtorch/lib/*.dylib                             dist/ 2>/dev/null || true
           cp libs/libduckdb-osx-universal/*.dylib                  dist/ 2>/dev/null || true
-          cp templates/*.evapipe templates/*.evapt                 dist/templates/
 
           # ---- Make the bundle relocatable (adapted from the legacy mac packer) ----
           # libtorch's / DuckDB's dylibs and the binary reference each other by
