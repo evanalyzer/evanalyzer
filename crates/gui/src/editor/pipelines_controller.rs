@@ -1202,6 +1202,29 @@ impl PipelinesController {
     ///    to zero and forcefully triggers the `PipelineRunning` overlay dialog screen.
     /// 4. **Asynchronous Dispatch**: Offloads the generated `PipelineTask` directly to the pipeline worker.
     pub fn trigger_pipeline_preview_execution(&self) {
+        // Auto preview fires this from a debounced timer (see
+        // `pipeline_settings_changed`), completely independent of whatever
+        // dialog the user currently has open - e.g. opening the "New
+        // pipeline" dialog changes pipeline settings, which arms this same
+        // timer. Below, a successful run force-closes the dialog
+        // (`DialogType::None`) once it completes, and starting one
+        // force-opens `PreviewRendering` - either would silently steal focus
+        // from/dismiss an unrelated modal like the pipeline-edit dialog if
+        // this fired while one was open. Skip this run entirely rather than
+        // fight over `active_dialog`; the next real settings change re-arms
+        // the debounce and tries again once the user isn't mid-dialog.
+        if let Some(ui) = self.app_state.ui_handle.upgrade() {
+            let active_dialog = ui.global::<GlobalAppState>().get_active_dialog();
+            if active_dialog != DialogType::None && active_dialog != DialogType::PreviewRendering
+            {
+                debug!(
+                    "Skipping auto preview - {:?} dialog is open",
+                    active_dialog
+                );
+                return;
+            }
+        }
+
         let project = self.app_state.get_project();
 
         let Some(current_project) = &project.tmp_settings.current_project else {
