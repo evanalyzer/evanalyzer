@@ -16,11 +16,13 @@ import {
     ImagePixelInfo,
 } from "state.slint";
 import { SidebarLeft } from "sidebar_left.slint";
+import { GlobalShortcuts, DialogShortcuts } from "shortcuts.slint";
 import { Toolbar, ToolbarState } from "toolbar.slint";
 import { Viewport } from "editor/viewport.slint";
 import { ToolState } from "editor/viewport_state.slint";
 import { StatusBar } from "status_bar.slint";
 import { AboutDialog } from "dialogs/about.slint";
+import { ShortcutsHelpDialog } from "dialogs/shortcuts_help_dialog.slint";
 import { CustomMenuBar } from "menu_bar.slint";
 import { SidebarRight } from "sidebar_right.slint";
 import { ImageMetaData } from "editor/image_meta_panel.slint";
@@ -197,44 +199,15 @@ export component AppWindow inherits Window {
     // after this window is constructed, using the persisted preference -
     // see `evanalyzer_gui::run`.
 
-    // Global keyboard accelerators for the main editing surface (Save/Open/
-    // Undo/Redo). Wrapping the `VerticalBox` (rather than adding a sibling
-    // `FocusScope`, the pattern the modal dialogs use) makes `kbd` an
-    // ancestor of every focusable widget inside it - e.g. a `LineEdit` in a
-    // sidebar panel - so an unhandled key press there bubbles up to this
-    // handler instead of only firing when nothing has focus. Gated on no
-    // dialog being open; dialogs live outside this subtree (see the
-    // "Overlay Manager" below) and have no bubble path back here anyway, but
-    // the guard is kept as a defensive belt-and-braces check.
+    // Global keyboard accelerators for the main editing surface. Wrapping
+    // the `VerticalBox` (rather than adding a sibling `FocusScope`, the
+    // pattern the modal dialogs use) makes `kbd` an ancestor of every
+    // focusable widget inside it - e.g. a `LineEdit` in a sidebar panel - so
+    // an unhandled key press there bubbles up to this handler instead of
+    // only firing when nothing has focus. See shortcuts.slint for the full
+    // list of shortcuts and why they're gated on no dialog being open.
     forward-focus: kbd;
-    kbd := FocusScope {
-        key-pressed(e) => {
-            if (GlobalAppState.active_dialog != DialogType.none) {
-                return reject;
-            }
-            if (e.modifiers.control && e.text == "s") {
-                if (e.modifiers.shift) {
-                    ToolbarState.save_as_file_clicked();
-                } else {
-                    ToolbarState.save_file_clicked();
-                }
-                return accept;
-            }
-            if (e.modifiers.control && e.text == "o") {
-                ToolbarState.open_file_clicked();
-                return accept;
-            }
-            if (e.modifiers.control && (e.text == "z" || e.text == "y")) {
-                if (e.text == "y" || e.modifiers.shift) {
-                    ToolbarState.redo_clicked();
-                } else {
-                    ToolbarState.undo_clicked();
-                }
-                return accept;
-            }
-            return reject;
-        }
-
+    kbd := GlobalShortcuts {
         VerticalBox {
             padding: 0;
             spacing: 0;
@@ -295,98 +268,105 @@ export component AppWindow inherits Window {
         }
     }
 
-    // The "Overlay Manager"
-    if (GlobalAppState.active_dialog != DialogType.none): Rectangle {
+    // The "Overlay Manager". Wrapped in `DialogShortcuts` (see
+    // shortcuts.slint) so Escape closes whichever dialog below is open,
+    // without every dialog file needing its own copy of that logic.
+    if (GlobalAppState.active_dialog != DialogType.none): DialogShortcuts {
         width: 100%;
         height: 100%;
-        if (GlobalAppState.active_dialog == DialogType.missing_images): ImageMissingDialog { }
-        if (GlobalAppState.active_dialog == DialogType.about): AboutDialog { }
-        if (GlobalAppState.active_dialog == DialogType.project_settings): ProjectSettingsDialog { }
-        if (GlobalAppState.active_dialog == DialogType.classification_confirm_delete): ConfirmDeleteClassDialog { }
-        if (GlobalAppState.active_dialog == DialogType.classification_confirm_auto_add_dialog): ConfirmAutoAddClassesDialog { }
-        if (GlobalAppState.active_dialog == DialogType.classification-edit-class-dialog): ClassEditDialog { }
-        if (GlobalAppState.active_dialog == DialogType.object-confirm-delete): ConfirmDeleteObjectDialog { }
-        if (GlobalAppState.active_dialog == DialogType.command-selection-dialog): CommandSelectionDialog {
+        Rectangle {
             width: 100%;
             height: 100%;
-            commands: CommandPickerState.all-commands;
-            target-pipeline: CommandPickerState.target-pipeline;
-            insert-after-idx: CommandPickerState.insert-after-idx;
-            total-steps: CommandPickerState.total-steps;
-            shown-preprocess: CommandPickerState.shown-preprocess;
-            shown-segment: CommandPickerState.shown-segment;
-            shown-object: CommandPickerState.shown-object;
-            shown-classify: CommandPickerState.shown-classify;
-            shown-measure: CommandPickerState.shown-measure;
-            shown-templates: CommandPickerState.shown-templates;
-            detail: CommandPickerState.detail;
-            has-detail: CommandPickerState.has-detail;
-            total-shown: CommandPickerState.total-shown;
-            cat-count-pre: CommandPickerState.cat-count-pre;
-            cat-count-seg: CommandPickerState.cat-count-seg;
-            cat-count-obj: CommandPickerState.cat-count-obj;
-            cat-count-cls: CommandPickerState.cat-count-cls;
-            cat-count-mea: CommandPickerState.cat-count-mea;
-            cat-count-fav: CommandPickerState.cat-count-fav;
-            query <=> CommandPickerState.query;
-            fcat-pre <=> CommandPickerState.fcat-pre;
-            fcat-seg <=> CommandPickerState.fcat-seg;
-            fcat-obj <=> CommandPickerState.fcat-obj;
-            fcat-mea <=> CommandPickerState.fcat-mea;
-            fcat-cls <=> CommandPickerState.fcat-cls;
-            filter-favorites <=> CommandPickerState.filter-favorites;
-            selected-id <=> CommandPickerState.selected-id;
-            query-changed(t) => {
-                CommandPickerState.query-changed(t);
+            if (GlobalAppState.active_dialog == DialogType.missing_images): ImageMissingDialog { }
+            if (GlobalAppState.active_dialog == DialogType.about): AboutDialog { }
+            if (GlobalAppState.active_dialog == DialogType.shortcuts_help): ShortcutsHelpDialog { }
+            if (GlobalAppState.active_dialog == DialogType.project_settings): ProjectSettingsDialog { }
+            if (GlobalAppState.active_dialog == DialogType.classification_confirm_delete): ConfirmDeleteClassDialog { }
+            if (GlobalAppState.active_dialog == DialogType.classification_confirm_auto_add_dialog): ConfirmAutoAddClassesDialog { }
+            if (GlobalAppState.active_dialog == DialogType.classification-edit-class-dialog): ClassEditDialog { }
+            if (GlobalAppState.active_dialog == DialogType.object-confirm-delete): ConfirmDeleteObjectDialog { }
+            if (GlobalAppState.active_dialog == DialogType.command-selection-dialog): CommandSelectionDialog {
+                width: 100%;
+                height: 100%;
+                commands: CommandPickerState.all-commands;
+                target-pipeline: CommandPickerState.target-pipeline;
+                insert-after-idx: CommandPickerState.insert-after-idx;
+                total-steps: CommandPickerState.total-steps;
+                shown-preprocess: CommandPickerState.shown-preprocess;
+                shown-segment: CommandPickerState.shown-segment;
+                shown-object: CommandPickerState.shown-object;
+                shown-classify: CommandPickerState.shown-classify;
+                shown-measure: CommandPickerState.shown-measure;
+                shown-templates: CommandPickerState.shown-templates;
+                detail: CommandPickerState.detail;
+                has-detail: CommandPickerState.has-detail;
+                total-shown: CommandPickerState.total-shown;
+                cat-count-pre: CommandPickerState.cat-count-pre;
+                cat-count-seg: CommandPickerState.cat-count-seg;
+                cat-count-obj: CommandPickerState.cat-count-obj;
+                cat-count-cls: CommandPickerState.cat-count-cls;
+                cat-count-mea: CommandPickerState.cat-count-mea;
+                cat-count-fav: CommandPickerState.cat-count-fav;
+                query <=> CommandPickerState.query;
+                fcat-pre <=> CommandPickerState.fcat-pre;
+                fcat-seg <=> CommandPickerState.fcat-seg;
+                fcat-obj <=> CommandPickerState.fcat-obj;
+                fcat-mea <=> CommandPickerState.fcat-mea;
+                fcat-cls <=> CommandPickerState.fcat-cls;
+                filter-favorites <=> CommandPickerState.filter-favorites;
+                selected-id <=> CommandPickerState.selected-id;
+                query-changed(t) => {
+                    CommandPickerState.query-changed(t);
+                }
+                select(id) => {
+                    CommandPickerState.select(id);
+                }
+                confirm(id) => {
+                    CommandPickerState.confirm(id);
+                }
+                cancel => {
+                    CommandPickerState.cancel();
+                }
+                import-bioimageio => {
+                    CommandPickerState.import-bioimageio();
+                }
             }
-            select(id) => {
-                CommandPickerState.select(id);
+            if (GlobalAppState.active_dialog == DialogType.pipeline-edit): PipelineEditDialog {
+                width: 100%;
+                height: 100%;
             }
-            confirm(id) => {
-                CommandPickerState.confirm(id);
+            if (GlobalAppState.active_dialog == DialogType.pipeline-delete-confirm): PipelineDeleteConfirmDialog {
+                width: 100%;
+                height: 100%;
             }
-            cancel => {
-                CommandPickerState.cancel();
+            if (GlobalAppState.active_dialog == DialogType.pipeline-running): PipelineRunningDialog {
+                width: 100%;
+                height: 100%;
             }
-            import-bioimageio => {
-                CommandPickerState.import-bioimageio();
+            if (GlobalAppState.active_dialog == DialogType.warning): WarningDialog {
+                width: 100%;
+                height: 100%;
             }
-        }
-        if (GlobalAppState.active_dialog == DialogType.pipeline-edit): PipelineEditDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.pipeline-delete-confirm): PipelineDeleteConfirmDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.pipeline-running): PipelineRunningDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.warning): WarningDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.template-meta): TemplateMetaDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.project-template): ProjectTemplateDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.unsaved-changes-confirm): UnsavedChangesDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.run-analysis-confirm): RunAnalysisDialog {
-            width: 100%;
-            height: 100%;
-        }
-        if (GlobalAppState.active_dialog == DialogType.ai-learning): AiLearningDialog {
-            width: 100%;
-            height: 100%;
+            if (GlobalAppState.active_dialog == DialogType.template-meta): TemplateMetaDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.project-template): ProjectTemplateDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.unsaved-changes-confirm): UnsavedChangesDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.run-analysis-confirm): RunAnalysisDialog {
+                width: 100%;
+                height: 100%;
+            }
+            if (GlobalAppState.active_dialog == DialogType.ai-learning): AiLearningDialog {
+                width: 100%;
+                height: 100%;
+            }
         }
     }
 }

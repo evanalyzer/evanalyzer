@@ -20,7 +20,8 @@ export enum DialogType {
     project_template,
     unsaved_changes_confirm,
     run_analysis_confirm,
-    ai_learning }
+    ai_learning,
+    shortcuts_help }
 
 
 export global GlobalAppState {
@@ -30,6 +31,16 @@ export global GlobalAppState {
         in-out property <int> sidebar_right_active_tab: 0;
 
         in-out property <DialogType> active_dialog: DialogType.none;
+
+        // Incremented by the viewport's TouchArea on pointer-up (see
+        // viewport.slint) - a mouse-drag gesture (panning, drawing) can
+        // leave Slint's own internal focus tracking stuck on that
+        // TouchArea instead of bubbling back to the main `GlobalShortcuts`
+        // FocusScope (see shortcuts.slint), silently swallowing every
+        // keyboard shortcut afterwards even though nothing looks wrong.
+        // `GlobalShortcuts` mirrors this counter and calls `self.focus()`
+        // whenever it changes, forcing focus back to a known-good place.
+        in-out property <int> reclaim_focus_requested: 0;
     }
 
 // One distinct license text used by one or more third-party crates (grouped

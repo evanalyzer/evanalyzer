@@ -28,6 +28,13 @@ export global ImagesListState {
     callback open_images_folder_clicked();
     callback refresh_images_clicked();
     callback image_selected(string);
+    // Incremented (never read for its value) by the Ctrl+F global shortcut
+    // (see shortcuts.slint) to move keyboard focus into the search field
+    // below. A counter rather than a bool: `changed` below only fires on an
+    // actual value change, and a plain bool would miss every second request
+    // once it's already `true`. Handled directly in this file, not Rust -
+    // it's pure UI focus, nothing to persist.
+    in-out property <int> focus_search_requested: 0;
     callback image_filter_text_changed(string);
 
     in-out property <int> selected_image_index: -1;
@@ -157,6 +164,13 @@ component ImageListRow inherits Rectangle {
 
 // ----------------------------------------------------------
 export component ImagesListPanel inherits Rectangle {
+    // Mirror the global so a change requested from outside (Ctrl+F, see
+    // shortcuts.slint) can be observed here - see the identical pattern for
+    // `scroll_index` further down.
+    property <int> focus_search_mirror: ImagesListState.focus_search_requested;
+    changed focus_search_mirror => {
+        search-input.focus();
+    }
 
     VerticalBox {
         spacing: 12px;
@@ -185,7 +199,7 @@ export component ImagesListPanel inherits Rectangle {
         // ----- SEARCH + REFRESH -----
         HorizontalLayout {
             spacing: 6px;
-            LineEdit {
+            search-input := LineEdit {
                 placeholder-text: "Search files…";
                 height: 32px;
                 horizontal-stretch: 1;

@@ -146,8 +146,8 @@ export component CustomMenuBar inherits Rectangle {
 
         // --- MENU: EXPORT ---
         export-item := Rectangle {
-            width: file-text.preferred-width + 16px;
-            background: file-touch.has-hover ? Theme.hover : transparent;
+            width: export-text.preferred-width + 16px;
+            background: export-touch.has-hover ? Theme.hover : transparent;
             border-radius: 3px;
             export-text := Text {
                 text: "Export";
@@ -210,10 +210,17 @@ export component CustomMenuBar inherits Rectangle {
 
                     MenuItem {
                         text: "evanalyzer.org";
-                        icon: @image-url("icons/regular-blue/question-mark.svg");
-                        icon-colorize: #4F71BF;
+                        icon: @image-url("icons/regular-black/question-mark.svg");
                         clicked => {
                             ToolbarState.open_website();
+                            help-menu.close();
+                        }
+                    }
+
+                    MenuItem {
+                        text: "Shortcuts";
+                        clicked => {
+                            GlobalAppState.active-dialog = DialogType.shortcuts-help;
                             help-menu.close();
                         }
                     }

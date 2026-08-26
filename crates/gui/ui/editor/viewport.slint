@@ -382,6 +382,14 @@ export component Viewport inherits Rectangle {
                     ViewportState.report_mouse_moved(self.mouse-x, self.mouse-y);
                 }
             }
+            if (evt.kind == PointerEventKind.up) {
+                // See the doc comment on `GlobalAppState.reclaim_focus_requested`:
+                // a drag gesture (panning with the Move tool, drawing a
+                // shape) can leave keyboard focus stuck on this TouchArea
+                // instead of back on the app's main FocusScope, silently
+                // swallowing every keyboard shortcut afterwards.
+                GlobalAppState.reclaim_focus_requested += 1;
+            }
         }
 
         moved => {
