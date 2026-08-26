@@ -1,0 +1,144 @@
+import { ScrollView } from "std-widgets.slint";
+import { GlobalAppState, DialogType } from "../state.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+import { ShortcutsDoc } from "../shortcuts.slint";
+
+component ShortcutRow inherits Rectangle {
+    in property <string> combo;
+    in property <string> label;
+
+    height: 30px;
+
+    HorizontalLayout {
+        alignment: space-between;
+        padding-right: 4px;
+
+        Text {
+            text: root.label;
+            font-size: 12.5px;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            background: Theme.raised;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            border-radius: 5px;
+            width: combo-text.preferred-width + 16px;
+
+            combo-text := Text {
+                text: root.combo;
+                font-size: 11px;
+                font-family: Theme.font-mono;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component ShortcutsHelpDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    // Click outside = close, same as the pipeline-edit dialog - this is a
+    // pure reference view with nothing to confirm/discard.
+    TouchArea {
+        clicked => {
+            GlobalAppState.active_dialog = DialogType.none;
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 460px;
+        height: 560px;
+        background: Theme.panel;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-blur: 48px;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-offset-y: 16px;
+        clip: true;
+
+        // Eat clicks inside so the scrim behind doesn't fire.
+        TouchArea { }
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: "Keyboard Shortcuts";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 4px;
+                    background: close-ta.has-hover ? Theme.raised : transparent;
+                    animate background { duration: 80ms; }
+                    Text {
+                        text: "✕";
+                        font-size: 12px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            GlobalAppState.active_dialog = DialogType.none;
+                        }
+                    }
+                }
+            }
+
+            ScrollView {
+                VerticalLayout {
+                    spacing: 18px;
+
+                    for section in ShortcutsDoc.sections: VerticalLayout {
+                        spacing: 2px;
+
+                        Text {
+                            text: section.title;
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: Theme.text-mute;
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.border-soft;
+                        }
+
+                        for row in section.rows: ShortcutRow {
+                            combo: row.combo;
+                            label: row.label;
+                        }
+                    }
+                }
+            }
+
+            AppButton {
+                text: "Close";
+                primary: true;
+                clicked => {
+                    GlobalAppState.active_dialog = DialogType.none;
+                }
+            }
+        }
+    }
+}

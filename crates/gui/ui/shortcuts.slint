@@ -1,0 +1,340 @@
+// -- Keyboard shortcuts ----------------------------------------
+//
+// Every keyboard shortcut in the application lives in this one file, split
+// into the two contexts a shortcut can fire in:
+//
+// - `GlobalShortcuts` - the main editing surface. Wraps the whole app body
+//   in `main.slint` (same technique that file's own comment already
+//   documented: wrapping the content, rather than adding a sibling
+//   `FocusScope`, makes this an ancestor of every focusable widget inside
+//   it, so an unhandled key press bubbles up here instead of only firing
+//   when nothing has focus). Gated on no dialog being open.
+// - `DialogShortcuts` - wraps the "Overlay Manager" in `main.slint` (the
+//   `if active_dialog == ...` switch that renders whichever dialog is
+//   currently open). Handles Escape-closes-the-open-dialog centrally, so
+//   each of the ~17 dialog files doesn't need its own copy of that logic.
+//
+// Adding a shortcut: find the right component below and add another
+// `if (...) { ...; return accept; }` branch, following the existing ones,
+// AND add a matching row to `ShortcutsDoc` further down - that table drives
+// the "Keyboard Shortcuts" help dialog (F1 / Help menu,
+// dialogs/shortcuts_help_dialog.slint) and isn't generated from the
+// `key-pressed` handlers above (Slint callbacks aren't values, so there's no
+// way to enumerate "every branch below" automatically) - it only stays
+// accurate if every new shortcut updates both places.
+
+import { GlobalAppState, DialogType, UnsavedChangesState } from "state.slint";
+import { ToolbarState } from "toolbar.slint";
+import { ToolState, ViewportObjectState } from "editor/viewport_state.slint";
+import { ImagesListState } from "editor/images_list_panel.slint";
+import { ObjectListState } from "editor/object_list_panel.slint";
+import { PipelinesPanelState } from "editor/pipelines_panel.slint";
+import {
+    PipelineEditState,
+    PipelineDeleteConfirmState,
+} from "dialogs/pipeline_edit_dialog.slint";
+import { TemplateMetaState } from "dialogs/template_meta_dialog.slint";
+import { RunAnalysisState } from "dialogs/run_analysis_dialog.slint";
+import { AiLearningState } from "dialogs/ai_learning_dialog.slint";
+import { ProjectSettingsState } from "dialogs/project_settings_dialog.slint";
+import {
+    ClassificationSettingsState,
+} from "dialogs/classification_class_edit_dialog.slint";
+import { CommandPickerState } from "dialogs/command_selection_dialog.slint";
+import { ProjectTemplateState } from "dialogs/project_template_dialog.slint";
+
+export component GlobalShortcuts inherits FocusScope {
+    // Ctrl+F both switches to the Images tab and focuses its search field.
+    // Doing the focus part in the very same key-press as the tab switch is
+    // unreliable: switching tabs mounts `ImagesListPanel` fresh, and its
+    // `changed focus_search_mirror` handler only fires on a value
+    // *transition* it observes after that binding already exists - not on
+    // the value the binding happens to capture at its very first
+    // evaluation. A 1ms timer pushes the increment to the next tick, after
+    // the panel has definitely finished mounting, so the change is real.
+    focus-search-timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            ImagesListState.focus_search_requested += 1;
+        }
+    }
+
+    // See the doc comment on `GlobalAppState.reclaim_focus_requested`
+    // (state.slint) - a viewport drag can strand keyboard focus away from
+    // this FocusScope with nothing left to bubble a key press back to it.
+    // Mirrored + `changed`, not a direct binding: this needs to run every
+    // time the counter changes, not just react to its current value.
+    property <int> reclaim-focus-mirror: GlobalAppState.reclaim_focus_requested;
+    changed reclaim-focus-mirror => {
+        self.focus();
+    }
+
+    key-pressed(e) => {
+        if (GlobalAppState.active_dialog != DialogType.none) {
+            return reject;
+        }
+
+        // -- File --
+        if (e.modifiers.control && e.text == "s") {
+            if (e.modifiers.shift) {
+                ToolbarState.save_as_file_clicked();
+            } else {
+                ToolbarState.save_file_clicked();
+            }
+            return accept;
+        }
+        if (e.modifiers.control && e.text == "o") {
+            ToolbarState.open_file_clicked();
+            return accept;
+        }
+
+        // -- Edit --
+        if (e.modifiers.control && (e.text == "z" || e.text == "y")) {
+            if (e.text == "y" || e.modifiers.shift) {
+                ToolbarState.redo_clicked();
+            } else {
+                ToolbarState.undo_clicked();
+            }
+            return accept;
+        }
+
+        // Delete the selected object/ROI - mirrors the trash-can button in
+        // the object list panel's footer toolbar (same guard: nothing
+        // selected = no-op), which opens the same confirm dialog rather
+        // than deleting immediately.
+        if (e.text == Key.Delete && ObjectListState.selected_object.id != 0) {
+            GlobalAppState.active_dialog = DialogType.object_confirm_delete;
+            return accept;
+        }
+
+        // Re-run the pipeline preview once (the toolbar's "eye" button /
+        // PipelinesPanel's "Preview" tap - a single dry-run, distinct from
+        // toggling Auto Preview on/off).
+        if (e.text == Key.F5) {
+            PipelinesPanelState.dry-run();
+            return accept;
+        }
+
+        // -- Canvas tool modes -- first-letter mnemonics, no modifier
+        // (guarded explicitly, not just by branch ordering, so this stays
+        // correct regardless of what's above) so they're reachable
+        // one-handed while the other hand is on the mouse. Deliberately not
+        // digits: 1-4 would silently mean two unrelated things depending on
+        // whether Ctrl was actually registered as held (a missed modifier,
+        // a remote-desktop client eating Ctrl+digit, etc.) since Ctrl+1..4
+        // already means "switch sidebar tab" below - letters share no keys
+        // with that at all. K (not M) for PaintMarker since M is already
+        // Move; every other letter is the tool's own first letter.
+        if (!e.modifiers.control && (e.text == "m" || e.text == Key.Escape)) {
+            ViewportObjectState.act_tool_state = ToolState.Move;
+            return accept;
+        }
+        if (!e.modifiers.control && e.text == "s") {
+            ViewportObjectState.act_tool_state = ToolState.Select;
+            return accept;
+        }
+        if (!e.modifiers.control && e.text == "k") {
+            ViewportObjectState.act_tool_state = ToolState.PaintMarker;
+            return accept;
+        }
+        if (!e.modifiers.control && e.text == "r") {
+            ViewportObjectState.act_tool_state = ToolState.PaintRectangle;
+            return accept;
+        }
+        if (!e.modifiers.control && e.text == "o") {
+            ViewportObjectState.act_tool_state = ToolState.PaintOval;
+            return accept;
+        }
+        if (!e.modifiers.control && e.text == "p") {
+            ViewportObjectState.act_tool_state = ToolState.PaintPolygon;
+            return accept;
+        }
+        if (!e.modifiers.control && e.text == "#") {
+            ViewportObjectState.show_objects = !ViewportObjectState.show_objects;
+            return accept;
+        }
+
+        // -- Left sidebar tabs -- Ctrl+1..4, the same convention browsers
+        // use for switching between a fixed row of tabs.
+        if (e.modifiers.control && e.text == "1") {
+            GlobalAppState.sidebar_left_active_tab = 0; // Images
+            return accept;
+        }
+        if (e.modifiers.control && e.text == "2") {
+            GlobalAppState.sidebar_left_active_tab = 1; // Meta
+            return accept;
+        }
+        if (e.modifiers.control && e.text == "3") {
+            GlobalAppState.sidebar_left_active_tab = 2; // Pipelines
+            return accept;
+        }
+        if (e.modifiers.control && e.text == "4") {
+            GlobalAppState.sidebar_left_active_tab = 3; // Results
+            return accept;
+        }
+
+        // Jump to the image search field, switching to the Images tab
+        // first if it isn't already showing (otherwise the field the
+        // counter below is meant to focus isn't even mounted yet).
+        if (e.modifiers.control && e.text == "f") {
+            GlobalAppState.sidebar_left_active_tab = 0;
+            focus-search-timer.running = true;
+            return accept;
+        }
+
+        // -- Help --
+        if (e.text == Key.F1) {
+            GlobalAppState.active_dialog = DialogType.shortcuts_help;
+            return accept;
+        }
+        return reject;
+    }
+}
+
+export component DialogShortcuts inherits FocusScope {
+    // The wrapping `if (active_dialog != none): DialogShortcuts { ... }` in
+    // main.slint means a fresh instance is created every time a dialog
+    // opens - grab focus right away so Escape actually reaches `key-pressed`
+    // below instead of whatever held focus on the main editing surface
+    // before the dialog opened.
+    //
+    // command_selection_dialog.slint and project_template_dialog.slint each
+    // have their own internal `kbd := FocusScope` with the same Escape logic
+    // - but nothing ever actually calls `.focus()` on it (`forward-focus`
+    // only sets the *initial* target when a window is first created, it
+    // doesn't reach in and grab focus for a component instantiated later),
+    // so it has never actually fired; verified by testing Escape on
+    // command_selection_dialog against an unmodified checkout. Grabbing
+    // focus here fixes that as a side effect - clicking any field inside the
+    // dialog (e.g. its search box) still works normally afterwards, since a
+    // real click always transfers Slint's internal focus regardless of what
+    // held it before.
+    init => {
+        self.focus();
+    }
+
+    key-pressed(e) => {
+        if (e.text != Key.Escape) {
+            return reject;
+        }
+
+        // These represent an in-progress background job (analysis running /
+        // preview rendering) - deliberately NOT wired to Escape. Their
+        // `cancel()` callback only requests cancellation, it doesn't close
+        // the dialog (closing happens once the job actually finishes), so a
+        // reflexive Escape here would look like it did nothing while
+        // silently killing a possibly multi-minute run. Use the dialog's
+        // own Cancel button, which makes that distinction visible.
+        if (GlobalAppState.active_dialog == DialogType.pipeline_running
+            || GlobalAppState.active_dialog == DialogType.preview_rendering) {
+            return reject;
+        }
+        if (GlobalAppState.active_dialog == DialogType.command_selection_dialog) {
+            CommandPickerState.cancel();
+        } else if (GlobalAppState.active_dialog == DialogType.project_template) {
+            ProjectTemplateState.cancel();
+        } else if (GlobalAppState.active_dialog == DialogType.project_settings) {
+            ProjectSettingsState.project_settings_canceled();
+        } else if (GlobalAppState.active_dialog == DialogType.classification_edit_class_dialog) {
+            ClassificationSettingsState.reset_to_zero();
+        } else if (GlobalAppState.active_dialog == DialogType.pipeline_edit) {
+            PipelineEditState.cancel();
+        } else if (GlobalAppState.active_dialog == DialogType.pipeline_delete_confirm) {
+            PipelineDeleteConfirmState.cancel();
+        } else if (GlobalAppState.active_dialog == DialogType.template_meta) {
+            TemplateMetaState.cancel();
+        } else if (GlobalAppState.active_dialog == DialogType.unsaved_changes_confirm) {
+            UnsavedChangesState.cancel();
+        } else if (GlobalAppState.active_dialog == DialogType.run_analysis_confirm) {
+            RunAnalysisState.cancel();
+        } else if (GlobalAppState.active_dialog == DialogType.ai_learning) {
+            AiLearningState.cancel_clicked();
+        } else if (GlobalAppState.active_dialog == DialogType.none) {
+            return reject;
+        }
+        // Every remaining dialog type (about, missing_images,
+        // classification_confirm_delete, classification_confirm_auto_add_dialog,
+        // object_confirm_delete, warning) closes with no other side effect
+        // needed - same as their own Cancel/Close/OK button.
+
+        // Always explicit, even for the callbacks above whose own Rust
+        // handler already closes the dialog itself - redundant in that case,
+        // but harmless, and it means this one line is correct regardless of
+        // what a given callback does or doesn't do on its own.
+        GlobalAppState.active_dialog = DialogType.none;
+        return accept;
+    }
+}
+
+// -- Shortcuts reference (for the help dialog) -----------------
+//
+// Plain descriptive data, not wired to anything above - see the note at the
+// top of this file on keeping the two in sync by hand.
+
+export struct ShortcutRow {
+    combo: string,
+    label: string,
+}
+
+export struct ShortcutSection {
+    title: string,
+    rows: [ShortcutRow],
+}
+
+export global ShortcutsDoc {
+    out property <[ShortcutSection]> sections: [
+        {
+            title: "File",
+            rows: [
+                { combo: "Ctrl+S", label: "Save" },
+                { combo: "Ctrl+Shift+S", label: "Save As" },
+                { combo: "Ctrl+O", label: "Open" },
+            ],
+        },
+        {
+            title: "Edit",
+            rows: [
+                { combo: "Ctrl+Z", label: "Undo" },
+                { combo: "Ctrl+Y / Ctrl+Shift+Z", label: "Redo" },
+                { combo: "Delete", label: "Delete the selected object/ROI" },
+            ],
+        },
+        {
+            title: "Pipeline",
+            rows: [
+                { combo: "F5", label: "Refresh the preview" },
+            ],
+        },
+        {
+            title: "Canvas tools",
+            rows: [
+                { combo: "M/Escape", label: "Move" },
+                { combo: "S", label: "Select" },
+                { combo: "K", label: "Paint marker" },
+                { combo: "R", label: "Paint rectangle" },
+                { combo: "O", label: "Paint oval" },
+                { combo: "P", label: "Paint polygon" },
+                { combo: "#", label: "Show/Hide objects" },
+            ],
+        },
+        {
+            title: "Navigation",
+            rows: [
+                { combo: "Ctrl+1", label: "Images tab" },
+                { combo: "Ctrl+2", label: "Meta tab" },
+                { combo: "Ctrl+3", label: "Pipelines tab" },
+                { combo: "Ctrl+4", label: "Results tab" },
+                { combo: "Ctrl+F", label: "Jump to the image search field" },
+            ],
+        },
+        {
+            title: "Dialogs",
+            rows: [
+                { combo: "Escape", label: "Close the open dialog" },
+                { combo: "F1", label: "Show this help" },
+            ],
+        },
+    ];
+}

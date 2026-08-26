@@ -18,7 +18,7 @@
 
 **A high-performance bioimage analysis desktop application written in Rust.**
 
-EVAnalyzer is the Rust reimplementation of [ImageC](https://github.com/imagec) and the successor of the [EVAnalyzer ImageJ plugin](https://github.com/evanalyzer/evanalyzer-ij), combining a high-performance image viewer with a configurable analysis pipeline for fluorescence microscopy and high-content screening data.
+EVAnalyzer is the Rust reimplementation of [ImageC](https://github.com/joda01/imagec) and the successor of the [EVAnalyzer ImageJ plugin](https://github.com/evanalyzer/evanalyzer-ij), combining a high-performance image viewer with a configurable analysis pipeline for fluorescence microscopy and high-content screening data.
 
 ![Screenshot](docs/screenshot.png)
 
