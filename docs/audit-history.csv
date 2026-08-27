@@ -32,3 +32,6 @@ date,commit,kind,crate,version,advisory_id,cve,cvss_vector,title
 2026-08-24T18:53:53Z,7218779c,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0194,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Quadratic run time when checking a start tag for duplicate attribute names
 2026-08-24T18:53:53Z,7218779c,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0195,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
 2026-08-24T18:53:53Z,7218779c,unsound,lru,0.16.4,RUSTSEC-2026-0253,,,Potential use-after-free due to lack of panic safety in `LruCache::pop()`
+2026-08-26T19:08:08Z,c892615f,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0194,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Quadratic run time when checking a start tag for duplicate attribute names
+2026-08-26T19:08:08Z,c892615f,vulnerability,quick-xml,0.40.1,RUSTSEC-2026-0195,,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H,Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service
+2026-08-26T19:08:08Z,c892615f,unsound,lru,0.16.4,RUSTSEC-2026-0253,,,Potential use-after-free due to lack of panic safety in `LruCache::pop()`
