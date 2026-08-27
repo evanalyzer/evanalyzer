@@ -1215,12 +1215,8 @@ impl PipelinesController {
         // the debounce and tries again once the user isn't mid-dialog.
         if let Some(ui) = self.app_state.ui_handle.upgrade() {
             let active_dialog = ui.global::<GlobalAppState>().get_active_dialog();
-            if active_dialog != DialogType::None && active_dialog != DialogType::PreviewRendering
-            {
-                debug!(
-                    "Skipping auto preview - {:?} dialog is open",
-                    active_dialog
-                );
+            if active_dialog != DialogType::None && active_dialog != DialogType::PreviewRendering {
+                debug!("Skipping auto preview - {:?} dialog is open", active_dialog);
                 return;
             }
         }
