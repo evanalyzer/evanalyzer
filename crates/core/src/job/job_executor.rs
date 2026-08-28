@@ -25,7 +25,7 @@ use kornia_image::ImageSize;
 use log::{info, warn};
 use rayon::prelude::*;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     ops::RangeInclusive,
     path::PathBuf,
     sync::{
@@ -1208,7 +1208,7 @@ impl<'a> JobExecutor {
                 image_meta: image_meta,
                 images: image_cache_map,
             },
-            object_cache: BTreeMap::new(),
+            object_cache: Default::default(),
             image_rel_path: image_rel_path.clone(),
         })
     }
@@ -2615,7 +2615,7 @@ mod tile_merge_end_to_end_tests {
                 },
                 images,
             },
-            object_cache: BTreeMap::new(),
+            object_cache: Default::default(),
             image_rel_path: PathBuf::new(),
         }
     }
@@ -2792,6 +2792,7 @@ mod estimate_ram_per_worker_bytes_tests {
     use super::*;
     use crate::storage::memory::MemoryExporter;
     use evanalyzer_cfg::settings::images_settings::{ChannelSettings, SeriesSettings};
+    use std::collections::BTreeMap;
 
     fn image_entry(width: u64, height: u64, channel_count: usize) -> ImageEntry {
         let channels = (0..channel_count as i32)

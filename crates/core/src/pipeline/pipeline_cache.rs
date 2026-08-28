@@ -1,13 +1,12 @@
-use crate::{image::ImageContainer, object::Object, pipeline::pipeline::PipelineImageMeta};
-use evanalyzer_cfg::core_types::{ImageAddress, MemoryId, ObjectId};
+use crate::{
+    image::ImageContainer,
+    pipeline::{object_cache::ObjectCache, pipeline::PipelineImageMeta},
+};
+use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use kornia_apriltag::utils::Point2d;
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
-use std::{
-    collections::{BTreeMap, HashMap},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 /// This is a map which stores an image to the RAM.
 /// The image can be addressed either by Image plane or a memory ID
@@ -169,7 +168,7 @@ pub fn sample_channel_pixel(is_rgb: bool, slice: &[f32], sample: usize) -> f32 {
 #[derive(Default)]
 pub struct PipelineCache {
     pub image_cache: ImageCache,
-    pub object_cache: BTreeMap<ObjectId, Object>,
+    pub object_cache: ObjectCache,
     pub image_rel_path: PathBuf,
 }
 
