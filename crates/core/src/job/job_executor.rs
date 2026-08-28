@@ -1,10 +1,10 @@
-use super::object_scratch;
-use super::tile_merge::{PendingFragment, merge_pending_fragments, touches_tile_edge};
 use crate::{
-    ImageInfo, Object, ZProjection,
+    ImageInfo, ZProjection,
+    algos::{Connectivity, TileMerge},
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
     pipeline::{
-        pipeline::{Pipeline, PipelineImageMeta},
+        object_cache::ObjectCache,
+        pipeline::{CorePipelineSettings, Pipeline, PipelineImageMeta},
         pipeline_cache::{ImageCache, ImageMap, PipelineCache},
     },
     resources::{CACHE_QUEUE_DEPTH, MAX_TILE_SIZE},
@@ -134,6 +134,24 @@ pub struct BreakpointSettings {
     pub pipeline_id: PipelineId,
     pub pipeline_step_id: i32,
     pub mode: BreakpointMode,
+}
+
+/// The one place `evanalyzer_cfg::settings::project_settings::TileMergeConnectivity`
+/// (project settings) gets converted into `algos::Connectivity` (the algorithm's
+/// own parameter type) - `TileMerge` itself never references project settings
+/// or `job_executor` at all; this is where that boundary gets crossed, right
+/// where `TileMerge` actually gets constructed below.
+impl From<evanalyzer_cfg::settings::project_settings::TileMergeConnectivity> for Connectivity {
+    fn from(value: evanalyzer_cfg::settings::project_settings::TileMergeConnectivity) -> Self {
+        match value {
+            evanalyzer_cfg::settings::project_settings::TileMergeConnectivity::FourConnected => {
+                Connectivity::FourConnected
+            }
+            evanalyzer_cfg::settings::project_settings::TileMergeConnectivity::EightConnected => {
+                Connectivity::EightConnected
+            }
+        }
+    }
 }
 
 pub struct JobExecutor {
@@ -602,34 +620,16 @@ impl<'a> JobExecutor {
                 .ok();
         }
 
-        // Buffer for objects that touch their own tile's edge (but not the
-        // full image's edge) and don't carry a class in
-        // `tile_merge.classes_to_not_merge` - held back from the normal
-        // per-tile export path and matched/merged once every tile of this
-        // image has finished, see
-        // `docs/tile_merge_plan.md`. `None` when the feature is off, which
-        // must be a complete no-op on the existing per-tile export path -
-        // every `run_tile` invocation below checks this once and does
-        // nothing extra when it's `None`. One buffer per image (not global):
-        // merging is per-image, and `analyze_image` itself is already the
-        // per-image unit of work.
-        let pending: Option<Arc<Mutex<Vec<PendingFragment>>>> = self
-            .tile_merge
-            .enabled
-            .then(|| Arc::new(Mutex::new(Vec::new())));
-
-        // Per-tile object scratch files for the whole-image command phase -
-        // only needed once this image actually has more than one tile; a
-        // single-tile image's one tile already *is* the whole image, so
-        // there's nothing to reconstruct later. Independent of
-        // `tile_merge.enabled`: any `ExecutionScope::WholeImage` command
-        // needs every tile's objects, not just tile-merge specifically.
-        let object_store: Option<object_scratch::TileObjectStore> = if tiles.len() > 1 {
-            Some(object_scratch::TileObjectStore::new()?)
-        } else {
-            None
-        };
-        let next_tile_object_index = Arc::new(AtomicUsize::new(0));
+        // Every object extracted by every tile's `Tile`-scope pipelines,
+        // accumulated in memory across the whole tile loop - as if RAM were
+        // infinite, deliberately, for now. Once every tile has finished,
+        // this becomes the whole-image `PipelineCache.object_cache` that
+        // `TileMerge` (and then every other `ExecutionScope::WholeImage`
+        // command) runs against. Paging this to disk instead of holding it
+        // all in memory is a separate, later step - see
+        // `job::object_scratch`/`job::object_index`, not wired up yet.
+        let accumulated_objects: Arc<Mutex<ObjectCache>> =
+            Arc::new(Mutex::new(ObjectCache::default()));
 
         // Spawn a dedicated DB writer thread so one tile's image loading and
         // pipeline execution can overlap with another tile's DuckDB insert.
@@ -772,58 +772,9 @@ impl<'a> JobExecutor {
                 return Ok(());
             }
 
-            // Persist this tile's complete, just-finished object set to a
-            // scratch file for the later whole-image phase (tile-merge, then
-            // any `ExecutionScope::WholeImage` command) - captured *before*
-            // fragment-splitting below removes any objects from
-            // `cache.object_cache`, so the file always reflects everything
-            // this tile actually produced. A no-op whenever `object_store` is
-            // `None` (single-tile image).
-            if let Some(store) = &object_store {
-                let objects: Vec<Object> = cache.object_cache.values().cloned().collect();
-                let tile_index = next_tile_object_index.fetch_add(1, Ordering::Relaxed);
-                store.write_tile(tile_index, tile.clone(), objects)?;
-            }
-
-            // Split out tile-edge-touching, merge-eligible objects into
-            // `pending` instead of letting them flow through the normal
-            // per-tile export below - they're matched against fragments from
-            // other tiles and (re-)exported once every tile of this image
-            // has finished, see `docs/tile_merge_plan.md`. A no-op whenever
-            // `pending` is `None` (`tile_merge.enabled == false`). Every
-            // class merges by default - `classes_to_not_merge` is an
-            // opt-out deny-list, not an opt-in allow-list, since a user
-            // turning this on has no reason to know about tiles at all and
-            // just expects their objects to be detected correctly.
-            if let Some(pending) = &pending {
-                let fragment_ids: Vec<_> = cache
-                    .object_cache
-                    .iter()
-                    .filter(|(_, object)| {
-                        !object.touches_edge
-                            && touches_tile_edge(object.bbox, &tile)
-                            && !object
-                                .object_class
-                                .iter()
-                                .any(|c| self.tile_merge.classes_to_not_merge.contains(c))
-                    })
-                    .map(|(id, _)| id.clone())
-                    .collect();
-                if !fragment_ids.is_empty() {
-                    let mut buffer = pending.lock().unwrap_or_else(|e| e.into_inner());
-                    for id in fragment_ids {
-                        if let Some(object) = cache.object_cache.remove(&id) {
-                            buffer.push(PendingFragment {
-                                object,
-                                tile: tile.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-
             // Only interactive runs consume per-tile objects (for the
             // TileCompleted event below) - skip the clone/collect otherwise.
+            // Must run before the move below empties `cache.object_cache`.
             let tile_objects: Vec<ObjectMetricSettings> = if sender.is_some() {
                 cache
                     .object_cache
@@ -833,6 +784,20 @@ impl<'a> JobExecutor {
             } else {
                 Vec::new()
             };
+
+            // Move (not copy) this tile's complete, just-finished object set
+            // into the shared whole-image accumulator - as if RAM were
+            // infinite, see `accumulated_objects`'s own doc comment.
+            // `cache.object_cache` is empty after this, so the per-tile
+            // `cache_tx` send below no longer re-exports anything - the
+            // whole-image phase's own export at the end of `analyze_image`
+            // is now the only place objects actually get written.
+            {
+                let mut accumulated = accumulated_objects
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                accumulated.extend(std::mem::take(&mut cache.object_cache));
+            }
 
             match cache_tx.try_send(cache) {
                 Ok(()) => {}
@@ -880,101 +845,132 @@ impl<'a> JobExecutor {
         // processed and its output handed to `exporter` by this point,
         // regardless of which calling context (`progress` above) got us here.
 
-        // Match/merge every tile-edge fragment buffered above (a no-op when
-        // `pending` is `None`) and export the merged objects via a synthetic
-        // whole-image `PipelineCache` - see `docs/tile_merge_plan.md`. Must
-        // run before `finalize_image` below, which the exporter uses as the
-        // "this image is done" signal.
-        let merge_result: Result<(), InternalErrors> = match &pending {
-            Some(pending) => {
-                let fragments =
-                    std::mem::take(&mut *pending.lock().unwrap_or_else(|e| e.into_inner()));
-                if fragments.is_empty() {
-                    Ok(())
-                } else {
-                    merge_pending_fragments(fragments, &self.tile_merge).and_then(|merged| {
-                        if merged.is_empty() {
-                            return Ok(());
-                        }
-                        let mut whole_image_cache = PipelineCache {
-                            image_cache: ImageCache {
-                                image_meta: PipelineImageMeta {
-                                    image_tile_info: ImageTile {
-                                        offset_x: 0,
-                                        offset_y: 0,
-                                        width: full_size.width,
-                                        height: full_size.height,
-                                    },
-                                    full_image_width: full_size,
-                                    is_rgb,
-                                    nr_of_bits: nr_bits,
-                                    pixel_sizes: pixel_sizes.clone(),
+        // Run the whole-image phase (tile-merge, then every other
+        // `ExecutionScope::WholeImage` command) over every object every tile
+        // produced, and export the result via a synthetic whole-image
+        // `PipelineCache`. Must run before `finalize_image` below, which the
+        // exporter uses as the "this image is done" signal.
+        let merge_result: Result<(), InternalErrors> = {
+            let accumulated = std::mem::take(
+                &mut *accumulated_objects.lock().unwrap_or_else(|e| e.into_inner()),
+            );
+            if accumulated.is_empty() {
+                Ok(())
+            } else {
+                // IIFE so `?` below stays contained here - errors here must be
+                // captured as a plain `Result`, not propagate out of
+                // `analyze_image` itself, since `finalize_image` still has to
+                // run afterward regardless (see `combined_error` below).
+                (|| -> Result<(), InternalErrors> {
+                    let mut whole_image_cache = PipelineCache {
+                        image_cache: ImageCache {
+                            image_meta: PipelineImageMeta {
+                                image_tile_info: ImageTile {
+                                    offset_x: 0,
+                                    offset_y: 0,
+                                    width: full_size.width,
+                                    height: full_size.height,
                                 },
-                                images: ImageMap::new(),
+                                full_image_width: full_size,
+                                is_rgb,
+                                nr_of_bits: nr_bits,
+                                pixel_sizes: pixel_sizes.clone(),
                             },
-                            object_cache: merged.into_iter().map(|o| (o.id.clone(), o)).collect(),
-                            image_rel_path: image_rel_path.clone(),
+                            images: ImageMap::new(),
+                        },
+                        object_cache: accumulated,
+                        image_rel_path: image_rel_path.clone(),
+                    };
+
+                    // Tile-merge itself runs first, as an ordinary
+                    // `ExecutionScope::WholeImage` `ImageAlgorithm`
+                    // (`algos::object::tile_merge::TileMerge`) reconciling
+                    // cross-tile fragments into the real merged objects -
+                    // exactly like any other whole-image command, just always
+                    // first and not user-configurable (driven by the
+                    // project-level `self.tile_merge` settings, not a
+                    // pipeline step, so it's run via its own synthetic
+                    // single-command `Pipeline` rather than being inserted
+                    // into a user's own pipeline). Whether to run it at all
+                    // is a decision made *here*, not inside `TileMerge`
+                    // itself - the algorithm has no `enabled` field, only
+                    // the parameters it actually needs to do its job
+                    // (project settings and algo settings stay separate).
+                    if self.tile_merge.enabled {
+                        let mut tile_merge_pipeline = Pipeline::new(
+                            PipelineId(0),
+                            CorePipelineSettings {
+                                start_image: ImageAddress::Scratchpad,
+                            },
+                        );
+                        tile_merge_pipeline.add_command(Box::new(TileMerge {
+                            classes_to_not_merge: self.tile_merge.classes_to_not_merge.clone(),
+                            connectivity: self.tile_merge.connectivity.into(),
+                            max_fragments_per_group: self.tile_merge.max_fragments_per_group,
+                        }));
+                        let result = tile_merge_pipeline.run_whole_image(
+                            self.output_path.clone(),
+                            whole_image_cache,
+                            None,
+                            false,
+                        )?;
+                        whole_image_cache = result.cache;
+                    }
+
+                    // Run every pipeline's whole-image-scoped commands
+                    // (Voronoi, Colocalization, ObjectMath, ClassifyObjects,
+                    // TransformObjects, AiObjectClassifier) exactly once for
+                    // this image, now that tile-merge has reconciled the
+                    // cross-tile object set - never per-tile, see
+                    // `Pipeline::run_whole_image`. `whole_image_cache` holds
+                    // every object the image produced (not just tile-edge
+                    // fragments), so a command like Colocalization now sees
+                    // the complete object set, not a partial one.
+                    for pipe_id in order {
+                        let Some(p) = self.pipelines.get(pipe_id) else {
+                            continue;
                         };
-
-                        // Run every pipeline's whole-image-scoped commands
-                        // (Voronoi, Colocalization, ObjectMath, ClassifyObjects,
-                        // TransformObjects, AiObjectClassifier) exactly once for
-                        // this image, now that tile-merge has reconciled the
-                        // cross-tile object set - never per-tile, see
-                        // `Pipeline::run_whole_image`.
-                        //
-                        // NOTE: `whole_image_cache.object_cache` currently only
-                        // holds tile-merge's *reconciled* objects (fragments
-                        // that touched a tile edge) - objects that never
-                        // touched a tile edge were already exported per-tile
-                        // above and aren't re-collected here. A whole-image
-                        // command that needs the complete object set (e.g.
-                        // Colocalization against a class that never touches a
-                        // tile edge) won't see it yet; closing that gap needs
-                        // per-tile export to stop streaming every object
-                        // immediately and instead accumulate the full image's
-                        // objects for this pass - a separate, larger change
-                        // from wiring up this call.
-                        for pipe_id in order {
-                            let Some(p) = self.pipelines.get(pipe_id) else {
-                                continue;
-                            };
-                            let (bp_step, snapshot_mode) = self
-                                .breakpoint
-                                .as_ref()
-                                .filter(|b| b.pipeline_id == *pipe_id)
-                                .map(|b| {
-                                    (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot)
-                                })
-                                .unwrap_or((None, false));
-                            let result = p.run_whole_image(
-                                self.output_path.clone(),
-                                whole_image_cache,
-                                bp_step,
-                                snapshot_mode,
-                            )?;
-                            whole_image_cache = result.cache;
-                            if result.breakpoint_hit {
-                                // Breakpoints on whole-image-scoped steps aren't
-                                // wired into the interactive per-tile preview UI
-                                // yet - stop here rather than silently running
-                                // past it and exporting an incomplete result.
-                                info!(
-                                    "Whole-image breakpoint hit for pipeline {} on image {:?}",
-                                    pipe_id, image_rel_path
-                                );
-                                break;
-                            }
+                        // `run_commands` always needs a valid starting image,
+                        // even for zero commands - and the synthetic
+                        // `whole_image_cache` built above has no real pixel
+                        // data (`images` is empty, only `Scratchpad` resolves
+                        // against it). Skip pipelines with nothing to do here
+                        // rather than failing on that unrelated precondition.
+                        if p.whole_image_commands.is_empty() {
+                            continue;
                         }
+                        let (bp_step, snapshot_mode) = self
+                            .breakpoint
+                            .as_ref()
+                            .filter(|b| b.pipeline_id == *pipe_id)
+                            .map(|b| (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot))
+                            .unwrap_or((None, false));
+                        let result = p.run_whole_image(
+                            self.output_path.clone(),
+                            whole_image_cache,
+                            bp_step,
+                            snapshot_mode,
+                        )?;
+                        whole_image_cache = result.cache;
+                        if result.breakpoint_hit {
+                            // Breakpoints on whole-image-scoped steps aren't
+                            // wired into the interactive per-tile preview UI
+                            // yet - stop here rather than silently running
+                            // past it and exporting an incomplete result.
+                            info!(
+                                "Whole-image breakpoint hit for pipeline {} on image {:?}",
+                                pipe_id, image_rel_path
+                            );
+                            break;
+                        }
+                    }
 
-                        exporter
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .export(&whole_image_cache)
-                    })
-                }
+                    exporter
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .export(&whole_image_cache)
+                })()
             }
-            None => Ok(()),
         };
 
         // Record the image was processed even if it produced zero objects -
@@ -2268,9 +2264,23 @@ mod full_run_integration_tests {
                 .any(|e| matches!(e, ProgressEvent::ImageFailed { .. })),
             "no image should have failed"
         );
+        let exported = out_objects.lock().unwrap();
         assert!(
-            !out_objects.lock().unwrap().is_empty(),
+            !exported.is_empty(),
             "thresholding the whole 8-bit range should extract at least one object"
+        );
+        // Regression guard: each tile's objects used to be exported
+        // immediately *and* re-exported again via the whole-image cache
+        // after the whole-image phase - every object doubled, and anything
+        // `TileMerge` actually merged left its stale pre-merge fragments
+        // behind too. There must be exactly one exported row per id now.
+        let unique_ids: std::collections::HashSet<_> =
+            exported.iter().map(|o| o.id.clone()).collect();
+        assert_eq!(
+            unique_ids.len(),
+            exported.len(),
+            "every exported object id must appear exactly once, not be duplicated \
+             across the per-tile and whole-image export paths"
         );
     }
 
@@ -2530,9 +2540,11 @@ mod full_run_integration_tests {
 mod tile_merge_end_to_end_tests {
     use super::*;
     use crate::ImagePlane;
+    use crate::Object;
+    use crate::algos::touches_tile_edge;
     use crate::algos::{
-        ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod,
-        ThresholdValueSource,
+        Connectivity, ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry,
+        ThresholdMethod, ThresholdValueSource,
     };
     use crate::image::{ImageContainer, ManagedImage};
     use crate::pipeline::pipeline::CorePipelineSettings;
@@ -2628,14 +2640,16 @@ mod tile_merge_end_to_end_tests {
     }
 
     /// Splits every tile-edge-touching, merge-eligible object out of `cache`
-    /// into `PendingFragment`s - the same filter `analyze_image`'s tile loop
-    /// applies before `cache_tx.try_send`. Every class merges unless it's on
-    /// `classes_to_not_merge`.
+    /// - the same filter `analyze_image`'s tile loop applies before
+    /// `cache_tx.try_send`. Every class merges unless it's on
+    /// `classes_to_not_merge`. Each `Object` already carries its own
+    /// `source_tile` (set by `ExtractObjects`), so unlike the old
+    /// `PendingFragment` wrapper this just returns plain objects.
     fn split_fragments(
         cache: &mut PipelineCache,
         tile: &ImageTile,
         classes_to_not_merge: &[ObjectClass],
-    ) -> Vec<PendingFragment> {
+    ) -> Vec<Object> {
         let ids: Vec<_> = cache
             .object_cache
             .iter()
@@ -2650,15 +2664,7 @@ mod tile_merge_end_to_end_tests {
             .map(|(id, _)| id.clone())
             .collect();
         ids.into_iter()
-            .filter_map(|id| {
-                cache
-                    .object_cache
-                    .remove(&id)
-                    .map(|object| PendingFragment {
-                        object,
-                        tile: tile.clone(),
-                    })
-            })
+            .filter_map(|id| cache.object_cache.remove(&id))
             .collect()
     }
 
@@ -2757,15 +2763,27 @@ mod tile_merge_end_to_end_tests {
             "buffered fragments must be removed from their tile's own export"
         );
 
-        let settings = TileMergeSettings {
-            enabled: true,
-            classes_to_not_merge: Vec::new(),
-            connectivity:
-                evanalyzer_cfg::settings::project_settings::TileMergeConnectivity::EightConnected,
-            max_fragments_per_group: 100,
+        let mut whole_image_cache = PipelineCache {
+            object_cache: pending.into_iter().map(|o| (o.id.clone(), o)).collect(),
+            ..Default::default()
         };
-        let merged = merge_pending_fragments(pending, &settings).unwrap();
+        let mut tile_merge_pipeline = Pipeline::new(
+            PipelineId(0),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        tile_merge_pipeline.add_command(Box::new(TileMerge {
+            classes_to_not_merge: Vec::new(),
+            connectivity: Connectivity::EightConnected,
+            max_fragments_per_group: 100,
+        }));
+        whole_image_cache = tile_merge_pipeline
+            .run_whole_image(PathBuf::new(), whole_image_cache, None, false)
+            .unwrap()
+            .cache;
 
+        let merged: Vec<_> = whole_image_cache.object_cache.values().collect();
         assert_eq!(
             merged.len(),
             1,

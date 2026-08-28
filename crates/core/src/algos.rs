@@ -69,6 +69,7 @@ pub use self::object::coloc_objects::Colocalization;
 pub use self::object::extract_objects::ExtractObjects;
 pub use self::object::object_math::ObjectMath;
 pub use self::object::object_math::ObjectSetOperation;
+pub(crate) use self::object::tile_merge::{Connectivity, TileMerge, touches_tile_edge};
 pub use self::object::transform_objects::TransformFunction;
 pub use self::object::transform_objects::TransformObjects;
 pub use self::object::voronoi::Voronoi;

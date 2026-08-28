@@ -75,7 +75,6 @@ impl TileObjectStore {
     }
 
     /// Reads back one tile's objects and the tile they came from.
-    #[allow(dead_code)] // consumed by the whole-image phase, not wired up yet
     pub(crate) fn read_tile(&self, tile_index: usize) -> Result<(ImageTile, Vec<Object>), InternalErrors> {
         let bytes = std::fs::read(self.path_for(tile_index)).map_err(|e| {
             InternalErrors::Io(format!("Failed to read tile-object scratch file: {e}"))

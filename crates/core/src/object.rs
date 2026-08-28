@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::ImagePlane;
+use crate::ImageTile;
 use crate::pipeline::{
     pipeline_cache::{PipelineCache, sample_channel_pixel},
     pipeline_context::PipelineContext,
@@ -80,6 +81,16 @@ pub struct Object {
     // Image plane information
     pub plane: ImagePlane,
 
+    /// The tile this object was extracted from (by `ExtractObjects`), i.e.
+    /// which tile's `run_tile` pass produced it. Used only by tile-merge to
+    /// tell "two fragments from different tiles, real merge candidates"
+    /// apart from "two objects from the same tile's own segmentation,
+    /// already correctly separate" - no other algorithm needs to read this.
+    /// Defaults to `ImageTile::default()` (offset 0,0) for an object not
+    /// tied to a specific extraction tile (e.g. one created directly by a
+    /// whole-image command rather than `ExtractObjects`).
+    pub source_tile: ImageTile,
+
     // --- Precomputed geometry metrics ---
     // Filled by `finalize_geometry()` at object creation time — which runs on the
     // parallel extraction/segmentation workers — and read back through
@@ -128,6 +139,7 @@ pub struct ObjectInit {
     pub sum_xy: u64,
     pub intensities: IndexMap<i32, Intensity>,
     pub plane: ImagePlane,
+    pub source_tile: ImageTile,
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
@@ -215,6 +227,7 @@ impl Object {
             sum_xy: init.sum_xy,
             intensities: init.intensities,
             plane: init.plane,
+            source_tile: init.source_tile,
             perimeter: 0.0,
             ellipse: FittingEllipse::default(),
         };
@@ -703,6 +716,7 @@ impl Object {
                 c: s.c_stack,
                 t: s.t_stack,
             },
+            source_tile: ImageTile::default(),
         })
     }
 

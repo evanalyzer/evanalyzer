@@ -238,6 +238,7 @@ impl ImageAlgorithm for ExtractObjects {
                     sum_xy: sum_xy[id],
                     intensities,
                     plane,
+                    source_tile: cache.image_cache.image_meta.image_tile_info.clone(),
                     ..Default::default()
                 });
                 // Assign the segmentation class as default first object class so classify object is not mandatory.
