@@ -934,7 +934,16 @@ fn extract_command_structs(
 
 fn determine_category(file_path: &Path) -> String {
     let path_str = file_path.to_string_lossy();
-    if path_str.contains("filters")
+    // Checked first, ahead of the generic filename-substring checks below:
+    // a file living under `algos/object/` (e.g. `object_math.rs`) would
+    // otherwise get misclassified by, say, the `"math"` check meant for
+    // `algos/math/`.
+    if path_str.contains("/object/")
+        || path_str.contains("classification")
+        || path_str.contains("extract")
+    {
+        "Object".to_string()
+    } else if path_str.contains("filters")
         || path_str.contains("blur")
         || path_str.contains("morphology")
         || path_str.contains("edge")
@@ -946,8 +955,6 @@ fn determine_category(file_path: &Path) -> String {
         "Preprocessing".to_string()
     } else if path_str.contains("segmentation") || path_str.contains("threshold") {
         "Segmentation".to_string()
-    } else if path_str.contains("classification") || path_str.contains("extract") {
-        "Object".to_string()
     } else {
         "Other".to_string()
     }

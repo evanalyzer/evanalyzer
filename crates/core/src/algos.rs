@@ -3,10 +3,10 @@
 // Register algos
 #[cfg(feature = "ai")]
 mod ai_segmentation;
-mod classification;
 mod filters;
 mod math;
 mod morphology;
+mod object;
 mod segmentation;
 mod spartial_transform;
 
@@ -22,22 +22,6 @@ pub use self::ai_segmentation::stardist::Stardist;
 pub use self::ai_segmentation::unet::UNet;
 #[cfg(feature = "ai")]
 pub use self::ai_segmentation::unet::UNetOutputMode;
-#[cfg(feature = "ai")]
-pub use self::classification::ai_object_classifier::AiClassifyMatchHandling;
-#[cfg(feature = "ai")]
-pub use self::classification::ai_object_classifier::AiObjectClassifier;
-#[cfg(feature = "ai")]
-pub use self::classification::ai_object_classifier::ClassificationMapping;
-pub use self::classification::classify_objects::ClassifyMatchHandling;
-pub use self::classification::classify_objects::ClassifyObjects;
-pub use self::classification::coloc_objects::ColocMultiplicity;
-pub use self::classification::coloc_objects::Colocalization;
-pub use self::classification::extract_objects::ExtractObjects;
-pub use self::classification::object_math::ObjectMath;
-pub use self::classification::object_math::ObjectSetOperation;
-pub use self::classification::transform_objects::TransformFunction;
-pub use self::classification::transform_objects::TransformObjects;
-pub use self::classification::voronoi::Voronoi;
 pub use self::filters::blur::Blur;
 pub use self::filters::blur_gaussian::GaussianBlur;
 pub use self::filters::color_filter::ColorFilterCommand;
@@ -72,6 +56,22 @@ pub use self::morphology::fill_holes::FillHoles;
 pub use self::morphology::morphological_transformation::KernelShapes;
 pub use self::morphology::morphological_transformation::MorphOps;
 pub use self::morphology::morphological_transformation::MorphologicalCommand;
+#[cfg(feature = "ai")]
+pub use self::object::ai_object_classifier::AiClassifyMatchHandling;
+#[cfg(feature = "ai")]
+pub use self::object::ai_object_classifier::AiObjectClassifier;
+#[cfg(feature = "ai")]
+pub use self::object::ai_object_classifier::ClassificationMapping;
+pub use self::object::classify_objects::ClassifyMatchHandling;
+pub use self::object::classify_objects::ClassifyObjects;
+pub use self::object::coloc_objects::ColocMultiplicity;
+pub use self::object::coloc_objects::Colocalization;
+pub use self::object::extract_objects::ExtractObjects;
+pub use self::object::object_math::ObjectMath;
+pub use self::object::object_math::ObjectSetOperation;
+pub use self::object::transform_objects::TransformFunction;
+pub use self::object::transform_objects::TransformObjects;
+pub use self::object::voronoi::Voronoi;
 pub use self::segmentation::connected_components::ConnectedComponents;
 pub use self::segmentation::threshold::Averaging;
 pub use self::segmentation::threshold::OtsuClasses;

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 /// `segmentation_mapping` has remapped) a class for it.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings {
+pub enum ObjectAiObjectClassifierAiClassifyMatchHandlingSettings {
     #[default]
     #[serde(
         alias = "add-output-class-if-match",
@@ -75,7 +75,7 @@ pub enum FiltersRollingBallBallTypeSettings {
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ClassificationClassifyObjectsClassifyMatchHandlingSettings {
+pub enum ObjectClassifyObjectsClassifyMatchHandlingSettings {
     #[default]
     #[serde(
         alias = "add-output-class-if-match",
@@ -142,7 +142,7 @@ pub enum ClassificationClassifyObjectsClassifyMatchHandlingSettings {
 /// How many partners an object may coloc with at once.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ClassificationColocObjectsColocMultiplicitySettings {
+pub enum ObjectColocObjectsColocMultiplicitySettings {
     /// Every object keeps only its single best-overlap match per other class -
     /// e.g. a small object sitting on the border of two larger ones picks
     /// exactly one (the larger overlap; ties go to the lower `ObjectId`).
@@ -305,7 +305,7 @@ pub enum MorphologyMorphologicalTransformationMorphOpsSettings {
 /// its overlapping `other_class` ROIs ("B").
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ClassificationObjectMathObjectSetOperationSettings {
+pub enum ObjectObjectMathObjectSetOperationSettings {
     /// Intersection: pixels present in both A and B. With no overlapping B, the
     /// result is empty - there is nothing to keep regardless of `keep_unmatched`.
     #[default]
@@ -650,7 +650,7 @@ pub enum SegmentationThresholdThresholdValueSourceSettings {
 /// multiplier for `Scale` but a length in `size_unit` for `SnapArea`).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ClassificationTransformObjectsTransformFunctionSettings {
+pub enum ObjectTransformObjectsTransformFunctionSettings {
     /// Scale the object by the given scale factor.
     ///
     /// Shape keeps and center of the object keeps the same, it is just shrinked or expanded.
@@ -730,7 +730,7 @@ pub enum ClassificationTransformObjectsTransformFunctionSettings {
     },
 }
 
-impl Default for ClassificationTransformObjectsTransformFunctionSettings {
+impl Default for ObjectTransformObjectsTransformFunctionSettings {
     fn default() -> Self {
         Self::Scale { factor: 1.0f32 }
     }
@@ -1876,7 +1876,7 @@ pub struct AiObjectClassifierSettings {
     ///
     /// - **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.
     /// - **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.
-    pub match_handling: ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings,
+    pub match_handling: ObjectAiObjectClassifierAiClassifyMatchHandlingSettings,
 }
 
 impl Default for AiObjectClassifierSettings {
@@ -1887,7 +1887,7 @@ impl Default for AiObjectClassifierSettings {
             origin_segmentation: vec![],
             input_classes: vec![],
             match_handling:
-                ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch,
+                ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch,
         }
     }
 }
@@ -1938,7 +1938,7 @@ pub struct ClassifyObjectsSettings {
     /// - **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.
     /// - **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.
     /// - **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.
-    pub match_handling: ClassificationClassifyObjectsClassifyMatchHandlingSettings,
+    pub match_handling: ObjectClassifyObjectsClassifyMatchHandlingSettings,
     /// Class label assigned to (or removed from) objects by the chosen operation
     ///
     /// Used as the target class for `AddOutputClass*` and `RemoveOutputClass*` operations.
@@ -2058,11 +2058,12 @@ impl Default for ClassifyObjectsSettings {
         Self {
             origin_segmentation: vec![],
             input_classes: vec![],
-            match_handling: ClassificationClassifyObjectsClassifyMatchHandlingSettings :: RemoveAllClassesIfNotMatch,
-            output_class: ObjectClass :: Unset,
-            overlapping_with: ObjectClass :: Unset,
+            match_handling:
+                ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch,
+            output_class: ObjectClass::Unset,
+            overlapping_with: ObjectClass::Unset,
             min_intersection_area: 0.0f32,
-            size_unit: SizeUnits :: NanoMeter,
+            size_unit: SizeUnits::NanoMeter,
             min_area: 0.0f32,
             max_area: 2147483648.0f32,
             min_circularity: 0.0f32,
@@ -2104,7 +2105,7 @@ pub struct ColocalizationSettings {
     /// If defined the overlapping coloc area is added as new object and labeled with this class
     pub class_for_overlapping_areas: ObjectClass,
     /// How many partners an object may coloc with at once.
-    pub multiplicity: ClassificationColocObjectsColocMultiplicitySettings,
+    pub multiplicity: ObjectColocObjectsColocMultiplicitySettings,
     /// Size unit for the minimum coloc area size
     pub size_unit: SizeUnits,
     /// Minimum overlapping area size to count objects as coloc
@@ -2128,7 +2129,7 @@ impl Default for ColocalizationSettings {
             classes_to_coloc: vec![],
             filter_classes: vec![],
             class_for_overlapping_areas: ObjectClass::default(),
-            multiplicity: ClassificationColocObjectsColocMultiplicitySettings::OneToOne,
+            multiplicity: ObjectColocObjectsColocMultiplicitySettings::OneToOne,
             size_unit: SizeUnits::Pixels,
             min_coloc_area: 0.0f32,
             exclude_classes: vec![],
@@ -2147,7 +2148,7 @@ impl Default for ColocalizationSettings {
 #[serde(rename_all = "camelCase")]
 pub struct ObjectMathSettings {
     /// Boolean set operation to apply
-    pub operation: ClassificationObjectMathObjectSetOperationSettings,
+    pub operation: ObjectObjectMathObjectSetOperationSettings,
     /// ROIs carrying this class are the left-hand operand ("A").
     pub input_class: ObjectClass,
     /// ROIs carrying this class are the right-hand operand ("B").
@@ -2178,7 +2179,7 @@ pub struct ObjectMathSettings {
 impl Default for ObjectMathSettings {
     fn default() -> Self {
         Self {
-            operation: ClassificationObjectMathObjectSetOperationSettings::default(),
+            operation: ObjectObjectMathObjectSetOperationSettings::default(),
             input_class: ObjectClass::default(),
             other_class: ObjectClass::default(),
             other_filter_classes: vec![],
@@ -2201,7 +2202,7 @@ impl Default for ObjectMathSettings {
 #[serde(rename_all = "camelCase")]
 pub struct TransformObjectsSettings {
     /// Geometric transform applied to each input object
-    pub function: ClassificationTransformObjectsTransformFunctionSettings,
+    pub function: ObjectTransformObjectsTransformFunctionSettings,
     /// ROIs carrying this class are the input to the transform
     pub input_class: ObjectClass,
     /// If unset, the transformed shape replaces the input object in place.
@@ -2214,7 +2215,7 @@ pub struct TransformObjectsSettings {
 impl Default for TransformObjectsSettings {
     fn default() -> Self {
         Self {
-            function: ClassificationTransformObjectsTransformFunctionSettings::default(),
+            function: ObjectTransformObjectsTransformFunctionSettings::default(),
             input_class: ObjectClass::default(),
             output_class: ObjectClass::Unset,
         }
