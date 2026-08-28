@@ -5,6 +5,7 @@ use evanalyzer_cfg::{
 };
 use indexmap::IndexMap;
 use kornia_image::ImageSize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::ImagePlane;
@@ -13,7 +14,7 @@ use crate::pipeline::{
     pipeline_context::PipelineContext,
 };
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Intensity {
     /// Sum of all pixel intensities in the object
     pub sum_intensity: f64,
@@ -27,14 +28,14 @@ pub struct Intensity {
     pub pixel_values: Vec<f32>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
     pub object_ids: Vec<ObjectId>,     // Ordered list of ROIs over time
     pub parent_track: Option<TrackId>, // If created by division
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Object {
     // Global unique object ID
     pub id: ObjectId,
@@ -129,7 +130,7 @@ pub struct ObjectInit {
     pub plane: ImagePlane,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct FittingEllipse {
     /// The length of the longest diameter (2a).
     /// ImageJ refers to this as 'Major'.

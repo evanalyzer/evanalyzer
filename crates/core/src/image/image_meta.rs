@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Default, Clone)]
@@ -52,14 +53,14 @@ pub struct ImageMeta {
     pub series: BTreeMap<i32, ImageInfo>, // Image series
 }
 
-#[derive(Default, Copy, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ImagePlane {
     pub z: i32,
     pub c: i32,
     pub t: i32,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct ImageTile {
     pub offset_x: usize,
     pub offset_y: usize,

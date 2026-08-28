@@ -1,6 +1,6 @@
 use crate::{
     ImageTile, ManagedImage,
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     image::{ImageContainer, PixelSizes},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
@@ -55,7 +55,21 @@ pub struct Pipeline {
     pub id: PipelineId,
     pub dependencies: Vec<PipelineId>,
     pub settings: CorePipelineSettings,
-    pub commands: Vec<Box<dyn ImageAlgorithm>>,
+    /// `ExecutionScope::Tile` commands, each paired with its original
+    /// as-authored step index (see `add_command`) so a breakpoint targeting
+    /// a specific step still resolves correctly even though `Tile` and
+    /// `WholeImage` commands are split into two separately-run lists.
+    pub commands: Vec<(usize, Box<dyn ImageAlgorithm>)>,
+    /// `ExecutionScope::WholeImage` commands - see `commands`. Run once per
+    /// image via `run_whole_image`, after every tile's `run_tile` has
+    /// finished and tile-merge has reconciled the image's full object set -
+    /// never per-tile.
+    pub whole_image_commands: Vec<(usize, Box<dyn ImageAlgorithm>)>,
+    /// Next as-authored step index to assign in `add_command`. Counts every
+    /// command added regardless of which scope it lands in, so the index
+    /// reflects the pipeline's authored order (what a breakpoint targets),
+    /// not either scope's own position.
+    next_step_index: usize,
 }
 
 /// Pipeline execution pipeline implementation
@@ -78,12 +92,21 @@ impl Pipeline {
             dependencies: Vec::new(),
             settings,
             commands: Vec::new(),
+            whole_image_commands: Vec::new(),
+            next_step_index: 0,
         }
     }
 
-    /// Add a new command to the end of the pipeline
+    /// Add a new command to the end of the pipeline, routing it to the
+    /// `Tile` or `WholeImage` list per its `execution_scope()` while
+    /// preserving its as-authored step index (see `next_step_index`).
     pub fn add_command(&mut self, command: Box<dyn ImageAlgorithm>) {
-        self.commands.push(command);
+        let step_index = self.next_step_index;
+        self.next_step_index += 1;
+        match command.execution_scope() {
+            ExecutionScope::Tile => self.commands.push((step_index, command)),
+            ExecutionScope::WholeImage => self.whole_image_commands.push((step_index, command)),
+        }
     }
 
     // Add dependency
@@ -93,20 +116,66 @@ impl Pipeline {
         }
     }
 
-    /// Execute all commands in sequence.
+    /// Execute this pipeline's per-tile (`ExecutionScope::Tile`) commands.
     ///
-    /// `breakpoint_step` identifies a step index (0-based) at which to act.
-    /// `snapshot_mode`:
+    /// Called once per tile, before tile-merge has reconciled the image's
+    /// full object set - `ExecutionScope::WholeImage` commands never run
+    /// here, see `run_whole_image`.
+    ///
+    /// `breakpoint_step` identifies a step's *as-authored* index (see
+    /// `add_command`) at which to act; a step index belonging to a
+    /// `WholeImage` command never matches here. `snapshot_mode`:
     ///   - `false` (Stop) — stop execution at that step and return early.
     ///   - `true`  (Snapshot) — capture the buffers at that step, then
     ///     continue to completion; the capture is returned in
     ///     `breakpoint_capture`.
-    pub fn run(
+    pub fn run_tile(
+        &self,
+        output_path: PathBuf,
+        cache: PipelineCache,
+        breakpoint_step: Option<i32>,
+        snapshot_mode: bool,
+    ) -> Result<PipelineResult, InternalErrors> {
+        self.run_commands(
+            output_path,
+            cache,
+            breakpoint_step,
+            snapshot_mode,
+            &self.commands,
+        )
+    }
+
+    /// Execute this pipeline's whole-image (`ExecutionScope::WholeImage`)
+    /// commands.
+    ///
+    /// Must be called exactly once per image, after every tile's `run_tile`
+    /// has finished and tile-merge has reconciled the image's full object
+    /// set - never per-tile. See `run_tile` for `breakpoint_step`/
+    /// `snapshot_mode`; a step index belonging to a `Tile` command never
+    /// matches here.
+    pub fn run_whole_image(
+        &self,
+        output_path: PathBuf,
+        cache: PipelineCache,
+        breakpoint_step: Option<i32>,
+        snapshot_mode: bool,
+    ) -> Result<PipelineResult, InternalErrors> {
+        self.run_commands(
+            output_path,
+            cache,
+            breakpoint_step,
+            snapshot_mode,
+            &self.whole_image_commands,
+        )
+    }
+
+    fn run_commands(
         &self,
         output_path: PathBuf,
         mut cache: PipelineCache,
         breakpoint_step: Option<i32>,
         snapshot_mode: bool,
+        commands: &[(usize, Box<dyn ImageAlgorithm>)],
     ) -> Result<PipelineResult, InternalErrors> {
         let Some(initial_image) = cache
             .image_cache
@@ -123,7 +192,8 @@ impl Pipeline {
         let start = Instant::now();
         let mut breakpoint_capture: Option<BreakpointCapture> = None;
 
-        for (idx, command) in self.commands.iter().enumerate() {
+        for (step_index, command) in commands {
+            let step_index = *step_index;
             let step_start = Instant::now();
             command.execute(&mut ctx, &mut cache)?;
             let duration = step_start.elapsed();
@@ -132,8 +202,11 @@ impl Pipeline {
             // Only capture at the exact breakpoint step - `breakpoint_step`
             // is `None` whenever no breakpoint is set, so this never runs
             // (and never clones segmentation/instance buffers) for a normal
-            // run.
-            if breakpoint_step == Some(idx as i32) {
+            // run. Comparing against the command's as-authored `step_index`
+            // (not its position in `commands`) is what lets a breakpoint
+            // resolve correctly regardless of which scope's list it's run
+            // through.
+            if breakpoint_step == Some(step_index as i32) {
                 let capture = BreakpointCapture {
                     image: ctx.image.clone(),
                     segmentation: ctx.segmentation_map.as_ref().map(|s| {
@@ -159,7 +232,7 @@ impl Pipeline {
                     cache.image_cache.clear_pipeline_context();
                     info!(
                         "Breakpoint (stop) at step {} of pipeline {} in {:?}",
-                        idx,
+                        step_index,
                         self.id,
                         start.elapsed()
                     );
@@ -246,19 +319,25 @@ mod tests {
         }
     }
 
-    fn run_two_stage_pipeline_on_tile(
+    /// Runs stage 1 (`FakeSegmenter` + `ExtractObjects`, both `Tile`-scoped)
+    /// independently for each `(tile_offset, tile_size, object_rect)` tile via
+    /// `run_tile` - exactly as `JobExecutor` runs a tile's first pipeline -
+    /// then combines every tile's extracted objects into one whole-image
+    /// cache and runs stage 2 (`Voronoi`, `WholeImage`-scoped) exactly once
+    /// via `run_whole_image`, simulating `JobExecutor` running it once per
+    /// image, after tile-merge, rather than once per tile.
+    fn run_pipeline_across_tiles(
         full_w: usize,
         full_h: usize,
-        tile_offset: (usize, usize),
-        tile_size: (usize, usize),
-        object_rect: [usize; 4],
+        tiles: &[((usize, usize), (usize, usize), [usize; 4])],
     ) -> PipelineCache {
-        let meta = PipelineImageMeta {
+        let mut whole_image_cache = PipelineCache::default();
+        whole_image_cache.image_cache.image_meta = PipelineImageMeta {
             image_tile_info: crate::ImageTile {
-                offset_x: tile_offset.0,
-                offset_y: tile_offset.1,
-                width: tile_size.0,
-                height: tile_size.1,
+                offset_x: 0,
+                offset_y: 0,
+                width: full_w,
+                height: full_h,
             },
             full_image_width: ImageSize {
                 width: full_w,
@@ -273,49 +352,76 @@ mod tests {
             },
         };
 
-        let mut cache = PipelineCache::default();
-        cache.image_cache.image_meta = meta;
-        let channel = Image::<f32, 1, CpuAllocator>::new(
-            ImageSize {
-                width: tile_size.0,
-                height: tile_size.1,
-            },
-            vec![2.0f32; tile_size.0 * tile_size.1],
-            CpuAllocator,
-        )
-        .unwrap();
-        cache.image_cache.add_to_channel_cache(
-            std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
-                data: channel,
-                tile_offset: Point2d {
-                    x: tile_offset.0,
-                    y: tile_offset.1,
+        for &(tile_offset, tile_size, object_rect) in tiles {
+            let meta = PipelineImageMeta {
+                image_tile_info: crate::ImageTile {
+                    offset_x: tile_offset.0,
+                    offset_y: tile_offset.1,
+                    width: tile_size.0,
+                    height: tile_size.1,
                 },
-                plane: None,
-            })),
-            0,
-        );
+                full_image_width: ImageSize {
+                    width: full_w,
+                    height: full_h,
+                },
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: crate::image::PixelSizes {
+                    px_size_x: 1.0,
+                    px_size_y: 1.0,
+                    px_size_z: 1.0,
+                },
+            };
 
-        // Stage 1: segment + extract ROIs from real per-tile pixel data, exactly the
-        // way JobExecutor runs a tile's first pipeline.
-        let mut stage1 = Pipeline::new(
-            PipelineId(1),
-            CorePipelineSettings {
-                start_image: ImageAddress::Channel(0),
-            },
-        );
-        stage1.add_command(Box::new(FakeSegmenter { rect: object_rect }));
-        stage1.add_command(Box::new(ExtractObjects {
-            max_objects_before_fail: 100_000,
-        }));
-        let result1 = stage1
-            .run(PathBuf::default(), cache, None, false)
-            .expect("stage 1 must not fail");
+            let mut cache = PipelineCache::default();
+            cache.image_cache.image_meta = meta;
+            let channel = Image::<f32, 1, CpuAllocator>::new(
+                ImageSize {
+                    width: tile_size.0,
+                    height: tile_size.1,
+                },
+                vec![2.0f32; tile_size.0 * tile_size.1],
+                CpuAllocator,
+            )
+            .unwrap();
+            cache.image_cache.add_to_channel_cache(
+                std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
+                    data: channel,
+                    tile_offset: Point2d {
+                        x: tile_offset.0,
+                        y: tile_offset.1,
+                    },
+                    plane: None,
+                })),
+                0,
+            );
 
-        // Stage 2: Voronoi, sourced from Scratchpad - the recommended setup for a
-        // pure object-manipulation step with no pixel input of its own - reading the
-        // center object stage 1 just produced via the cache that's threaded between
-        // both pipelines on this same tile.
+            let mut stage1 = Pipeline::new(
+                PipelineId(1),
+                CorePipelineSettings {
+                    start_image: ImageAddress::Channel(0),
+                },
+            );
+            stage1.add_command(Box::new(FakeSegmenter { rect: object_rect }));
+            stage1.add_command(Box::new(ExtractObjects {
+                max_objects_before_fail: 100_000,
+            }));
+            let result = stage1
+                .run_tile(PathBuf::default(), cache, None, false)
+                .expect("tile stage must not fail");
+
+            // Stand-in for tile-merge: union every tile's objects into one
+            // whole-image object set. Real `JobExecutor` also reconciles
+            // edge-touching fragments here (`merge_pending_fragments`), but
+            // these test objects never touch their tile's edge, so a plain
+            // union already matches what tile-merge would hand onward.
+            whole_image_cache.object_cache.extend(result.cache.object_cache);
+        }
+
+        // Stage 2: Voronoi, sourced from Scratchpad - the recommended setup
+        // for a pure object-manipulation step with no pixel input of its
+        // own - run exactly once against every tile's combined objects, not
+        // once per tile.
         let mut stage2 = Pipeline::new(
             PipelineId(2),
             CorePipelineSettings {
@@ -333,56 +439,62 @@ mod tests {
             exclude_areas_at_the_edges: false,
             exclude_areas_with_no_center: false,
         }));
-        let result2 = stage2
-            .run(PathBuf::default(), result1.cache, None, false)
-            .expect("stage 2 must not fail");
+        let result = stage2
+            .run_whole_image(PathBuf::default(), whole_image_cache, None, false)
+            .expect("whole-image stage must not fail");
 
-        result2.cache
+        result.cache
     }
 
     #[test]
-    fn voronoi_regions_stay_within_their_own_tile_across_a_multi_tile_image() {
+    fn voronoi_regions_are_computed_once_across_the_whole_image_not_per_tile() {
         // Regression test for the whole bug class: a per-tile algorithm computing
         // pixel coordinates from the *full* image instead of the *current tile*
         // silently corrupts results (or, once intensity sampling reads from the
         // tile-local channel buffer, panics outright) for any image split into more
-        // than one tile. This drives the real ExtractObjects -> Voronoi pipeline chain,
-        // exactly as JobExecutor does per tile, against two adjacent tiles cut from
-        // one larger image, and checks neither tile's results leak past its own
-        // absolute bounds.
+        // than one tile. Two seed objects placed symmetrically around the tile
+        // boundary drive the real ExtractObjects -> Voronoi pipeline chain,
+        // exactly as JobExecutor does: `ExtractObjects` per tile, `Voronoi` once
+        // for the whole image after both tiles' objects are combined - so each
+        // region is bounded by the *other* seed, not by its own tile's edge.
         let full_w = 40;
         let full_h = 20;
         let tile_size = (20, 20);
 
-        let cache_a =
-            run_two_stage_pipeline_on_tile(full_w, full_h, (0, 0), tile_size, [8, 8, 11, 11]);
-        let cache_b =
-            run_two_stage_pipeline_on_tile(full_w, full_h, (20, 0), tile_size, [8, 8, 11, 11]);
+        let cache = run_pipeline_across_tiles(
+            full_w,
+            full_h,
+            &[
+                ((0, 0), tile_size, [8, 8, 11, 11]),
+                ((20, 0), tile_size, [8, 8, 11, 11]),
+            ],
+        );
 
-        for (cache, lo_x, hi_x) in [(&cache_a, 0u32, 20u32), (&cache_b, 20u32, 40u32)] {
-            let regions: Vec<&Object> = cache
-                .object_cache
-                .values()
-                .filter(|r| r.has_object_class(&ObjectClass::Valid(99)))
-                .collect();
-            assert_eq!(regions.len(), 1, "exactly one Voronoi region per tile");
-            let [x_min, _, x_max, y_max] = regions[0].bbox;
-            assert!(
-                x_min >= lo_x && x_max < hi_x,
-                "region bbox {:?} must stay within this tile's own x-range [{lo_x},{hi_x})",
-                regions[0].bbox
-            );
-            assert!(y_max < 20);
-            assert_eq!(regions[0].area, tile_size.0 * tile_size.1);
-            assert_eq!(
-                regions[0]
-                    .intensities
-                    .get(&0)
-                    .expect("Voronoi region must have measured intensities")
-                    .sum_intensity,
-                (tile_size.0 * tile_size.1) as f64 * 2.0
-            );
-        }
+        let mut regions: Vec<&Object> = cache
+            .object_cache
+            .values()
+            .filter(|r| r.has_object_class(&ObjectClass::Valid(99)))
+            .collect();
+        regions.sort_by_key(|r| r.bbox[0]);
+        assert_eq!(
+            regions.len(),
+            2,
+            "one Voronoi region per seed, computed together over the whole image"
+        );
+
+        // The two seeds sit at absolute x-centers 9.5 and 29.5 - symmetric
+        // around the tile boundary at x=20 - so a correct whole-image
+        // tessellation splits the canvas into two equal halves at that
+        // midline, each seed's region bounded by the *other* seed rather
+        // than by its own tile's edge.
+        let total_area: usize = regions.iter().map(|r| r.area).sum();
+        assert_eq!(
+            total_area,
+            full_w * full_h,
+            "the two regions must tile the whole image with no gaps or overlap"
+        );
+        assert_eq!(regions[0].bbox, [0, 0, 19, 19]);
+        assert_eq!(regions[1].bbox, [20, 0, 39, 19]);
     }
 
     fn default_image_meta(size: ImageSize) -> PipelineImageMeta {
@@ -465,7 +577,7 @@ mod tests {
         pipeline.add_command(Box::new(FakeSegmenter { rect: [0, 0, 1, 1] }));
 
         let result = pipeline
-            .run(PathBuf::default(), cache, None, false)
+            .run_tile(PathBuf::default(), cache, None, false)
             .expect("run must not fail");
 
         assert!(
@@ -501,7 +613,7 @@ mod tests {
         pipeline.add_command(Box::new(SetFirstPixel { value: 9.0 }));
 
         let result = pipeline
-            .run(PathBuf::default(), cache, None, false)
+            .run_tile(PathBuf::default(), cache, None, false)
             .expect("run must not fail");
 
         // The pipeline's own output reflects the mutation...

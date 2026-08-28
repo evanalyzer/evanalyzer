@@ -49,6 +49,12 @@ serde_json = { workspace = true, optional = true }
 petname = "3.1.0"
 chrono = { workspace = true }
 sysinfo = "0.39.6"
+# Per-tile object scratch files for the whole-image command phase (see
+# `job::object_scratch`) - a pure internal working format with no
+# cross-version stability requirements, so the simple/stable 1.x API is
+# preferable to chasing bincode 2's newer (and still-evolving) one.
+bincode = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 ai = ["dep:tch", "dep:smartcore", "dep:burn", "dep:serde_json"]
@@ -66,7 +72,6 @@ duckdb = { workspace = true, features = ["bundled"] }
 [dev-dependencies]
 approx = "0.5"
 env_logger = { workspace = true }
-tempfile = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["zune-core"]
