@@ -18,7 +18,7 @@
 //!
 use crate::{
     ImagePlane,
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     object::{Object, ObjectInit},
 };
 use bitvec::prelude::*;
@@ -494,6 +494,10 @@ impl ImageAlgorithm for Voronoi {
             url: None,
             pages: Some("198-287"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
     }
 }
 

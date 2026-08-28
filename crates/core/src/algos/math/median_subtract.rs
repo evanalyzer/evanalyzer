@@ -8,7 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::algos::{
-    ImageAlgorithm, ImageMath, PipelineCache, PipelineContext, RankFilter, RankFilterType,
+    ExecutionScope, ImageAlgorithm, ImageMath, PipelineCache, PipelineContext, RankFilter, RankFilterType,
 };
 use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::ImageAddress;
@@ -79,6 +79,10 @@ impl ImageAlgorithm for MedianSubtract {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

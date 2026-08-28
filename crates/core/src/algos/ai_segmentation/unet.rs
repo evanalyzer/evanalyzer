@@ -13,7 +13,7 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, Kind, Tensor};
 
 use crate::{
-    algos::{ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -183,6 +183,10 @@ impl ImageAlgorithm for UNet {
             url: Some("https://doi.org/10.1007/978-3-319-24574-4_28"),
             pages: Some("234-241"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

@@ -10,7 +10,7 @@ use macros::CommandsMeta;
 use crate::{
     ai_learning::model::load_from_file,
     ai_learning::training::object::compute_object_features,
-    algos::{ImageAlgorithm, ai_segmentation::model_cache::load_cached_classifier},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_classifier},
     object::Object,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
@@ -171,6 +171,10 @@ impl ImageAlgorithm for AiObjectClassifier {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
     }
 }
 

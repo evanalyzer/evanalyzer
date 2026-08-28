@@ -193,7 +193,7 @@ mod tests {
     use super::*;
     use crate::{
         ManagedImage, Object,
-        algos::{ExtractObjects, Voronoi},
+        algos::{ExecutionScope, ExtractObjects, Voronoi},
     };
     use evanalyzer_cfg::core_types::{CitationMetadata, ImageAddress, ObjectClass, SizeUnits};
     use kornia_apriltag::utils::Point2d;
@@ -239,6 +239,10 @@ mod tests {
 
         fn cite(&self) -> Option<&'static CitationMetadata> {
             None
+        }
+
+        fn execution_scope(&self) -> ExecutionScope {
+            ExecutionScope::Tile
         }
     }
 
@@ -424,6 +428,10 @@ mod tests {
 
         fn cite(&self) -> Option<&'static CitationMetadata> {
             None
+        }
+
+        fn execution_scope(&self) -> ExecutionScope {
+            ExecutionScope::Tile
         }
     }
 

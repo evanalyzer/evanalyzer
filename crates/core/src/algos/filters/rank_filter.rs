@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -121,6 +121,10 @@ impl ImageAlgorithm for RankFilter {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

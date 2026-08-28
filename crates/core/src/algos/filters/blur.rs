@@ -10,7 +10,7 @@
 use std::f32::consts::E;
 use std::sync::Arc;
 
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::{Image, ImageSize};
@@ -91,6 +91,10 @@ impl ImageAlgorithm for Blur {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

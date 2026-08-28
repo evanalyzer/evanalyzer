@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::ImageAlgorithm;
+use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
@@ -321,6 +321,10 @@ impl ImageAlgorithm for RollingBall {
             url: Some("https://doi.org/10.1109/MC.1983.1654163"),
             pages: Some("22-34"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

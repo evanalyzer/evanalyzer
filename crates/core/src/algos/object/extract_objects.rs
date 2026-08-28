@@ -9,7 +9,7 @@
 
 use crate::{
     ImagePlane,
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     object::{Intensity, Object, ObjectInit},
     pipeline::{
         pipeline_cache::{PipelineCache, sample_channel_pixel},
@@ -257,6 +257,10 @@ impl ImageAlgorithm for ExtractObjects {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

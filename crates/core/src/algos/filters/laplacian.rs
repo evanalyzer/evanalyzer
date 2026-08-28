@@ -9,7 +9,7 @@
 
 use crate::image::ImageContainer;
 use crate::pipeline::pipeline_context::PipelineContext;
-use crate::{algos::ImageAlgorithm, pipeline::pipeline_cache::PipelineCache};
+use crate::{algos::{ExecutionScope, ImageAlgorithm}, pipeline::pipeline_cache::PipelineCache};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
@@ -84,6 +84,10 @@ impl ImageAlgorithm for Laplacian {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::ImageAddress;
@@ -169,6 +169,10 @@ impl ImageAlgorithm for ImageMath {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 impl ImageMath {

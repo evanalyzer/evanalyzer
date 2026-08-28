@@ -18,7 +18,7 @@
 //! spanned by the operands is ever touched, regardless of image or tile size.
 //!
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     object::{BooleanOp, Object, ObjectInit},
 };
 use evanalyzer_cfg::core_types::{
@@ -234,6 +234,10 @@ impl ImageAlgorithm for ObjectMath {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
     }
 }
 

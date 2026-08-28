@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::sobel;
@@ -77,6 +77,10 @@ impl ImageAlgorithm for EdgeDetectionSobel {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

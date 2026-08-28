@@ -8,7 +8,7 @@ use macros::CommandsMeta;
 use crate::{
     ai_learning::model::load_from_file,
     ai_learning::training::pixel::compute_pixel_features,
-    algos::{ImageAlgorithm, ai_segmentation::model_cache::load_cached_classifier},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_classifier},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -109,6 +109,10 @@ impl ImageAlgorithm for PixelClassifier {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

@@ -8,7 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     image::ImageContainer,
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
@@ -88,6 +88,10 @@ impl ImageAlgorithm for IntensityTransformation {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

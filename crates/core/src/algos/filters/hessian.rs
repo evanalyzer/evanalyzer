@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ImageAlgorithm, PipelineContext};
+use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage, PixelSizes};
 use crate::pipeline::pipeline_cache::PipelineCache;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
@@ -114,6 +114,10 @@ impl ImageAlgorithm for Hessian {
             url: Some("https://doi.org/10.1109/34.659930"),
             pages: Some("113-125"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

@@ -8,7 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::ImagePlane;
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_apriltag::utils::Point2d;
@@ -169,6 +169,10 @@ impl ImageAlgorithm for ColorFilterCommand {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

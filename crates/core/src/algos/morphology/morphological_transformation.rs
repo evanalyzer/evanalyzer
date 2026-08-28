@@ -10,7 +10,7 @@
 use crate::extlibs::libmorphology::{self, Kernel};
 use crate::pipeline::pipeline_cache::PipelineCache;
 use crate::{
-    algos::ImageAlgorithm, image::ImageContainer, pipeline::pipeline_context::PipelineContext,
+    algos::{ExecutionScope, ImageAlgorithm}, image::ImageContainer, pipeline::pipeline_context::PipelineContext,
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -148,6 +148,10 @@ impl ImageAlgorithm for MorphologicalCommand {
             url: None,
             pages: None,
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

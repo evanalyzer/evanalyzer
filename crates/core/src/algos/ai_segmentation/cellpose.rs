@@ -13,7 +13,7 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
-    algos::{ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -193,6 +193,10 @@ impl ImageAlgorithm for Cellpose {
             url: Some("https://doi.org/10.1038/s41592-020-01018-x"),
             pages: Some("100-106"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

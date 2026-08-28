@@ -11,7 +11,7 @@ use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
 
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -101,6 +101,10 @@ impl ImageAlgorithm for ConnectedComponents {
             url: Some("https://doi.org/10.1145/321356.321357"),
             pages: Some("471-494"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 impl ConnectedComponents {

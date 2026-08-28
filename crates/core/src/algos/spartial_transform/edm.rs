@@ -8,7 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
@@ -150,6 +150,10 @@ impl ImageAlgorithm for DistanceTransform {
             url: Some("https://doi.org/10.1145/321356.321357"),
             pages: Some("471-494"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

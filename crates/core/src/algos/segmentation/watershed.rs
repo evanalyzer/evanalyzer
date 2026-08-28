@@ -9,7 +9,7 @@
 
 use crate::{
     algos::{
-        ImageAlgorithm,
+        ExecutionScope, ImageAlgorithm,
         segmentation::maximum_finder::{
             find_intensity_seeds, watershed_segment_edm, watershed_segment_from_seeds,
         },
@@ -246,6 +246,10 @@ impl ImageAlgorithm for Watershed {
             url: Some("https://doi.org/10.1109/34.87344"),
             pages: Some("583-598"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

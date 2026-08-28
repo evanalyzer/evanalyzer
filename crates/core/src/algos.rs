@@ -90,6 +90,11 @@ use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::InternalErrors;
 
+pub enum ExecutionScope {
+    Tile,
+    WholeImage,
+}
+
 pub trait ImageAlgorithm: Send + Sync {
     /// Execute image processing algorithm
     fn execute(
@@ -99,4 +104,5 @@ pub trait ImageAlgorithm: Send + Sync {
     ) -> Result<(), InternalErrors>;
     fn name(&self) -> &'static str;
     fn cite(&self) -> Option<&'static CitationMetadata>;
+    fn execution_scope(&self) -> ExecutionScope;
 }

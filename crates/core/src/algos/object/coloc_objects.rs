@@ -16,7 +16,7 @@
 //! regions as distinct ROIs based on configuration settings.
 //!
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     object::{Object, ObjectInit},
     spatial_grid::BboxGrid,
 };
@@ -413,6 +413,10 @@ impl ImageAlgorithm for Colocalization {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
     }
 }
 

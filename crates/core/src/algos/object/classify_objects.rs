@@ -14,7 +14,7 @@
 //! to regions of interest based on configurable criteria and machine learning models.
 
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     image::PixelSizes,
     object::Object, // ... other imports
     spatial_grid::BboxGrid,
@@ -383,6 +383,10 @@ impl ImageAlgorithm for ClassifyObjects {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
     }
 }
 

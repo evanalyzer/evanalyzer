@@ -13,7 +13,7 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
-    algos::{ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
     pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
 };
 
@@ -165,6 +165,10 @@ impl ImageAlgorithm for Stardist {
             url: Some("https://doi.org/10.1007/978-3-030-00934-2_30"),
             pages: Some("265-273"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 

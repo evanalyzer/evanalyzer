@@ -16,7 +16,7 @@
 //! transformed shape either replaces the input object in place or is added as a new, separate object.
 //!
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     image::PixelSizes,
     object::{Object, ObjectInit, TransformedGeometry},
 };
@@ -213,6 +213,10 @@ impl ImageAlgorithm for TransformObjects {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
     }
 }
 
