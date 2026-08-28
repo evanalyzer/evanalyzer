@@ -11,6 +11,17 @@ name: CI
 on:
   push:
     branches: ["main", "beta-fix"]
+    # Excludes the bot's own badge/history commits from re-triggering this
+    # workflow - without this, those commits used `[skip ci]` instead, but
+    # GitHub's skip-ci applies to every push/pull_request-triggered workflow
+    # run on that commit, on any ref: tagging that same commit for a release
+    # later silently skipped release.yml's tag-push trigger too. paths-ignore
+    # gets the same loop-prevention without touching the commit message.
+    paths-ignore:
+      - "docs/coverage-badge.svg"
+      - "docs/coverage-history.csv"
+      - "docs/audit-badge.svg"
+      - "docs/audit-history.csv"
   pull_request:
 
 concurrency:
@@ -108,7 +119,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/coverage-badge.svg docs/coverage-history.csv
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update coverage badge [skip ci]"
+            git commit -m "chore: update coverage badge"
             # The `audit` job commits its own badge to main from the same
             # workflow run, in parallel - whichever of the two pushes second
             # would otherwise be rejected as non-fast-forward. Rebase onto
@@ -261,7 +272,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/audit-badge.svg docs/audit-history.csv
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update audit badge [skip ci]"
+            git commit -m "chore: update audit badge"
             # The `test` job commits its own badge to main from the same
             # workflow run, in parallel - whichever of the two pushes second
             # would otherwise be rejected as non-fast-forward. Rebase onto
