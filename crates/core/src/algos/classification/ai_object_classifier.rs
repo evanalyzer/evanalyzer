@@ -56,7 +56,7 @@ pub enum AiClassifyMatchHandling {
 /// predictions as background - mapping only the classes you care about is a
 /// deliberate simplification, not an oversight.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify", display_name = "AI Object Classifier")]
+#[cmdsmeta(category = "object", display_name = "AI Object Classifier")]
 pub struct AiObjectClassifier {
     /// Path to a trained object classifier model, saved from the AI training dialog.
     #[cmdsmeta(file_extensions = "evamodel")]

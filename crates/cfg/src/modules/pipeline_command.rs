@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 pub enum CommandCategory {
     Preprocess,
     Segment,
-    Object,
+    InstanceSegmentation,
     Measure,
-    Classify,
+    Object,
 }
 
 impl CommandCategory {
@@ -23,9 +23,9 @@ impl CommandCategory {
         match self {
             Self::Preprocess => 0,
             Self::Segment => 1,
-            Self::Object => 2,
+            Self::InstanceSegmentation => 2,
             Self::Measure => 3,
-            Self::Classify => 4,
+            Self::Object => 4,
         }
     }
 
@@ -36,9 +36,9 @@ impl CommandCategory {
         match self {
             Self::Preprocess => &[Self::Preprocess],
             Self::Segment => &[Self::Preprocess, Self::Segment],
-            Self::Object => &[Self::Segment, Self::Object],
-            Self::Measure => &[Self::Object, Self::Measure],
-            Self::Classify => &[Self::Measure, Self::Classify],
+            Self::InstanceSegmentation => &[Self::Segment, Self::InstanceSegmentation],
+            Self::Measure => &[Self::InstanceSegmentation, Self::Measure],
+            Self::Object => &[Self::Measure, Self::Object],
         }
     }
 
@@ -47,10 +47,10 @@ impl CommandCategory {
     pub fn suggested_next(self) -> CommandCategory {
         match self {
             Self::Preprocess => Self::Segment,
-            Self::Segment => Self::Object,
-            Self::Object => Self::Measure,
-            Self::Measure => Self::Classify,
-            Self::Classify => Self::Classify,
+            Self::Segment => Self::InstanceSegmentation,
+            Self::InstanceSegmentation => Self::Measure,
+            Self::Measure => Self::Object,
+            Self::Object => Self::Object,
         }
     }
 }
@@ -217,7 +217,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 0,
             name: "AI Object Classifier",
-            category: CommandCategory::Classify,
+            category: CommandCategory::Object,
             summary: "An object classifier trained via the app's AI training dialog (an",
             description: "`.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),\napplied here as a pipeline classification step: every object already\npresent in `PipelineCache::object_cache` matching `origin_segmentation`/\n`input_classes` is scored independently (reusing the same feature recipe\nused at training time), then remapped through `segmentation_mapping` into\nthis project's own classes and applied via `match_handling` - the same\ninput selection `ClassifyObjects` uses, but the output class comes from\nthe model's prediction instead of a fixed rule.\n\nPredicted classes with no matching `segmentation_mapping` entry leave the\nobject untouched, mirroring how `PixelClassifier` leaves unmapped\npredictions as background - mapping only the classes you care about is a\ndeliberate simplification, not an oversight.",
         },
@@ -238,14 +238,14 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 3,
             name: "ClassifyObjects",
-            category: CommandCategory::Classify,
+            category: CommandCategory::Object,
             summary: "Classifies ROIs based on morphological and intensity features.",
             description: "This command applies rule-based classification logic to assign object classes\nto extracted ROIs. Classification is performed using configurable criteria\nincluding area, shape descriptors, and intensity statistics.",
         },
         CommandMeta {
             id: 4,
             name: "Colocalization",
-            category: CommandCategory::Classify,
+            category: CommandCategory::Object,
             summary: "Calculates spatial colocalization and intersections between specified object classes.",
             description: "This command scans the object cache, groups objects by their designated classes,\nand performs spatial overlap analysis. It records colocalization relationships\nbetween intersecting entities and can optionally generate new child ROIs representing\nthe precise intersection regions.",
         },
@@ -259,7 +259,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 6,
             name: "ConnectedComponents",
-            category: CommandCategory::Object,
+            category: CommandCategory::InstanceSegmentation,
             summary: "Identifies and labels discrete objects within a binary or multi-class image.",
             description: "",
         },
@@ -301,7 +301,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 12,
             name: "FillHoles",
-            category: CommandCategory::Object,
+            category: CommandCategory::InstanceSegmentation,
             summary: "Fills enclosed background holes in the segmentation map.",
             description: "A direct port of ImageJ's `Process > Binary > Fill Holes` command\n(`ij.plugin.filter.Binary.fill`, originally contributed by Gabriel\nLandini): a background pixel counts as a \"hole\" - and is turned into\nforeground - exactly when it cannot be reached from the image border by a\npath of background pixels using 4-connectivity.\n\nLike ImageJ's own command, this treats the image as strictly binary: every\nnon-background pixel is \"foreground\" regardless of its actual label/class\nvalue, and a filled hole is stamped with a single fixed value rather than\ninheriting whatever label happens to surround it. If the segmentation map\ncarries several distinct label values, holes are not attributed back to\nthe object that encloses them - only ImageJ's original background/\nforeground distinction is reproduced here.\n\n# Algorithm (matches `ij.process.FloodFiller.fill(x, y)`)\n1. Scan every pixel on the image border; for each one that is background\n(`0`), flood-fill outward from it using 4-connectivity (up/down/left/\nright only - diagonal neighbors are **not** considered connected),\nmarking every background pixel reached this way as \"outside\".\n2. Any background pixel never marked \"outside\" is enclosed and becomes\nforeground. Every non-background pixel is copied through unchanged.\n\nThe 4-connectivity in step 1 is load-bearing, not an implementation\ndetail: a boundary that only touches itself diagonally (8-connected) does\n**not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,\nwhose own docs specify a 4-connected fill.",
         },
@@ -371,7 +371,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 22,
             name: "ObjectMath",
-            category: CommandCategory::Classify,
+            category: CommandCategory::Object,
             summary: "Computes a boolean set operation between two object classes, object pair by",
             description: "object pair.\n\nWhen more than one `other_class` object overlaps a given input object, all of them\nare unioned into a single \"B\" before the operation is applied, so the result\ndoesn't depend on the order they'd otherwise be combined in.",
         },
@@ -427,7 +427,7 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 30,
             name: "TransformObjects",
-            category: CommandCategory::Classify,
+            category: CommandCategory::Object,
             summary: "Transforms given ROIs and either replaces the old ones or creates new ones.",
             description: "This command applies a geometric transform (scale, circle, fitted ellipse) to every object\ncarrying `input_class`. The transformed shape keeps the original object's bounding-box center.\nIf `output_class` is unset (or equal to `input_class`) the input object is replaced in place;\notherwise a new object carrying `output_class` is created alongside the untouched input object.",
         },
@@ -441,14 +441,14 @@ pub fn all_command_meta() -> Vec<CommandMeta> {
         CommandMeta {
             id: 32,
             name: "Voronoi",
-            category: CommandCategory::Classify,
+            category: CommandCategory::Object,
             summary: "Computes a Voronoi tessellation from segmented seed objects.",
             description: "Each seed center expands outward until it reaches another region, the optional mask\nboundary, or the maximum radius. The resulting areas are stored as new ROIs labeled\nwith `output_class` and linked to their originating center object.",
         },
         CommandMeta {
             id: 33,
             name: "Watershed",
-            category: CommandCategory::Object,
+            category: CommandCategory::InstanceSegmentation,
             summary: "A morphological segmentation algorithm that splits touching objects using distance topography.",
             description: "This is a faithful port of ImageJ's `Process > Binary > Watershed`\n(`MaximumFinder` applied to the Euclidean distance map). Touching objects that\n`ConnectedComponents` merged into a single blob are split at their \"necks\":\nthe distance map's local maxima are the seeds, maxima protruding less than\n`maximum_finder_tolerance` above the ridge connecting them to a higher maximum\nare merged, and a constrained flood draws 1-pixel watershed lines between the\nsurviving basins. The split blob is then re-labeled into separate instances.",
         },
@@ -586,19 +586,19 @@ impl PipelineCommand {
 
     pub fn category(&self) -> &CommandCategory {
         match self {
-            Self::AiObjectClassifier(_) => &CommandCategory::Classify,
+            Self::AiObjectClassifier(_) => &CommandCategory::Object,
             Self::Blur(_) => &CommandCategory::Preprocess,
             Self::Cellpose(_) => &CommandCategory::Segment,
-            Self::ClassifyObjects(_) => &CommandCategory::Classify,
-            Self::Colocalization(_) => &CommandCategory::Classify,
+            Self::ClassifyObjects(_) => &CommandCategory::Object,
+            Self::Colocalization(_) => &CommandCategory::Object,
             Self::ColorFilterCommand(_) => &CommandCategory::Preprocess,
-            Self::ConnectedComponents(_) => &CommandCategory::Object,
+            Self::ConnectedComponents(_) => &CommandCategory::InstanceSegmentation,
             Self::DistanceTransform(_) => &CommandCategory::Preprocess,
             Self::EdgeDetectionCanny(_) => &CommandCategory::Preprocess,
             Self::EdgeDetectionSobel(_) => &CommandCategory::Preprocess,
             Self::EnhanceContrast(_) => &CommandCategory::Preprocess,
             Self::ExtractObjects(_) => &CommandCategory::Measure,
-            Self::FillHoles(_) => &CommandCategory::Object,
+            Self::FillHoles(_) => &CommandCategory::InstanceSegmentation,
             Self::GaussianBlur(_) => &CommandCategory::Preprocess,
             Self::Hessian(_) => &CommandCategory::Preprocess,
             Self::IlluminationCorrection(_) => &CommandCategory::Preprocess,
@@ -608,7 +608,7 @@ impl PipelineCommand {
             Self::Laplacian(_) => &CommandCategory::Preprocess,
             Self::MedianSubtract(_) => &CommandCategory::Preprocess,
             Self::MorphologicalCommand(_) => &CommandCategory::Preprocess,
-            Self::ObjectMath(_) => &CommandCategory::Classify,
+            Self::ObjectMath(_) => &CommandCategory::Object,
             Self::PixelClassifier(_) => &CommandCategory::Segment,
             Self::RankFilter(_) => &CommandCategory::Preprocess,
             Self::RollingBall(_) => &CommandCategory::Preprocess,
@@ -616,10 +616,10 @@ impl PipelineCommand {
             Self::Stardist(_) => &CommandCategory::Segment,
             Self::StructureTensor(_) => &CommandCategory::Preprocess,
             Self::Threshold(_) => &CommandCategory::Segment,
-            Self::TransformObjects(_) => &CommandCategory::Classify,
+            Self::TransformObjects(_) => &CommandCategory::Object,
             Self::UNet(_) => &CommandCategory::Segment,
-            Self::Voronoi(_) => &CommandCategory::Classify,
-            Self::Watershed(_) => &CommandCategory::Object,
+            Self::Voronoi(_) => &CommandCategory::Object,
+            Self::Watershed(_) => &CommandCategory::InstanceSegmentation,
             Self::WeightedDeviation(_) => &CommandCategory::Preprocess,
         }
     }
@@ -627,19 +627,22 @@ impl PipelineCommand {
     /// Categories that may be inserted immediately after this command.
     pub fn allowed_next(&self) -> &'static [CommandCategory] {
         match self {
-            Self::AiObjectClassifier(_) => &[CommandCategory::Classify],
+            Self::AiObjectClassifier(_) => &[CommandCategory::Object],
             Self::Blur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Cellpose(_) => &[CommandCategory::Measure],
-            Self::ClassifyObjects(_) => &[CommandCategory::Classify],
-            Self::Colocalization(_) => &[CommandCategory::Classify],
+            Self::ClassifyObjects(_) => &[CommandCategory::Object],
+            Self::Colocalization(_) => &[CommandCategory::Object],
             Self::ColorFilterCommand(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::ConnectedComponents(_) => &[CommandCategory::Object, CommandCategory::Measure],
+            Self::ConnectedComponents(_) => &[
+                CommandCategory::InstanceSegmentation,
+                CommandCategory::Measure,
+            ],
             Self::DistanceTransform(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EdgeDetectionCanny(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EdgeDetectionSobel(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::EnhanceContrast(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::ExtractObjects(_) => &[CommandCategory::Classify],
-            Self::FillHoles(_) => &[CommandCategory::Object],
+            Self::ExtractObjects(_) => &[CommandCategory::Object],
+            Self::FillHoles(_) => &[CommandCategory::InstanceSegmentation],
             Self::GaussianBlur(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Hessian(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::IlluminationCorrection(_) => {
@@ -655,17 +658,17 @@ impl PipelineCommand {
             Self::MorphologicalCommand(_) => {
                 &[CommandCategory::Segment, CommandCategory::Preprocess]
             }
-            Self::ObjectMath(_) => &[CommandCategory::Classify],
-            Self::PixelClassifier(_) => &[CommandCategory::Object],
+            Self::ObjectMath(_) => &[CommandCategory::Object],
+            Self::PixelClassifier(_) => &[CommandCategory::InstanceSegmentation],
             Self::RankFilter(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::RollingBall(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::SaveImage(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
             Self::Stardist(_) => &[CommandCategory::Measure],
             Self::StructureTensor(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
-            Self::Threshold(_) => &[CommandCategory::Object],
-            Self::TransformObjects(_) => &[CommandCategory::Classify],
-            Self::UNet(_) => &[CommandCategory::Object],
-            Self::Voronoi(_) => &[CommandCategory::Classify],
+            Self::Threshold(_) => &[CommandCategory::InstanceSegmentation],
+            Self::TransformObjects(_) => &[CommandCategory::Object],
+            Self::UNet(_) => &[CommandCategory::InstanceSegmentation],
+            Self::Voronoi(_) => &[CommandCategory::Object],
             Self::Watershed(_) => &[CommandCategory::Measure],
             Self::WeightedDeviation(_) => &[CommandCategory::Segment, CommandCategory::Preprocess],
         }

@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 /// A morphological segmentation algorithm that splits touching objects using distance topography.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "object", next = "measure")]
+#[cmdsmeta(category = "instance_segmentation", next = "measure")]
 ///
 /// This is a faithful port of ImageJ's `Process > Binary > Watershed`
 /// (`MaximumFinder` applied to the Euclidean distance map). Touching objects that

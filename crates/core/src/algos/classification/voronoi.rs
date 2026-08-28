@@ -33,7 +33,7 @@ use macros::CommandsMeta;
 /// boundary, or the maximum radius. The resulting areas are stored as new ROIs labeled
 /// with `output_class` and linked to their originating center object.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify")]
+#[cmdsmeta(category = "object")]
 pub struct Voronoi {
     /// Object class whose instances act as Voronoi seed points.
     pub centers: ObjectClass,

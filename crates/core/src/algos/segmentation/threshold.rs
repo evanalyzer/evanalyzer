@@ -169,7 +169,7 @@ pub struct ThresholdEntry {
 /// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
 /// determine which `object_class_id` it belongs to.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment", next = "object")]
+#[cmdsmeta(category = "segment", next = "instance_segmentation")]
 pub struct Threshold {
     /// A list of thresholding layers. Overlapping ranges are resolved
     /// by the order of the vector (last-in priority).

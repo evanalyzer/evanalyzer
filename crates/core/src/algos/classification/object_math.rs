@@ -62,7 +62,7 @@ impl From<&ObjectSetOperation> for BooleanOp {
 /// are unioned into a single "B" before the operation is applied, so the result
 /// doesn't depend on the order they'd otherwise be combined in.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify")]
+#[cmdsmeta(category = "object")]
 pub struct ObjectMath {
     /// Boolean set operation to apply
     #[cmdsmeta(summary = true)]

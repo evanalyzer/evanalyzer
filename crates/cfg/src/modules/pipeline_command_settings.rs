@@ -1665,7 +1665,7 @@ impl Default for UNetSettings {
     }
 }
 
-// ============ OBJECT ============
+// ============ INSTANCESEGMENTATION ============
 
 fn _serde_default_connectedcomponents_min_size() -> i32 {
     0i32
@@ -1836,7 +1836,7 @@ impl Default for ExtractObjectsSettings {
     }
 }
 
-// ============ CLASSIFICATION ============
+// ============ OBJECT ============
 
 /// An object classifier trained via the app's AI training dialog (an
 /// `.evamodel` file - see `ai_learning::training::object::ObjectTrainingJob`),

@@ -17,9 +17,12 @@ use crate::{
 
 /// Identifies and labels discrete objects within a binary or multi-class image.
 #[derive(CommandsMeta)]
-// Labelling usually exists to feed a splitter: suggest Object (Watershed) first,
-// while still allowing Measure for callers that don't need to split.
-#[cmdsmeta(category = "object", next = "object,measure")]
+// Labelling usually exists to feed a splitter: suggest InstanceSegmentation
+// (Watershed) first, while still allowing Measure for callers that don't need to split.
+#[cmdsmeta(
+    category = "instance_segmentation",
+    next = "instance_segmentation,measure"
+)]
 pub struct ConnectedComponents {
     /// Minimum object size, in pixels, an object must have to be kept.
     ///

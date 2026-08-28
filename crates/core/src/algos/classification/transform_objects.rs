@@ -110,7 +110,7 @@ pub enum TransformFunction {
 /// If `output_class` is unset (or equal to `input_class`) the input object is replaced in place;
 /// otherwise a new object carrying `output_class` is created alongside the untouched input object.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify")]
+#[cmdsmeta(category = "object")]
 pub struct TransformObjects {
     /// Geometric transform applied to each input object
     #[cmdsmeta(summary = true)]

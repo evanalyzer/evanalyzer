@@ -61,7 +61,7 @@ pub enum ClassifyMatchHandling {
 /// to extracted ROIs. Classification is performed using configurable criteria
 /// including area, shape descriptors, and intensity statistics.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify")]
+#[cmdsmeta(category = "object")]
 pub struct ClassifyObjects {
     /// Apply only to objects with this given segmentation class
     ///

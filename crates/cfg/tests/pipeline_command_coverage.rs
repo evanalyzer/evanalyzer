@@ -261,9 +261,9 @@ fn command_category_helpers_cover_every_variant() {
     let categories = [
         CommandCategory::Preprocess,
         CommandCategory::Segment,
-        CommandCategory::Object,
+        CommandCategory::InstanceSegmentation,
         CommandCategory::Measure,
-        CommandCategory::Classify,
+        CommandCategory::Object,
     ];
     for cat in categories {
         // These are `#[allow(dead_code)]` (unused outside tests currently),
@@ -291,9 +291,9 @@ fn command_category_helpers_cover_every_variant() {
 fn command_category_display_order_is_sequential_by_pipeline_stage() {
     assert_eq!(CommandCategory::Preprocess.display_order(), 0);
     assert_eq!(CommandCategory::Segment.display_order(), 1);
-    assert_eq!(CommandCategory::Object.display_order(), 2);
+    assert_eq!(CommandCategory::InstanceSegmentation.display_order(), 2);
     assert_eq!(CommandCategory::Measure.display_order(), 3);
-    assert_eq!(CommandCategory::Classify.display_order(), 4);
+    assert_eq!(CommandCategory::Object.display_order(), 4);
 }
 
 #[test]
@@ -307,42 +307,48 @@ fn command_category_allowed_after_matches_expected_predecessors() {
         &[CommandCategory::Preprocess, CommandCategory::Segment]
     );
     assert_eq!(
-        CommandCategory::Object.allowed_after(),
-        &[CommandCategory::Segment, CommandCategory::Object]
+        CommandCategory::InstanceSegmentation.allowed_after(),
+        &[
+            CommandCategory::Segment,
+            CommandCategory::InstanceSegmentation
+        ]
     );
     assert_eq!(
         CommandCategory::Measure.allowed_after(),
-        &[CommandCategory::Object, CommandCategory::Measure]
+        &[
+            CommandCategory::InstanceSegmentation,
+            CommandCategory::Measure
+        ]
     );
     assert_eq!(
-        CommandCategory::Classify.allowed_after(),
-        &[CommandCategory::Measure, CommandCategory::Classify]
+        CommandCategory::Object.allowed_after(),
+        &[CommandCategory::Measure, CommandCategory::Object]
     );
 }
 
 #[test]
-fn command_category_suggested_next_advances_and_terminates_at_classify() {
+fn command_category_suggested_next_advances_and_terminates_at_object() {
     assert_eq!(
         CommandCategory::Preprocess.suggested_next(),
         CommandCategory::Segment
     );
     assert_eq!(
         CommandCategory::Segment.suggested_next(),
-        CommandCategory::Object
+        CommandCategory::InstanceSegmentation
     );
     assert_eq!(
-        CommandCategory::Object.suggested_next(),
+        CommandCategory::InstanceSegmentation.suggested_next(),
         CommandCategory::Measure
     );
     assert_eq!(
         CommandCategory::Measure.suggested_next(),
-        CommandCategory::Classify
+        CommandCategory::Object
     );
-    // Classify is the terminal stage: it suggests itself rather than looping
+    // Object is the terminal stage: it suggests itself rather than looping
     // back or panicking.
     assert_eq!(
-        CommandCategory::Classify.suggested_next(),
-        CommandCategory::Classify
+        CommandCategory::Object.suggested_next(),
+        CommandCategory::Object
     );
 }
 
@@ -350,23 +356,24 @@ fn command_category_suggested_next_advances_and_terminates_at_classify() {
 fn allowed_next_returns_expected_categories_for_every_variant() {
     use CommandCategory::*;
     let expected: [(&str, &[CommandCategory]); 35] = [
-        ("AI Object Classifier", &[Classify]),
+        ("AI Object Classifier", &[Object]),
         ("Blur", &[Segment, Preprocess]),
         ("AI Cellpose Segmentation", &[Measure]),
-        ("ClassifyObjects", &[Classify]),
-        ("Colocalization", &[Classify]),
+        ("ClassifyObjects", &[Object]),
+        ("Colocalization", &[Object]),
         ("ColorFilterCommand", &[Segment, Preprocess]),
-        ("ConnectedComponents", &[Object, Measure]),
+        ("ConnectedComponents", &[InstanceSegmentation, Measure]),
         ("DistanceTransform", &[Segment, Preprocess]),
         ("EdgeDetectionCanny", &[Segment, Preprocess]),
         ("EdgeDetectionSobel", &[Segment, Preprocess]),
         ("EnhanceContrast", &[Segment, Preprocess]),
-        ("ExtractObjects", &[Classify]),
-        // Not `default_next_for_category("Object")` (`[Measure, Object]`) -
-        // pinned to just `[Object]`: `Measure`-stage commands like
+        ("ExtractObjects", &[Object]),
+        // Not `default_next_for_category("InstanceSegmentation")`
+        // (`[Measure, InstanceSegmentation]`) - pinned to just
+        // `[InstanceSegmentation]`: `Measure`-stage commands like
         // ExtractObjects expect instance IDs from ConnectedComponents/
         // Watershed, which haven't run yet right after FillHoles.
-        ("FillHoles", &[Object]),
+        ("FillHoles", &[InstanceSegmentation]),
         ("GaussianBlur", &[Segment, Preprocess]),
         ("Hessian", &[Segment, Preprocess]),
         ("IlluminationCorrection", &[Segment, Preprocess]),
@@ -376,20 +383,20 @@ fn allowed_next_returns_expected_categories_for_every_variant() {
         ("Laplacian", &[Segment, Preprocess]),
         ("MedianSubtract", &[Segment, Preprocess]),
         ("MorphologicalCommand", &[Segment, Preprocess]),
-        ("ObjectMath", &[Classify]),
-        ("AI Pixel Classifier", &[Object]),
+        ("ObjectMath", &[Object]),
+        ("AI Pixel Classifier", &[InstanceSegmentation]),
         ("RankFilter", &[Segment, Preprocess]),
         ("Rolling Ball", &[Segment, Preprocess]),
         ("SaveImage", &[Segment, Preprocess]),
         ("AI Stardist Segmentation", &[Measure]),
         ("StructureTensor", &[Segment, Preprocess]),
-        // Not the default `[Segment]` for `Threshold`'s own category -
-        // pinned to `[Object]` so `object`-category instance labeling
+        // Pinned to `[InstanceSegmentation]` (same as the default for
+        // `Threshold`'s own `Segment` category) so instance labeling
         // (ConnectedComponents) is suggested right after it.
-        ("Threshold", &[Object]),
-        ("TransformObjects", &[Classify]),
-        ("AI UNet Segmentation", &[Object]),
-        ("Voronoi", &[Classify]),
+        ("Threshold", &[InstanceSegmentation]),
+        ("TransformObjects", &[Object]),
+        ("AI UNet Segmentation", &[InstanceSegmentation]),
+        ("Voronoi", &[Object]),
         ("Watershed", &[Measure]),
         ("WeightedDeviation", &[Segment, Preprocess]),
     ];

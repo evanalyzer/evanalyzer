@@ -57,7 +57,7 @@ pub enum ColocMultiplicity {
 /// between intersecting entities and can optionally generate new child ROIs representing
 /// the precise intersection regions.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify")]
+#[cmdsmeta(category = "object")]
 pub struct Colocalization {
     /// Theses are the classes the coloclization should be calculated for
     pub classes_to_coloc: Vec<ObjectClass>,

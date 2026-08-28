@@ -17,7 +17,7 @@ import { ClassificationState, ClassItemData } from "classification_panel.slint";
 // ----------------------------------------------------------
 // Data model
 
-export enum StepCategory { preprocess, segment, object, measure, classify }
+export enum StepCategory { preprocess, segment, instance-segmentation, measure, object }
 export enum PipelineStatus { idle, queued, running, done, error }
 export enum ParamType {
     number,
@@ -103,7 +103,7 @@ global Cat {
             if c == StepCategory.segment {
                 return Theme.cat-segment;
             }
-            if c == StepCategory.object {
+            if c == StepCategory.instance-segmentation {
                 return Theme.cat-object;
             }
             if c == StepCategory.measure {
@@ -121,13 +121,13 @@ global Cat {
             if c == StepCategory.segment {
                 return "Segment";
             }
-            if c == StepCategory.object {
-                return "Object";
+            if c == StepCategory.instance-segmentation {
+                return "Instance Seg.";
             }
             if c == StepCategory.measure {
                 return "Measure";
             }
-            return "Classify";
+            return "Object";
         }
     }
 
@@ -2156,41 +2156,41 @@ export component PipelinesPanel inherits Rectangle {
             // vertical-stretch:1 to claim whatever this section leaves it) -
             // beyond the cap it scrolls instead.
             Rectangle {
-                height: min(PipelinesPanelState.pipelines.length * 49px + 7px, 200px);
+                    height: min(PipelinesPanelState.pipelines.length * 49px + 7px, 200px);
 
-                ScrollView {
-                    width: 100%;
-                    height: 100%;
+                    ScrollView {
+                        width: 100%;
+                        height: 100%;
 
-                    VerticalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
-                        spacing: 3px;
+                        VerticalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 3px;
 
-                        for p in PipelinesPanelState.pipelines: PipelineTab {
-                            pipeline: p;
-                            active: p.id == PipelinesPanelState.active-pipeline-id;
-                            selected => {
-                                PipelinesPanelState.active-pipeline-id = p.id;
-                                PipelinesPanelState.select-pipeline(p.id);
-                            }
-                            toggled => {
-                                PipelinesPanelState.toggle-pipeline(p.id);
-                            }
-                            move-up => {
-                                PipelinesPanelState.move-pipeline-up(p.id);
-                            }
-                            move-down => {
-                                PipelinesPanelState.move-pipeline-down(p.id);
-                            }
-                            more-clicked => {
-                                PipelinesPanelState.pipeline-more(p.id);
+                            for p in PipelinesPanelState.pipelines: PipelineTab {
+                                pipeline: p;
+                                active: p.id == PipelinesPanelState.active-pipeline-id;
+                                selected => {
+                                    PipelinesPanelState.active-pipeline-id = p.id;
+                                    PipelinesPanelState.select-pipeline(p.id);
+                                }
+                                toggled => {
+                                    PipelinesPanelState.toggle-pipeline(p.id);
+                                }
+                                move-up => {
+                                    PipelinesPanelState.move-pipeline-up(p.id);
+                                }
+                                move-down => {
+                                    PipelinesPanelState.move-pipeline-down(p.id);
+                                }
+                                more-clicked => {
+                                    PipelinesPanelState.pipeline-more(p.id);
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
             // --- 3. Editing-context bar ---
         Rectangle {
@@ -2317,7 +2317,7 @@ export component PipelinesPanel inherits Rectangle {
 
                 Row {
                     CategoryChip {
-                        category: StepCategory.classify;
+                        category: StepCategory.object;
                         count: PipelinesPanelState.cat-count-classify;
                         active: PipelinesPanelState.filter-category == 2;
                         clicked => {

@@ -41,7 +41,7 @@ use macros::CommandsMeta;
 /// **not** block this flood fill, exactly mirroring ImageJ's `FloodFiller`,
 /// whose own docs specify a 4-connected fill.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "object", next = "object")]
+#[cmdsmeta(category = "instance_segmentation", next = "instance_segmentation")]
 pub struct FillHoles {}
 
 impl ImageAlgorithm for FillHoles {
