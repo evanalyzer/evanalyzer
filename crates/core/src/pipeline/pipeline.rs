@@ -1,6 +1,6 @@
 use crate::{
     ImageTile, ManagedImage,
-    algos::{ExecutionScope, ImageAlgorithm},
+    algos::ImageAlgorithm,
     image::{ImageContainer, PixelSizes},
     pipeline::{
         pipeline_cache::{CacheAddress, GlobalPipelineCache},
@@ -63,11 +63,6 @@ pub struct Pipeline {
     /// a specific step still resolves correctly even though `Tile` and
     /// `WholeImage` commands are split into two separately-run lists.
     pub commands: Vec<(usize, Box<dyn ImageAlgorithm>)>,
-    /// `ExecutionScope::WholeImage` commands - see `commands`. Run once per
-    /// image via `run_whole_image`, after every tile's `run_tile` has
-    /// finished and tile-merge has reconciled the image's full object set -
-    /// never per-tile.
-    pub whole_image_commands: Vec<(usize, Box<dyn ImageAlgorithm>)>,
     /// Next as-authored step index to assign in `add_command`. Counts every
     /// command added regardless of which scope it lands in, so the index
     /// reflects the pipeline's authored order (what a breakpoint targets),
@@ -95,7 +90,6 @@ impl Pipeline {
             dependencies: Vec::new(),
             settings,
             commands: Vec::new(),
-            whole_image_commands: Vec::new(),
             next_step_index: 0,
         }
     }
@@ -106,10 +100,7 @@ impl Pipeline {
     pub fn add_command(&mut self, command: Box<dyn ImageAlgorithm>) {
         let step_index = self.next_step_index;
         self.next_step_index += 1;
-        match command.execution_scope() {
-            ExecutionScope::Tile => self.commands.push((step_index, command)),
-            ExecutionScope::WholeImage => self.whole_image_commands.push((step_index, command)),
-        }
+        self.commands.push((step_index, command));
     }
 
     // Add dependency
@@ -132,57 +123,13 @@ impl Pipeline {
     ///   - `true`  (Snapshot) — capture the buffers at that step, then
     ///     continue to completion; the capture is returned in
     ///     `breakpoint_capture`.
-    pub fn run_tile(
-        &self,
-        output_path: PathBuf,
-        cache: GlobalPipelineCache,
-        tile: ImageTile,
-        breakpoint_step: Option<i32>,
-        snapshot_mode: bool,
-    ) -> Result<PipelineResult, InternalErrors> {
-        self.run_commands(
-            output_path,
-            Some(tile),
-            cache,
-            breakpoint_step,
-            snapshot_mode,
-            &self.commands,
-        )
-    }
-
-    /// Execute this pipeline's whole-image (`ExecutionScope::WholeImage`)
-    /// commands.
-    ///
-    /// Must be called exactly once per image, after every tile's `run_tile`
-    /// has finished and tile-merge has reconciled the image's full object
-    /// set - never per-tile. See `run_tile` for `breakpoint_step`/
-    /// `snapshot_mode`; a step index belonging to a `Tile` command never
-    /// matches here.
-    pub fn run_whole_image(
-        &self,
-        output_path: PathBuf,
-        cache: GlobalPipelineCache,
-        breakpoint_step: Option<i32>,
-        snapshot_mode: bool,
-    ) -> Result<PipelineResult, InternalErrors> {
-        self.run_commands(
-            output_path,
-            None,
-            cache,
-            breakpoint_step,
-            snapshot_mode,
-            &self.whole_image_commands,
-        )
-    }
-
-    fn run_commands(
+    pub fn run_commands(
         &self,
         output_path: PathBuf,
         tile: Option<ImageTile>,
         mut cache: GlobalPipelineCache,
         breakpoint_step: Option<i32>,
         snapshot_mode: bool,
-        commands: &[(usize, Box<dyn ImageAlgorithm>)],
     ) -> Result<PipelineResult, InternalErrors> {
         let tile = match tile {
             Some(data) => data,
@@ -218,7 +165,7 @@ impl Pipeline {
         let start = Instant::now();
         let mut breakpoint_capture: Option<BreakpointCapture> = None;
 
-        for (step_index, command) in commands {
+        for (step_index, command) in &self.commands {
             let step_index = *step_index;
             let step_start = Instant::now();
             command.execute(&mut ctx, &mut cache)?;
@@ -428,15 +375,15 @@ mod tests {
                 max_objects_before_fail: 100_000,
             }));
             let result = stage1
-                .run_tile(
+                .run_commands(
                     PathBuf::default(),
-                    cache,
-                    crate::ImageTile {
+                    Some(crate::ImageTile {
                         offset_x: tile_offset.0,
                         offset_y: tile_offset.1,
                         width: tile_size.0,
                         height: tile_size.1,
-                    },
+                    }),
+                    cache,
                     None,
                     false,
                 )
@@ -474,7 +421,7 @@ mod tests {
             exclude_areas_with_no_center: false,
         }));
         let result = stage2
-            .run_whole_image(PathBuf::default(), whole_image_cache, None, false)
+            .run_commands(PathBuf::default(), None, whole_image_cache, None, false)
             .expect("whole-image stage must not fail");
 
         result.cache
@@ -612,15 +559,15 @@ mod tests {
         pipeline.add_command(Box::new(FakeSegmenter { rect: [0, 0, 1, 1] }));
 
         let result = pipeline
-            .run_tile(
+            .run_commands(
                 PathBuf::default(),
-                cache,
-                crate::ImageTile {
+                Some(crate::ImageTile {
                     offset_x: 0,
                     offset_y: 0,
                     width: size.width,
                     height: size.height,
-                },
+                }),
+                cache,
                 None,
                 false,
             )
@@ -666,15 +613,15 @@ mod tests {
         pipeline.add_command(Box::new(SetFirstPixel { value: 9.0 }));
 
         let result = pipeline
-            .run_tile(
+            .run_commands(
                 PathBuf::default(),
-                cache,
-                crate::ImageTile {
+                Some(crate::ImageTile {
                     offset_x: 0,
                     offset_y: 0,
                     width: size.width,
                     height: size.height,
-                },
+                }),
+                cache,
                 None,
                 false,
             )

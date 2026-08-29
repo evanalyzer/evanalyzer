@@ -157,7 +157,14 @@ impl From<evanalyzer_cfg::settings::project_settings::TileMergeConnectivity> for
 pub struct JobExecutor {
     pub project_path: PathBuf,
     pub output_path: PathBuf,
-    pub pipelines: IndexMap<PipelineId, Pipeline>,
+    
+    // The job_generator splits the user created pipelines in two parts.
+    // The pipelines steps which can be executed in parallel and thos which has to be executed
+    // after the preprocessing has been finished
+    pub pipelines_pre_process: IndexMap<PipelineId, Pipeline>,
+    pub pipelines_post_process: IndexMap<PipelineId, Pipeline>,
+
+
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
     pub global_image_settings: GlobalImageSettings,
@@ -169,12 +176,6 @@ pub struct JobExecutor {
 
     /// Debugging settings, if set the pipeline stops at this point and returns the actual image
     pub breakpoint: Option<BreakpointSettings>,
-
-    /// Opt-in setting to reassemble objects that got split across an
-    /// internal tile boundary back into one correct object - see
-    /// `docs/tile_merge_plan.md`. Defaults to disabled (a complete no-op);
-    /// set by `job_generator` from the project's own `ProjectSettings`.
-    pub tile_merge: TileMergeSettings,
 }
 
 impl<'a> JobExecutor {
@@ -188,7 +189,8 @@ impl<'a> JobExecutor {
         override_pixel_sizes: Option<PixelSizes>,
     ) -> Self {
         Self {
-            pipelines: IndexMap::new(),
+            pipelines_pre_process: IndexMap::new(),
+            pipelines_post_process: IndexMap::new(),
             project_path,
             output_path,
             image_base_path,
@@ -198,12 +200,15 @@ impl<'a> JobExecutor {
             override_pixel_sizes,
             preview_tile_settings: None,
             breakpoint: None,
-            tile_merge: TileMergeSettings::default(),
         }
     }
 
-    pub fn add_pipeline(&mut self, p: Pipeline) {
-        self.pipelines.insert(p.id, p);
+    pub fn add_pre_process_pipeline(&mut self, p: Pipeline) {
+        self.pipelines_pre_process.insert(p.id, p);
+    }
+
+    pub fn add_post_process_pipeline(&mut self, p: Pipeline) {
+        self.pipelines_post_process.insert(p.id, p);
     }
 
     /// Runs all images through the configured pipelines, blocking until complete.
@@ -669,7 +674,7 @@ impl<'a> JobExecutor {
                         if stop_capture.is_some() {
                             break;
                         }
-                        if let Some(p) = self.pipelines.get(pipe_id) {
+                        if let Some(p) = self.pipelines_pre_process.get(pipe_id) {
                             let (bp_step, snapshot_mode) = self
                                 .breakpoint
                                 .as_ref()
@@ -678,10 +683,10 @@ impl<'a> JobExecutor {
                                     (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot)
                                 })
                                 .unwrap_or((None, false));
-                            let result = p.run_tile(
+                            let result = p.run_commands(
                                 self.output_path.clone(),
+                                Some(tile),
                                 cache,
-                                tile,
                                 bp_step,
                                 snapshot_mode,
                             )?;
@@ -795,36 +800,15 @@ impl<'a> JobExecutor {
                         return Ok(());
                     }
 
-                    // Tile merging algorithm
-                    // TODO: Move this ti job_generator
-                    if self.tile_merge.enabled {
-                        let mut tile_merge_pipeline = Pipeline::new(
-                            PipelineId(0),
-                            CorePipelineSettings {
-                                start_image: ImageAddress::Scratchpad,
-                            },
-                        );
-                        tile_merge_pipeline.add_command(Box::new(TileMerge {
-                            classes_to_not_merge: self.tile_merge.classes_to_not_merge.clone(),
-                            connectivity: self.tile_merge.connectivity.into(),
-                            max_fragments_per_group: self.tile_merge.max_fragments_per_group,
-                        }));
-                        let result = tile_merge_pipeline.run_whole_image(
-                            self.output_path.clone(),
-                            merged_cache,
-                            None,
-                            false,
-                        )?;
-                        merged_cache = result.cache;
-                    }
+    
 
                     // Run every pipeline's whole-image-scoped commands
                     for pipe_id in order {
-                        let Some(p) = self.pipelines.get(pipe_id) else {
+                        let Some(p) = self.pipelines_post_process.get(pipe_id) else {
                             continue;
                         };
 
-                        if p.whole_image_commands.is_empty() {
+                        if p.commands.is_empty() {
                             continue;
                         }
                         let (bp_step, snapshot_mode) = self
@@ -833,8 +817,9 @@ impl<'a> JobExecutor {
                             .filter(|b| b.pipeline_id == *pipe_id)
                             .map(|b| (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot))
                             .unwrap_or((None, false));
-                        let result = p.run_whole_image(
+                        let result = p.run_commands(
                             self.output_path.clone(),
+                            None,
                             merged_cache,
                             bp_step,
                             snapshot_mode,
@@ -1179,10 +1164,10 @@ impl<'a> JobExecutor {
             }
         }
 
-        for name in self.pipelines.keys() {
+        for name in self.pipelines_post_process.keys() {
             visit(
                 name,
-                &self.pipelines,
+                &self.pipelines_post_process,
                 &mut visited,
                 &mut temp_visited,
                 &mut order,
@@ -1969,9 +1954,9 @@ mod execution_order_tests {
     #[test]
     fn pipelines_without_dependencies_preserve_insertion_order() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[]));
-        job.add_pipeline(make_pipeline(2, &[]));
-        job.add_pipeline(make_pipeline(3, &[]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[]));
+        job.add_pre_process_pipeline(make_pipeline(3, &[]));
 
         let order = job.get_execution_order();
 
@@ -1981,8 +1966,8 @@ mod execution_order_tests {
     #[test]
     fn dependency_runs_before_dependent() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[2]));
-        job.add_pipeline(make_pipeline(2, &[]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[2]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[]));
 
         let order = job.get_execution_order();
 
@@ -1992,9 +1977,9 @@ mod execution_order_tests {
     #[test]
     fn transitive_dependency_chain_is_fully_ordered() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[2]));
-        job.add_pipeline(make_pipeline(2, &[3]));
-        job.add_pipeline(make_pipeline(3, &[]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[2]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[3]));
+        job.add_pre_process_pipeline(make_pipeline(3, &[]));
 
         let order = job.get_execution_order();
 
@@ -2004,10 +1989,10 @@ mod execution_order_tests {
     #[test]
     fn diamond_dependency_orders_shared_dependency_first() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[])); // A
-        job.add_pipeline(make_pipeline(2, &[1])); // B depends on A
-        job.add_pipeline(make_pipeline(3, &[1])); // C depends on A
-        job.add_pipeline(make_pipeline(4, &[2, 3])); // D depends on B, C
+        job.add_pre_process_pipeline(make_pipeline(1, &[])); // A
+        job.add_pre_process_pipeline(make_pipeline(2, &[1])); // B depends on A
+        job.add_pre_process_pipeline(make_pipeline(3, &[1])); // C depends on A
+        job.add_pre_process_pipeline(make_pipeline(4, &[2, 3])); // D depends on B, C
 
         let order = job.get_execution_order();
         let pos = |id: u32| order.iter().position(|x| *x == PipelineId(id)).unwrap();
@@ -2021,7 +2006,7 @@ mod execution_order_tests {
     #[test]
     fn dependency_on_unregistered_pipeline_is_still_included_in_order() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[99]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[99]));
 
         let order = job.get_execution_order();
 
@@ -2039,8 +2024,8 @@ mod execution_order_tests {
     #[should_panic(expected = "Circular dependency detected!")]
     fn direct_circular_dependency_panics() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[2]));
-        job.add_pipeline(make_pipeline(2, &[1]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[2]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[1]));
 
         job.get_execution_order();
     }
@@ -2049,7 +2034,7 @@ mod execution_order_tests {
     #[should_panic(expected = "Circular dependency detected!")]
     fn self_dependency_panics() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[1]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[1]));
 
         job.get_execution_order();
     }
@@ -2058,9 +2043,9 @@ mod execution_order_tests {
     #[should_panic(expected = "Circular dependency detected!")]
     fn transitive_circular_dependency_panics() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[2]));
-        job.add_pipeline(make_pipeline(2, &[3]));
-        job.add_pipeline(make_pipeline(3, &[1]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[2]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[3]));
+        job.add_pre_process_pipeline(make_pipeline(3, &[1]));
 
         job.get_execution_order();
     }
@@ -2138,7 +2123,7 @@ mod full_run_integration_tests {
             Arc::new(Mutex::new(MemoryExporter { out_objects })),
             None,
         );
-        job.add_pipeline(threshold_connected_components_extract_pipeline());
+        job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
     }
 
@@ -2212,7 +2197,7 @@ mod full_run_integration_tests {
             Arc::new(Mutex::new(MemoryExporter { out_objects })),
             None,
         );
-        job.add_pipeline(threshold_connected_components_extract_pipeline());
+        job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
     }
 
@@ -2538,7 +2523,7 @@ mod tile_merge_end_to_end_tests {
 
     fn run_pipeline(cache: GlobalPipelineCache) -> GlobalPipelineCache {
         threshold_connected_components_extract_pipeline()
-            .run_whole_image(PathBuf::new(), cache, None, false)
+            .run_commands(PathBuf::new(),None, cache, None, false)
             .expect("pipeline must run successfully")
             .cache
     }
@@ -2683,7 +2668,7 @@ mod tile_merge_end_to_end_tests {
             max_fragments_per_group: 100,
         }));
         whole_image_cache = tile_merge_pipeline
-            .run_whole_image(PathBuf::new(), whole_image_cache, None, false)
+            .run_commands(PathBuf::new(),None, whole_image_cache, None, false)
             .unwrap()
             .cache;
 

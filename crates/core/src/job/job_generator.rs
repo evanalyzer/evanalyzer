@@ -1,12 +1,16 @@
 use crate::{
     DuckDbExporter, MemoryExporter,
+    algos::TileMerge,
     image::PixelSizes,
     job::job_executor::JobExecutor,
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
-use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION};
+use evanalyzer_cfg::{
+    PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION,
+    core_types::{ImageAddress, PipelineId},
+};
 use evanalyzer_cfg::{
     core_types::InternalErrors,
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},
@@ -177,29 +181,58 @@ fn generate_job_from_project_settings_intenal(
         result_storage,
         pixel_sizes,
     );
-    job.tile_merge = config.tile_merge.clone();
 
+    // If tile merged is enabled, add this command as first post process pipeline.
+    // This command must run before any other object command
+    if config.tile_merge.enabled {
+        let mut tile_merge_pipeline = Pipeline::new(
+            PipelineId(0xFFFFFFFF),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        tile_merge_pipeline.add_command(Box::new(TileMerge {
+            classes_to_not_merge: config.tile_merge.classes_to_not_merge.clone(),
+            connectivity: config.tile_merge.connectivity.into(),
+            max_fragments_per_group: config.tile_merge.max_fragments_per_group,
+        }));
+        job.add_post_process_pipeline(tile_merge_pipeline);
+    }
+
+    // Now generate the pipelines from the user settings
     for pipeline_setting in &config.pipelines {
         if !pipeline_setting.enabled {
             continue;
         }
 
-        let mut pipeline = Pipeline::new(
+        let mut pipeline_pre_process = Pipeline::new(
             pipeline_setting.id.clone(),
             CorePipelineSettings {
                 start_image: pipeline_setting.image_source,
             },
         );
 
+        let mut pipeline_post_process = Pipeline::new(
+            pipeline_setting.id.clone(),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+
         for step in &pipeline_setting.steps {
             if step.enabled {
-                pipeline.add_command(super::algos_from_config::into_algorithm(
-                    step.command.clone(),
-                )?);
+                let step = super::algos_from_config::into_algorithm(step.command.clone())?;
+                match step.execution_scope() {
+                    crate::algos::ExecutionScope::Tile => pipeline_pre_process.add_command(step),
+                    crate::algos::ExecutionScope::WholeImage => {
+                        pipeline_post_process.add_command(step)
+                    }
+                }
             }
         }
 
-        job.add_pipeline(pipeline);
+        job.add_pre_process_pipeline(pipeline_pre_process);
+        job.add_post_process_pipeline(pipeline_post_process);
     }
 
     Ok(job)
@@ -269,7 +302,7 @@ mod tests {
         assert_eq!(job.output_path, expected_output);
         assert_eq!(job.project_path, project_dir.path());
         assert_eq!(job.image_base_path, image_root.path());
-        assert!(job.pipelines.is_empty());
+        assert!(job.pipelines_pre_process.is_empty());
     }
 
     #[test]
@@ -289,12 +322,12 @@ mod tests {
                 .unwrap();
 
         assert_eq!(
-            job.pipelines.len(),
+            job.pipelines_pre_process.len(),
             1,
             "only the enabled pipeline must be added"
         );
-        assert!(job.pipelines.contains_key(&PipelineId(2)));
-        assert!(!job.pipelines.contains_key(&PipelineId(1)));
+        assert!(job.pipelines_pre_process.contains_key(&PipelineId(2)));
+        assert!(!job.pipelines_pre_process.contains_key(&PipelineId(1)));
     }
 
     #[test]
@@ -315,7 +348,7 @@ mod tests {
                 .unwrap();
 
         let built = job
-            .pipelines
+            .pipelines_pre_process
             .get(&PipelineId(1))
             .expect("pipeline 1 must exist");
         assert_eq!(
@@ -377,7 +410,7 @@ mod tests {
         )
         .expect("valid config with an image root must succeed");
 
-        assert_eq!(job.pipelines.len(), 1);
+        assert_eq!(job.pipelines_pre_process.len(), 1);
         assert!(
             job.output_path
                 .starts_with(project_dir.path().join("results")),
