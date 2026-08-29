@@ -44,7 +44,7 @@ impl Default for GlobalImageMeta {
                 height: 0,
             },
             is_rgb: Default::default(),
-            nr_of_bits: Default::default(),
+            nr_of_bits: 16,
             pixel_sizes: Default::default(),
         }
     }
@@ -393,7 +393,14 @@ mod cache_tests {
         cache.image_meta.is_rgb = false;
 
         let result = cache
-            .get_image_from_cache(&CacheAddress::Scratchpad, ImageTile::default())
+            .get_image_from_cache(
+                &CacheAddress::Scratchpad,
+                ImageTile {
+                    width: 3,
+                    height: 2,
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         match result.as_ref() {
@@ -412,7 +419,14 @@ mod cache_tests {
         cache.image_meta.is_rgb = true;
 
         let result = cache
-            .get_image_from_cache(&CacheAddress::Scratchpad, ImageTile::default())
+            .get_image_from_cache(
+                &CacheAddress::Scratchpad,
+                ImageTile {
+                    width: 2,
+                    height: 2,
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         match result.as_ref() {

@@ -2232,7 +2232,7 @@ mod tests {
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),
             channel,
-            ImageTile::default(),
+            ctx.image_meta.image_tile_info.clone(),
         );
 
         let cmd = Threshold {
@@ -2335,7 +2335,7 @@ mod tests {
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_rgb_from_image_test(rgb_image)),
             channel,
-            ImageTile::default(),
+            ctx.image_meta.image_tile_info.clone(),
         );
 
         let cmd = Threshold {
@@ -2368,7 +2368,7 @@ mod tests {
         cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),
             channel,
-            ImageTile::default(),
+            ctx.image_meta.image_tile_info.clone(),
         );
 
         let cmd = Threshold {

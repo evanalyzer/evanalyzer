@@ -1143,7 +1143,8 @@ impl<'a> JobExecutor {
 
         fn visit(
             name: &PipelineId,
-            pipelines: &IndexMap<PipelineId, Pipeline>,
+            pre_pipelines: &IndexMap<PipelineId, Pipeline>,
+            post_pipelines: &IndexMap<PipelineId, Pipeline>,
             visited: &mut HashSet<PipelineId>,
             temp_visited: &mut HashSet<PipelineId>,
             order: &mut Vec<PipelineId>,
@@ -1153,9 +1154,9 @@ impl<'a> JobExecutor {
             }
             if !visited.contains(name) {
                 temp_visited.insert(name.clone());
-                if let Some(p) = pipelines.get(name) {
+                if let Some(p) = pre_pipelines.get(name).or_else(|| post_pipelines.get(name)) {
                     for dep in &p.dependencies {
-                        visit(dep, pipelines, visited, temp_visited, order);
+                        visit(dep, pre_pipelines, post_pipelines, visited, temp_visited, order);
                     }
                 }
                 temp_visited.remove(name);
@@ -1164,9 +1165,18 @@ impl<'a> JobExecutor {
             }
         }
 
-        for name in self.pipelines_post_process.keys() {
+        // Both maps share one dependency graph - a post-process pipeline can
+        // depend on a pre-process one finishing first (and vice versa isn't
+        // ruled out by the type system either), so the order must be computed
+        // over their union, not just `pipelines_post_process` alone.
+        for name in self
+            .pipelines_pre_process
+            .keys()
+            .chain(self.pipelines_post_process.keys())
+        {
             visit(
                 name,
+                &self.pipelines_pre_process,
                 &self.pipelines_post_process,
                 &mut visited,
                 &mut temp_visited,
@@ -2521,9 +2531,14 @@ mod tile_merge_end_to_end_tests {
         }
     }
 
-    fn run_pipeline(cache: GlobalPipelineCache) -> GlobalPipelineCache {
+    /// `tile` must match the `ImageTile` key `gray_tile_cache` stored the
+    /// channel image under - `run_commands`'s `None` fallback assumes the
+    /// tile covers the *whole* image (`cache.image_meta.full_image_width`),
+    /// which is only true for the untiled reference run, not for a real
+    /// sub-tile like `tile_a`/`tile_b` below.
+    fn run_pipeline(cache: GlobalPipelineCache, tile: ImageTile) -> GlobalPipelineCache {
         threshold_connected_components_extract_pipeline()
-            .run_commands(PathBuf::new(),None, cache, None, false)
+            .run_commands(PathBuf::new(), Some(tile), cache, None, false)
             .expect("pipeline must run successfully")
             .cache
     }
@@ -2574,7 +2589,15 @@ mod tile_merge_end_to_end_tests {
     #[test]
     fn tiled_merge_reproduces_the_untiled_reference_object() {
         // Reference: single tile covering the whole image.
-        let reference_cache = run_pipeline(gray_tile_cache(whole_image_data(), 6, 3, 0, 6, 3));
+        let reference_cache = run_pipeline(
+            gray_tile_cache(whole_image_data(), 6, 3, 0, 6, 3),
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: 6,
+                height: 3,
+            },
+        );
         let reference_objects: Vec<_> = reference_cache.object_cache.values().collect();
         assert_eq!(
             reference_objects.len(),
@@ -2608,8 +2631,8 @@ mod tile_merge_end_to_end_tests {
             width: 3,
             height: 3,
         };
-        let mut cache_a = run_pipeline(gray_tile_cache(tile_a_data, 3, 3, 0, 6, 3));
-        let mut cache_b = run_pipeline(gray_tile_cache(tile_b_data, 3, 3, 3, 6, 3));
+        let mut cache_a = run_pipeline(gray_tile_cache(tile_a_data, 3, 3, 0, 6, 3), tile_a);
+        let mut cache_b = run_pipeline(gray_tile_cache(tile_b_data, 3, 3, 3, 6, 3), tile_b);
 
         assert_eq!(
             cache_a.object_cache.len(),

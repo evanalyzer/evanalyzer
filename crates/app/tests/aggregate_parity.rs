@@ -65,6 +65,10 @@ fn export_fixture(images: Vec<(&str, Vec<Object>)>) -> (tempfile::TempDir, Resul
             image_rel_path: PathBuf::from(image_rel_path),
             ..Default::default()
         };
+        // The exporter rejects an implausible bit depth (guards against
+        // `1u64 << nr_of_bits` overflowing); these tests only care about
+        // object/aggregation data, so just supply a plausible value.
+        cache.image_meta.nr_of_bits = 16;
         for object in objects {
             cache.object_cache.insert(object.id.clone(), object);
         }
