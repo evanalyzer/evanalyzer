@@ -12,7 +12,7 @@ use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     object::{Intensity, Object, ObjectInit},
     pipeline::{
-        pipeline_cache::{PipelineCache, sample_channel_pixel},
+        pipeline_cache::{GlobalPipelineCache, sample_channel_pixel},
         pipeline_context::PipelineContext,
     },
 };
@@ -60,8 +60,9 @@ impl ImageAlgorithm for ExtractObjects {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
+        let tile = ctx.image_meta.image_tile_info.clone();
         let size = ctx.get_image_size();
         let (w, h) = (size.width as usize, size.height as usize);
 
@@ -105,8 +106,12 @@ impl ImageAlgorithm for ExtractObjects {
         // so they share the tile's own pixel grid 1:1 with the label/instance maps -
         // no resolution scaling against `full_image_size` applies here, the channel
         // index is identical to the label map's `row + x`.
-        let channel_views = cache.image_cache.resolve_channel_views();
+        let channel_views = cache.resolve_channel_views();
         let n_ch = channel_views.len();
+        // Pass 2 (below) only needs the channel ids, not the pixel slices - pulling
+        // them out as an owned Vec lets this borrow of `cache` end after pass 1, so
+        // `cache.object_cache.extend(..)` can borrow `cache` mutably afterwards.
+        let channel_ids: Vec<i32> = channel_views.iter().map(|(idx, _, _)| idx.0).collect();
         let n_obj = max_id + 1;
 
         // Struct-of-arrays accumulators. Pass 1 only ever touches these small, contiguous
@@ -209,10 +214,10 @@ impl ImageAlgorithm for ExtractObjects {
                 let base = id * n_ch;
                 let n = area[id] as f64;
                 let mut intensities = IndexMap::with_capacity(n_ch);
-                for (ci, (ch_idx, _, _)) in channel_views.iter().enumerate() {
+                for (ci, &ch_idx) in channel_ids.iter().enumerate() {
                     let k = base + ci;
                     intensities.insert(
-                        *ch_idx,
+                        ch_idx,
                         Intensity {
                             sum_intensity: i_sum[k],
                             min_intensity: i_min[k],
@@ -238,7 +243,7 @@ impl ImageAlgorithm for ExtractObjects {
                     sum_xy: sum_xy[id],
                     intensities,
                     plane,
-                    source_tile: cache.image_cache.image_meta.image_tile_info.clone(),
+                    source_tile: tile.clone(),
                     ..Default::default()
                 });
                 // Assign the segmentation class as default first object class so classify object is not mandatory.
@@ -424,7 +429,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        F32Gray, ImagePlane,
+        F32Gray, ImagePlane, ImageTile,
         image::{ManagedImage, PixelSizes},
     };
     use bitvec::slice::BitSlice;
@@ -439,7 +444,7 @@ mod tests {
             height: 10,
         };
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 1. Setup Mock Data
         // Create an Intensity Image (f32)
@@ -504,7 +509,7 @@ mod tests {
             .expect("Failed to create test image"),
         );
 
-        cache.image_cache.add_to_channel_cache(ctx.image.clone(), 0);
+        cache.add_to_channel_cache(ctx.image.clone(), 0, ImageTile::default());
 
         // 2. Execute Algorithm
         let extractor = ExtractObjects {
@@ -572,7 +577,7 @@ mod tests {
 
         let mut ctx =
             PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Define a 1x1 object at the very top-left of this tile (local 0,0)
         // Global coordinates should be (10+0, 15+0) = (10, 15)
@@ -606,7 +611,7 @@ mod tests {
                 .unwrap(),
         );
 
-        cache.image_cache.add_to_channel_cache(ctx.image.clone(), 0);
+        cache.add_to_channel_cache(ctx.image.clone(), 0, ImageTile::default());
 
         // Execute
         let extractor = ExtractObjects {
@@ -655,7 +660,7 @@ mod tests {
 
         let mut ctx =
             PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Two objects at different tile-local positions, each with a distinct intensity.
         let mut classes = vec![0u32; 15 * 20];
@@ -687,7 +692,7 @@ mod tests {
                 .unwrap(),
         );
 
-        cache.image_cache.add_to_channel_cache(ctx.image.clone(), 0);
+        cache.add_to_channel_cache(ctx.image.clone(), 0, ImageTile::default());
 
         let extractor = ExtractObjects {
             max_objects_before_fail: 100_000,

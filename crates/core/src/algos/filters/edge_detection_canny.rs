@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, ImageAlgorithm, GlobalPipelineCache, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::gaussian_blur;
@@ -70,7 +70,7 @@ impl ImageAlgorithm for EdgeDetectionCanny {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let (input, output) = match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(in_img), ImageContainer::F32Gray(out_img)) => {
@@ -265,7 +265,6 @@ fn calculate_sigma(kernel_size: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::pipeline_cache::ImageCache;
     // Assuming these exist based on your code
     // use crate::image::{ImageContainer, PipelineContext, CpuAllocator};
 
@@ -293,7 +292,7 @@ mod tests {
 
         // Initialize Context
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Initialize Algorithm
         let canny = EdgeDetectionCanny {
@@ -346,7 +345,7 @@ mod tests {
         .unwrap();
 
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let canny = EdgeDetectionCanny {
             kernel_size: 3,
             threshold_min: 0.1,
@@ -373,7 +372,7 @@ mod tests {
         .unwrap();
 
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let canny = EdgeDetectionCanny {
             kernel_size: 3,
             threshold_min: 0.1,

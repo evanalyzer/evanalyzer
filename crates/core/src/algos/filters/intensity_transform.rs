@@ -10,7 +10,7 @@
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     image::ImageContainer,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -69,7 +69,7 @@ impl ImageAlgorithm for IntensityTransformation {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         match Arc::make_mut(&mut ctx.image) {
             // These are different types, so they need separate arms

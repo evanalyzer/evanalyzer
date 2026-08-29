@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use crate::ImagePlane;
 use crate::ImageTile;
 use crate::pipeline::{
-    pipeline_cache::{PipelineCache, sample_channel_pixel},
+    pipeline_cache::{GlobalPipelineCache, sample_channel_pixel},
     pipeline_context::PipelineContext,
 };
 
@@ -824,7 +824,7 @@ impl Object {
     pub fn measure_intensities(
         &self,
         ctx: &PipelineContext,
-        cache: &PipelineCache,
+        cache: &GlobalPipelineCache,
     ) -> IndexMap<i32, Intensity> {
         let tile_offset = ctx.get_image_tile_offset();
         // Channel images are loaded for the current tile, so they share that tile's
@@ -835,7 +835,7 @@ impl Object {
         let tile_size = ctx.get_image_size();
         let origin_width = tile_size.width;
 
-        let channel_views = cache.image_cache.resolve_channel_views();
+        let channel_views = cache.resolve_channel_views();
 
         let [xmin, ymin, xmax, ymax] = self.bbox;
         let rw = (xmax - xmin + 1) as usize;
@@ -905,6 +905,7 @@ impl Object {
                     },
                 )
             })
+            .map(|(k, v)| (k.0, v))
             .collect()
     }
 
@@ -1476,7 +1477,9 @@ mod tests {
         // synthesized object (e.g. colocalization intersections, Voronoi regions)
         // sample channel pixel 0 regardless of its actual tile-local position.
         use crate::image::ManagedImage;
-        use crate::pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext};
+        use crate::pipeline::{
+            pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext,
+        };
         use crate::{F32Gray, ImageContainer, ImagePlane};
         use kornia_apriltag::utils::Point2d;
         use kornia_image::{Image, ImageSize};
@@ -1495,7 +1498,7 @@ mod tests {
 
         let ctx =
             PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Distinct intensities at two different tile-local positions.
         let mut intensity = vec![0.0f32; 15 * 20];
@@ -1511,7 +1514,7 @@ mod tests {
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
-        cache.image_cache.add_to_channel_cache(channel, 0);
+        cache.add_to_channel_cache(channel, 0, ImageTile::default());
 
         // A 1-pixel object at the global position corresponding to tile-local (7,5).
         let object = Object::new(ObjectInit {
@@ -1541,7 +1544,9 @@ mod tests {
         // channel slice miles out of bounds, panicking. Now those pixels must simply be
         // skipped rather than sampled.
         use crate::image::ManagedImage;
-        use crate::pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext};
+        use crate::pipeline::{
+            pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext,
+        };
         use crate::{F32Gray, ImageContainer, ImagePlane};
         use kornia_apriltag::utils::Point2d;
         use kornia_image::{Image, ImageSize};
@@ -1560,7 +1565,7 @@ mod tests {
 
         let ctx =
             PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let mut intensity = vec![7.0f32; 15 * 20];
         intensity[5 * 15 + 7] = 99.0; // tile-local (7,5)
@@ -1574,7 +1579,7 @@ mod tests {
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
-        cache.image_cache.add_to_channel_cache(channel, 0);
+        cache.add_to_channel_cache(channel, 0, ImageTile::default());
 
         // A 4x4 mask straddling the tile's top-left corner: global x in [8, 11], y in
         // [13, 16] against a tile that only starts at (10, 15). Only the bottom-right

@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::{algos::{ExecutionScope, ImageAlgorithm}, pipeline::pipeline_context::PipelineContext};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
@@ -50,7 +50,7 @@ impl ImageAlgorithm for FillHoles {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let (segmentation, scratch) = ctx.get_segmentation_map_u32_buf()?;
         let size = segmentation.size();
@@ -253,7 +253,7 @@ mod tests {
             CpuAllocator,
         )?);
 
-        FillHoles {}.execute(&mut ctx, &mut PipelineCache::default())?;
+        FillHoles {}.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
 
         let labels = ctx.segmentation_map.as_ref().expect("no labels found");
         assert_eq!(

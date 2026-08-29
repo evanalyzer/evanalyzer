@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 /// `job::object_scratch`, paging tiles in/out of memory as `insert`/`get`/
 /// `values`/etc. are called - transparently to every algorithm that already
 /// calls these methods, since none of their call sites need to change.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ObjectCache {
     objects: BTreeMap<ObjectId, Object>,
 }

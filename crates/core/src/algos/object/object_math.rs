@@ -109,7 +109,7 @@ impl ImageAlgorithm for ObjectMath {
     fn execute(
         &self,
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
-        cache: &mut crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         if self.input_class == ObjectClass::Unset || self.other_class == ObjectClass::Unset {
             return Ok(());
@@ -245,10 +245,11 @@ impl ImageAlgorithm for ObjectMath {
 mod tests {
     use super::*;
     use crate::{
-        ImageContainer, ImagePlane, ManagedImage,
+        ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
         pipeline::{
-            pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
+            pipeline::PipelineImageMeta,
+            pipeline_cache::{GlobalImageMeta, GlobalPipelineCache},
             pipeline_context::PipelineContext,
         },
     };
@@ -298,7 +299,7 @@ mod tests {
     /// `cache`, so intensity measurement has something real to sample.
     fn make_ctx_with_channel(
         size: ImageSize,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
         value: f32,
     ) -> PipelineContext {
         let ctx = make_ctx(size);
@@ -308,13 +309,7 @@ mod tests {
             CpuAllocator,
         )
         .unwrap();
-        cache.image_cache.image_meta = PipelineImageMeta {
-            image_tile_info: crate::ImageTile {
-                offset_x: 0,
-                offset_y: 0,
-                width: size.width,
-                height: size.height,
-            },
+        cache.image_meta = GlobalImageMeta {
             full_image_width: size,
             is_rgb: false,
             nr_of_bits: 8,
@@ -324,13 +319,14 @@ mod tests {
                 px_size_z: 1.0,
             },
         };
-        cache.image_cache.add_to_channel_cache(
+        cache.add_to_channel_cache(
             std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
             })),
             0,
+            ImageTile::default(),
         );
         ctx
     }
@@ -371,7 +367,7 @@ mod tests {
     #[test]
     fn subtract_creates_cytoplasm_like_shape_excluding_the_nucleus() {
         let cmd = default_cmd(ObjectSetOperation::Subtract, OUT);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // Cell: 10x10 at (10,10) -> bbox [10,10,19,19], area 100.
         let cell = make_square_object(ID_A, 10, 10, 10, CELL);
         // Nucleus: 4x4 at (13,13) -> bbox [13,13,16,16], area 16, fully inside the cell.
@@ -409,7 +405,7 @@ mod tests {
     #[test]
     fn and_keeps_only_the_overlap() {
         let cmd = default_cmd(ObjectSetOperation::And, OUT);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cell = make_square_object(ID_A, 10, 10, 10, CELL); // [10,10,19,19]
         let nucleus = make_square_object(200_000, 13, 13, 4, NUCLEUS); // [13,13,16,16], inside cell
         cache.object_cache.insert(cell.id.clone(), cell);
@@ -436,7 +432,7 @@ mod tests {
     #[test]
     fn or_extends_beyond_the_input_bbox() {
         let cmd = default_cmd(ObjectSetOperation::Or, OUT);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let a = make_square_object(ID_A, 10, 10, 10, CELL); // [10,10,19,19], area 100
         let b = make_square_object(200_000, 15, 15, 10, NUCLEUS); // [15,15,24,24], area 100, overlap 25
         cache.object_cache.insert(a.id.clone(), a);
@@ -464,7 +460,7 @@ mod tests {
     #[test]
     fn xor_excludes_the_overlap() {
         let cmd = default_cmd(ObjectSetOperation::Xor, OUT);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let a = make_square_object(ID_A, 10, 10, 10, CELL); // area 100
         let b = make_square_object(200_000, 15, 15, 10, NUCLEUS); // area 100, overlap 25
         cache.object_cache.insert(a.id.clone(), a);
@@ -494,7 +490,7 @@ mod tests {
         // a policy override: it means "don't touch this object at all", not "replace it
         // with the literal (empty) result".
         let cmd = default_cmd(ObjectSetOperation::And, ObjectClass::Unset);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cell = make_square_object(ID_A, 10, 10, 10, CELL);
         let original_area = cell.area;
         cache.object_cache.insert(cell.id.clone(), cell);
@@ -514,7 +510,7 @@ mod tests {
     fn drops_unmatched_input_when_keep_unmatched_false() {
         let mut cmd = default_cmd(ObjectSetOperation::Or, ObjectClass::Unset);
         cmd.keep_unmatched = false;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cell = make_square_object(ID_A, 10, 10, 10, CELL);
         cache.object_cache.insert(cell.id.clone(), cell);
 
@@ -533,7 +529,7 @@ mod tests {
     #[test]
     fn in_place_replaces_input_when_output_class_unset() {
         let cmd = default_cmd(ObjectSetOperation::Subtract, ObjectClass::Unset);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cell = make_square_object(ID_A, 10, 10, 10, CELL);
         let nucleus = make_square_object(200_000, 13, 13, 4, NUCLEUS);
         cache.object_cache.insert(cell.id.clone(), cell);
@@ -559,7 +555,7 @@ mod tests {
         const DEBRIS: ObjectClass = ObjectClass::Valid(13);
         let mut cmd = default_cmd(ObjectSetOperation::Subtract, ObjectClass::Unset);
         cmd.other_class = DEBRIS;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cell = make_square_object(ID_A, 10, 10, 10, CELL); // [10,10,19,19], area 100
         let debris_a = make_square_object(200_001, 10, 10, 3, DEBRIS); // corner, area 9
         let debris_b = make_square_object(200_002, 16, 16, 3, DEBRIS); // opposite corner, area 9
@@ -586,7 +582,7 @@ mod tests {
         const CHANNEL: i32 = 0;
         const VALUE: f32 = 4.0;
         let cmd = default_cmd(ObjectSetOperation::Subtract, OUT);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cell = make_square_object(ID_A, 10, 10, 10, CELL);
         let nucleus = make_square_object(200_000, 13, 13, 4, NUCLEUS);
         cache.object_cache.insert(cell.id.clone(), cell);

@@ -9,7 +9,7 @@
 
 use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage, PixelSizes};
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
@@ -80,7 +80,7 @@ impl ImageAlgorithm for Hessian {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         match Arc::make_mut(&mut ctx.image) {
             ImageContainer::F32Gray(img) => {
@@ -209,15 +209,10 @@ fn process_f32_gray(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use kornia_image::ImageSize;
-
     use super::*;
-    use crate::pipeline::{
-        pipeline::PipelineImageMeta,
-        pipeline_cache::{ImageCache, PipelineCache},
-    };
+    use crate::pipeline::{pipeline::PipelineImageMeta, pipeline_cache::GlobalPipelineCache};
+    use kornia_image::ImageSize;
+    use std::path::PathBuf;
 
     #[test]
     fn test_hessian_determinant() {
@@ -236,7 +231,7 @@ mod tests {
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let detector = Hessian {
             mode: HessianMode::Determinant,
@@ -287,7 +282,7 @@ mod tests {
             crate::image::ImageContainer::new_f32_rgb_from_image_test(img).into(),
         )
         .unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let detector = Hessian {
             mode: HessianMode::Determinant,
@@ -325,7 +320,7 @@ mod tests {
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Test EigenvaluesX (Larger curvature/principal axis)
         let detector_x = Hessian {
@@ -373,7 +368,7 @@ mod tests {
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let detector = Hessian {
             mode: HessianMode::Determinant,

@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::sobel;
@@ -53,7 +53,7 @@ impl ImageAlgorithm for EdgeDetectionSobel {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let (input, output) = match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(in_img), ImageContainer::F32Gray(out_img)) => {
@@ -88,8 +88,6 @@ impl ImageAlgorithm for EdgeDetectionSobel {
 
 #[cfg(test)]
 mod tests {
-    use crate::pipeline::pipeline_cache::ImageCache;
-
     use super::*;
     use kornia_image::Image;
     use kornia_image::ImageSize;
@@ -116,7 +114,7 @@ mod tests {
         // Mock context
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         sobel_algo.execute(&mut ctx, &mut cache).unwrap();
 
@@ -155,7 +153,7 @@ mod tests {
 
         // Initialize Context with F32Rgb
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Setup the command
         let sobel_algo = EdgeDetectionSobel { kernel_size: 3 };

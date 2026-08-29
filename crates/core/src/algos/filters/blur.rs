@@ -10,7 +10,7 @@
 use std::f32::consts::E;
 use std::sync::Arc;
 
-use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::{Image, ImageSize};
@@ -58,7 +58,7 @@ impl ImageAlgorithm for Blur {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         if self.kernel_size % 2 == 0 {
             return Err(InternalErrors::Internal("kernel_size must be odd".into()));
@@ -191,7 +191,6 @@ mod tests {
     use super::*;
     use crate::image::PixelSizes;
     use crate::pipeline::pipeline::PipelineImageMeta;
-    use crate::pipeline::pipeline_cache::ImageCache;
     use kornia_image::Image;
     use kornia_image::ImageSize;
     use kornia_tensor::CpuAllocator;
@@ -212,7 +211,7 @@ mod tests {
 
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Execute
         blur_cmd
@@ -271,7 +270,7 @@ mod tests {
         let input_img = Image::new(size, data, CpuAllocator).unwrap();
         let blur_cmd = Blur { kernel_size: 3 };
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         blur_cmd
             .execute(&mut ctx, &mut cache)
             .expect("Blur execution failed");
@@ -318,7 +317,7 @@ mod tests {
         // Create context with F32Rgb
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img)
             .expect("Failed to create RGB context");
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Execute
         blur_cmd
@@ -397,7 +396,7 @@ mod tests {
         };
 
         let blur_cmd = Blur { kernel_size: 3 };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 4. Execute and assert the specific error
         let result = blur_cmd.execute(&mut ctx, &mut cache);
@@ -448,7 +447,7 @@ mod tests {
         let img = Image::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
         let blur_cmd = Blur { kernel_size: 0 };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let result = blur_cmd.execute(&mut ctx, &mut cache);
         assert!(result.is_err(), "kernel_size=0 should be rejected");
@@ -465,7 +464,7 @@ mod tests {
 
         // Force an error: Use an even kernel size (most libs reject this)
         let blur_cmd = Blur { kernel_size: 2 };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let result = blur_cmd.execute(&mut ctx, &mut cache);
 
@@ -516,7 +515,7 @@ mod tests {
         };
 
         let blur_cmd = Blur { kernel_size: 3 };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 4. Execute. `box_blur_edge_replicate` fully reconstructs its output
         // at the input's size (via pad-then-crop) rather than writing into

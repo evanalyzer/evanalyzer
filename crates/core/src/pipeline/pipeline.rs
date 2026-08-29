@@ -2,7 +2,10 @@ use crate::{
     ImageTile, ManagedImage,
     algos::{ExecutionScope, ImageAlgorithm},
     image::{ImageContainer, PixelSizes},
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{
+        pipeline_cache::{CacheAddress, GlobalPipelineCache},
+        pipeline_context::PipelineContext,
+    },
 };
 use evanalyzer_cfg::core_types::{ImageAddress, InternalErrors, PipelineId};
 use kornia_image::ImageSize;
@@ -25,7 +28,7 @@ pub struct BreakpointCapture {
 
 pub struct PipelineResult {
     pub image: Arc<ImageContainer>,
-    pub cache: PipelineCache,
+    pub cache: GlobalPipelineCache,
     /// True when the pipeline stopped early due to a Stop breakpoint.
     pub breakpoint_hit: bool,
     /// Populated when a Stop or Snapshot breakpoint was reached: the image
@@ -132,12 +135,14 @@ impl Pipeline {
     pub fn run_tile(
         &self,
         output_path: PathBuf,
-        cache: PipelineCache,
+        cache: GlobalPipelineCache,
+        tile: ImageTile,
         breakpoint_step: Option<i32>,
         snapshot_mode: bool,
     ) -> Result<PipelineResult, InternalErrors> {
         self.run_commands(
             output_path,
+            Some(tile),
             cache,
             breakpoint_step,
             snapshot_mode,
@@ -156,12 +161,13 @@ impl Pipeline {
     pub fn run_whole_image(
         &self,
         output_path: PathBuf,
-        cache: PipelineCache,
+        cache: GlobalPipelineCache,
         breakpoint_step: Option<i32>,
         snapshot_mode: bool,
     ) -> Result<PipelineResult, InternalErrors> {
         self.run_commands(
             output_path,
+            None,
             cache,
             breakpoint_step,
             snapshot_mode,
@@ -172,21 +178,41 @@ impl Pipeline {
     fn run_commands(
         &self,
         output_path: PathBuf,
-        mut cache: PipelineCache,
+        tile: Option<ImageTile>,
+        mut cache: GlobalPipelineCache,
         breakpoint_step: Option<i32>,
         snapshot_mode: bool,
         commands: &[(usize, Box<dyn ImageAlgorithm>)],
     ) -> Result<PipelineResult, InternalErrors> {
-        let Some(initial_image) = cache
-            .image_cache
-            .get_image_from_cache(&self.settings.start_image)
-        else {
+        let tile = match tile {
+            Some(data) => data,
+            None => ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: cache.image_meta.full_image_width.width,
+                height: cache.image_meta.full_image_width.height,
+            },
+        };
+
+        let cache_idx: CacheAddress = match self.settings.start_image {
+            ImageAddress::Scratchpad => CacheAddress::Scratchpad,
+            ImageAddress::Memory(memory_id) => CacheAddress::Memory(memory_id),
+            ImageAddress::Channel(channel_idx) => CacheAddress::Channel((channel_idx, tile)),
+        };
+
+        let Some(initial_image) = cache.get_image_from_cache(&cache_idx, tile) else {
             return Err(InternalErrors::CacheMiss("Image not found in cache".into()));
         };
 
         let mut ctx = PipelineContext::new_from_image(
             output_path,
-            cache.image_cache.image_meta.clone(),
+            PipelineImageMeta {
+                image_tile_info: tile,
+                full_image_width: cache.image_meta.full_image_width,
+                is_rgb: cache.image_meta.is_rgb,
+                nr_of_bits: cache.image_meta.nr_of_bits,
+                pixel_sizes: cache.image_meta.pixel_sizes.clone(),
+            },
             initial_image,
         )?;
         let start = Instant::now();
@@ -229,7 +255,7 @@ impl Pipeline {
                     breakpoint_capture = Some(capture);
                 } else {
                     // Stop: return immediately with the intermediate image.
-                    cache.image_cache.clear_pipeline_context();
+                    cache.clear_pipeline_context();
                     info!(
                         "Breakpoint (stop) at step {} of pipeline {} in {:?}",
                         step_index,
@@ -246,7 +272,7 @@ impl Pipeline {
             }
         }
 
-        cache.image_cache.clear_pipeline_context();
+        cache.clear_pipeline_context();
         info!(
             "Executed pipeline steps {} in {:?}",
             self.id,
@@ -267,6 +293,7 @@ mod tests {
     use crate::{
         ManagedImage, Object,
         algos::{ExecutionScope, ExtractObjects, Voronoi},
+        pipeline::pipeline_cache::GlobalImageMeta,
     };
     use evanalyzer_cfg::core_types::{CitationMetadata, ImageAddress, ObjectClass, SizeUnits};
     use kornia_apriltag::utils::Point2d;
@@ -286,7 +313,7 @@ mod tests {
         fn execute(
             &self,
             ctx: &mut PipelineContext,
-            _cache: &mut PipelineCache,
+            _cache: &mut GlobalPipelineCache,
         ) -> Result<(), InternalErrors> {
             let size = ctx.get_image_size();
             let (w, h) = (size.width, size.height);
@@ -330,15 +357,9 @@ mod tests {
         full_w: usize,
         full_h: usize,
         tiles: &[((usize, usize), (usize, usize), [usize; 4])],
-    ) -> PipelineCache {
-        let mut whole_image_cache = PipelineCache::default();
-        whole_image_cache.image_cache.image_meta = PipelineImageMeta {
-            image_tile_info: crate::ImageTile {
-                offset_x: 0,
-                offset_y: 0,
-                width: full_w,
-                height: full_h,
-            },
+    ) -> GlobalPipelineCache {
+        let mut whole_image_cache = GlobalPipelineCache::default();
+        whole_image_cache.image_meta = GlobalImageMeta {
             full_image_width: ImageSize {
                 width: full_w,
                 height: full_h,
@@ -353,13 +374,7 @@ mod tests {
         };
 
         for &(tile_offset, tile_size, object_rect) in tiles {
-            let meta = PipelineImageMeta {
-                image_tile_info: crate::ImageTile {
-                    offset_x: tile_offset.0,
-                    offset_y: tile_offset.1,
-                    width: tile_size.0,
-                    height: tile_size.1,
-                },
+            let meta = GlobalImageMeta {
                 full_image_width: ImageSize {
                     width: full_w,
                     height: full_h,
@@ -373,8 +388,8 @@ mod tests {
                 },
             };
 
-            let mut cache = PipelineCache::default();
-            cache.image_cache.image_meta = meta;
+            let mut cache = GlobalPipelineCache::default();
+            cache.image_meta = meta;
             let channel = Image::<f32, 1, CpuAllocator>::new(
                 ImageSize {
                     width: tile_size.0,
@@ -384,7 +399,7 @@ mod tests {
                 CpuAllocator,
             )
             .unwrap();
-            cache.image_cache.add_to_channel_cache(
+            cache.add_to_channel_cache(
                 std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
                     data: channel,
                     tile_offset: Point2d {
@@ -394,6 +409,12 @@ mod tests {
                     plane: None,
                 })),
                 0,
+                crate::ImageTile {
+                    offset_x: tile_offset.0,
+                    offset_y: tile_offset.1,
+                    width: tile_size.0,
+                    height: tile_size.1,
+                },
             );
 
             let mut stage1 = Pipeline::new(
@@ -407,7 +428,18 @@ mod tests {
                 max_objects_before_fail: 100_000,
             }));
             let result = stage1
-                .run_tile(PathBuf::default(), cache, None, false)
+                .run_tile(
+                    PathBuf::default(),
+                    cache,
+                    crate::ImageTile {
+                        offset_x: tile_offset.0,
+                        offset_y: tile_offset.1,
+                        width: tile_size.0,
+                        height: tile_size.1,
+                    },
+                    None,
+                    false,
+                )
                 .expect("tile stage must not fail");
 
             // Stand-in for tile-merge: union every tile's objects into one
@@ -415,7 +447,9 @@ mod tests {
             // edge-touching fragments here (`merge_pending_fragments`), but
             // these test objects never touch their tile's edge, so a plain
             // union already matches what tile-merge would hand onward.
-            whole_image_cache.object_cache.extend(result.cache.object_cache);
+            whole_image_cache
+                .object_cache
+                .extend(result.cache.object_cache);
         }
 
         // Stage 2: Voronoi, sourced from Scratchpad - the recommended setup
@@ -497,14 +531,8 @@ mod tests {
         assert_eq!(regions[1].bbox, [20, 0, 39, 19]);
     }
 
-    fn default_image_meta(size: ImageSize) -> PipelineImageMeta {
-        PipelineImageMeta {
-            image_tile_info: crate::ImageTile {
-                offset_x: 0,
-                offset_y: 0,
-                width: size.width,
-                height: size.height,
-            },
+    fn default_image_meta(size: ImageSize) -> GlobalImageMeta {
+        GlobalImageMeta {
             full_image_width: size,
             is_rgb: false,
             nr_of_bits: 8,
@@ -527,7 +555,7 @@ mod tests {
         fn execute(
             &self,
             ctx: &mut PipelineContext,
-            _cache: &mut PipelineCache,
+            _cache: &mut GlobalPipelineCache,
         ) -> Result<(), InternalErrors> {
             let img = ctx.get_f32_gray_image_mut()?;
             img.as_slice_mut()[0] = self.value;
@@ -559,11 +587,18 @@ mod tests {
             plane: None,
         }));
 
-        let mut cache = PipelineCache::default();
-        cache.image_cache.image_meta = default_image_meta(size);
-        cache
-            .image_cache
-            .add_to_channel_cache(Arc::clone(&channel_image), 0);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_meta = default_image_meta(size);
+        cache.add_to_channel_cache(
+            Arc::clone(&channel_image),
+            0,
+            crate::ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
+        );
 
         // FakeSegmenter only ever touches segmentation_map/instance_map, never
         // ctx.image - exactly the shape of a real segmentation+measurement
@@ -577,7 +612,18 @@ mod tests {
         pipeline.add_command(Box::new(FakeSegmenter { rect: [0, 0, 1, 1] }));
 
         let result = pipeline
-            .run_tile(PathBuf::default(), cache, None, false)
+            .run_tile(
+                PathBuf::default(),
+                cache,
+                crate::ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: size.width,
+                    height: size.height,
+                },
+                None,
+                false,
+            )
             .expect("run must not fail");
 
         assert!(
@@ -598,11 +644,18 @@ mod tests {
             plane: None,
         }));
 
-        let mut cache = PipelineCache::default();
-        cache.image_cache.image_meta = default_image_meta(size);
-        cache
-            .image_cache
-            .add_to_channel_cache(Arc::clone(&channel_image), 0);
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_meta = default_image_meta(size);
+        cache.add_to_channel_cache(
+            Arc::clone(&channel_image),
+            0,
+            crate::ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
+        );
 
         let mut pipeline = Pipeline::new(
             PipelineId(1),
@@ -613,7 +666,18 @@ mod tests {
         pipeline.add_command(Box::new(SetFirstPixel { value: 9.0 }));
 
         let result = pipeline
-            .run_tile(PathBuf::default(), cache, None, false)
+            .run_tile(
+                PathBuf::default(),
+                cache,
+                crate::ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: size.width,
+                    height: size.height,
+                },
+                None,
+                false,
+            )
             .expect("run must not fail");
 
         // The pipeline's own output reflects the mutation...

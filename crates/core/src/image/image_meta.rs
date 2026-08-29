@@ -60,7 +60,9 @@ pub struct ImagePlane {
     pub t: i32,
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Default, Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd,
+)]
 pub struct ImageTile {
     pub offset_x: usize,
     pub offset_y: usize,

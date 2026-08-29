@@ -252,7 +252,7 @@ impl ImageAlgorithm for Voronoi {
     fn execute(
         &self,
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
-        cache: &mut crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // Voronoi runs per tile, same as every other pipeline step - it must only
         // touch pixels within the current tile, in absolute (full-image) coordinates,
@@ -507,10 +507,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        ImageContainer, ImagePlane, ManagedImage,
+        ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
         pipeline::{
-            pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
+            pipeline::PipelineImageMeta, pipeline_cache::GlobalPipelineCache,
             pipeline_context::PipelineContext,
         },
     };
@@ -644,7 +644,7 @@ mod tests {
         }
     }
 
-    fn voronoi_objects(cache: &PipelineCache) -> Vec<&Object> {
+    fn voronoi_objects(cache: &GlobalPipelineCache) -> Vec<&Object> {
         cache
             .object_cache
             .values()
@@ -652,7 +652,7 @@ mod tests {
             .collect()
     }
 
-    fn run(v: &Voronoi, ctx: &mut PipelineContext, cache: &mut PipelineCache) {
+    fn run(v: &Voronoi, ctx: &mut PipelineContext, cache: &mut GlobalPipelineCache) {
         v.execute(ctx, cache).unwrap();
     }
 
@@ -670,7 +670,7 @@ mod tests {
         const CHANNEL: i32 = 0;
         const VALUE: f32 = 5.0;
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let channel_img = Image::<f32, 1, CpuAllocator>::new(
             ImageSize {
@@ -681,13 +681,14 @@ mod tests {
             CpuAllocator,
         )
         .unwrap();
-        cache.image_cache.add_to_channel_cache(
+        cache.add_to_channel_cache(
             std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: channel_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
             })),
             CHANNEL,
+            ImageTile::default(),
         );
 
         cache.object_cache.insert(
@@ -726,7 +727,7 @@ mod tests {
         let off_x = 100usize;
         let off_y = 100usize;
         let mut ctx = make_tiled_ctx(tile_w, tile_h, 500, 500, off_x, off_y);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Channel buffer is sized to the tile only, matching how `prepare_pipeline_cache`
         // loads channels per tile - this is exactly what made the old full-image loop
@@ -740,13 +741,14 @@ mod tests {
             CpuAllocator,
         )
         .unwrap();
-        cache.image_cache.add_to_channel_cache(
+        cache.add_to_channel_cache(
             std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: channel_img,
                 tile_offset: Point2d { x: off_x, y: off_y },
                 plane: None,
             })),
             CHANNEL,
+            ImageTile::default(),
         );
 
         // A center near the middle of the tile, in absolute (full-image) coordinates.
@@ -780,7 +782,7 @@ mod tests {
     #[test]
     fn no_centers_produces_no_output() {
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         run(&default_voronoi(), &mut ctx, &mut cache);
         assert!(voronoi_objects(&cache).is_empty());
     }
@@ -788,7 +790,7 @@ mod tests {
     #[test]
     fn single_center_covers_full_image() {
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
@@ -804,7 +806,7 @@ mod tests {
     #[test]
     fn two_centers_partition_image_without_overlap_or_gap() {
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, center_bbox(2, 5), CENTER_CLASS),
@@ -830,7 +832,7 @@ mod tests {
     #[test]
     fn max_radius_limits_assigned_pixels() {
         let mut ctx = make_ctx(20, 20);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, center_bbox(10, 10), CENTER_CLASS),
@@ -862,7 +864,7 @@ mod tests {
     #[test]
     fn mask_clips_voronoi_region() {
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
@@ -889,7 +891,7 @@ mod tests {
     #[test]
     fn edge_exclusion_discards_border_touching_regions() {
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
@@ -910,7 +912,7 @@ mod tests {
     #[test]
     fn edge_exclusion_off_keeps_border_region() {
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS),
@@ -924,7 +926,7 @@ mod tests {
     #[test]
     fn center_exclusion_discards_region_when_seed_outside_mask() {
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, [0, 4, 1, 6], CENTER_CLASS),
@@ -950,7 +952,7 @@ mod tests {
     #[test]
     fn center_exclusion_off_keeps_region_even_when_seed_outside_mask() {
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, [0, 4, 1, 6], CENTER_CLASS),
@@ -978,7 +980,7 @@ mod tests {
     fn center_filter_class_excludes_unmatched_centers() {
         const FILTER_CLASS: ObjectClass = ObjectClass::Valid(3);
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let object_a = make_filled_object(ID_A, center_bbox(2, 5), CENTER_CLASS);
         let mut object_b = make_filled_object(ID_B, center_bbox(7, 5), CENTER_CLASS);
@@ -1008,7 +1010,7 @@ mod tests {
         // it with `plane: None`), while the center object - surviving in
         // `cache.object_cache` from an earlier pipeline - carries a real plane.
         let mut ctx = make_ctx(10, 10);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let center_plane = ImagePlane { z: 3, c: 1, t: 2 };
         let mut object_a = make_filled_object(ID_A, center_bbox(5, 5), CENTER_CLASS);
         object_a.plane = center_plane;

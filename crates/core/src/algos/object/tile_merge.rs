@@ -32,7 +32,7 @@
 use crate::ImageTile;
 use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::object::{Intensity, Object, ObjectInit};
-use crate::pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext};
+use crate::pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext};
 use crate::spatial_grid::BboxGrid;
 use bitvec::prelude::*;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors, ObjectClass, ObjectId};
@@ -97,7 +97,7 @@ impl ImageAlgorithm for TileMerge {
     fn execute(
         &self,
         _ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let groups = group_candidates(cache, &self.classes_to_not_merge);
 
@@ -258,7 +258,7 @@ pub(crate) fn touches_tile_edge(bbox: [u32; 4], tile: &ImageTile) -> bool {
 /// Objects fully interior to their tile can never have a real cross-tile
 /// neighbor, so they're never even candidates.
 fn group_candidates(
-    cache: &PipelineCache,
+    cache: &GlobalPipelineCache,
     classes_to_not_merge: &[ObjectClass],
 ) -> IndexMap<(Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> {
     let mut groups: IndexMap<(Vec<ObjectClass>, crate::ImagePlane), Vec<ObjectId>> =
@@ -535,8 +535,8 @@ mod tests {
         }
     }
 
-    fn cache_with(objects: Vec<Object>) -> PipelineCache {
-        let mut cache = PipelineCache::default();
+    fn cache_with(objects: Vec<Object>) -> GlobalPipelineCache {
+        let mut cache = GlobalPipelineCache::default();
         for object in objects {
             cache.object_cache.insert(object.id.clone(), object);
         }
@@ -558,7 +558,7 @@ mod tests {
         .unwrap()
     }
 
-    fn run(cache: &mut PipelineCache, algo: TileMerge) {
+    fn run(cache: &mut GlobalPipelineCache, algo: TileMerge) {
         algo.execute(&mut dummy_ctx(), cache).unwrap();
     }
 

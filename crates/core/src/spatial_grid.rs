@@ -12,7 +12,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use evanalyzer_cfg::core_types::ObjectId;
 use std::collections::{HashMap, HashSet};
 
@@ -37,7 +37,7 @@ pub(crate) struct BboxGrid {
 }
 
 impl BboxGrid {
-    pub(crate) fn build(ids: &[ObjectId], cache: &PipelineCache) -> Self {
+    pub(crate) fn build(ids: &[ObjectId], cache: &GlobalPipelineCache) -> Self {
         let entries: Vec<(ObjectId, [u32; 4])> = ids
             .iter()
             .filter_map(|id| cache.object_cache.get(id).map(|o| (id.clone(), o.bbox)))
@@ -131,8 +131,8 @@ mod tests {
         object
     }
 
-    fn cache_with(objects: Vec<Object>) -> (PipelineCache, Vec<ObjectId>) {
-        let mut cache = PipelineCache::default();
+    fn cache_with(objects: Vec<Object>) -> (GlobalPipelineCache, Vec<ObjectId>) {
+        let mut cache = GlobalPipelineCache::default();
         let mut ids = Vec::new();
         for object in objects {
             ids.push(object.id.clone());

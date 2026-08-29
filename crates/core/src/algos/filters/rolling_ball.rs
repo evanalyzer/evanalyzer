@@ -8,7 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::algos::{ExecutionScope, ImageAlgorithm};
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
@@ -71,7 +71,7 @@ impl ImageAlgorithm for RollingBall {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // `radius` is only validated as `min = 1` at the UI/schema layer
         // (`#[cmdsmeta(...)]` above) - a hand-edited or API-produced pipeline
@@ -958,7 +958,7 @@ mod tests {
             let img =
                 Image::<f32, 1, CpuAllocator>::new(size, vec![0.0f32; 25], CpuAllocator).unwrap();
             let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             let cmd = RollingBall {
                 radius,
                 ball_type: BallType::Ball,
@@ -1035,7 +1035,7 @@ mod tests {
             ball_type: BallType::Ball,
             pre_smooth: true,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         rb.execute(&mut ctx, &mut cache)?;
 
         // The shared handle must still read back the exact original pixels -
@@ -1130,7 +1130,7 @@ mod tests {
             ball_type: BallType::Ball,
             pre_smooth: true,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         rb.execute(&mut ctx, &mut cache)?;
 
         if let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() {
@@ -1204,7 +1204,7 @@ mod tests {
             ImageContainer::new_f32_gray_from_image_test(image).into(),
         )
         .unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Radius 40.0 triggers a structural shrink factor of 4
         let rb = RollingBall {
@@ -1290,7 +1290,7 @@ mod tests {
             ball_type: BallType::Ball,
             pre_smooth: false,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         rb.execute(&mut ctx, &mut cache)?;
 
         let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() else {
@@ -1434,7 +1434,7 @@ mod tests {
             ball_type: BallType::Ball,
             pre_smooth: false,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         rb.execute(&mut ctx, &mut cache)?;
 
         let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() else {
@@ -1549,7 +1549,7 @@ mod tests {
             ball_type: BallType::Paraboloid,
             pre_smooth: false,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         rb.execute(&mut ctx, &mut cache)?;
 
         let ImageContainer::F32Gray(out_img) = ctx.image.as_ref() else {

@@ -10,7 +10,7 @@
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     image::ImageContainer,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -81,7 +81,7 @@ impl ImageAlgorithm for WeightedDeviation {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // Get input image as F32Gray (assuming conversion is handled upstream)
         // If your input is F32Rgb, you'll need a conversion step here first.
@@ -218,7 +218,7 @@ mod tests {
             kernel_size: 3,
             sigma: 1.0,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let result = algo.execute(&mut ctx, &mut cache);
 
         // Either compute correctly (self-heal to F32Gray) or fail loudly -
@@ -266,7 +266,7 @@ mod tests {
         };
 
         // 3. Execute
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         algo.execute(&mut ctx, &mut cache)?;
 
         // 4. Verification

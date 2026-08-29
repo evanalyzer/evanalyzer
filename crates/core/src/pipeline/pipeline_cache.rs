@@ -1,16 +1,62 @@
 use crate::{
-    image::ImageContainer,
+    ImageTile,
+    image::{ImageContainer, PixelSizes},
     pipeline::{object_cache::ObjectCache, pipeline::PipelineImageMeta},
 };
 use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
 use kornia_apriltag::utils::Point2d;
-use kornia_image::Image;
+use kornia_image::{Image, ImageSize};
 use kornia_tensor::CpuAllocator;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CacheAddress {
+    Scratchpad,
+    Memory(MemoryId),
+    Channel((i32, ImageTile)),
+}
 
 /// This is a map which stores an image to the RAM.
 /// The image can be addressed either by Image plane or a memory ID
-pub type ImageMap = HashMap<ImageAddress, Arc<ImageContainer>>;
+pub type ImageMap = HashMap<CacheAddress, Arc<ImageContainer>>;
+
+#[derive(Clone)]
+pub struct GlobalImageMeta {
+    /// The size of the original image (not the tile)
+    pub full_image_width: ImageSize,
+    /// True if this is a RGB image
+    pub is_rgb: bool,
+    /// Image bit depth: 8, 16, 32
+    pub nr_of_bits: u16,
+    /// Sizes of the image pixels in nm
+    pub pixel_sizes: PixelSizes,
+}
+
+impl Default for GlobalImageMeta {
+    fn default() -> Self {
+        Self {
+            full_image_width: ImageSize {
+                width: 0,
+                height: 0,
+            },
+            is_rgb: Default::default(),
+            nr_of_bits: Default::default(),
+            pixel_sizes: Default::default(),
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct GlobalPipelineCache {
+    pub image_cache: ImageMap,
+    pub image_meta: GlobalImageMeta,
+    pub object_cache: ObjectCache,
+    pub image_rel_path: PathBuf,
+}
 
 mod tests {
     use crate::{image::PixelSizes, pipeline::pipeline_cache::PipelineImageMeta};
@@ -36,99 +82,106 @@ mod tests {
     }
 }
 
-#[derive(Default)]
-pub struct ImageCache {
-    pub image_meta: PipelineImageMeta,
-    pub images: ImageMap,
-}
-
-impl ImageCache {
+impl GlobalPipelineCache {
     pub fn clear_pipeline_context(&mut self) {
-        self.images.retain(|key, _| {
+        self.image_cache.retain(|key, _| {
             match key {
                 // Always keep Channel types
-                ImageAddress::Channel(_) => true,
+                CacheAddress::Channel(_) => true,
                 // If it is a Memory(PipelineContext), return false to remove it
-                ImageAddress::Memory(MemoryId::PipelineContext(_)) => false,
+                CacheAddress::Memory(MemoryId::PipelineContext(_)) => false,
                 _ => false,
             }
         });
     }
 
-    pub fn add_to_channel_cache(&mut self, image: Arc<ImageContainer>, channel_idx: i32) {
-        self.images
-            .insert(ImageAddress::Channel(channel_idx), image);
+    pub fn add_to_channel_cache(
+        &mut self,
+        image: Arc<ImageContainer>,
+        channel_idx: i32,
+        image_tile_info: ImageTile,
+    ) {
+        self.image_cache
+            .insert(CacheAddress::Channel((channel_idx, image_tile_info)), image);
     }
 
-    pub fn get_image_from_channel_cache(&self, channel_idx: i32) -> Option<Arc<ImageContainer>> {
-        self.images
-            .get(&ImageAddress::Channel(channel_idx))
+    pub fn get_image_from_channel_cache(
+        &self,
+        channel_idx: i32,
+        image_tile_info: ImageTile,
+    ) -> Option<Arc<ImageContainer>> {
+        self.image_cache
+            .get(&CacheAddress::Channel((channel_idx, image_tile_info)))
+            .cloned()
+    }
+
+    pub fn get_image_from_channel_cache_for_tile(
+        &self,
+        channel_idx: (i32, ImageTile),
+    ) -> Option<Arc<ImageContainer>> {
+        self.image_cache
+            .get(&CacheAddress::Channel(channel_idx))
             .cloned()
     }
 
     pub fn get_image_from_memory_cache(&self, memory_id: MemoryId) -> Option<Arc<ImageContainer>> {
-        self.images
-            .get(&ImageAddress::Memory(memory_id.clone()))
+        self.image_cache
+            .get(&CacheAddress::Memory(memory_id.clone()))
             .cloned()
     }
 
-    pub fn get_image_from_cache(&self, cache_slot: &ImageAddress) -> Option<Arc<ImageContainer>> {
+    pub fn get_image_from_cache(
+        &self,
+        cache_slot: &CacheAddress,
+        image_tile_info: ImageTile,
+    ) -> Option<Arc<ImageContainer>> {
         match cache_slot {
-            ImageAddress::Scratchpad => match self.image_meta.is_rgb {
+            CacheAddress::Scratchpad => match self.image_meta.is_rgb {
                 true => Some(Arc::new(ImageContainer::F32Rgb(crate::ManagedImage {
                     data: Image::<f32, 3, CpuAllocator>::new(
                         kornia_image::ImageSize {
-                            width: self.image_meta.image_tile_info.width,
-                            height: self.image_meta.image_tile_info.height,
+                            width: image_tile_info.width,
+                            height: image_tile_info.height,
                         },
-                        vec![
-                            0f32;
-                            self.image_meta.image_tile_info.width
-                                * self.image_meta.image_tile_info.height
-                                * 3
-                        ],
+                        vec![0f32; image_tile_info.width * image_tile_info.height * 3],
                         CpuAllocator,
                     )
                     .expect("Could not allocate memory for image scratchpad"),
                     tile_offset: Point2d {
-                        x: self.image_meta.image_tile_info.offset_x,
-                        y: self.image_meta.image_tile_info.offset_y,
+                        x: image_tile_info.offset_x,
+                        y: image_tile_info.offset_y,
                     },
                     plane: None,
                 }))),
                 false => Some(Arc::new(ImageContainer::F32Gray(crate::ManagedImage {
                     data: Image::<f32, 1, CpuAllocator>::new(
                         kornia_image::ImageSize {
-                            width: self.image_meta.image_tile_info.width,
-                            height: self.image_meta.image_tile_info.height,
+                            width: image_tile_info.width,
+                            height: image_tile_info.height,
                         },
-                        vec![
-                            0f32;
-                            self.image_meta.image_tile_info.width
-                                * self.image_meta.image_tile_info.height
-                        ],
+                        vec![0f32; image_tile_info.width * image_tile_info.height],
                         CpuAllocator,
                     )
                     .expect("Could not allocate memory for image scratchpad"),
                     tile_offset: Point2d {
-                        x: self.image_meta.image_tile_info.offset_x,
-                        y: self.image_meta.image_tile_info.offset_y,
+                        x: image_tile_info.offset_x,
+                        y: image_tile_info.offset_y,
                     },
                     plane: None,
                 }))),
             },
-            ImageAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
-            ImageAddress::Channel(channel_idx) => {
-                self.get_image_from_channel_cache(channel_idx.clone())
+            CacheAddress::Memory(memory_id) => self.get_image_from_memory_cache(memory_id.clone()),
+            CacheAddress::Channel(channel_idx) => {
+                self.get_image_from_channel_cache_for_tile(channel_idx.clone())
             }
         }
     }
 
     /// Iterates over all Channel images in the cache.
     /// Returns an iterator of (channel_index, &ImageContainer)
-    pub fn iter_channels(&self) -> impl Iterator<Item = (i32, &ImageContainer)> {
-        self.images.iter().filter_map(|(key, container)| {
-            if let ImageAddress::Channel(index) = key {
+    pub fn iter_channels(&self) -> impl Iterator<Item = ((i32, ImageTile), &ImageContainer)> {
+        self.image_cache.iter().filter_map(|(key, container)| {
+            if let CacheAddress::Channel(index) = key {
                 // Convert the &Arc<ImageContainer> into &ImageContainer
                 Some((*index, container.as_ref()))
             } else {
@@ -143,7 +196,7 @@ impl ImageCache {
     /// samples per-channel intensities for a set of pixels (`ExtractObjects`,
     /// colocalization intersection ROIs, ...) so the channel resolution and the
     /// RGB-luminance formula live in exactly one place.
-    pub fn resolve_channel_views(&self) -> Vec<(i32, bool, &[f32])> {
+    pub fn resolve_channel_views(&self) -> Vec<((i32, ImageTile), bool, &[f32])> {
         self.iter_channels()
             .filter_map(|(idx, container)| match container {
                 ImageContainer::F32Gray(img) => Some((idx, false, img.as_slice())),
@@ -163,13 +216,6 @@ pub fn sample_channel_pixel(is_rgb: bool, slice: &[f32], sample: usize) -> f32 {
     } else {
         slice[sample]
     }
-}
-
-#[derive(Default)]
-pub struct PipelineCache {
-    pub image_cache: ImageCache,
-    pub object_cache: ObjectCache,
-    pub image_rel_path: PathBuf,
 }
 
 #[cfg(test)]
@@ -223,19 +269,23 @@ mod cache_tests {
 
     #[test]
     fn clear_pipeline_context_keeps_channel_entries() {
-        let mut cache = ImageCache::default();
-        cache.add_to_channel_cache(gray_container(1, 1, vec![1.0]), 0);
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(gray_container(1, 1, vec![1.0]), 0, ImageTile::default());
 
         cache.clear_pipeline_context();
 
-        assert!(cache.get_image_from_channel_cache(0).is_some());
+        assert!(
+            cache
+                .get_image_from_channel_cache(0, ImageTile::default())
+                .is_some()
+        );
     }
 
     #[test]
     fn clear_pipeline_context_drops_pipeline_context_memory_entries() {
-        let mut cache = ImageCache::default();
-        cache.images.insert(
-            ImageAddress::Memory(MemoryId::PipelineContext(1)),
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_cache.insert(
+            CacheAddress::Memory(MemoryId::PipelineContext(1)),
             gray_container(1, 1, vec![1.0]),
         );
 
@@ -256,58 +306,70 @@ mod cache_tests {
     /// that this is the *intended* behavior.
     #[test]
     fn clear_pipeline_context_also_drops_scratchpad_and_project_cache_via_catch_all() {
-        let mut cache = ImageCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache
-            .images
-            .insert(ImageAddress::Scratchpad, gray_container(1, 1, vec![2.0]));
-        cache.images.insert(
-            ImageAddress::Memory(MemoryId::ProjectCache(7)),
+            .image_cache
+            .insert(CacheAddress::Scratchpad, gray_container(1, 1, vec![2.0]));
+        cache.image_cache.insert(
+            CacheAddress::Memory(MemoryId::ProjectCache(7)),
             gray_container(1, 1, vec![3.0]),
         );
-        cache.add_to_channel_cache(gray_container(1, 1, vec![4.0]), 5);
+        cache.add_to_channel_cache(gray_container(1, 1, vec![4.0]), 5, ImageTile::default());
 
         cache.clear_pipeline_context();
 
         // Channel entry survives.
-        assert!(cache.get_image_from_channel_cache(5).is_some());
+        assert!(
+            cache
+                .get_image_from_channel_cache(5, ImageTile::default())
+                .is_some()
+        );
         // Scratchpad and ProjectCache entries are both gone too, via the `_ => false` arm,
         // even though the doc comment only calls out PipelineContext memory slots.
-        assert!(!cache.images.contains_key(&ImageAddress::Scratchpad));
+        assert!(!cache.image_cache.contains_key(&CacheAddress::Scratchpad));
         assert!(
             !cache
-                .images
-                .contains_key(&ImageAddress::Memory(MemoryId::ProjectCache(7)))
+                .image_cache
+                .contains_key(&CacheAddress::Memory(MemoryId::ProjectCache(7)))
         );
-        assert_eq!(cache.images.len(), 1);
+        assert_eq!(cache.image_cache.len(), 1);
     }
 
     // ---- add_to_channel_cache / get_image_from_channel_cache ----
 
     #[test]
     fn channel_cache_round_trip() {
-        let mut cache = ImageCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let image = gray_container(1, 1, vec![42.0]);
 
-        cache.add_to_channel_cache(image.clone(), 3);
+        cache.add_to_channel_cache(image.clone(), 3, ImageTile::default());
 
-        let fetched = cache.get_image_from_channel_cache(3).unwrap();
+        let fetched = cache
+            .get_image_from_channel_cache(3, ImageTile::default())
+            .unwrap();
         assert!(Arc::ptr_eq(&fetched, &image));
     }
 
     #[test]
     fn channel_cache_miss_returns_none() {
-        let cache = ImageCache::default();
-        assert!(cache.get_image_from_channel_cache(99).is_none());
+        let cache = GlobalPipelineCache::default();
+        assert!(
+            cache
+                .get_image_from_channel_cache(99, ImageTile::default())
+                .is_none()
+        );
     }
 
     // ---- get_image_from_memory_cache ----
 
     #[test]
     fn memory_cache_round_trip() {
-        let mut cache = ImageCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let image = gray_container(1, 1, vec![7.0]);
         let id = MemoryId::PipelineContext(2);
-        cache.images.insert(ImageAddress::Memory(id), image.clone());
+        cache
+            .image_cache
+            .insert(CacheAddress::Memory(id), image.clone());
 
         let fetched = cache.get_image_from_memory_cache(id).unwrap();
         assert!(Arc::ptr_eq(&fetched, &image));
@@ -315,7 +377,7 @@ mod cache_tests {
 
     #[test]
     fn memory_cache_miss_returns_none() {
-        let cache = ImageCache::default();
+        let cache = GlobalPipelineCache::default();
         assert!(
             cache
                 .get_image_from_memory_cache(MemoryId::PipelineContext(1))
@@ -327,17 +389,11 @@ mod cache_tests {
 
     #[test]
     fn get_image_from_cache_scratchpad_gray_is_zeroed_and_sized() {
-        let mut cache = ImageCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.image_meta.is_rgb = false;
-        cache.image_meta.image_tile_info = crate::ImageTile {
-            offset_x: 0,
-            offset_y: 0,
-            width: 3,
-            height: 2,
-        };
 
         let result = cache
-            .get_image_from_cache(&ImageAddress::Scratchpad)
+            .get_image_from_cache(&CacheAddress::Scratchpad, ImageTile::default())
             .unwrap();
 
         match result.as_ref() {
@@ -352,17 +408,11 @@ mod cache_tests {
 
     #[test]
     fn get_image_from_cache_scratchpad_rgb_is_zeroed_and_sized() {
-        let mut cache = ImageCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.image_meta.is_rgb = true;
-        cache.image_meta.image_tile_info = crate::ImageTile {
-            offset_x: 0,
-            offset_y: 0,
-            width: 2,
-            height: 2,
-        };
 
         let result = cache
-            .get_image_from_cache(&ImageAddress::Scratchpad)
+            .get_image_from_cache(&CacheAddress::Scratchpad, ImageTile::default())
             .unwrap();
 
         match result.as_ref() {
@@ -377,25 +427,30 @@ mod cache_tests {
 
     #[test]
     fn get_image_from_cache_memory_delegates() {
-        let mut cache = ImageCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let image = gray_container(1, 1, vec![9.0]);
         let id = MemoryId::PipelineContext(4);
-        cache.images.insert(ImageAddress::Memory(id), image.clone());
+        cache
+            .image_cache
+            .insert(CacheAddress::Memory(id), image.clone());
 
         let fetched = cache
-            .get_image_from_cache(&ImageAddress::Memory(id))
+            .get_image_from_cache(&CacheAddress::Memory(id), ImageTile::default())
             .unwrap();
         assert!(Arc::ptr_eq(&fetched, &image));
     }
 
     #[test]
     fn get_image_from_cache_channel_delegates() {
-        let mut cache = ImageCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let image = gray_container(1, 1, vec![11.0]);
-        cache.add_to_channel_cache(image.clone(), 6);
+        cache.add_to_channel_cache(image.clone(), 6, ImageTile::default());
 
         let fetched = cache
-            .get_image_from_cache(&ImageAddress::Channel(6))
+            .get_image_from_cache(
+                &CacheAddress::Channel((6, ImageTile::default())),
+                ImageTile::default(),
+            )
             .unwrap();
         assert!(Arc::ptr_eq(&fetched, &image));
     }
@@ -404,31 +459,39 @@ mod cache_tests {
 
     #[test]
     fn iter_channels_only_yields_channel_entries() {
-        let mut cache = ImageCache::default();
-        cache.add_to_channel_cache(gray_container(1, 1, vec![1.0]), 0);
-        cache.add_to_channel_cache(gray_container(1, 1, vec![2.0]), 1);
-        cache.images.insert(
-            ImageAddress::Memory(MemoryId::PipelineContext(1)),
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(gray_container(1, 1, vec![1.0]), 0, ImageTile::default());
+        cache.add_to_channel_cache(gray_container(1, 1, vec![2.0]), 1, ImageTile::default());
+        cache.image_cache.insert(
+            CacheAddress::Memory(MemoryId::PipelineContext(1)),
             gray_container(1, 1, vec![3.0]),
         );
         cache
-            .images
-            .insert(ImageAddress::Scratchpad, gray_container(1, 1, vec![4.0]));
+            .image_cache
+            .insert(CacheAddress::Scratchpad, gray_container(1, 1, vec![4.0]));
 
-        let mut indices: Vec<i32> = cache.iter_channels().map(|(idx, _)| idx).collect();
+        let mut indices: Vec<(i32, ImageTile)> =
+            cache.iter_channels().map(|(idx, _)| idx).collect();
         indices.sort();
 
-        assert_eq!(indices, vec![0, 1]);
+        assert_eq!(
+            indices,
+            vec![(0, ImageTile::default()), (1, ImageTile::default())]
+        );
     }
 
     // ---- resolve_channel_views ----
 
     #[test]
     fn resolve_channel_views_returns_gray_and_rgb_but_skips_u32() {
-        let mut cache = ImageCache::default();
-        cache.add_to_channel_cache(gray_container(1, 1, vec![5.0]), 0);
-        cache.add_to_channel_cache(rgb_container(1, 1, vec![1.0, 2.0, 3.0]), 1);
-        cache.add_to_channel_cache(u32_container(1, 1, vec![7]), 2);
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(gray_container(1, 1, vec![5.0]), 0, ImageTile::default());
+        cache.add_to_channel_cache(
+            rgb_container(1, 1, vec![1.0, 2.0, 3.0]),
+            1,
+            ImageTile::default(),
+        );
+        cache.add_to_channel_cache(u32_container(1, 1, vec![7]), 2, ImageTile::default());
 
         let mut views = cache.resolve_channel_views();
         views.sort_by_key(|(idx, _, _)| *idx);
@@ -436,12 +499,12 @@ mod cache_tests {
         assert_eq!(views.len(), 2);
 
         let (idx0, is_rgb0, slice0) = views[0];
-        assert_eq!(idx0, 0);
+        assert_eq!(idx0.0, 0);
         assert!(!is_rgb0);
         assert_eq!(slice0, &[5.0]);
 
         let (idx1, is_rgb1, slice1) = views[1];
-        assert_eq!(idx1, 1);
+        assert_eq!(idx1.0, 1);
         assert!(is_rgb1);
         assert_eq!(slice1, &[1.0, 2.0, 3.0]);
     }

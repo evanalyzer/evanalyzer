@@ -1,4 +1,4 @@
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use std::collections::HashMap;
@@ -89,13 +89,13 @@ impl CsvExporter {
 }
 
 impl PipelineResultExporter for CsvExporter {
-    fn export(&self, cache: &PipelineCache) -> Result<(), InternalErrors> {
+    fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| InternalErrors::Io("Failed to acquire CsvExporter lock".to_string()))?;
 
-        let px = &cache.image_cache.image_meta.pixel_sizes;
+        let px = &cache.image_meta.pixel_sizes;
 
         // --- Phase 1/2: establish (once) the channel/coloc-class set every
         // row this exporter writes will be shaped around - see the
@@ -212,7 +212,7 @@ impl PipelineResultExporter for CsvExporter {
 
         // --- Phase 4: Data Row Serialization ---
         let px_len = (px.px_size_x * px.px_size_y).sqrt();
-        let nr_of_bits = cache.image_cache.image_meta.nr_of_bits;
+        let nr_of_bits = cache.image_meta.nr_of_bits;
         // Same implausible-bit-depth guard as image_reader.rs's read path -
         // unguarded, `1u64 << nr_of_bits` for nr_of_bits > 63 is a
         // shift-by-too-large, silently producing a wrong scale factor
@@ -408,7 +408,7 @@ mod tests {
         let exporter =
             CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("test_image.tif");
 
         let result = exporter.export(&cache);
@@ -424,7 +424,7 @@ mod tests {
         let exporter =
             CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
-        let cache = PipelineCache::default();
+        let cache = GlobalPipelineCache::default();
         let _ = exporter.export(&cache);
 
         let content = fs::read_to_string(&output_path).expect("Failed to read CSV");
@@ -452,7 +452,7 @@ mod tests {
         let exporter =
             CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
-        let mut cache_a = PipelineCache::default();
+        let mut cache_a = GlobalPipelineCache::default();
         cache_a.image_rel_path = PathBuf::from("image_a.tif");
         let mut object_a = crate::object::Object::new(crate::object::ObjectInit {
             id: evanalyzer_cfg::core_types::ObjectId::next(),
@@ -463,7 +463,7 @@ mod tests {
         object_a.plane.t = 0;
         cache_a.object_cache.insert(object_a.id.clone(), object_a);
 
-        let mut cache_b = PipelineCache::default();
+        let mut cache_b = GlobalPipelineCache::default();
         cache_b.image_rel_path = PathBuf::from("image_b.tif");
         let mut object_b = crate::object::Object::new(crate::object::ObjectInit {
             id: evanalyzer_cfg::core_types::ObjectId::next(),
@@ -515,7 +515,7 @@ mod tests {
 
         // First call: an object with intensities on channels 0 AND 1 -
         // establishes the header with both channels' columns.
-        let mut cache_a = PipelineCache::default();
+        let mut cache_a = GlobalPipelineCache::default();
         cache_a.image_rel_path = PathBuf::from("image_a.tif");
         let mut object_a = crate::object::Object::new(crate::object::ObjectInit {
             id: evanalyzer_cfg::core_types::ObjectId::next(),
@@ -531,7 +531,7 @@ mod tests {
         // this were (incorrectly) used to size the row instead of the
         // header's established channel set, this row would be 8 columns
         // short.
-        let mut cache_b = PipelineCache::default();
+        let mut cache_b = GlobalPipelineCache::default();
         cache_b.image_rel_path = PathBuf::from("image_b.tif");
         let mut object_b = crate::object::Object::new(crate::object::ObjectInit {
             id: evanalyzer_cfg::core_types::ObjectId::next(),
@@ -578,7 +578,7 @@ mod tests {
         let exporter =
             CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("classes.tif");
 
         let named_id = ObjectId::next();
@@ -657,7 +657,7 @@ mod tests {
         let exporter =
             CsvExporter::new(output_path.clone(), class_names).expect("exporter init failed");
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("coloc.tif");
 
         let partner_a = ObjectId::next();
@@ -729,7 +729,7 @@ mod tests {
         let exporter =
             CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("intensities.tif");
         // PipelineCache::default() sets nr_of_bits = 16 (see PipelineImageMeta's test Default impl).
         let bit_max = ((1u64 << 16) - 1) as f64;
@@ -814,7 +814,7 @@ mod tests {
         // First, independent exporter instance creates the file and writes header + one row.
         let exporter_1 =
             CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
-        let mut cache_a = PipelineCache::default();
+        let mut cache_a = GlobalPipelineCache::default();
         cache_a.image_rel_path = PathBuf::from("image_a.tif");
         let object_a = crate::object::Object::new(crate::object::ObjectInit {
             id: ObjectId::next(),
@@ -832,7 +832,7 @@ mod tests {
         // header as already written (header_written = output_path.exists()) and only append.
         let exporter_2 =
             CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
-        let mut cache_b = PipelineCache::default();
+        let mut cache_b = GlobalPipelineCache::default();
         cache_b.image_rel_path = PathBuf::from("image_b.tif");
         let object_b = crate::object::Object::new(crate::object::ObjectInit {
             id: ObjectId::next(),
@@ -870,7 +870,7 @@ mod tests {
         let exporter =
             CsvExporter::new(output_path.clone(), HashMap::new()).expect("exporter init failed");
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.image_rel_path = PathBuf::from("lineage.tif");
 
         let parent_id = ObjectId::next();

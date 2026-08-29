@@ -13,7 +13,7 @@ use evanalyzer_app::result::{
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 use evanalyzer_core::{
-    DuckDbExporter, Intensity, Object, ObjectInit, PipelineCache, PipelineResultExporter,
+    DuckDbExporter, Intensity, Object, ObjectInit, GlobalPipelineCache, PipelineResultExporter,
 };
 use indexmap::IndexMap;
 use std::path::PathBuf;
@@ -61,7 +61,7 @@ fn export_fixture(images: Vec<(&str, Vec<Object>)>) -> (tempfile::TempDir, Resul
     let exporter = DuckDbExporter::new(&db_path, std::collections::HashMap::new())
         .expect("exporter init failed");
     for (image_rel_path, objects) in images {
-        let mut cache = PipelineCache {
+        let mut cache = GlobalPipelineCache {
             image_rel_path: PathBuf::from(image_rel_path),
             ..Default::default()
         };

@@ -12,7 +12,7 @@ use macros::CommandsMeta;
 
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
 /// Identifies and labels discrete objects within a binary or multi-class image.
@@ -72,7 +72,7 @@ impl ImageAlgorithm for ConnectedComponents {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let (segmentation, instances) = ctx.get_segmentation_and_instances_mut(false)?;
 
@@ -300,7 +300,7 @@ mod tests {
 
         ctx.get_segmentation_map().unwrap().print_window();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute
@@ -386,7 +386,7 @@ mod tests {
         println!("--- Input Mask ---");
         ctx.get_segmentation_map().unwrap().print_window();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute CCL
@@ -483,7 +483,7 @@ mod tests {
         println!("--- Input Mask ---");
         ctx.get_segmentation_map().unwrap().print_window();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let labeling = ConnectedComponents { min_size: 0 };
 
         // Execute
@@ -539,7 +539,7 @@ mod tests {
         ctx.segmentation_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let labeling = ConnectedComponents { min_size: 4 };
 
         labeling.execute(&mut ctx, &mut cache).expect("CCL Failed");
@@ -603,7 +603,7 @@ mod tests {
         ctx.segmentation_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         ConnectedComponents { min_size: 0 }
             .execute(&mut ctx, &mut cache)
             .expect("CCL failed");
@@ -648,7 +648,7 @@ mod tests {
         ctx.segmentation_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, seg_data, CpuAllocator).unwrap());
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         ConnectedComponents { min_size: 0 }
             .execute(&mut ctx, &mut cache)
             .expect("CCL failed");

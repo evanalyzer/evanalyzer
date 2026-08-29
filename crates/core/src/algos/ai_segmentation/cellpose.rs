@@ -14,7 +14,7 @@ use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
 /// Instance segmentation using a pretrained Cellpose model exported as TorchScript.
@@ -84,7 +84,7 @@ impl ImageAlgorithm for Cellpose {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let device = Device::cuda_if_available();
         let model = load_cached_model(&self.model_path, || {
@@ -439,7 +439,7 @@ mod tests {
             ..cellpose(0)
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
@@ -479,7 +479,7 @@ mod tests {
             ..cellpose(0)
         };
         let mut ctx = gray_ctx(3, 1, vec![0.0, 1.0, 1.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();
@@ -507,7 +507,7 @@ mod tests {
             ..cellpose(0)
         };
         let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();
@@ -527,7 +527,7 @@ mod tests {
             ..cellpose(0)
         };
         let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(msg) if msg.contains("too few dimensions")));
@@ -545,7 +545,7 @@ mod tests {
             ..cellpose(0)
         };
         let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(
@@ -569,7 +569,7 @@ mod tests {
             ..cellpose(0)
         };
         let mut ctx = gray_ctx(4, 1, vec![0.0; 4]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(

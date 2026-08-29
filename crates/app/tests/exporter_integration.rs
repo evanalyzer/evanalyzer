@@ -8,7 +8,7 @@
 use bitvec::prelude::*;
 use evanalyzer_app::result::{DatabaseFilter, GroupConfig, ResultsExporter, ResultsLoader};
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
-use evanalyzer_core::{DuckDbExporter, Object, ObjectInit, PipelineCache, PipelineResultExporter};
+use evanalyzer_core::{DuckDbExporter, Object, ObjectInit, GlobalPipelineCache, PipelineResultExporter};
 use std::sync::Arc;
 
 fn make_filled_object(id: u128, bbox: [u32; 4], class: ObjectClass) -> Object {
@@ -34,7 +34,7 @@ fn export_fixture(objects: Vec<Object>) -> (tempfile::TempDir, ResultsLoader) {
     let dir = tempfile::TempDir::new().expect("failed to create temp dir");
     let db_path = dir.path().join("results.duckdb");
 
-    let mut cache = PipelineCache::default();
+    let mut cache = GlobalPipelineCache::default();
     for object in objects {
         cache.object_cache.insert(object.id.clone(), object);
     }

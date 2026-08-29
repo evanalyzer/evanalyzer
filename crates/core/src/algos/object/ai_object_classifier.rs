@@ -12,7 +12,7 @@ use crate::{
     ai_learning::training::object::compute_object_features,
     algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_classifier},
     object::Object,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
 /// Maps one class the model was trained to predict to a class ID meaningful
@@ -93,7 +93,7 @@ impl ImageAlgorithm for AiObjectClassifier {
     fn execute(
         &self,
         _ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let saved = load_cached_classifier(&self.model_path, || load_from_file(&self.model_path))?;
 
@@ -370,7 +370,7 @@ mod tests {
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
         };
         let mut ctx = make_ctx();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         assert!(cmd.execute(&mut ctx, &mut cache).is_err());
     }
@@ -389,7 +389,7 @@ mod tests {
             match_handling: AiClassifyMatchHandling::ReclassifyIfMatch,
         };
         let mut ctx = make_ctx();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::InvalidArgument(_)));
@@ -416,7 +416,7 @@ mod tests {
         };
 
         let mut ctx = make_ctx();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let small = make_object(SMALL_ID, 1, SegmentationClass(1));
         let large = make_object(LARGE_ID, 100, SegmentationClass(1));
         cache.object_cache.insert(small.id.clone(), small);
@@ -464,7 +464,7 @@ mod tests {
         };
 
         let mut ctx = make_ctx();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let large = make_object(LARGE_ID, 100, SegmentationClass(1));
         cache.object_cache.insert(large.id.clone(), large);
 
@@ -496,7 +496,7 @@ mod tests {
         };
 
         let mut ctx = make_ctx();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let large = make_object(LARGE_ID, 100, SegmentationClass(1));
         cache.object_cache.insert(large.id.clone(), large);
 
@@ -528,7 +528,7 @@ mod tests {
         };
 
         let mut ctx = make_ctx();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let large = make_object(LARGE_ID, 100, SegmentationClass(1));
         cache.object_cache.insert(large.id.clone(), large);
 
@@ -559,7 +559,7 @@ mod tests {
         };
 
         let mut ctx = make_ctx();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let large = make_object(LARGE_ID, 100, SegmentationClass(1));
         cache.object_cache.insert(large.id.clone(), large);
 

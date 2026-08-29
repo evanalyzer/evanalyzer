@@ -7,9 +7,11 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::{
-    algos::{ExecutionScope, ImageAlgorithm}, image::ImageContainer, pipeline::pipeline_context::PipelineContext,
+    algos::{ExecutionScope, ImageAlgorithm},
+    image::ImageContainer,
+    pipeline::pipeline_context::PipelineContext,
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -97,7 +99,7 @@ impl ImageAlgorithm for StructureTensor {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let (input, output) = match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(in_img), ImageContainer::F32Gray(out_img)) => {
@@ -267,8 +269,6 @@ impl ImageAlgorithm for StructureTensor {
 
 #[cfg(test)]
 mod tests {
-    use crate::pipeline::pipeline_cache::ImageCache;
-
     use super::*;
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
@@ -300,7 +300,7 @@ mod tests {
         };
 
         // 4. Execute
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         algo.execute(&mut ctx, &mut cache)?;
 
@@ -339,7 +339,7 @@ mod tests {
         let input_img =
             Image::<f32, 1, CpuAllocator>::new(size, vec![], CpuAllocator).expect("image");
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let algo = StructureTensor {
             kernel_size: 3,

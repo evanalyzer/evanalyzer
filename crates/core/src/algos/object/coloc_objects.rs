@@ -102,7 +102,7 @@ impl ImageAlgorithm for Colocalization {
     fn execute(
         &self,
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
-        cache: &mut crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // If there aren't at least two classes, colocalization is impossible.
         if self.classes_to_coloc.len() < 2 {
@@ -439,7 +439,7 @@ impl Colocalization {
         object: &Object,
         exclude_id: &ObjectId,
         bucket: &[ObjectId],
-        cache: &crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &crate::pipeline::pipeline_cache::GlobalPipelineCache,
         min_area_px: usize,
     ) -> Option<ObjectId> {
         bucket
@@ -466,10 +466,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        ImageContainer, ImagePlane, ManagedImage,
+        ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
         pipeline::{
-            pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
+            pipeline::PipelineImageMeta, pipeline_cache::GlobalPipelineCache,
             pipeline_context::PipelineContext,
         },
     };
@@ -548,7 +548,7 @@ mod tests {
     const ID_B: u128 = 200_000;
     const ID_C: u128 = 300_000;
 
-    fn run(coloc: &Colocalization, cache: &mut PipelineCache) {
+    fn run(coloc: &Colocalization, cache: &mut GlobalPipelineCache) {
         coloc.execute(&mut make_ctx(), cache).unwrap();
     }
 
@@ -619,7 +619,7 @@ mod tests {
 
         for &n in &[500u32, 2_000, 8_000, 20_000] {
             let span = (n as f64).sqrt().ceil() as u32 + 1;
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             for o in scattered_objects(n, CLASS_A, 100_000, span, 111) {
                 cache.object_cache.insert(o.id.clone(), o);
             }
@@ -659,7 +659,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         cache.object_cache.insert(object.id.clone(), object);
 
@@ -684,7 +684,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // object A: [0,0,4,4], object B: [2,2,6,6] → overlap [2,2,4,4]
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
@@ -719,7 +719,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // No shared bounding box region
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [10, 10, 14, 14], ImagePlane::default(), CLASS_B);
@@ -749,7 +749,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let plane_ch0 = ImagePlane { z: 0, c: 0, t: 0 };
         let plane_ch1 = ImagePlane { z: 0, c: 1, t: 0 };
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], plane_ch0, CLASS_A);
@@ -782,7 +782,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // object_a has CLASS_A but NOT CLASS_C → filtered out
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         // object_b has CLASS_B and CLASS_C → passes filter
@@ -813,7 +813,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // Inclusive bboxes: A covers [0,3]×[0,3], B covers [2,5]×[2,5] → overlap [2,3]×[2,3]=2×2=4 px
         let object_a = make_filled_object(ID_A, [0, 0, 3, 3], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 5, 5], ImagePlane::default(), CLASS_B);
@@ -878,17 +878,18 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // Constant-value channel so the expected sum/avg/min/max are trivial to compute.
         let channel_img =
             Image::<f32, 1, CpuAllocator>::new(size, vec![VALUE; 100], CpuAllocator).unwrap();
-        cache.image_cache.add_to_channel_cache(
+        cache.add_to_channel_cache(
             Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: channel_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
             })),
             CHANNEL,
+            ImageTile::default(),
         );
 
         // Inclusive bboxes: A covers [0,5]×[0,5], B covers [3,8]×[3,8] → overlap [3,5]×[3,5] = 3×3 = 9 px
@@ -939,7 +940,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 8, 8], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [4, 4, 10, 10], ImagePlane::default(), CLASS_C);
@@ -999,7 +1000,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 7, 7], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [4, 4, 9, 9], ImagePlane::default(), CLASS_C);
@@ -1041,7 +1042,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 10, 10], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [1, 1, 4, 4], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [6, 6, 9, 9], ImagePlane::default(), CLASS_C);
@@ -1088,7 +1089,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [3, 3, 8, 8], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [6, 6, 11, 11], ImagePlane::default(), CLASS_C);
@@ -1138,7 +1139,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         const ID_X: u128 = 400_000;
         const ID_W: u128 = 500_000;
@@ -1192,7 +1193,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 8, 8], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [4, 4, 10, 10], ImagePlane::default(), CLASS_C);
@@ -1224,7 +1225,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [20, 20, 24, 24], ImagePlane::default(), CLASS_C);
@@ -1254,7 +1255,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
         cache.object_cache.insert(object_a.id.clone(), object_a);
@@ -1287,7 +1288,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         const ID_CELL_A: u128 = 900_001; // lower id - wins area ties
         const ID_CELL_B: u128 = 900_002;
@@ -1392,7 +1393,7 @@ mod tests {
         const ID_CELL_3: u128 = 910_003;
         const ID_CELL_4: u128 = 910_004;
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cell_0 = make_filled_object(ID_CELL_0, [0, 0, 9, 9], ImagePlane::default(), CLASS_A);
         let cell_1 = make_filled_object(ID_CELL_1, [10, 0, 19, 9], ImagePlane::default(), CLASS_A);
         let cell_2 = make_filled_object(ID_CELL_2, [40, 0, 49, 9], ImagePlane::default(), CLASS_A);
@@ -1517,7 +1518,7 @@ mod tests {
         run(&coloc_b, &mut cache);
         run(&coloc_c, &mut cache);
 
-        let coloc_count = |cache: &PipelineCache, id: u128, class: ObjectClass| -> usize {
+        let coloc_count = |cache: &GlobalPipelineCache, id: u128, class: ObjectClass| -> usize {
             cache
                 .object_cache
                 .get(&ObjectId(id))
@@ -1715,7 +1716,7 @@ mod tests {
 
         for seed in 1..12u32 {
             let mut rng = Rng(seed * 104_729 + 1);
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             let mut ids_by_class: std::collections::HashMap<ObjectClass, Vec<ObjectId>> =
                 std::collections::HashMap::new();
             let mut next_id: u128 = 1;

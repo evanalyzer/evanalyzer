@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use image::{ImageBuffer, Luma, Rgb};
@@ -64,7 +64,7 @@ impl ImageAlgorithm for SaveImage {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let Some(output_path) = ctx.output_path.clone() else {
             return Err(InternalErrors::Io("No output path!".into()));
@@ -233,8 +233,6 @@ fn get_color(val: u32) -> [u8; 3] {
 
 #[cfg(test)]
 mod tests {
-    use crate::pipeline::pipeline_cache::ImageCache;
-
     use super::*;
     use kornia_image::Image;
     use kornia_image::ImageSize;
@@ -267,7 +265,7 @@ mod tests {
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
         ctx.output_path = Some(dir.path().to_path_buf());
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 3. Control images are written under
         // `<output_path>/images/<image_rel_path>/<name>_x<off>_y<off>.png`; the
@@ -318,7 +316,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
         ctx.output_path = Some(dir.path().to_path_buf());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let test_path = dir
             .path()
             .join("images/test_output_rgb_deleteme_x000000_y000000.png");
@@ -352,7 +350,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_u32_image_test(unsupported_img).unwrap();
         ctx.output_path = Some(dir.path().to_path_buf());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let saver = SaveImage {
             name: "fail".into(),
             source: ImageSource::Image,
@@ -409,7 +407,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
         ctx.output_path = Some(dir.path().to_path_buf());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Try saving to an illegal path (e.g., a directory that doesn't exist)
         let saver = SaveImage {
@@ -441,7 +439,7 @@ mod tests {
             return;
         };
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let saver = SaveImage {
             name: "fail".into(),
@@ -477,7 +475,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
         ctx.output_path = Some(dir.path().to_path_buf());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let test_path = dir
             .path()
             .join("images/test_output_instance_map_deleteme_x000000_y000000.png");
@@ -507,7 +505,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
         ctx.output_path = Some(dir.path().to_path_buf());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let test_path = dir
             .path()
             .join("images/test_output_seg_mask_deleteme_x000000_y000000.png");

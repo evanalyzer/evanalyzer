@@ -8,7 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::ImagePlane;
-use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_apriltag::utils::Point2d;
@@ -89,7 +89,7 @@ impl ImageAlgorithm for ColorFilterCommand {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // Get the input image (must be RGB)
         let input = match ctx.image.as_ref() {
@@ -213,7 +213,6 @@ mod tests {
     use super::*;
     use crate::image::PixelSizes;
     use crate::pipeline::pipeline::PipelineImageMeta;
-    use crate::pipeline::pipeline_cache::ImageCache;
     use kornia_image::allocator::CpuAllocator;
     use kornia_image::{Image, ImageSize};
 
@@ -268,7 +267,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Define Filter: Target Green (Hue around 120)
         let filter = ColorFilterCommand {
@@ -346,7 +345,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Range that wraps: 350 to 10 degrees
         let filter = ColorFilterCommand {
@@ -409,7 +408,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Setup the command
         let filter = ColorFilterCommand {

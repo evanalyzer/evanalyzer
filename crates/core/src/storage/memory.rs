@@ -1,4 +1,4 @@
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
 use evanalyzer_cfg::{core_types::InternalErrors, settings::object_settings::ObjectMetricSettings};
 use std::sync::{Arc, Mutex};
@@ -17,7 +17,7 @@ pub struct MemoryExporter {
 }
 
 impl PipelineResultExporter for MemoryExporter {
-    fn export(&self, cache: &PipelineCache) -> Result<(), InternalErrors> {
+    fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
         // Build every ObjectMetricSettings without touching the lock - this is the
         // expensive part (each conversion clones the Object's fields, including
         // its mask), so doing it here keeps other threads running smoothly.
@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn export_moves_every_object_into_out_objects_without_dropping_or_duplicating_any() {
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let id_a = ObjectId::next();
         let id_b = ObjectId::next();
         cache.object_cache.insert(
@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn export_appends_to_existing_out_objects_rather_than_overwriting() {
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let id = ObjectId::next();
         cache.object_cache.insert(
             id.clone(),

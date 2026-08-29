@@ -7,7 +7,8 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
+use crate::pipeline::pipeline_cache::CacheAddress;
 use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -72,26 +73,30 @@ impl ImageAlgorithm for ImageCache {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
+        let address = match self.address {
+            ImageAddress::Scratchpad => CacheAddress::Scratchpad,
+            ImageAddress::Memory(memory_id) => CacheAddress::Memory(memory_id),
+            ImageAddress::Channel(channel_idx) => {
+                CacheAddress::Channel((channel_idx, ctx.image_meta.image_tile_info.clone()))
+            }
+        };
+
         match self.mode {
             ImageCacheMode::Load => {
                 // Cheap Arc clone (refcount bump): the cache and the context
                 // now share the buffer until either side actually mutates it.
                 ctx.image = cache
                     .image_cache
-                    .images
-                    .get(&self.address)
+                    .get(&address)
                     .ok_or(InternalErrors::CacheMiss("".to_string()))?
                     .clone();
                 Ok(())
             }
             ImageCacheMode::Store => {
                 // Cheap Arc clone: no pixel data is copied here either.
-                cache
-                    .image_cache
-                    .images
-                    .insert(self.address.clone(), Arc::clone(&ctx.image));
+                cache.image_cache.insert(address, Arc::clone(&ctx.image));
                 Ok(())
             }
         }
@@ -162,7 +167,7 @@ mod tests {
             ImageContainer::new_f32_gray_from_image_test(test_image).into(),
         )?;
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Define an address (Memory slot M2)
         let address = ImageAddress::Memory(MemoryId::PipelineContext(2));
@@ -176,7 +181,11 @@ mod tests {
         store_algo.execute(&mut ctx, &mut cache)?;
 
         // Verify it exists in the cache
-        assert!(cache.image_cache.images.contains_key(&address));
+        assert!(
+            cache
+                .image_cache
+                .contains_key(&CacheAddress::Memory(MemoryId::PipelineContext(2)))
+        );
 
         // 4. Modify context image so we can prove 'Load' actually changes it
         let empty_data = vec![0.0f32; 4];
@@ -214,7 +223,7 @@ mod tests {
             height: 1,
         };
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let address = ImageAddress::Memory(MemoryId::PipelineContext(8));
         let load_algo = ImageCache {

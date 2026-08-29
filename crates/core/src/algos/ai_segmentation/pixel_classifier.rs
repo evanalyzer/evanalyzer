@@ -9,7 +9,7 @@ use crate::{
     ai_learning::model::load_from_file,
     ai_learning::training::pixel::compute_pixel_features,
     algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_classifier},
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
 /// Maps one class the model was trained to predict to a class ID meaningful
@@ -56,7 +56,7 @@ impl ImageAlgorithm for PixelClassifier {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let saved = load_cached_classifier(&self.model_path, || load_from_file(&self.model_path))?;
 
@@ -238,7 +238,7 @@ mod tests {
             segmentation_mapping: vec![],
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         assert!(cmd.execute(&mut ctx, &mut cache).is_err());
     }
@@ -254,7 +254,7 @@ mod tests {
             segmentation_mapping: vec![],
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::InvalidArgument(_)));
@@ -293,7 +293,7 @@ mod tests {
 
         // Pixel values chosen to fall squarely in each training cluster.
         let mut ctx = gray_ctx(2, 1, vec![0.05, 10.05]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();

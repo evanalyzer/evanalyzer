@@ -9,7 +9,7 @@
 
 use crate::image::ImageContainer;
 use crate::pipeline::pipeline_context::PipelineContext;
-use crate::{algos::{ExecutionScope, ImageAlgorithm}, pipeline::pipeline_cache::PipelineCache};
+use crate::{algos::{ExecutionScope, ImageAlgorithm}, pipeline::pipeline_cache::GlobalPipelineCache};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
@@ -60,7 +60,7 @@ impl ImageAlgorithm for Laplacian {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {

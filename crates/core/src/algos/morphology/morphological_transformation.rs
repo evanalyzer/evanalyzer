@@ -8,7 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::extlibs::libmorphology::{self, Kernel};
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::{
     algos::{ExecutionScope, ImageAlgorithm}, image::ImageContainer, pipeline::pipeline_context::PipelineContext,
 };
@@ -102,7 +102,7 @@ impl ImageAlgorithm for MorphologicalCommand {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         if !self.use_grayscale {
             let (labels, scratch) = ctx.get_segmentation_map_u32_buf()?;
@@ -263,7 +263,7 @@ mod tests {
 
         // 3. Setup Context
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 4. Execute
         cmd.execute(&mut ctx, &mut cache)?;
@@ -321,7 +321,7 @@ mod tests {
             use_grayscale: false,
         };
 
-        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
         let labels = ctx.segmentation_map.as_ref().expect("No labels found");
         // Check that ID 7 has spread to neighbor (1,1)
         assert_eq!(*labels.get_pixel(1, 1, 0).unwrap(), 7);
@@ -359,7 +359,7 @@ mod tests {
             kernel_shape: KernelShapes::Box,
             use_grayscale: false,
         };
-        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
         let labels = ctx.segmentation_map.as_ref().expect("no labels found");
         // A single labeled pixel has no fully-labeled neighborhood, so erosion
         // (the neighborhood minimum) wipes it out entirely.
@@ -377,7 +377,7 @@ mod tests {
             kernel_shape: KernelShapes::Box,
             use_grayscale: false,
         };
-        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
         let labels = ctx.segmentation_map.as_ref().expect("no labels found");
         // Open = erode then dilate; eroding away the single-pixel label
         // leaves nothing for the dilate pass to expand back.
@@ -395,7 +395,7 @@ mod tests {
             kernel_shape: KernelShapes::Box,
             use_grayscale: false,
         };
-        cmd.execute(&mut ctx, &mut PipelineCache::default())?;
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())?;
         let labels = ctx.segmentation_map.as_ref().expect("no labels found");
         // Close = dilate then erode; the center pixel survives either way.
         assert_eq!(*labels.get_pixel(2, 2, 0).unwrap(), 7);
@@ -415,7 +415,7 @@ mod tests {
 
         let img = Image::<f32, 3, _>::from_size_slice(size, &data, CpuAllocator)?;
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Test Cross kernel (4-connectivity)
         let cmd_cross = MorphologicalCommand {
@@ -465,7 +465,7 @@ mod tests {
 
         // Setup context with a U32 image
         let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let cmd = MorphologicalCommand {
             op: MorphOps::Dilate,
@@ -499,7 +499,7 @@ mod tests {
             kernel_shape: KernelShapes::Box,
             use_grayscale: true,
         };
-        cmd.execute(&mut ctx, &mut PipelineCache::default())
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
 
         let img = match ctx.image.as_ref() {
@@ -519,7 +519,7 @@ mod tests {
             kernel_shape: KernelShapes::Box,
             use_grayscale: true,
         };
-        cmd.execute(&mut ctx, &mut PipelineCache::default())
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
 
         let img = match ctx.image.as_ref() {
@@ -539,7 +539,7 @@ mod tests {
             kernel_shape: KernelShapes::Box,
             use_grayscale: true,
         };
-        cmd.execute(&mut ctx, &mut PipelineCache::default())
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
 
         let img = match ctx.image.as_ref() {
@@ -559,7 +559,7 @@ mod tests {
             kernel_shape: KernelShapes::Box,
             use_grayscale: true,
         };
-        cmd.execute(&mut ctx, &mut PipelineCache::default())
+        cmd.execute(&mut ctx, &mut GlobalPipelineCache::default())
             .unwrap();
 
         let img = match ctx.image.as_ref() {

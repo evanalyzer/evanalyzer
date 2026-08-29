@@ -1,5 +1,6 @@
-use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
+use crate::pipeline::pipeline_cache::CacheAddress;
 use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::ImageAddress;
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -89,7 +90,7 @@ impl ImageAlgorithm for ImageMath {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         if self.operand == Operand::None {
             return Ok(());
@@ -116,6 +117,14 @@ impl ImageAlgorithm for ImageMath {
             return Ok(());
         }
 
+        let address = match self.second_image_address {
+            ImageAddress::Scratchpad => CacheAddress::Scratchpad,
+            ImageAddress::Memory(memory_id) => CacheAddress::Memory(memory_id),
+            ImageAddress::Channel(channel_idx) => {
+                CacheAddress::Channel((channel_idx, ctx.image_meta.image_tile_info.clone()))
+            }
+        };
+
         // Handle Binary Operations
         // Only get the secondary image if we actually need it. Both branches are
         // now a cheap Arc clone (refcount bump), not a pixel copy: when the
@@ -127,8 +136,7 @@ impl ImageAlgorithm for ImageMath {
         } else {
             cache
                 .image_cache
-                .images
-                .get(&self.second_image_address)
+                .get(&address)
                 .ok_or_else(|| InternalErrors::Generic("Secondary image not found".to_string()))?
                 .clone()
         };
@@ -293,18 +301,18 @@ mod tests {
             create_test_gray(val1).into(),
         )
         .unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Mock secondary image in cache
-        let second_image_address = ImageAddress::Memory(MemoryId::PipelineContext(1));
-        cache.image_cache.images.insert(
+        let second_image_address = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        cache.image_cache.insert(
             second_image_address.clone(),
             Arc::new(create_test_gray(val2)),
         );
 
         let cmd = ImageMath {
             operand: op,
-            second_image_address,
+            second_image_address: ImageAddress::Memory(MemoryId::PipelineContext(1)),
             swap_operands: swap,
         };
 
@@ -419,7 +427,7 @@ mod tests {
             create_test_gray(0.5).into(),
         )
         .unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Secondary image cached at a different pixel count than the
         // current (2x2) pipeline image.
@@ -434,15 +442,14 @@ mod tests {
             )
             .unwrap(),
         );
-        let second_image_address = ImageAddress::Memory(MemoryId::PipelineContext(1));
+        let second_image_address = CacheAddress::Memory(MemoryId::PipelineContext(1));
         cache
             .image_cache
-            .images
             .insert(second_image_address.clone(), Arc::new(smaller_second));
 
         let cmd = ImageMath {
             operand: Operand::Add,
-            second_image_address,
+            second_image_address: ImageAddress::Memory(MemoryId::PipelineContext(1)),
             swap_operands: false,
         };
 

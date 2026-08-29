@@ -85,7 +85,7 @@ pub use self::segmentation::watershed::SeedSource;
 pub use self::segmentation::watershed::Watershed;
 pub use self::spartial_transform::edm::DistanceTransform;
 
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 
 use evanalyzer_cfg::core_types::CitationMetadata;
@@ -101,7 +101,7 @@ pub trait ImageAlgorithm: Send + Sync {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors>;
     fn name(&self) -> &'static str;
     fn cite(&self) -> Option<&'static CitationMetadata>;
