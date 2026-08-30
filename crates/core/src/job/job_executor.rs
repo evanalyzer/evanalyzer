@@ -45,6 +45,20 @@ pub enum ProgressEvent {
         total_tiles: usize,
         objects: Vec<ObjectMetricSettings>,
     },
+    /// Emitted once the whole-image-scoped phase (tile-merge, plus any
+    /// `WholeImage`-scoped commands like Voronoi, plus the DB export) for
+    /// one (t, z) stack completes - always *after* every tile of that stack
+    /// has already reported `TileCompleted`. `total_tiles` (see
+    /// `TilesScheduled`) reserves one unit per (t, z) stack for exactly this
+    /// event, so a progress bar driven by `TileCompleted`/this event
+    /// together never claims 100% before the pipeline is actually done -
+    /// this phase can itself take a long time (e.g. Voronoi across a
+    /// whole-slide image's full object set), and without a dedicated event
+    /// there was nothing to report while it ran.
+    WholeImagePhaseCompleted {
+        completed: usize,
+        total_tiles: usize,
+    },
     ImageCompleted {
         index: usize,
         total: usize,
@@ -616,9 +630,22 @@ impl<'a> JobExecutor {
                 None => (tiles.clone(), vec![]),
             };
 
+        // One `WholeImagePhaseCompleted` unit per whole-image-scoped pipeline
+        // that actually has commands to run (TileMerge, plus any user
+        // pipeline's WholeImage-scoped steps, e.g. Voronoi or
+        // Colocalization), plus one more for the final export - matches
+        // exactly what the loop below ticks off, so a long-running whole-image
+        // command (Voronoi across many objects, say) shows up as one of
+        // *several* visible steps instead of the bar freezing on a single
+        // step for however long the whole phase takes. `.max(1)`: even if
+        // every whole-image pipeline is empty, the "object cache empty"
+        // early-exit path (see below) still needs its own single reserved
+        // unit.
+        let whole_image_units_per_stack = self.count_whole_image_progress_units(order);
+
         // Recalculate so progress events reflect only the tiles actually being processed.
-        let total_tiles =
-            (visible_tiles.len() + hidden_tiles.len()) * z_stacks.len() * t_stacks.len();
+        let total_tiles = (visible_tiles.len() + hidden_tiles.len()) * z_stacks.len() * t_stacks.len()
+            + whole_image_units_per_stack * z_stacks.len() * t_stacks.len();
         let completed = Arc::new(AtomicUsize::new(0));
         if let Some(progress) = &progress {
             progress
@@ -837,7 +864,20 @@ impl<'a> JobExecutor {
 
                 let stack_merge_result = stack_result.and_then(|mut merged_cache| {
                     if merged_cache.object_cache.is_empty() {
-                        // Object buffer is empty
+                        // Object buffer is empty - no whole-image-scoped
+                        // commands or export to run, but this stack's
+                        // reserved progress unit (see `total_tiles` above)
+                        // still needs to be accounted for, or the bar would
+                        // sit permanently one unit short of 100%.
+                        if let Some(sender) = &progress {
+                            let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            sender
+                                .send(ProgressEvent::WholeImagePhaseCompleted {
+                                    completed: idx,
+                                    total_tiles,
+                                })
+                                .ok();
+                        }
                         return Ok(());
                     }
 
@@ -868,8 +908,24 @@ impl<'a> JobExecutor {
                             snapshot_mode,
                         )?;
                         merged_cache = result.cache;
+
+                        // One reserved unit per non-empty whole-image
+                        // pipeline (see `whole_image_units_per_stack`) - a
+                        // long-running command here (Voronoi, say) now shows
+                        // up as one of several visible progress steps
+                        // instead of the bar freezing on a single step.
+                        if let Some(sender) = &progress {
+                            let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            sender
+                                .send(ProgressEvent::WholeImagePhaseCompleted {
+                                    completed: idx,
+                                    total_tiles,
+                                })
+                                .ok();
+                        }
+
                         if result.breakpoint_hit {
-        
+
                             info!(
                                 "Whole-image breakpoint hit for pipeline {} on image {:?} (t={}, z={})",
                                 pipe_id, image_rel_path, t, z
@@ -881,7 +937,18 @@ impl<'a> JobExecutor {
                     exporter
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .export(&merged_cache)
+                        .export(&merged_cache)?;
+
+                    if let Some(sender) = &progress {
+                        let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                        sender
+                            .send(ProgressEvent::WholeImagePhaseCompleted {
+                                completed: idx,
+                                total_tiles,
+                            })
+                            .ok();
+                    }
+                    Ok(())
                 });
 
                 if let Err(e) = stack_merge_result {
@@ -1231,6 +1298,28 @@ impl<'a> JobExecutor {
         }
 
         order
+    }
+
+    /// Number of `ProgressEvent::WholeImagePhaseCompleted` units one (t, z)
+    /// stack's whole-image phase will emit: one per pipeline in `order`
+    /// that's registered in `pipelines_post_process` and has at least one
+    /// command, plus one more for the final export - matching exactly what
+    /// `analyze_image`'s whole-image loop ticks off, so a progress bar
+    /// driven by these events reaches 100% exactly when that phase actually
+    /// finishes. `.max(1)`: even when every whole-image pipeline is empty,
+    /// the "object cache empty" early-exit path still emits its own single
+    /// unit.
+    fn count_whole_image_progress_units(&self, order: &[PipelineId]) -> usize {
+        order
+            .iter()
+            .filter(|&pipe_id| {
+                self.pipelines_post_process
+                    .get(pipe_id)
+                    .is_some_and(|p| !p.commands.is_empty())
+            })
+            .count()
+            .saturating_add(1)
+            .max(1)
     }
 
     /// Picks the tile size for a single-image preview run.
@@ -1978,8 +2067,11 @@ mod z_stack_iterator_tests {
 #[cfg(test)]
 mod execution_order_tests {
     use super::*;
+    use crate::algos::{ExecutionScope, ImageAlgorithm};
     use crate::pipeline::pipeline::CorePipelineSettings;
+    use crate::pipeline::pipeline_context::PipelineContext;
     use crate::storage::memory::MemoryExporter;
+    use evanalyzer_cfg::core_types::CitationMetadata;
     use std::sync::{Arc, Mutex};
 
     fn make_job_executor() -> JobExecutor {
@@ -2106,6 +2198,77 @@ mod execution_order_tests {
         job.add_pre_process_pipeline(make_pipeline(3, &[1]));
 
         job.get_execution_order();
+    }
+
+    // ---- count_whole_image_progress_units ----
+
+    struct NoopCommand;
+    impl ImageAlgorithm for NoopCommand {
+        fn execute(
+            &self,
+            _ctx: &mut PipelineContext,
+            _cache: &mut GlobalPipelineCache,
+        ) -> Result<(), InternalErrors> {
+            Ok(())
+        }
+        fn name(&self) -> &'static str {
+            "Noop"
+        }
+        fn cite(&self) -> Option<&'static CitationMetadata> {
+            None
+        }
+        fn execution_scope(&self) -> ExecutionScope {
+            ExecutionScope::WholeImage
+        }
+    }
+
+    /// Like `make_pipeline`, but with one real command, so
+    /// `commands.is_empty()` is `false` - what actually distinguishes a
+    /// whole-image pipeline that contributes a progress unit from one that
+    /// doesn't.
+    fn make_pipeline_with_command(id: u32) -> Pipeline {
+        let mut p = make_pipeline(id, &[]);
+        p.add_command(Box::new(NoopCommand));
+        p
+    }
+
+    #[test]
+    fn no_post_process_pipelines_still_reserves_one_unit_for_the_empty_object_cache_exit() {
+        let job = make_job_executor();
+        assert_eq!(job.count_whole_image_progress_units(&[]), 1);
+    }
+
+    #[test]
+    fn empty_post_process_pipelines_in_order_do_not_add_units() {
+        let mut job = make_job_executor();
+        job.add_post_process_pipeline(make_pipeline(1, &[])); // no commands
+
+        let order = vec![PipelineId(1)];
+        assert_eq!(job.count_whole_image_progress_units(&order), 1);
+    }
+
+    #[test]
+    fn one_unit_per_non_empty_post_process_pipeline_plus_one_for_export() {
+        let mut job = make_job_executor();
+        job.add_post_process_pipeline(make_pipeline_with_command(1));
+        job.add_post_process_pipeline(make_pipeline_with_command(2));
+
+        let order = vec![PipelineId(1), PipelineId(2)];
+        assert_eq!(job.count_whole_image_progress_units(&order), 3);
+    }
+
+    #[test]
+    fn a_pipeline_id_in_order_but_not_registered_is_not_counted() {
+        let mut job = make_job_executor();
+        job.add_post_process_pipeline(make_pipeline_with_command(1));
+
+        // `order` can name a pipeline id that was never registered as a
+        // post-process pipeline (e.g. a pre-process-only id, or a stale
+        // dependency) - `count_whole_image_progress_units` must skip it,
+        // same as the real whole-image loop's own `let Some(p) = ... else
+        // { continue }`.
+        let order = vec![PipelineId(1), PipelineId(99)];
+        assert_eq!(job.count_whole_image_progress_units(&order), 2);
     }
 }
 

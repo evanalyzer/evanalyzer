@@ -184,6 +184,8 @@ impl PipelineWorker {
                             if let Some(ui) = ui_handle.upgrade() {
                                 ui.global::<PipelineRunningState>().set_total(total);
                                 ui.global::<PipelineRunningState>().set_processed(0);
+                                ui.global::<PipelineRunningState>()
+                                    .set_whole_image_phase(false);
                             }
                         });
                     }
@@ -208,6 +210,8 @@ impl PipelineWorker {
                                 ui.global::<PipelineRunningState>().set_has_error(false);
                                 ui.global::<PipelineRunningState>().set_total(total);
                                 ui.global::<PipelineRunningState>().set_processed(0);
+                                ui.global::<PipelineRunningState>()
+                                    .set_whole_image_phase(false);
                             }
                         });
                     }
@@ -240,6 +244,33 @@ impl PipelineWorker {
                                     .set_processed(tile_index as i32);
                                 ui.global::<PipelineRunningState>()
                                     .set_total(total_tiles as i32);
+                                ui.global::<PipelineRunningState>()
+                                    .set_whole_image_phase(false);
+                            }
+                        });
+                    }
+                    evanalyzer_core::ProgressEvent::WholeImagePhaseCompleted {
+                        completed,
+                        total_tiles,
+                    } => {
+                        // The whole-image-scoped phase (tile-merge, Voronoi,
+                        // etc.) can itself run long after every tile has
+                        // already reported `TileCompleted` - without this,
+                        // the bar above would sit at 100% while the pipeline
+                        // was still genuinely working. `total_tiles` already
+                        // reserves a unit for this event (see its own doc
+                        // comment), so this only needs to report progress,
+                        // not recompute the total.
+                        info!("Whole-image phase completed ({completed}/{total_tiles})");
+                        let ui_handle = self.app_state.ui_handle.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_handle.upgrade() {
+                                ui.global::<PipelineRunningState>()
+                                    .set_processed(completed as i32);
+                                ui.global::<PipelineRunningState>()
+                                    .set_total(total_tiles as i32);
+                                ui.global::<PipelineRunningState>()
+                                    .set_whole_image_phase(true);
                             }
                         });
                     }
