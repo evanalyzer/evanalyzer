@@ -376,7 +376,7 @@ impl ImageAlgorithm for Colocalization {
                                 // through `ExtractObjects` (the step that normally measures
                                 // intensities), so it needs its own measurement pass here.
                                 intersection.intensities =
-                                    intersection.measure_intensities(ctx, cache);
+                                    intersection.measure_intensities(cache);
                                 new_objects.push(intersection);
                             }
                         }
@@ -889,7 +889,12 @@ mod tests {
                 plane: None,
             })),
             CHANNEL,
-            ImageTile::default(),
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
         );
 
         // Inclusive bboxes: A covers [0,5]×[0,5], B covers [3,8]×[3,8] → overlap [3,5]×[3,5] = 3×3 = 9 px

@@ -470,7 +470,7 @@ impl ImageAlgorithm for Voronoi {
             // `Object::new` only derives geometry from the mask; Voronoi regions never
             // pass through `ExtractObjects` (the step that normally samples pixel data),
             // so they need their own intensity measurement pass here.
-            object.intensities = object.measure_intensities(ctx, cache);
+            object.intensities = object.measure_intensities(cache);
             new_objects.push(object);
         }
 
@@ -691,7 +691,12 @@ mod tests {
                 plane: None,
             })),
             CHANNEL,
-            ImageTile::default(),
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: 10,
+                height: 10,
+            },
         );
 
         cache.object_cache.insert(
@@ -754,7 +759,12 @@ mod tests {
                 plane: None,
             })),
             CHANNEL,
-            ImageTile::default(),
+            ImageTile {
+                offset_x: off_x,
+                offset_y: off_y,
+                width: tile_w,
+                height: tile_h,
+            },
         );
 
         // A center near the middle of the placeholder tile, in absolute

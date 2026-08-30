@@ -10,10 +10,7 @@ use std::collections::HashSet;
 
 use crate::ImagePlane;
 use crate::ImageTile;
-use crate::pipeline::{
-    pipeline_cache::{GlobalPipelineCache, sample_channel_pixel},
-    pipeline_context::PipelineContext,
-};
+use crate::pipeline::pipeline_cache::{GlobalPipelineCache, sample_channel_pixel};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Intensity {
@@ -812,32 +809,44 @@ impl Object {
     /// held in `cache`. For ROIs assembled by [`ExtractObjects`](crate::algos::classification::extract_objects::ExtractObjects)
     /// this is redundant (it already measures intensities in the same pass that builds the
     /// mask). It exists for ROIs synthesized later in the pipeline — e.g. the intersection
-    /// ROIs colocalization creates via [`overlaps`](Self::overlaps) — which have a valid
-    /// mask/bbox but never had a chance to sample pixel data.
-    pub fn measure_intensities(
-        &self,
-        ctx: &PipelineContext,
-        cache: &GlobalPipelineCache,
-    ) -> IndexMap<i32, Intensity> {
-        let tile_offset = ctx.get_image_tile_offset();
-        // Channel images are loaded for the current tile, so they share that tile's
-        // pixel grid 1:1 - no resolution scaling against `full_image_size` applies
-        // here (that ratio is meaningless for tile-local indexing: a tile is a crop
-        // of the full image at the same resolution, not a smaller-resolution pyramid
-        // level of it).
-        let tile_size = ctx.get_image_size();
-        let origin_width = tile_size.width;
-
+    /// ROIs colocalization creates via [`overlaps`](Self::overlaps), Voronoi regions, or an
+    /// object rebuilt by `TransformObjects`/`ObjectMath` — which have a valid mask/bbox but
+    /// never had a chance to sample pixel data.
+    ///
+    /// `cache.image_cache` can hold channel data from *more than one* source tile at once
+    /// (the whole-image phase merges every tile's own channel views together), and this
+    /// object's mask may itself span more than one of them - e.g. a `TileMerge`d object, or
+    /// a Voronoi region seeded near a tile boundary. So each mask pixel is matched against
+    /// whichever loaded tile actually covers it, per channel, rather than assuming a single
+    /// "current" tile the way a `Tile`-scoped command's own `ctx` would. A pixel not covered
+    /// by any loaded tile for a given channel (e.g. a tile that was never processed, as
+    /// happens for an off-screen tile in a partial preview run) is simply skipped for that
+    /// channel - not an error, just missing data.
+    pub fn measure_intensities(&self, cache: &GlobalPipelineCache) -> IndexMap<i32, Intensity> {
         let channel_views = cache.resolve_channel_views();
+
+        // Group the loaded tiles by channel, preserving first-seen channel order so the
+        // returned map's key order matches `resolve_channel_views`'s own order (existing
+        // callers/tests rely on `IndexMap` insertion order).
+        let mut by_channel: IndexMap<i32, Vec<(ImageTile, bool, &[f32])>> = IndexMap::new();
+        for ((channel_id, tile), is_rgb, slice) in &channel_views {
+            by_channel
+                .entry(*channel_id)
+                .or_default()
+                .push((*tile, *is_rgb, slice));
+        }
 
         let [xmin, ymin, xmax, ymax] = self.bbox;
         let rw = (xmax - xmin + 1) as usize;
         let rh = (ymax - ymin + 1) as usize;
 
-        let mut sum = vec![0f64; channel_views.len()];
-        let mut min = vec![f32::MAX; channel_views.len()];
-        let mut max = vec![f32::MIN; channel_views.len()];
-        let mut area = 0usize;
+        // Sum/min/max/count accumulated per channel - `count` (not the mask's total area)
+        // is the average's denominator, since a channel can legitimately have fewer covered
+        // pixels than the mask if part of it falls outside every loaded tile.
+        let mut acc: IndexMap<i32, (f64, f32, f32, usize)> = by_channel
+            .keys()
+            .map(|&channel_id| (channel_id, (0f64, f32::MAX, f32::MIN, 0usize)))
+            .collect();
 
         for ry in 0..rh {
             for rx in 0..rw {
@@ -852,53 +861,43 @@ impl Object {
                 let x_abs = xmin as usize + rx;
                 let y_abs = ymin as usize + ry;
 
-                // Transforms (Expand/Scale/Circle/...) clamp the mask against the *full*
-                // image, not this tile, since the mask/bbox they produce must stay valid
-                // regardless of which tile is being processed. So a mask pixel can legally
-                // fall outside the tile currently loaded in `cache` - there's no channel
-                // data for it here, so skip it instead of underflowing `x_abs - tile_offset.x`.
-                if x_abs < tile_offset.x || y_abs < tile_offset.y {
-                    continue;
-                }
-                let tile_x = x_abs - tile_offset.x;
-                let tile_y = y_abs - tile_offset.y;
-                if tile_x >= tile_size.width || tile_y >= tile_size.height {
-                    continue;
-                }
-
-                area += 1;
-                let sample = tile_y * origin_width + tile_x;
-
-                for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
+                for (channel_id, tiles) in &by_channel {
+                    let Some((tile, is_rgb, slice)) = tiles.iter().find(|(tile, _, _)| {
+                        x_abs >= tile.offset_x
+                            && y_abs >= tile.offset_y
+                            && x_abs < tile.offset_x + tile.width
+                            && y_abs < tile.offset_y + tile.height
+                    }) else {
+                        continue;
+                    };
+                    let tile_x = x_abs - tile.offset_x;
+                    let tile_y = y_abs - tile.offset_y;
+                    let sample = tile_y * tile.width + tile_x;
                     let val = sample_channel_pixel(*is_rgb, slice, sample);
-                    sum[ci] += val as f64;
-                    if val < min[ci] {
-                        min[ci] = val;
-                    }
-                    if val > max[ci] {
-                        max[ci] = val;
-                    }
+
+                    let entry = acc.get_mut(channel_id).expect("seeded from by_channel above");
+                    entry.0 += val as f64;
+                    entry.1 = entry.1.min(val);
+                    entry.2 = entry.2.max(val);
+                    entry.3 += 1;
                 }
             }
         }
 
-        let n = area.max(1) as f64;
-        channel_views
-            .iter()
-            .enumerate()
-            .map(|(ci, (ch_idx, _, _))| {
+        acc.into_iter()
+            .map(|(channel_id, (sum, min, max, n))| {
+                let has_data = n > 0;
                 (
-                    *ch_idx,
+                    channel_id,
                     Intensity {
-                        sum_intensity: sum[ci],
-                        min_intensity: min[ci],
-                        max_intensity: max[ci],
-                        avg_intensity: (sum[ci] / n) as f32,
+                        sum_intensity: sum,
+                        min_intensity: if has_data { min } else { 0.0 },
+                        max_intensity: if has_data { max } else { 0.0 },
+                        avg_intensity: (sum / n.max(1) as f64) as f32,
                         pixel_values: Vec::new(),
                     },
                 )
             })
-            .map(|(k, v)| (k.0, v))
             .collect()
     }
 
@@ -1470,27 +1469,19 @@ mod tests {
         // synthesized object (e.g. colocalization intersections, Voronoi regions)
         // sample channel pixel 0 regardless of its actual tile-local position.
         use crate::image::ManagedImage;
-        use crate::pipeline::{
-            pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext,
-        };
-        use crate::{F32Gray, ImageContainer, ImagePlane};
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use crate::{ImageContainer, ImagePlane};
         use kornia_apriltag::utils::Point2d;
         use kornia_image::{Image, ImageSize};
         use kornia_tensor::CpuAllocator;
         use std::sync::Arc;
 
-        let full_size = ImageSize {
-            width: 50,
-            height: 60,
-        };
         let tile_size = ImageSize {
             width: 15,
             height: 20,
         };
         let offset = Point2d { x: 10, y: 15 };
 
-        let ctx =
-            PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
         let mut cache = GlobalPipelineCache::default();
 
         // Distinct intensities at two different tile-local positions.
@@ -1507,7 +1498,19 @@ mod tests {
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
-        cache.add_to_channel_cache(channel, 0, ImageTile::default());
+        // The cache key's `ImageTile` is what `measure_intensities` now matches mask
+        // pixels against - it must reflect this channel's *real* tile position/size,
+        // not a placeholder, since a mismatch here means "no tile covers this pixel".
+        cache.add_to_channel_cache(
+            channel,
+            0,
+            ImageTile {
+                offset_x: offset.x,
+                offset_y: offset.y,
+                width: tile_size.width,
+                height: tile_size.height,
+            },
+        );
 
         // A 1-pixel object at the global position corresponding to tile-local (7,5).
         let object = Object::new(ObjectInit {
@@ -1518,7 +1521,7 @@ mod tests {
             ..Default::default()
         });
 
-        let intensities = object.measure_intensities(&ctx, &cache);
+        let intensities = object.measure_intensities(&cache);
 
         assert_eq!(
             intensities.get(&0).unwrap().sum_intensity,
@@ -1537,27 +1540,19 @@ mod tests {
         // channel slice miles out of bounds, panicking. Now those pixels must simply be
         // skipped rather than sampled.
         use crate::image::ManagedImage;
-        use crate::pipeline::{
-            pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext,
-        };
-        use crate::{F32Gray, ImageContainer, ImagePlane};
+        use crate::pipeline::pipeline_cache::GlobalPipelineCache;
+        use crate::{ImageContainer, ImagePlane};
         use kornia_apriltag::utils::Point2d;
         use kornia_image::{Image, ImageSize};
         use kornia_tensor::CpuAllocator;
         use std::sync::Arc;
 
-        let full_size = ImageSize {
-            width: 50,
-            height: 60,
-        };
         let tile_size = ImageSize {
             width: 15,
             height: 20,
         };
         let offset = Point2d { x: 10, y: 15 };
 
-        let ctx =
-            PipelineContext::new_test_with_offset::<F32Gray>(tile_size, full_size, offset).unwrap();
         let mut cache = GlobalPipelineCache::default();
 
         let mut intensity = vec![7.0f32; 15 * 20];
@@ -1572,7 +1567,19 @@ mod tests {
             tile_offset: offset,
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
-        cache.add_to_channel_cache(channel, 0, ImageTile::default());
+        // The cache key's `ImageTile` is what `measure_intensities` now matches mask
+        // pixels against - it must reflect this channel's *real* tile position/size,
+        // not a placeholder, since a mismatch here means "no tile covers this pixel".
+        cache.add_to_channel_cache(
+            channel,
+            0,
+            ImageTile {
+                offset_x: offset.x,
+                offset_y: offset.y,
+                width: tile_size.width,
+                height: tile_size.height,
+            },
+        );
 
         // A 4x4 mask straddling the tile's top-left corner: global x in [8, 11], y in
         // [13, 16] against a tile that only starts at (10, 15). Only the bottom-right
@@ -1588,7 +1595,7 @@ mod tests {
 
         // Must not panic, and must only have sampled the four in-tile pixels (tile-local
         // (0,0), (1,0), (0,1), (1,1)), all value 7.0 - away from the 99.0 marker.
-        let intensities = object.measure_intensities(&ctx, &cache);
+        let intensities = object.measure_intensities(&cache);
         let intensity = intensities.get(&0).unwrap();
         assert_eq!(intensity.sum_intensity, 28.0);
         assert_eq!(intensity.max_intensity, 7.0);

@@ -194,7 +194,7 @@ impl ImageAlgorithm for ObjectMath {
                 sum_xy: geometry.sum_xy,
                 ..Default::default()
             });
-            let intensities = transformed.measure_intensities(ctx, cache);
+            let intensities = transformed.measure_intensities(cache);
 
             if replace_in_place {
                 if let Some(object) = cache.object_cache.get_mut(input_id) {
@@ -326,7 +326,12 @@ mod tests {
                 plane: None,
             })),
             0,
-            ImageTile::default(),
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
         );
         ctx
     }
