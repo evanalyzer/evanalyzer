@@ -639,23 +639,6 @@ impl<'a> JobExecutor {
         // on every single tile.
         let image_entry_arc = Arc::new(image_entry.clone());
 
-        // A small pool of readers, opened once per image rather than once
-        // per tile: `ImageReader::new` re-parses the format header and walks
-        // metadata every time it's called (a few ms each, per the reader's
-        // own timing logs), even for the same file - real cost for a
-        // whole-slide image with many tiles, invisible for a single-tile
-        // one. Sized to the actual tile count so a small image never
-        // over-allocates readers it'll never use. Two (or more) tiles can
-        // still land on the same pool slot - `read_image_tile_combined_pooled`
-        // handles that safely (each reader is internally mutex-guarded), it
-        // just serializes those specific reads rather than every tile
-        // paying for its own reader from scratch.
-        let reader_pool_size = crate::resources::recommended_reader_pool_size()
-            .min((visible_tiles.len() + hidden_tiles.len()).max(1));
-        let reader_pool: Vec<Arc<ImageReader>> = (0..reader_pool_size)
-            .map(|_| ImageReader::new(image_path, ReadMode::Default).map(Arc::new))
-            .collect::<Result<_, _>>()?;
-
         'stacks: for &t in &t_stacks {
             for &z in &z_stacks {
                 let global_cache = match self.prepare_global_image_cache(
@@ -694,9 +677,17 @@ impl<'a> JobExecutor {
                         .map(|(ox, oy)| tile.offset_x == ox && tile.offset_y == oy)
                         .unwrap_or(false);
 
+                    // A fresh reader per tile, not pooled: measured to be
+                    // faster in practice than sharing a small mutex-guarded
+                    // pool across many concurrent tiles (see
+                    // `prepare_pipeline_cache`'s doc comment) - the pool's
+                    // per-tile lock contention cost more wall-clock time
+                    // than the reader construction it was meant to save.
+                    let reader = ImageReader::new(image_path, ReadMode::Default)?;
+
                     let mut cache = self.prepare_pipeline_cache(
                         global_cache.clone(),
-                        &reader_pool,
+                        &reader,
                         image_entry_arc.clone(),
                         &tile,
                         t,
@@ -1089,16 +1080,11 @@ impl<'a> JobExecutor {
     ///
     /// Loads the selected image plane from the image and inits the
     /// cache with the loaded image planes and returns the cache.
-    /// This cache can now be used for processing the pipelines of the image.
-    ///
-    /// `reader_pool` is shared across every tile of this image (see its own
-    /// doc comment at the call site) - `read_image_tile_combined_pooled`
-    /// distributes this tile's channel reads across the pool in parallel,
-    /// instead of a single reader reading every channel sequentially.
+    /// This cache can now be used for processing the pipelines of the image
     fn prepare_pipeline_cache(
         &self,
         mut global_cache: GlobalPipelineCache,
-        reader_pool: &[Arc<ImageReader>],
+        image_reader: &ImageReader,
         image_entry: Arc<ImageEntry>,
         image_tile: &ImageTile,
         t_stack: i32,
@@ -1106,8 +1092,7 @@ impl<'a> JobExecutor {
         z_range: &Option<RangeInclusive<i32>>,
         resolution_index: i32,
     ) -> Result<GlobalPipelineCache, InternalErrors> {
-        let loaded_channels = ImageReader::read_image_tile_combined_pooled(
-            reader_pool,
+        let loaded_channels = image_reader.read_image_tile_combined(
             image_entry.selected_series,
             resolution_index,
             z_projection.clone(),
