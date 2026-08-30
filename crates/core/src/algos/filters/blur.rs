@@ -577,30 +577,4 @@ mod tests {
             panic!("Expected F32Gray in ctx.image after swap");
         }
     }
-
-    #[test]
-    #[ignore]
-    fn bench_box_blur_edge_replicate() {
-        let size = ImageSize {
-            width: 2048,
-            height: 2048,
-        };
-        let data: Vec<f32> = (0..size.width * size.height)
-            .map(|i| (i % 251) as f32 / 251.0)
-            .collect();
-        let img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap();
-
-        for kernel_size in [3usize, 9, 27] {
-            let iters = 20;
-            let start = std::time::Instant::now();
-            for _ in 0..iters {
-                let _ = Blur::box_blur_edge_replicate(&img, kernel_size).unwrap();
-            }
-            let elapsed = start.elapsed();
-            println!(
-                "kernel_size={kernel_size}: {:.3}ms/iter",
-                elapsed.as_secs_f64() * 1000.0 / iters as f64
-            );
-        }
-    }
 }
