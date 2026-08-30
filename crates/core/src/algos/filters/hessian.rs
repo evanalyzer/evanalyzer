@@ -82,14 +82,15 @@ impl ImageAlgorithm for Hessian {
         ctx: &mut PipelineContext,
         _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        match Arc::make_mut(&mut ctx.image) {
-            ImageContainer::F32Gray(img) => {
-                let result = process_f32_gray(img, self.mode)?;
-                *img = ManagedImage {
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
+            (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
+                let result = process_f32_gray(&input.data, self.mode)?;
+                *output = ManagedImage {
                     data: result,
-                    tile_offset: img.tile_offset,
-                    plane: img.plane,
+                    tile_offset: input.tile_offset,
+                    plane: input.plane,
                 };
+                ctx.swap()?;
                 Ok(())
             }
             _ => Err(InternalErrors::FormatMismatch {

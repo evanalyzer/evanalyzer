@@ -74,13 +74,23 @@ impl ImageAlgorithm for EnhanceContrast {
         ctx: &mut PipelineContext,
         _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        match Arc::make_mut(&mut ctx.image) {
-            ImageContainer::F32Gray(img) => {
-                self.process_f32_gray(img);
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
+            (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
+                output
+                    .data
+                    .as_slice_mut()
+                    .copy_from_slice(input.data.as_slice());
+                self.process_f32_gray(&mut output.data);
+                ctx.swap()?;
                 Ok(())
             }
-            ImageContainer::F32Rgb(img) => {
-                self.process_f32_rgb(img);
+            (ImageContainer::F32Rgb(input), ImageContainer::F32Rgb(output)) => {
+                output
+                    .data
+                    .as_slice_mut()
+                    .copy_from_slice(input.data.as_slice());
+                self.process_f32_rgb(&mut output.data);
+                ctx.swap()?;
                 Ok(())
             }
             _ => Err(InternalErrors::FormatMismatch {

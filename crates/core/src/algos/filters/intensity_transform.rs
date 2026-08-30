@@ -16,7 +16,7 @@ use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
 use macros::CommandsMeta;
-use ndarray::ArrayViewMut3;
+use ndarray::{ArrayView3, ArrayViewMut3};
 use std::sync::Arc;
 
 /// Specifies how intensity adjustments are calculated.
@@ -61,7 +61,7 @@ impl ImageAlgorithm for IntensityTransformation {
     ///
     /// ### Supported Formats
     /// * **Input:** `F32Gray` or `F32Rgb`.
-    /// * **Output:** Matches input format (processed in-place or via scratch pad).
+    /// * **Output:** Matches input format, written into the scratch pad.
     ///
     /// # Errors
     /// Returns [`InternalErrors::FormatMismatch`] if the image and scratch pad
@@ -71,10 +71,17 @@ impl ImageAlgorithm for IntensityTransformation {
         ctx: &mut PipelineContext,
         _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        match Arc::make_mut(&mut ctx.image) {
-            // These are different types, so they need separate arms
-            ImageContainer::F32Gray(img) => self.process_f32_image(img),
-            ImageContainer::F32Rgb(img) => self.process_f32_image(img),
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
+            (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
+                self.process_f32_image(input, output)?;
+                ctx.swap()?;
+                Ok(())
+            }
+            (ImageContainer::F32Rgb(input), ImageContainer::F32Rgb(output)) => {
+                self.process_f32_image(input, output)?;
+                ctx.swap()?;
+                Ok(())
+            }
             _ => Err(InternalErrors::FormatMismatch {
                 expected: "F32Gray or F32Rgb".into(),
                 found: format!("{:?}", ctx.image),
@@ -98,40 +105,47 @@ impl ImageAlgorithm for IntensityTransformation {
 impl IntensityTransformation {
     fn process_f32_image<const C: usize>(
         &self,
-        image: &mut Image<f32, C, CpuAllocator>,
+        input: &Image<f32, C, CpuAllocator>,
+        output: &mut Image<f32, C, CpuAllocator>,
     ) -> Result<(), InternalErrors> {
         match self.mode {
-            IntensityTransformMode::Automatic => self.equalize_hist_f32(image),
-            IntensityTransformMode::Manual => self.apply_manual_f32(image),
+            IntensityTransformMode::Automatic => self.equalize_hist_f32(input, output),
+            IntensityTransformMode::Manual => self.apply_manual_f32(input, output),
         }
     }
 
     /// Manual Contrast/Brightness: result = contrast * pixel + brightness
     fn apply_manual_f32<const C: usize>(
         &self,
-        image: &mut Image<f32, C, CpuAllocator>,
+        input: &Image<f32, C, CpuAllocator>,
+        output: &mut Image<f32, C, CpuAllocator>,
     ) -> Result<(), InternalErrors> {
-        let (h, w) = (image.size().height, image.size().width);
-        let mut view = ArrayViewMut3::from_shape((h, w, C), image.as_slice_mut())?;
+        let (h, w) = (input.size().height, input.size().width);
+        let in_view = ArrayView3::from_shape((h, w, C), input.as_slice())?;
+        let mut out_view = ArrayViewMut3::from_shape((h, w, C), output.as_slice_mut())?;
 
         let c = self.contrast;
         let b = self.brightness;
 
-        view.mapv_inplace(|pixel| {
-            // Clamp to [0.0, 1.0] to emulate saturate_cast
-            (c * pixel + b).clamp(0.0, 1.0)
-        });
+        ndarray::Zip::from(&mut out_view)
+            .and(&in_view)
+            .for_each(|o, &i| {
+                // Clamp to [0.0, 1.0] to emulate saturate_cast
+                *o = (c * i + b).clamp(0.0, 1.0);
+            });
         Ok(())
     }
 
     /// Histogram Equalization for Float Images
     fn equalize_hist_f32<const C: usize>(
         &self,
-        image: &mut Image<f32, C, CpuAllocator>,
+        input: &Image<f32, C, CpuAllocator>,
+        output: &mut Image<f32, C, CpuAllocator>,
     ) -> Result<(), InternalErrors> {
-        let (h, w) = (image.size().height, image.size().width);
+        let (h, w) = (input.size().height, input.size().width);
         let total_pixels = (h * w) as f32;
-        let mut view = ArrayViewMut3::from_shape((h, w, C), image.as_slice_mut())?;
+        let in_view = ArrayView3::from_shape((h, w, C), input.as_slice())?;
+        let mut out_view = ArrayViewMut3::from_shape((h, w, C), output.as_slice_mut())?;
 
         // Use 65536 bins for high precision even with floats
         const BINS: usize = 65536;
@@ -139,7 +153,7 @@ impl IntensityTransformation {
         for c in 0..C {
             // Quantized Histogram
             let mut hist = vec![0usize; BINS];
-            for &pixel in view.slice(ndarray::s![.., .., c]) {
+            for &pixel in in_view.slice(ndarray::s![.., .., c]) {
                 // Map [0.0, 1.0] to [0, 65535]
                 let bin = (pixel * (BINS - 1) as f32).clamp(0.0, (BINS - 1) as f32) as usize;
                 hist[bin] += 1;
@@ -153,10 +167,11 @@ impl IntensityTransformation {
             }
 
             // Map back to float
-            view.slice_mut(ndarray::s![.., .., c])
-                .mapv_inplace(|pixel| {
+            ndarray::Zip::from(out_view.slice_mut(ndarray::s![.., .., c]))
+                .and(in_view.slice(ndarray::s![.., .., c]))
+                .for_each(|o, &pixel| {
                     let bin = (pixel * (BINS - 1) as f32).clamp(0.0, (BINS - 1) as f32) as usize;
-                    cdf[bin] as f32 / total_pixels
+                    *o = cdf[bin] as f32 / total_pixels;
                 });
         }
         Ok(())
@@ -178,17 +193,17 @@ mod tests {
 
     #[test]
     fn test_manual_intensity_adjustment() {
-        let mut img = setup_test_image(2, 2, 0.5); // 2x2 image, all pixels 0.5
+        let img = setup_test_image(2, 2, 0.5); // 2x2 image, all pixels 0.5
+        let mut out = setup_test_image(2, 2, 0.0);
 
         let algo = IntensityTransformation {
             mode: IntensityTransformMode::Manual,
             contrast: 1.2,   // 0.5 * 1.2 = 0.6
             brightness: 0.1, // 0.6 + 0.1 = 0.7
         };
-        algo.process_f32_image(&mut img).unwrap();
+        algo.process_f32_image(&img, &mut out).unwrap();
 
-        let data = img.as_slice();
-        for &pixel in data {
+        for &pixel in out.as_slice() {
             // Check if (0.5 * 1.2) + 0.1 = 0.7
             assert!((pixel - 0.7).abs() < 1e-6);
         }
@@ -196,16 +211,17 @@ mod tests {
 
     #[test]
     fn test_manual_clamping() {
-        let mut img = setup_test_image(2, 2, 0.9);
+        let img = setup_test_image(2, 2, 0.9);
+        let mut out = setup_test_image(2, 2, 0.0);
 
         let algo = IntensityTransformation {
             mode: IntensityTransformMode::Manual,
             contrast: 2.0,   // 1.8
             brightness: 0.5, // 2.3 -> should clamp to 1.0
         };
-        algo.process_f32_image(&mut img).unwrap();
+        algo.process_f32_image(&img, &mut out).unwrap();
 
-        for &pixel in img.as_slice() {
+        for &pixel in out.as_slice() {
             assert_eq!(pixel, 1.0);
         }
     }
@@ -227,15 +243,17 @@ mod tests {
             slice[2] = 0.1;
             slice[3] = 1.0;
         }
+        let mut out =
+            Image::<f32, 1, CpuAllocator>::from_size_val(size, 0.0, CpuAllocator).unwrap();
 
         let algo = IntensityTransformation {
             mode: IntensityTransformMode::Automatic,
             contrast: 1.0,
             brightness: 0.0,
         };
-        algo.process_f32_image(&mut img).unwrap();
+        algo.process_f32_image(&img, &mut out).unwrap();
 
-        let result = img.as_slice();
+        let result = out.as_slice();
 
         // In a 4-pixel image:
         // 0.1 is the 3rd pixel in the CDF (3/4 = 0.75)

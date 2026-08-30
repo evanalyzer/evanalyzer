@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ExecutionScope, ImageAlgorithm, GlobalPipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
@@ -152,15 +152,25 @@ impl ImageAlgorithm for IlluminationCorrection {
             ));
         }
 
-        match Arc::make_mut(&mut ctx.image) {
-            ImageContainer::F32Gray(img) => {
-                let (width, height) = (img.width(), img.height());
-                self.correct_channel(img.as_slice_mut(), width, height)
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
+            (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
+                let (width, height) = (input.width(), input.height());
+                output
+                    .data
+                    .as_slice_mut()
+                    .copy_from_slice(input.data.as_slice());
+                self.correct_channel(output.data.as_slice_mut(), width, height)?;
+                ctx.swap()?;
+                Ok(())
             }
-            ImageContainer::F32Rgb(img) => {
-                let (width, height) = (img.width(), img.height());
+            (ImageContainer::F32Rgb(input), ImageContainer::F32Rgb(output)) => {
+                let (width, height) = (input.width(), input.height());
                 let pixels = width * height;
-                let slice = img.as_slice_mut();
+                output
+                    .data
+                    .as_slice_mut()
+                    .copy_from_slice(input.data.as_slice());
+                let slice = output.data.as_slice_mut();
                 let mut channel = vec![0.0f32; pixels];
                 for c in 0..3 {
                     for i in 0..pixels {
@@ -171,6 +181,7 @@ impl ImageAlgorithm for IlluminationCorrection {
                         slice[i * 3 + c] = channel[i];
                     }
                 }
+                ctx.swap()?;
                 Ok(())
             }
             _ => Err(InternalErrors::FormatMismatch {
