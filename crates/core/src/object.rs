@@ -10,7 +10,9 @@ use std::collections::HashSet;
 
 use crate::ImagePlane;
 use crate::ImageTile;
-use crate::pipeline::pipeline_cache::{GlobalPipelineCache, sample_channel_pixel};
+use crate::pipeline::pipeline_cache::{
+    GlobalPipelineCache, channel_pixel_slice, sample_channel_pixel,
+};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Intensity {
@@ -823,13 +825,22 @@ impl Object {
     /// happens for an off-screen tile in a partial preview run) is simply skipped for that
     /// channel - not an error, just missing data.
     pub fn measure_intensities(&self, cache: &GlobalPipelineCache) -> IndexMap<i32, Intensity> {
-        let channel_views = cache.resolve_channel_views();
+        // Only resolves (and, if needed, disk-loads - see `ImageCache`'s own doc
+        // comments) the tiles whose bounds actually overlap this object's bbox,
+        // not every channel entry the cache happens to be holding: once the
+        // whole-image phase merges every tile's channel views together, this
+        // object's mask - all `measure_intensities` ever samples - typically
+        // only touches a handful of those tiles.
+        let channel_views = cache.resolve_channel_views_for_bbox(self.bbox);
 
         // Group the loaded tiles by channel, preserving first-seen channel order so the
-        // returned map's key order matches `resolve_channel_views`'s own order (existing
-        // callers/tests rely on `IndexMap` insertion order).
+        // returned map's key order matches `resolve_channel_views_for_bbox`'s own order
+        // (existing callers/tests rely on `IndexMap` insertion order).
         let mut by_channel: IndexMap<i32, Vec<(ImageTile, bool, &[f32])>> = IndexMap::new();
-        for ((channel_id, tile), is_rgb, slice) in &channel_views {
+        for ((channel_id, tile), is_rgb, container) in &channel_views {
+            let Some(slice) = channel_pixel_slice(container) else {
+                continue;
+            };
             by_channel
                 .entry(*channel_id)
                 .or_default()

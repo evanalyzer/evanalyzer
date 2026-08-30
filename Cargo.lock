@@ -2760,6 +2760,7 @@ dependencies = [
  "duckdb",
  "env_logger",
  "evanalyzer_cfg",
+ "fast-uuid-v7",
  "image 0.25.10",
  "indexmap",
  "kornia-apriltag",

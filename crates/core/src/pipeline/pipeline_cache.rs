@@ -1,13 +1,13 @@
 use crate::{
     ImageTile,
     image::{ImageContainer, PixelSizes},
-    pipeline::{object_cache::ObjectCache, pipeline::PipelineImageMeta},
+    pipeline::{image_cache::ImageCache, object_cache::ObjectCache, pipeline::PipelineImageMeta},
 };
 use evanalyzer_cfg::core_types::MemoryId;
 use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
 use kornia_tensor::CpuAllocator;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheAddress {
@@ -15,10 +15,6 @@ pub enum CacheAddress {
     Memory(MemoryId),
     Channel((i32, ImageTile)),
 }
-
-/// This is a map which stores an image to the RAM.
-/// The image can be addressed either by Image plane or a memory ID
-pub type ImageMap = HashMap<CacheAddress, Arc<ImageContainer>>;
 
 #[derive(Clone)]
 pub struct GlobalImageMeta {
@@ -48,7 +44,7 @@ impl Default for GlobalImageMeta {
 
 #[derive(Default, Clone)]
 pub struct GlobalPipelineCache {
-    pub image_cache: ImageMap,
+    pub image_cache: ImageCache,
     pub image_meta: GlobalImageMeta,
     pub object_cache: ObjectCache,
     pub image_rel_path: PathBuf,
@@ -80,7 +76,7 @@ mod tests {
 
 impl GlobalPipelineCache {
     pub fn clear_pipeline_context(&mut self) {
-        self.image_cache.retain(|key, _| {
+        self.image_cache.retain(|key| {
             match key {
                 // Always keep Channel types
                 CacheAddress::Channel(_) => true,
@@ -108,22 +104,18 @@ impl GlobalPipelineCache {
     ) -> Option<Arc<ImageContainer>> {
         self.image_cache
             .get(&CacheAddress::Channel((channel_idx, image_tile_info)))
-            .cloned()
     }
 
     pub fn get_image_from_channel_cache_for_tile(
         &self,
         channel_idx: (i32, ImageTile),
     ) -> Option<Arc<ImageContainer>> {
-        self.image_cache
-            .get(&CacheAddress::Channel(channel_idx))
-            .cloned()
+        self.image_cache.get(&CacheAddress::Channel(channel_idx))
     }
 
     pub fn get_image_from_memory_cache(&self, memory_id: MemoryId) -> Option<Arc<ImageContainer>> {
         self.image_cache
             .get(&CacheAddress::Memory(memory_id.clone()))
-            .cloned()
     }
 
     pub fn get_image_from_cache(
@@ -173,37 +165,120 @@ impl GlobalPipelineCache {
         }
     }
 
-    /// Iterates over all Channel images in the cache.
-    /// Returns an iterator of (channel_index, &ImageContainer)
-    pub fn iter_channels(&self) -> impl Iterator<Item = ((i32, ImageTile), &ImageContainer)> {
-        self.image_cache.iter().filter_map(|(key, container)| {
-            if let CacheAddress::Channel(index) = key {
-                // Convert the &Arc<ImageContainer> into &ImageContainer
-                Some((*index, container.as_ref()))
-            } else {
-                None
-            }
+    /// Registered `(channel, tile)` keys, without loading any pixel data -
+    /// see `ImageCache::keys`. Cheap: only reads the always-in-memory index,
+    /// never touches the hot cache or disk.
+    pub fn channel_keys(&self) -> impl Iterator<Item = (i32, ImageTile)> + '_ {
+        self.image_cache.keys().filter_map(|key| match key {
+            CacheAddress::Channel(index) => Some(*index),
+            _ => None,
         })
     }
 
-    /// Resolves the registered channel images into flat pixel slices ready for
-    /// direct-index sampling, paired with whether each is RGB (needing luminance
-    /// conversion via [`sample_channel_pixel`]). Shared by every algorithm that
-    /// samples per-channel intensities for a set of pixels (`ExtractObjects`,
-    /// colocalization intersection ROIs, ...) so the channel resolution and the
-    /// RGB-luminance formula live in exactly one place.
-    pub fn resolve_channel_views(&self) -> Vec<((i32, ImageTile), bool, &[f32])> {
+    /// Iterates over all Channel images in the cache, loading each from disk
+    /// (or the hot cache) as needed - see `ImageCache::get`. Returns an
+    /// owned `Arc<ImageContainer>` per entry, not `&ImageContainer`: `get`
+    /// can't hand back a borrow once `hot_cache` sits behind an `RwLock`
+    /// (see its own doc comment), so this is the same trade for the same
+    /// reason - cloning an `Arc` is a cheap refcount bump, not a data copy.
+    ///
+    /// Loads *every* registered channel entry - for a cache holding more
+    /// than the current tile's own channels (e.g. the whole-image phase,
+    /// once tiles are merged across the image), prefer
+    /// [`resolve_channel_views_for_bbox`](Self::resolve_channel_views_for_bbox)
+    /// instead, so a query only pays for the tiles it actually needs.
+    pub fn iter_channels(
+        &self,
+    ) -> impl Iterator<Item = ((i32, ImageTile), Arc<ImageContainer>)> + '_ {
+        self.channel_keys()
+            .filter_map(|index| Some((index, self.image_cache.get(&CacheAddress::Channel(index))?)))
+    }
+
+    /// Resolves every registered channel image into flat pixel slices ready
+    /// for direct-index sampling, paired with whether each is RGB (needing
+    /// luminance conversion via [`sample_channel_pixel`]). Used by
+    /// `ExtractObjects`, which only ever has one tile's worth of channels
+    /// loaded at a time (see `prepare_pipeline_cache`) - "every registered
+    /// entry" and "everything relevant" are the same set there, so there's
+    /// no bbox to scope by. For anything that can see a larger cache (the
+    /// whole-image phase), use
+    /// [`resolve_channel_views_for_bbox`](Self::resolve_channel_views_for_bbox).
+    pub fn resolve_channel_views(&self) -> Vec<((i32, ImageTile), bool, Arc<ImageContainer>)> {
         self.iter_channels()
-            .filter_map(|(idx, container)| match container {
-                ImageContainer::F32Gray(img) => Some((idx, false, img.as_slice())),
-                ImageContainer::F32Rgb(img) => Some((idx, true, img.as_slice())),
-                ImageContainer::U32(_) => None,
+            .filter_map(|(idx, container)| {
+                let is_rgb = channel_is_rgb(&container)?;
+                Some((idx, is_rgb, container))
+            })
+            .collect()
+    }
+
+    /// Like [`resolve_channel_views`](Self::resolve_channel_views), but only
+    /// loads the channel entries whose tile bounds actually intersect
+    /// `bbox` ([x_min, y_min, x_max, y_max], inclusive - matching
+    /// `Object::bbox`), instead of every registered entry.
+    ///
+    /// `ImageCache` is disk-backed (see its own doc comments): once the
+    /// whole-image phase merges every tile's channel images into one cache,
+    /// `resolve_channel_views` would force a disk load for *every* tile in
+    /// the image just to measure one object's intensities, even though a
+    /// single object's mask - the only thing `Object::measure_intensities`
+    /// actually samples - typically only touches a handful of tiles.
+    /// Filtering by key (cheap - see `channel_keys`) before ever calling
+    /// `get` (which may hit disk) keeps that query proportional to the
+    /// object's own size, not the whole image's.
+    pub fn resolve_channel_views_for_bbox(
+        &self,
+        bbox: [u32; 4],
+    ) -> Vec<((i32, ImageTile), bool, Arc<ImageContainer>)> {
+        let [x_min, y_min, x_max, y_max] = bbox;
+        self.channel_keys()
+            .filter(|(_, tile)| tile_intersects_bbox(tile, x_min, y_min, x_max, y_max))
+            .filter_map(|index| {
+                let container = self.image_cache.get(&CacheAddress::Channel(index))?;
+                let is_rgb = channel_is_rgb(&container)?;
+                Some((index, is_rgb, container))
             })
             .collect()
     }
 }
 
-/// Samples one pixel from a channel view resolved by [`ImageCache::resolve_channel_views`],
+/// Whether a tile ([offset_x, offset_x + width) x [offset_y, offset_y +
+/// height), i.e. exclusive upper bounds) overlaps an inclusive pixel bbox
+/// ([x_min, x_max] x [y_min, y_max], matching `Object::bbox`'s convention).
+fn tile_intersects_bbox(tile: &ImageTile, x_min: u32, y_min: u32, x_max: u32, y_max: u32) -> bool {
+    let tile_x_min = tile.offset_x as u32;
+    let tile_y_min = tile.offset_y as u32;
+    let tile_x_max = tile_x_min + tile.width as u32;
+    let tile_y_max = tile_y_min + tile.height as u32;
+    tile_x_min <= x_max && x_min < tile_x_max && tile_y_min <= y_max && y_min < tile_y_max
+}
+
+/// Whether a channel container carries `f32` pixel data sampleable by
+/// [`sample_channel_pixel`] - `Some(is_rgb)` for `F32Gray`/`F32Rgb`, `None`
+/// for `U32` (label/instance maps, never intensity data).
+fn channel_is_rgb(container: &ImageContainer) -> Option<bool> {
+    match container {
+        ImageContainer::F32Gray(_) => Some(false),
+        ImageContainer::F32Rgb(_) => Some(true),
+        ImageContainer::U32(_) => None,
+    }
+}
+
+/// Extracts the flat pixel slice from a channel container resolved by
+/// [`GlobalPipelineCache::resolve_channel_views`]/
+/// [`resolve_channel_views_for_bbox`](GlobalPipelineCache::resolve_channel_views_for_bbox),
+/// for use with [`sample_channel_pixel`]. `None` for `U32` - both resolvers
+/// already filter those out via `channel_is_rgb`, so this should never
+/// actually return `None` for anything they returned.
+pub fn channel_pixel_slice(container: &ImageContainer) -> Option<&[f32]> {
+    match container {
+        ImageContainer::F32Gray(img) => Some(img.as_slice()),
+        ImageContainer::F32Rgb(img) => Some(img.as_slice()),
+        ImageContainer::U32(_) => None,
+    }
+}
+
+/// Samples one pixel from a channel view resolved by [`GlobalPipelineCache::resolve_channel_views`],
 /// converting RGB to perceptual luminance (BT.709) when `is_rgb` is set.
 pub fn sample_channel_pixel(is_rgb: bool, slice: &[f32], sample: usize) -> f32 {
     if is_rgb {
@@ -343,7 +418,10 @@ mod cache_tests {
         let fetched = cache
             .get_image_from_channel_cache(3, ImageTile::default())
             .unwrap();
-        assert!(Arc::ptr_eq(&fetched, &image));
+        // Not `Arc::ptr_eq`: `ImageCache` is disk-backed, so a fetched image may be
+        // a freshly reconstructed `Arc` (same content, different allocation) rather
+        // than the exact one inserted - see `ImageCache::get`'s own doc comment.
+        assert_eq!(channel_pixel_slice(&fetched), channel_pixel_slice(&image));
     }
 
     #[test]
@@ -368,7 +446,8 @@ mod cache_tests {
             .insert(CacheAddress::Memory(id), image.clone());
 
         let fetched = cache.get_image_from_memory_cache(id).unwrap();
-        assert!(Arc::ptr_eq(&fetched, &image));
+        // Not `Arc::ptr_eq` - see `channel_cache_round_trip`'s comment.
+        assert_eq!(channel_pixel_slice(&fetched), channel_pixel_slice(&image));
     }
 
     #[test]
@@ -447,7 +526,8 @@ mod cache_tests {
         let fetched = cache
             .get_image_from_cache(&CacheAddress::Memory(id), ImageTile::default())
             .unwrap();
-        assert!(Arc::ptr_eq(&fetched, &image));
+        // Not `Arc::ptr_eq` - see `channel_cache_round_trip`'s comment.
+        assert_eq!(channel_pixel_slice(&fetched), channel_pixel_slice(&image));
     }
 
     #[test]
@@ -462,7 +542,8 @@ mod cache_tests {
                 ImageTile::default(),
             )
             .unwrap();
-        assert!(Arc::ptr_eq(&fetched, &image));
+        // Not `Arc::ptr_eq` - see `channel_cache_round_trip`'s comment.
+        assert_eq!(channel_pixel_slice(&fetched), channel_pixel_slice(&image));
     }
 
     // ---- iter_channels ----
@@ -508,15 +589,18 @@ mod cache_tests {
 
         assert_eq!(views.len(), 2);
 
-        let (idx0, is_rgb0, slice0) = views[0];
+        let (idx0, is_rgb0, container0) = &views[0];
         assert_eq!(idx0.0, 0);
         assert!(!is_rgb0);
-        assert_eq!(slice0, &[5.0]);
+        assert_eq!(channel_pixel_slice(container0), Some([5.0].as_slice()));
 
-        let (idx1, is_rgb1, slice1) = views[1];
+        let (idx1, is_rgb1, container1) = &views[1];
         assert_eq!(idx1.0, 1);
         assert!(is_rgb1);
-        assert_eq!(slice1, &[1.0, 2.0, 3.0]);
+        assert_eq!(
+            channel_pixel_slice(container1),
+            Some([1.0, 2.0, 3.0].as_slice())
+        );
     }
 
     // ---- sample_channel_pixel ----

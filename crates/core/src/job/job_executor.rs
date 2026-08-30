@@ -1,14 +1,7 @@
 use crate::{
-    ImageInfo, ZProjection,
-    algos::{Connectivity},
-    image::{ImageReader, ImageTile, PixelSizes, ReadMode},
-    pipeline::{
-        object_cache::ObjectCache,
-        pipeline::{ Pipeline, PipelineImageMeta},
-        pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache, ImageMap},
-    },
-    resources::{CACHE_QUEUE_DEPTH, MAX_TILE_SIZE},
-    storage::PipelineResultExporter,
+    ImageInfo, ZProjection, algos::Connectivity, image::{ImageReader, ImageTile, PixelSizes, ReadMode}, pipeline::{
+        image_cache::ImageCache, object_cache::ObjectCache, pipeline::{ Pipeline, PipelineImageMeta}, pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
+    }, resources::{CACHE_QUEUE_DEPTH, MAX_TILE_SIZE}, storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
     core_types::{ImageAddress, InternalErrors, PipelineId},
@@ -625,13 +618,19 @@ impl<'a> JobExecutor {
 
         'stacks: for &t in &t_stacks {
             for &z in &z_stacks {
-                let global_cache = self.prepare_global_image_cache(
+                let global_cache = match self.prepare_global_image_cache(
                     full_size,
                     is_rgb,
                     image_rel_path,
                     nr_bits,
                     pixel_sizes.clone(),
-                );
+                ) {
+                    Ok(cache) => cache,
+                    Err(e) => {
+                        analyze_result = Err(e);
+                        break 'stacks;
+                    }
+                };
 
                 let z_range_in = matches!(
                     z_handling,
@@ -1030,9 +1029,13 @@ impl<'a> JobExecutor {
         image_rel_path: &PathBuf,
         nr_of_bits: u16,
         pixel_sizes: PixelSizes,
-    ) -> GlobalPipelineCache {
-        GlobalPipelineCache {
-            image_cache: ImageMap::new(),
+    ) -> Result<GlobalPipelineCache, InternalErrors> {
+        Ok(GlobalPipelineCache {
+            // `ImageCache::new` creates its own scratch directory and can only
+            // fail if the OS can't (disk full, permissions) - fatal for this
+            // image, same as any other I/O setup failure here.
+            image_cache: ImageCache::new()
+                .map_err(|e| InternalErrors::Io(format!("Failed to create image cache: {e}")))?,
             image_meta: GlobalImageMeta {
                 full_image_width,
                 is_rgb,
@@ -1041,7 +1044,7 @@ impl<'a> JobExecutor {
             },
             object_cache: ObjectCache::default(),
             image_rel_path: image_rel_path.into(),
-        }
+        })
     }
 
     /// Prepares the pipeline cache
@@ -1092,18 +1095,12 @@ impl<'a> JobExecutor {
             pixel_sizes: global_cache.image_meta.pixel_sizes.clone(),
         };
 
-        // Collect Vec into HashMap automatically
-        let image_cache_map: ImageMap = loaded_channels
-            .into_iter()
-            .map(|img| {
-                (
-                    CacheAddress::Channel((img.c_stack, image_meta.image_tile_info.clone())),
-                    img.image,
-                )
-            })
-            .collect();
-
-        global_cache.image_cache.extend(image_cache_map);
+        for img in loaded_channels {
+            global_cache.image_cache.insert(
+                CacheAddress::Channel((img.c_stack, image_meta.image_tile_info.clone())),
+                img.image,
+            );
+        }
 
         Ok(global_cache)
     }
@@ -2464,7 +2461,8 @@ use crate::algos::touches_tile_edge;
         ThresholdMethod, ThresholdValueSource,
     };
     use crate::image::{ImageContainer, ManagedImage};
-    use crate::pipeline::pipeline::CorePipelineSettings;
+    use crate::pipeline::image_cache::ImageCache;
+use crate::pipeline::pipeline::CorePipelineSettings;
     use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass};
     use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
@@ -2523,7 +2521,7 @@ use crate::algos::touches_tile_edge;
             },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
-        let mut images: ImageMap = ImageMap::new();
+        let mut images: ImageCache = ImageCache::new().unwrap();
         images.insert(
             CacheAddress::Channel((
                 0,

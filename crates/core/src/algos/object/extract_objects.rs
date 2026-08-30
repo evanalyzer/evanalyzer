@@ -12,7 +12,7 @@ use crate::{
     algos::{ExecutionScope, ImageAlgorithm},
     object::{Intensity, Object, ObjectInit},
     pipeline::{
-        pipeline_cache::{GlobalPipelineCache, sample_channel_pixel},
+        pipeline_cache::{GlobalPipelineCache, channel_pixel_slice, sample_channel_pixel},
         pipeline_context::PipelineContext,
     },
 };
@@ -112,6 +112,21 @@ impl ImageAlgorithm for ExtractObjects {
         // them out as an owned Vec lets this borrow of `cache` end after pass 1, so
         // `cache.object_cache.extend(..)` can borrow `cache` mutably afterwards.
         let channel_ids: Vec<i32> = channel_views.iter().map(|(idx, _, _)| idx.0).collect();
+        // `resolve_channel_views` now hands back an owned `Arc<ImageContainer>` per
+        // channel (it has to - see its own doc comment), not a borrowed `&[f32]`
+        // slice directly. Resolve the actual slices once here, borrowing from the
+        // `Arc`s that `channel_views` keeps alive for the rest of this function -
+        // still outside the hot per-pixel loop below, so nothing re-matches the
+        // container type per pixel the way the comment above already guards against.
+        let channel_slices: Vec<(bool, &[f32])> = channel_views
+            .iter()
+            .map(|(_, is_rgb, container)| {
+                (
+                    *is_rgb,
+                    channel_pixel_slice(container).unwrap_or_default(),
+                )
+            })
+            .collect();
         let n_obj = max_id + 1;
 
         // Struct-of-arrays accumulators. Pass 1 only ever touches these small, contiguous
@@ -154,7 +169,7 @@ impl ImageAlgorithm for ExtractObjects {
                 // Sample intensity for each pre-resolved channel.
                 let sample = row + x;
                 let base = id * n_ch;
-                for (ci, (_, is_rgb, slice)) in channel_views.iter().enumerate() {
+                for (ci, (is_rgb, slice)) in channel_slices.iter().enumerate() {
                     let val = sample_channel_pixel(*is_rgb, slice, sample);
                     let k = base + ci;
                     i_sum[k] += val as f64;

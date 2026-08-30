@@ -21,12 +21,6 @@ kornia-apriltag = { workspace = true }
 zune-core = "=0.5.3"
 image = { workspace = true }
 log = { workspace = true }
-# Pinned to a specific commit (not `branch = "main"`) for reproducible builds
-# - bump deliberately with `cargo update -p bioformats --precise <rev>`, don't
-# let it float. The "gpl" feature is deliberately *not* listed here; it's
-# wired through our own `bioformats-gpl` feature below instead, so the
-# workspace root can toggle it (see the `evanalyzer_core` comment in the root
-# Cargo.toml).
 bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "tif-read-fix", features = [
     "jpegxr",
     "zarr",
@@ -49,21 +43,13 @@ serde_json = { workspace = true, optional = true }
 petname = "3.1.0"
 chrono = { workspace = true }
 sysinfo = "0.39.6"
-# Per-tile object scratch files for the whole-image command phase (see
-# `job::object_scratch`) - a pure internal working format with no
-# cross-version stability requirements, so the simple/stable 1.x API is
-# preferable to chasing bincode 2's newer (and still-evolving) one.
 bincode = { workspace = true }
 tempfile = { workspace = true }
+fast-uuid-v7 = { workspace = true }
+
 
 [features]
 ai = ["dep:tch", "dep:smartcore", "dep:burn", "dep:serde_json"]
-# Enables bioformats' own "gpl" feature - the GPL-2.0-or-later readers ported
-# from upstream Bio-Formats' `formats-gpl` module (CZI, ND2, LIF, LSM, and
-# others - see bioformats-rs' README for the full list). Disabling this drops
-# those formats but yields a BSD-2-Clause-only bioformats build. Toggle from
-# the workspace root, not here - see the `evanalyzer_core` comment in the
-# root Cargo.toml.
 bioformats-gpl = ["bioformats/gpl"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
