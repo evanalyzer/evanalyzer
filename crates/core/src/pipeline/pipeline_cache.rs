@@ -3,15 +3,11 @@ use crate::{
     image::{ImageContainer, PixelSizes},
     pipeline::{object_cache::ObjectCache, pipeline::PipelineImageMeta},
 };
-use evanalyzer_cfg::core_types::{ImageAddress, MemoryId};
+use evanalyzer_cfg::core_types::MemoryId;
 use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
 use kornia_tensor::CpuAllocator;
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheAddress {

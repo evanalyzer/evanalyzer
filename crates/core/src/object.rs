@@ -81,14 +81,7 @@ pub struct Object {
     // Image plane information
     pub plane: ImagePlane,
 
-    /// The tile this object was extracted from (by `ExtractObjects`), i.e.
-    /// which tile's `run_tile` pass produced it. Used only by tile-merge to
-    /// tell "two fragments from different tiles, real merge candidates"
-    /// apart from "two objects from the same tile's own segmentation,
-    /// already correctly separate" - no other algorithm needs to read this.
-    /// Defaults to `ImageTile::default()` (offset 0,0) for an object not
-    /// tied to a specific extraction tile (e.g. one created directly by a
-    /// whole-image command rather than `ExtractObjects`).
+    /// The tile this object was extracted from (by `ExtractObjects`)
     pub source_tile: ImageTile,
 
     // --- Precomputed geometry metrics ---

@@ -1,10 +1,10 @@
 use crate::{
     ImageInfo, ZProjection,
-    algos::{Connectivity, TileMerge},
+    algos::{Connectivity},
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
     pipeline::{
         object_cache::ObjectCache,
-        pipeline::{CorePipelineSettings, Pipeline, PipelineImageMeta},
+        pipeline::{ Pipeline, PipelineImageMeta},
         pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache, ImageMap},
     },
     resources::{CACHE_QUEUE_DEPTH, MAX_TILE_SIZE},
@@ -17,7 +17,6 @@ use evanalyzer_cfg::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
         },
         object_settings::ObjectMetricSettings,
-        project_settings::TileMergeSettings,
     },
 };
 use indexmap::IndexMap;
@@ -788,6 +787,10 @@ impl<'a> JobExecutor {
                     .map(|&tile| run_tile(tile, progress.clone()))
                     .try_reduce(|| global_cache.clone(), merge_caches)
                     .and_then(|acc| {
+    
+                        if hidden_tiles.is_empty() {
+                            return Ok(acc);
+                        }
                         hidden_tiles
                             .par_iter()
                             .map(|&tile| run_tile(tile, progress.clone()))
@@ -2436,7 +2439,8 @@ mod tile_merge_end_to_end_tests {
     use super::*;
     use crate::ImagePlane;
     use crate::Object;
-    use crate::algos::touches_tile_edge;
+    use crate::algos::TileMerge;
+use crate::algos::touches_tile_edge;
     use crate::algos::{
         ConnectedComponents, Connectivity, ExtractObjects, Threshold, ThresholdEntry,
         ThresholdMethod, ThresholdValueSource,

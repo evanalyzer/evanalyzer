@@ -133,11 +133,14 @@ impl Pipeline {
     ) -> Result<PipelineResult, InternalErrors> {
         let tile = match tile {
             Some(data) => data,
+            // No explicit tile means this is a whole-image-scoped run.
+            // No buffer is needed, since this is only called by the post process commands
+            // which only contains object commands
             None => ImageTile {
                 offset_x: 0,
                 offset_y: 0,
-                width: cache.image_meta.full_image_width.width,
-                height: cache.image_meta.full_image_width.height,
+                width: 1,
+                height: 1,
             },
         };
 

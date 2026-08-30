@@ -254,20 +254,23 @@ impl ImageAlgorithm for Voronoi {
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
         cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        // Voronoi runs per tile, same as every other pipeline step - it must only
-        // touch pixels within the current tile, in absolute (full-image) coordinates,
-        // not iterate the whole image on every tile (which both wastes work and, once
-        // a region's pixels are later sampled for intensity, reads channel data that
-        // was only ever loaded for this tile, far out of bounds for large images).
+        // Voronoi is `ExecutionScope::WholeImage` - it runs once against the
+        // complete object set, not per tile, so its pixel-assignment pass
+        // covers the *whole* image. That must come from `full_image_size()`
+        // (metadata, always correct) rather than `ctx.get_image_size()`/
+        // `get_image_tile_offset()` (the size of `ctx.image`'s actual
+        // buffer): Voronoi's `start_image` is recommended to be Scratchpad,
+        // whose placeholder buffer is deliberately allocated as small as
+        // possible (nothing here ever reads its pixel content, only object
+        // data from `cache.object_cache`), so it can't be used as a stand-in
+        // for "how big is the image."
         let full_size = ctx.full_image_size();
         let full_w = full_size.width as u32;
         let full_h = full_size.height as u32;
-        let tile_size = ctx.get_image_size();
-        let tile_offset = ctx.get_image_tile_offset();
-        let tile_w = tile_size.width as u32;
-        let tile_h = tile_size.height as u32;
-        let off_x = tile_offset.x as u32;
-        let off_y = tile_offset.y as u32;
+        let tile_w = full_w;
+        let tile_h = full_h;
+        let off_x = 0u32;
+        let off_y = 0u32;
 
         if tile_w == 0 || tile_h == 0 {
             return Ok(());
@@ -712,26 +715,29 @@ mod tests {
     }
 
     #[test]
-    fn voronoi_stays_within_tile_bounds_for_a_tile_smaller_than_the_full_image() {
-        // Regression test: for a multi-tile (whole-slide-image) job, Voronoi used to
-        // iterate `0..full_image_width/height` on every tile invocation - far beyond
-        // the pixels actually loaded for the current tile. That silently produced
-        // wrong, oversized regions, and panicked with an out-of-bounds slice index
-        // once intensity sampling (which only has this tile's channel buffer) was
-        // added. The tile here (20x20) sits at offset (100,100) inside a much larger
-        // (500x500) full image - any pixel assigned outside [100,120)x[100,120) would
-        // either panic during intensity sampling or prove the tile boundary leaked.
+    fn voronoi_covers_the_whole_image_even_when_ctxs_buffer_is_a_smaller_placeholder() {
+        // Voronoi is `ExecutionScope::WholeImage` - it must size its pixel-assignment
+        // pass from `full_image_size()` (metadata), not from `ctx.image`'s actual
+        // buffer, since that buffer is only ever a placeholder for a Scratchpad-
+        // sourced pipeline (nothing here reads its pixel content) and is deliberately
+        // allocated much smaller than the real image to avoid a full-image-sized
+        // allocation on every whole-image run. This constructs exactly that
+        // situation - a 20x20 placeholder buffer inside a 500x500 image - and checks
+        // the region still spans the *whole* image, not just the placeholder's bounds.
         const CHANNEL: i32 = 0;
         let tile_w = 20usize;
         let tile_h = 20usize;
         let off_x = 100usize;
         let off_y = 100usize;
-        let mut ctx = make_tiled_ctx(tile_w, tile_h, 500, 500, off_x, off_y);
+        let full_w = 500usize;
+        let full_h = 500usize;
+        let mut ctx = make_tiled_ctx(tile_w, tile_h, full_w, full_h, off_x, off_y);
         let mut cache = GlobalPipelineCache::default();
 
-        // Channel buffer is sized to the tile only, matching how `prepare_pipeline_cache`
-        // loads channels per tile - this is exactly what made the old full-image loop
-        // panic when it tried to sample pixels far outside this small buffer.
+        // Only a small patch of channel data is actually loaded (as it would be for
+        // one tile's worth of pixels) - intensity sampling must still only sum over
+        // the pixels it actually has, silently skipping the rest of the now-larger
+        // region rather than panicking.
         let channel_img = Image::<f32, 1, CpuAllocator>::new(
             ImageSize {
                 width: tile_w,
@@ -751,7 +757,8 @@ mod tests {
             ImageTile::default(),
         );
 
-        // A center near the middle of the tile, in absolute (full-image) coordinates.
+        // A center near the middle of the placeholder tile, in absolute
+        // (full-image) coordinates.
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, center_bbox(110, 110), CENTER_CLASS),
@@ -761,21 +768,18 @@ mod tests {
 
         let regions = voronoi_objects(&cache);
         assert_eq!(regions.len(), 1);
-        let [x_min, y_min, x_max, y_max] = regions[0].bbox;
-        assert!(
-            x_min >= off_x as u32
-                && y_min >= off_y as u32
-                && x_max < (off_x + tile_w) as u32
-                && y_max < (off_y + tile_h) as u32,
-            "region bbox {:?} must stay within the tile [{off_x},{},{off_y},{}]",
+        assert_eq!(
             regions[0].bbox,
-            off_x + tile_w,
-            off_y + tile_h
+            [0, 0, full_w as u32 - 1, full_h as u32 - 1],
+            "the single center has no competitor, mask, or radius limit, so its region \
+             must cover the entire image, not just the placeholder buffer's bounds"
         );
-        assert_eq!(regions[0].area, tile_w * tile_h);
+        assert_eq!(regions[0].area, full_w * full_h);
         assert_eq!(
             regions[0].intensities.get(&CHANNEL).unwrap().sum_intensity,
-            (tile_w * tile_h) as f64 * 7.0
+            (tile_w * tile_h) as f64 * 7.0,
+            "intensity sampling must still only sum the pixels actually loaded, \
+             silently skipping the rest of the region rather than panicking"
         );
     }
 
