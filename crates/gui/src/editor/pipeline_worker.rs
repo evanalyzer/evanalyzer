@@ -8,6 +8,7 @@ use crate::{
     },
 };
 use evanalyzer_cfg::core_types::InternalErrors;
+use evanalyzer_cfg::settings::object_settings::ObjectMetricSettings;
 use log::{error, info};
 use slint::ComponentHandle;
 use std::sync::{Arc, Condvar, Mutex};
@@ -58,16 +59,33 @@ impl PipelineWorker {
         loop {
             let task = wait_for_task(task_request.clone());
             let is_preview = task.preview;
-            let job = if is_preview {
-                evanalyzer_core::generate_preview_job_from_project_settings(
+            // `out_objects` is only `Some` for a preview run - it's the in-memory
+            // store `MemoryExporter::export` fills in once the job's whole-image
+            // phase (TileMerge included) finishes for an image, which is the
+            // *actual* final, correctly-merged object set. The per-tile
+            // `TileCompleted` events below stream in each tile's own objects
+            // *before* tile-merge has run, purely for fast incremental preview
+            // feedback - `out_objects` is read back once the job completes to
+            // replace that pre-merge snapshot with the real result.
+            let (job, out_objects): (
+                Result<evanalyzer_core::JobExecutor, InternalErrors>,
+                Option<Arc<Mutex<Vec<ObjectMetricSettings>>>>,
+            ) = if is_preview {
+                match evanalyzer_core::generate_preview_job_from_project_settings(
                     task.project_settings,
                     task.project_path,
-                )
+                ) {
+                    Ok((job, out_objects)) => (Ok(job), Some(out_objects)),
+                    Err(e) => (Err(e), None),
+                }
             } else {
-                evanalyzer_core::generate_analyze_job_from_project_settings(
-                    task.project_settings,
-                    task.project_path,
-                    task.job_name,
+                (
+                    evanalyzer_core::generate_analyze_job_from_project_settings(
+                        task.project_settings,
+                        task.project_path,
+                        task.job_name,
+                    ),
+                    None,
                 )
             };
 
@@ -323,8 +341,21 @@ impl PipelineWorker {
                 Ok(()) => {
                     info!("Pipeline completed successfully");
                     if is_preview {
-                        // All tiles have already been streamed in via TileCompleted; just
-                        // do a final sync to make sure the UI is consistent.
+                        // Replace the incrementally-streamed per-tile ROIs (each
+                        // tile's own objects, sent via `TileCompleted` *before* the
+                        // whole-image phase's `TileMerge` ran) with the actual
+                        // final, merged result now that the job has finished -
+                        // otherwise cross-tile fragments stay displayed as two
+                        // separate objects even though the backend merged them.
+                        if let Some(out_objects) = &out_objects {
+                            let final_objects = out_objects
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .clone();
+                            let mut project = self_handle.app_state.get_project_write();
+                            project.tmp_settings.preview_objects.clear();
+                            project.tmp_settings.preview_objects.extend(final_objects);
+                        }
                         self_handle.object_list_controller.sync_objects_to_slint();
                         self_handle
                             .classification_controller

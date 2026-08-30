@@ -23,11 +23,19 @@ use std::{
 
 /// Generate a job just for preview
 ///
-/// No output data are written to disk, results are just stored in memory
+/// No output data are written to disk, results are just stored in memory -
+/// the returned `Arc<Mutex<Vec<ObjectMetricSettings>>>` is that in-memory
+/// store, filled in by `MemoryExporter::export` once the job's whole-image
+/// phase (including `TileMerge`, if enabled) finishes for each image. The
+/// caller must read *this* after the job completes to get the final,
+/// correctly-merged object set - the per-tile `ProgressEvent::TileCompleted`
+/// events streamed during the run carry each tile's own objects *before*
+/// tile-merge has run, so accumulating those alone leaves cross-tile
+/// fragments unmerged.
 pub fn generate_preview_job_from_project_settings(
     config: ProjectSettings,
     project_path: PathBuf,
-) -> Result<JobExecutor, InternalErrors> {
+) -> Result<(JobExecutor, Arc<Mutex<Vec<ObjectMetricSettings>>>), InternalErrors> {
     let out_objects: Arc<Mutex<Vec<ObjectMetricSettings>>> = Arc::new(Mutex::new(vec![]));
     let memory_storage = Arc::new(Mutex::new(MemoryExporter {
         out_objects: out_objects.clone(),
@@ -39,7 +47,13 @@ pub fn generate_preview_job_from_project_settings(
         return Err(InternalErrors::Io(format!("{e}")));
     }
 
-    generate_job_from_project_settings_intenal(config, project_path, output_path, memory_storage)
+    let job = generate_job_from_project_settings_intenal(
+        config,
+        project_path,
+        output_path,
+        memory_storage,
+    )?;
+    Ok((job, out_objects))
 }
 
 /// Generates a job for a full analysis.
@@ -290,7 +304,7 @@ mod tests {
         let image_root = tempfile::tempdir().unwrap();
         let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
 
-        let job =
+        let (job, _out_objects) =
             generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
                 .expect("valid config with an image root must succeed");
 
@@ -317,7 +331,7 @@ mod tests {
             ],
         );
 
-        let job =
+        let (job, _out_objects) =
             generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
                 .unwrap();
 
@@ -343,7 +357,7 @@ mod tests {
             )],
         );
 
-        let job =
+        let (job, _out_objects) =
             generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
                 .unwrap();
 
@@ -369,7 +383,7 @@ mod tests {
             z: 3.5,
         });
 
-        let job =
+        let (job, _out_objects) =
             generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
                 .unwrap();
 
@@ -387,7 +401,7 @@ mod tests {
         let image_root = tempfile::tempdir().unwrap();
         let project = project_with(Some(image_root.path().to_path_buf()), vec![]);
 
-        let job =
+        let (job, _out_objects) =
             generate_preview_job_from_project_settings(project, project_dir.path().to_path_buf())
                 .unwrap();
 
