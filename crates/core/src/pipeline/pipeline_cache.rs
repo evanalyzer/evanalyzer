@@ -166,11 +166,11 @@ impl GlobalPipelineCache {
     }
 
     /// Registered `(channel, tile)` keys, without loading any pixel data -
-    /// see `ImageCache::keys`. Cheap: only reads the always-in-memory index,
-    /// never touches the hot cache or disk.
-    pub fn channel_keys(&self) -> impl Iterator<Item = (i32, ImageTile)> + '_ {
+    /// see `ImageCache::keys`. Never touches disk, but does briefly lock the
+    /// hot cache (an address may only exist there, not yet spilled).
+    pub fn channel_keys(&self) -> impl Iterator<Item = (i32, ImageTile)> + use<> {
         self.image_cache.keys().filter_map(|key| match key {
-            CacheAddress::Channel(index) => Some(*index),
+            CacheAddress::Channel(index) => Some(index),
             _ => None,
         })
     }

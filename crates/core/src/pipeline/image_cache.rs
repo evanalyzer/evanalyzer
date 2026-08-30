@@ -1,3 +1,4 @@
+use clru::{CLruCache, CLruCacheConfig, WeightScale};
 use log::warn;
 
 use crate::{ImageContainer, ImagePlane, ManagedImage, pipeline::pipeline_cache::CacheAddress};
@@ -5,11 +6,12 @@ use kornia_apriltag::utils::Point2d;
 use kornia_image::{Image, ImageSize};
 use kornia_tensor::CpuAllocator;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, hash_map::RandomState},
     fs::{self, File},
     io::{self, BufReader, BufWriter, Read, Write},
-    path::PathBuf,
-    sync::{Arc, RwLock},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 /// On-disk tag for which `ImageContainer` variant a cache file holds -
@@ -18,11 +20,54 @@ const TAG_F32_GRAY: u8 = 0;
 const TAG_F32_RGB: u8 = 1;
 const TAG_U32: u8 = 2;
 
-pub struct ImageCache {
-    // Image index which holds all stored images and the file name under which it was stored
+/// Default cap on `hot_cache`'s combined pixel-data size. Bounds memory
+/// use regardless of how many tiles/objects a whole-slide image produces -
+/// once this is hit, the least-recently-used entries are evicted to disk
+/// (see `spill_to_disk`) to make room.
+/// TODO: make this configurable based on the user's available RAM.
+const DEFAULT_HOT_CACHE_CAPACITY_BYTES: usize = 1024 * 1024 * 1024; // 1 GiB
+
+/// Weighs a `hot_cache` entry by its actual pixel-data size (see
+/// `ImageContainer::get_image_memory_usage`), so `DEFAULT_HOT_CACHE_CAPACITY_BYTES`
+/// is a real memory bound rather than an entry count - a 4096x4096 RGB tile
+/// and a 512x512 gray tile don't count the same.
+struct ImageWeight;
+
+impl WeightScale<CacheAddress, Arc<ImageContainer>> for ImageWeight {
+    fn weight(&self, _key: &CacheAddress, value: &Arc<ImageContainer>) -> usize {
+        value.get_image_memory_usage()
+    }
+}
+
+type HotCache = CLruCache<CacheAddress, Arc<ImageContainer>, RandomState, ImageWeight>;
+
+fn new_hot_cache() -> HotCache {
+    // unwrap: DEFAULT_HOT_CACHE_CAPACITY_BYTES is a nonzero constant.
+    let capacity = NonZeroUsize::new(DEFAULT_HOT_CACHE_CAPACITY_BYTES).unwrap();
+    CLruCache::with_config(CLruCacheConfig::new(capacity).with_scale(ImageWeight))
+}
+
+/// `image_index` and `hot_cache` behind one lock, not two: `spill_to_disk`
+/// needs to check-then-insert into `image_index` in lockstep with evicting
+/// from `hot_cache` (see its own doc comment), and `get`/`insert` can race
+/// each other across threads on the same `ImageCache` (e.g. rayon-parallel
+/// object measurement in the whole-image phase all reading the same merged
+/// cache) - a single lock makes that whole sequence atomic instead of
+/// leaving a window where the two could disagree.
+struct ImageCacheInner {
+    // Addresses that have actually been written to a scratch file, and
+    // where. An address only appears here once it's been spilled out of
+    // `hot_cache` (see `spill_to_disk`) - most images live and die entirely
+    // in `hot_cache` and never touch disk at all.
     image_index: HashMap<CacheAddress, PathBuf>,
-    // Images in the hot cache which do not need to be loaded from disk right now
-    hot_cache: RwLock<HashMap<CacheAddress, Arc<ImageContainer>>>,
+    // Size-bounded, least-recently-used store of resident images. Every
+    // stored address is either only here (never spilled), or here *and* in
+    // `image_index` (spilled once, then loaded back by `get`).
+    hot_cache: HotCache,
+}
+
+pub struct ImageCache {
+    inner: Mutex<ImageCacheInner>,
     // Shared, refcounted scratch directory: every clone descended from the
     // same `new()` call writes into (and reads from) this *same* physical
     // directory, rather than each clone getting its own. That matters
@@ -42,7 +87,7 @@ pub struct ImageCache {
     temp_dir: Arc<tempfile::TempDir>,
 }
 
-/// Can't `#[derive(Clone)]`: `RwLock<T>` doesn't implement `Clone` even when
+/// Can't `#[derive(Clone)]`: `Mutex<T>` doesn't implement `Clone` even when
 /// `T` does (a lock can't be duplicated without briefly acquiring it, and
 /// std won't do that implicitly - a poisoned lock would make the clone
 /// itself fallible in a way `Clone::clone` can't express).
@@ -53,9 +98,18 @@ pub struct ImageCache {
 /// or hidden the way an independent fresh directory would.
 impl Clone for ImageCache {
     fn clone(&self) -> Self {
+        // `CLruCache` isn't `Clone` either, so rebuild one from `self`'s
+        // entries rather than cloning the container directly.
+        let source = self.inner.lock().expect("Poisned thread");
+        let mut hot_cache = new_hot_cache();
+        for (address, image) in source.hot_cache.iter() {
+            let _ = hot_cache.put_with_weight(*address, Arc::clone(image));
+        }
         Self {
-            image_index: self.image_index.clone(),
-            hot_cache: RwLock::new(self.hot_cache.read().expect("Poisned thread").clone()),
+            inner: Mutex::new(ImageCacheInner {
+                image_index: source.image_index.clone(),
+                hot_cache,
+            }),
             temp_dir: Arc::clone(&self.temp_dir),
         }
     }
@@ -73,8 +127,10 @@ impl ImageCache {
             .prefix("evanalyzer-image-cache-")
             .tempdir()?;
         Ok(Self {
-            image_index: Default::default(),
-            hot_cache: Default::default(),
+            inner: Mutex::new(ImageCacheInner {
+                image_index: Default::default(),
+                hot_cache: new_hot_cache(),
+            }),
             temp_dir: Arc::new(temp_dir),
         })
     }
@@ -82,31 +138,34 @@ impl ImageCache {
     /// Inserts `img` at `address`, returning the previously stored image (if
     /// any) - matches `HashMap::insert`.
     ///
-    /// Writes through to disk immediately (so the entry can later be evicted
-    /// from `hot_cache` without losing it - see `retain`/eviction) *and*
-    /// caches it in `hot_cache` right away: without that, the very next
-    /// `get()` for this address - typically moments later, e.g. a
-    /// tile-scoped pipeline reading back the channel image it was just
-    /// handed - would force an immediate disk round-trip for data that's
-    /// still sitting right here in memory. `hot_cache` has no eviction
-    /// policy yet (nothing bounds its size), so until one exists this means
-    /// every inserted image does stay resident for the cache's lifetime,
-    /// same as a plain in-memory `HashMap` would - disk-backing today only
-    /// gets you the *ability* to evict-and-reload later, not automatic
-    /// memory bounding.
+    /// Only ever caches in `hot_cache` here - never writes to disk directly.
+    /// Most images (anything not part of a whole-slide-sized run) live their
+    /// entire life in `hot_cache` and are dropped without ever touching
+    /// disk. A disk write only happens later, and only for whichever entries
+    /// `hot_cache`'s size limit actually forces out - see `spill_to_disk`.
     pub fn insert(
         &mut self,
         address: CacheAddress,
         img: Arc<ImageContainer>,
     ) -> Option<Arc<ImageContainer>> {
-        let uuid = fast_uuid_v7::gen_id_u128();
-        let img_path = self.generate_path(&uuid);
-        self.write_to_disk(&img_path, img.clone());
-        self.image_index.insert(address, img_path);
-        //  self.hot_cache
-        //      .write()
-        //      .expect("Poisned thread")
-        //      .insert(address, img.clone());
+        let mut inner = self.inner.lock().expect("Poisned thread");
+        // Replacing this address invalidates any file already spilled for
+        // the old value - delete it now rather than leaking scratch space
+        // until the whole cache (and its temp directory) eventually drops.
+        if let Some(stale_path) = inner.image_index.remove(&address) {
+            self.delete_from_disk(&stale_path);
+        }
+        let ImageCacheInner {
+            image_index,
+            hot_cache,
+        } = &mut *inner;
+        hot_cache_insert(
+            self.temp_dir.path(),
+            image_index,
+            hot_cache,
+            address,
+            img.clone(),
+        );
         Some(img)
     }
 
@@ -114,75 +173,108 @@ impl ImageCache {
     /// `Extend::extend`. Safe to call even after `other` is dropped
     /// immediately afterwards: `temp_dir` is shared (see the struct-level
     /// doc), so the on-disk files these paths point at aren't tied to
-    /// `other`'s lifetime. Also merges `hot_cache`, so entries that were
-    /// hot in `other` (e.g. a tile's just-processed channel images) stay
-    /// hot in the merged cache instead of forcing a cold disk reload on the
-    /// next `get`.
-    pub fn extend(&mut self, mut other: ImageCache) {
-        self.image_index
-            .extend(std::mem::take(&mut other.image_index));
-        if let Ok(other_hot) = other.hot_cache.into_inner() {
-            self.hot_cache
-                .write()
-                .expect("Poisned thread")
-                .extend(other_hot);
+    /// `other`'s lifetime. `other`'s `hot_cache` entries are re-inserted
+    /// through the same size-bounded path `insert` uses, so merging can
+    /// still spill to disk if the combined result needs the room.
+    pub fn extend(&mut self, other: ImageCache) {
+        let ImageCacheInner {
+            image_index: other_index,
+            hot_cache: other_hot,
+        } = other.inner.into_inner().expect("Poisned thread");
+
+        let mut inner = self.inner.lock().expect("Poisned thread");
+        inner.image_index.extend(other_index);
+        let ImageCacheInner {
+            image_index,
+            hot_cache,
+        } = &mut *inner;
+        for (address, image) in other_hot {
+            hot_cache_insert(self.temp_dir.path(), image_index, hot_cache, address, image);
         }
     }
 
-    /// Matches `HashMap::contains_key`: `&self`, key by reference.
+    /// Matches `HashMap::contains_key`: `&self`, key by reference. An
+    /// address counts whether it's spilled to disk, still only resident in
+    /// `hot_cache`, or both.
     pub fn contains_key(&self, address: &CacheAddress) -> bool {
-        self.image_index.contains_key(address)
+        let inner = self.inner.lock().expect("Poisned thread");
+        inner.image_index.contains_key(address) || inner.hot_cache.contains(address)
     }
 
-    /// Matches `HashMap::len`: `&self`.
+    /// Matches `HashMap::len`: `&self`. Counts each address once, even if
+    /// it happens to be both spilled to disk *and* currently resident in
+    /// `hot_cache` (loaded back by a `get` after being spilled once).
     pub fn len(&self) -> usize {
-        self.image_index.len()
+        self.keys().count()
     }
 
     /// Matches `HashMap::is_empty`: `&self`.
     pub fn is_empty(&self) -> bool {
-        self.image_index.is_empty()
+        let inner = self.inner.lock().expect("Poisned thread");
+        inner.image_index.is_empty() && inner.hot_cache.is_empty()
     }
 
     /// Matches `HashMap::keys`: every registered address, without loading
-    /// any pixel data - cheap, since it only reads `image_index` (always
-    /// in memory), never touches `hot_cache` or disk. Callers that only
-    /// need to know *which* entries exist (e.g. to find the ones relevant
-    /// to a query before deciding which to actually load) should use this
-    /// instead of `get`-ing everything.
-    pub fn keys(&self) -> impl Iterator<Item = &CacheAddress> {
-        self.image_index.keys()
+    /// any pixel data from disk. Unlike before, this can't stay a zero-copy
+    /// borrow of a single map: an address may only exist in `hot_cache`
+    /// (never spilled), so this briefly locks `hot_cache` to collect the
+    /// union with `image_index`, fully materialized before returning (a
+    /// borrowed iterator can't outlive the lock guard). Returns owned
+    /// `CacheAddress`es (it's `Copy`) rather than references, for the same
+    /// reason.
+    pub fn keys(&self) -> impl Iterator<Item = CacheAddress> + use<> {
+        let inner = self.inner.lock().expect("Poisned thread");
+        let mut addresses: Vec<CacheAddress> = inner.image_index.keys().copied().collect();
+        for (address, _) in inner.hot_cache.iter() {
+            if !inner.image_index.contains_key(address) {
+                addresses.push(*address);
+            }
+        }
+        addresses.into_iter()
     }
 
     /// Returns the image at `address`, transparently loading it from disk
-    /// and caching it in `hot_cache` on a miss - so a repeat `get` for the
-    /// same address doesn't pay the disk read again.
+    /// on a miss and caching it back in `hot_cache` - so a repeat `get` for
+    /// the same address doesn't pay the disk read again (until it's evicted
+    /// for space). A hit also bumps the entry to most-recently-used, which
+    /// is why this needs a lock even for a read.
     ///
     /// Returns an owned `Arc<ImageContainer>`, not `&Arc<ImageContainer>`:
-    /// `hot_cache` is behind an `RwLock` for thread-safety, and a `&self`
-    /// method can't return a reference that outlives the `RwLockReadGuard`
+    /// a `&self` method can't return a reference that outlives the guard
     /// borrowed to produce it - that guard is a local value, dropped at the
     /// end of this call. Cloning the `Arc` (a cheap refcount bump, not a
     /// data copy - ~10ns regardless of image size) is the standard way
-    /// around that, and lets the lock be held only for the lookup itself.
+    /// around that, and lets the lock be held only for the lookup itself,
+    /// never across the disk read below.
     pub fn get(&self, address: &CacheAddress) -> Option<Arc<ImageContainer>> {
-        if let Some(image) = self.hot_cache.read().expect("Poisned thread").get(address) {
-            return Some(image.clone());
-        }
+        let image_path = {
+            let mut inner = self.inner.lock().expect("Poisned thread");
+            if let Some(image) = inner.hot_cache.get(address) {
+                return Some(image.clone());
+            }
+            inner.image_index.get(address)?.clone()
+        };
 
-        let image_path = self.image_index.get(address)?.clone();
         let image = self.load_from_disk(&image_path)?;
-        // self.hot_cache
-        //     .write()
-        //     .expect("Poisned thread")
-        //     .insert(*address, image.clone());
+        let mut inner = self.inner.lock().expect("Poisned thread");
+        let ImageCacheInner {
+            image_index,
+            hot_cache,
+        } = &mut *inner;
+        hot_cache_insert(
+            self.temp_dir.path(),
+            image_index,
+            hot_cache,
+            *address,
+            image.clone(),
+        );
         Some(image)
     }
 
     /// Keeps only the entries for which `f` returns `true`, evicting the
-    /// rest from both the hot cache and the on-disk index - and deleting
-    /// their temp file, so a dropped entry doesn't leak `temp_folder`
-    /// space forever.
+    /// rest from both `hot_cache` and `image_index` - deleting the temp
+    /// file too, but only for entries that actually had one (most never
+    /// got spilled at all, so there's nothing on disk to clean up).
     ///
     /// Unlike `HashMap::retain`, `f` only receives the key, not `&mut V`:
     /// this cache is disk-backed, so a disk-only entry has no in-memory
@@ -193,19 +285,12 @@ impl ImageCache {
     where
         F: FnMut(&CacheAddress) -> bool,
     {
-        let to_remove: Vec<CacheAddress> = self
-            .image_index
-            .keys()
-            .filter(|address| !f(address))
-            .copied()
-            .collect();
+        let to_remove: Vec<CacheAddress> = self.keys().filter(|address| !f(address)).collect();
 
+        let mut inner = self.inner.lock().expect("Poisned thread");
         for address in to_remove {
-            self.hot_cache
-                .write()
-                .expect("Poisned thread")
-                .remove(&address);
-            if let Some(path) = self.image_index.remove(&address) {
+            inner.hot_cache.pop(&address);
+            if let Some(path) = inner.image_index.remove(&address) {
                 self.delete_from_disk(&path);
             }
         }
@@ -216,21 +301,6 @@ impl ImageCache {
     // pub fn iter(&self) -> impl Iterator<Item = (&CacheAddress, &Arc<ImageContainer>)> {
     //     self.image_index.iter()
     // }
-
-    /// Writes `image` to `path` as raw bytes: a small fixed header (variant,
-    /// size, tile offset, plane) followed by the pixel buffer verbatim, in
-    /// host-native byte order - no compression, no per-element encoding.
-    /// This is a scratch file for the current process only (deleted on
-    /// eviction or `Drop`, see `delete_from_disk`), never read by another
-    /// run or another machine, so there's no reason to pay for a
-    /// self-describing or portable format. Failure just leaves this
-    /// address unwritten - logged, not propagated, since a slow/full disk
-    /// shouldn't take down the whole pipeline over a cache write.
-    fn write_to_disk(&self, path: &PathBuf, image: Arc<ImageContainer>) {
-        if let Err(e) = Self::try_write_to_disk(path, &image) {
-            warn!("Could not write image to cache file {:?}: {}", path, e);
-        }
-    }
 
     fn try_write_to_disk(path: &PathBuf, image: &ImageContainer) -> io::Result<()> {
         let mut w = BufWriter::new(File::create(path)?);
@@ -289,11 +359,11 @@ impl ImageCache {
         Ok(())
     }
 
-    /// Reads back a file written by `write_to_disk`. Returns `None` (logged)
-    /// on any I/O or format error - e.g. this cache's own `temp_folder` was
-    /// wiped externally - since a cache miss is always a safe fallback, but
-    /// a hard error here would take down the whole pipeline over what's
-    /// just a scratch file.
+    /// Reads back a file written by `try_write_to_disk`. Returns `None`
+    /// (logged) on any I/O or format error - e.g. this cache's own scratch
+    /// directory was wiped externally - since a cache miss is always a safe
+    /// fallback, but a hard error here would take down the whole pipeline
+    /// over what's just a scratch file.
     fn load_from_disk(&self, path: &PathBuf) -> Option<Arc<ImageContainer>> {
         match Self::try_load_from_disk(path) {
             Ok(image) => Some(Arc::new(image)),
@@ -371,10 +441,6 @@ impl ImageCache {
             );
         }
     }
-
-    fn generate_path(&self, name: &u128) -> PathBuf {
-        self.temp_dir.path().join(format!("{}", name))
-    }
 }
 
 /// No manual `Drop` needed here: `temp_dir` is `Arc<tempfile::TempDir>`, so
@@ -387,6 +453,72 @@ impl Default for ImageCache {
     fn default() -> Self {
         Self::new().expect("failed to create scratch directory for ImageCache::default()")
     }
+}
+
+/// Puts `img` into `hot_cache`, evicting (and spilling to disk via
+/// `spill_to_disk`) whatever least-recently-used entries are needed to make
+/// room - or, if `img` alone is too big to ever fit, writing it straight to
+/// disk without holding it in memory at all. A free function (not an
+/// `ImageCache` method) so it can take `image_index`/`hot_cache` as
+/// independent `&mut` borrows of one already-locked `ImageCacheInner`,
+/// alongside `&self` calls like `delete_from_disk` at the same call site.
+fn hot_cache_insert(
+    temp_dir: &Path,
+    image_index: &mut HashMap<CacheAddress, PathBuf>,
+    hot_cache: &mut HotCache,
+    address: CacheAddress,
+    img: Arc<ImageContainer>,
+) {
+    let weight = img.get_image_memory_usage();
+    if weight >= hot_cache.capacity() {
+        warn!(
+            "Image at {:?} ({} bytes) is larger than the hot cache's entire capacity \
+             ({} bytes) - writing it straight to disk instead of holding it in memory.",
+            address,
+            weight,
+            hot_cache.capacity()
+        );
+        spill_to_disk(temp_dir, image_index, address, &img);
+        return;
+    }
+    // Mirrors `CLruCache::put_with_weight`'s own "make room" formula
+    // exactly (see its source), so this pre-eviction leaves the cache in a
+    // state where the `put_with_weight` call below never needs to evict
+    // anything further itself.
+    while hot_cache.len() + hot_cache.weight() + weight >= hot_cache.capacity() {
+        // unwrap: the loop condition and the `weight >= capacity` check
+        // above together guarantee `hot_cache` isn't empty yet - each
+        // iteration strictly reduces `len() + weight()`, and it can't reach
+        // zero while the condition (which `weight` alone already satisfies
+        // being under) still holds.
+        let (evicted_address, evicted_image) = hot_cache.pop_back().unwrap();
+        spill_to_disk(temp_dir, image_index, evicted_address, &evicted_image);
+    }
+    let _ = hot_cache.put_with_weight(address, img);
+}
+
+/// Writes `img` to a fresh scratch file and records its path in
+/// `image_index` - unless `image_index` already has a path for `address`,
+/// meaning it was written once before (e.g. loaded back into `hot_cache` by
+/// `get`, then evicted again) and that file is still current: the only way
+/// an address's value changes is through `ImageCache::insert`, which always
+/// deletes any stale file first.
+fn spill_to_disk(
+    temp_dir: &Path,
+    image_index: &mut HashMap<CacheAddress, PathBuf>,
+    address: CacheAddress,
+    img: &ImageContainer,
+) {
+    if image_index.contains_key(&address) {
+        return;
+    }
+    let uuid = fast_uuid_v7::gen_id_u128();
+    let img_path = temp_dir.join(format!("{}", uuid));
+    if let Err(e) = ImageCache::try_write_to_disk(&img_path, img) {
+        warn!("Could not write image to cache file {:?}: {}", img_path, e);
+        return;
+    }
+    image_index.insert(address, img_path);
 }
 
 /// Reinterprets a pixel slice as raw bytes in host-native order, for a
@@ -428,4 +560,123 @@ fn read_pod_vec<T: Copy>(r: &mut impl Read, count: usize, fill: T) -> io::Result
     };
     r.read_exact(bytes)?;
     Ok(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evanalyzer_cfg::core_types::MemoryId;
+
+    fn gray_container(width: usize, height: usize, data: Vec<f32>) -> Arc<ImageContainer> {
+        Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::new(
+                ImageSize { width, height },
+                data,
+                CpuAllocator,
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }))
+    }
+
+    /// Bypasses `new`'s fixed `DEFAULT_HOT_CACHE_CAPACITY_BYTES`, so eviction
+    /// can be exercised without allocating gigabytes of test data.
+    fn cache_with_capacity(bytes: usize) -> ImageCache {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("evanalyzer-image-cache-test-")
+            .tempdir()
+            .unwrap();
+        let capacity = NonZeroUsize::new(bytes).unwrap();
+        ImageCache {
+            inner: Mutex::new(ImageCacheInner {
+                image_index: Default::default(),
+                hot_cache: CLruCache::with_config(
+                    CLruCacheConfig::new(capacity).with_scale(ImageWeight),
+                ),
+            }),
+            temp_dir: Arc::new(temp_dir),
+        }
+    }
+
+    fn disk_file_count(cache: &ImageCache) -> usize {
+        fs::read_dir(cache.temp_dir.path()).unwrap().count()
+    }
+
+    #[test]
+    fn insert_under_capacity_never_touches_disk() {
+        let mut cache = cache_with_capacity(DEFAULT_HOT_CACHE_CAPACITY_BYTES);
+
+        cache.insert(
+            CacheAddress::Scratchpad,
+            gray_container(2, 2, vec![1.0, 2.0, 3.0, 4.0]),
+        );
+
+        assert_eq!(disk_file_count(&cache), 0);
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains_key(&CacheAddress::Scratchpad));
+
+        let fetched = cache.get(&CacheAddress::Scratchpad).unwrap();
+        assert_eq!(
+            fetched.as_f32_slice(),
+            Some([1.0, 2.0, 3.0, 4.0].as_slice())
+        );
+        // A `get` hit never needs to write anything either.
+        assert_eq!(disk_file_count(&cache), 0);
+    }
+
+    #[test]
+    fn eviction_spills_the_least_recently_used_entry_to_disk() {
+        // Each 4x4 f32 gray image is 4*4*4 = 64 bytes; cap the cache at 100
+        // bytes so a second insert can't fit alongside the first.
+        let mut cache = cache_with_capacity(100);
+        let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        let second = CacheAddress::Memory(MemoryId::PipelineContext(2));
+
+        cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
+        assert_eq!(disk_file_count(&cache), 0);
+
+        cache.insert(second, gray_container(4, 4, vec![2.0; 16]));
+
+        // `first` no longer fits alongside `second` - it was evicted and
+        // spilled to disk. `second` (just inserted, most-recently-used)
+        // stays resident, so still only one file exists.
+        assert_eq!(disk_file_count(&cache), 1);
+        assert_eq!(cache.len(), 2);
+
+        // Still transparently retrievable, reloaded from the spilled file.
+        let fetched = cache.get(&first).unwrap();
+        assert_eq!(fetched.as_f32_slice(), Some([1.0; 16].as_slice()));
+    }
+
+    #[test]
+    fn retain_removes_hot_only_entries_without_touching_disk() {
+        let mut cache = cache_with_capacity(DEFAULT_HOT_CACHE_CAPACITY_BYTES);
+        cache.insert(CacheAddress::Scratchpad, gray_container(1, 1, vec![9.0]));
+
+        cache.retain(|_| false);
+
+        assert!(cache.is_empty());
+        assert_eq!(disk_file_count(&cache), 0);
+    }
+
+    #[test]
+    fn insert_deletes_the_stale_spilled_file_of_the_address_it_replaces() {
+        let mut cache = cache_with_capacity(100);
+        let first = CacheAddress::Memory(MemoryId::PipelineContext(1));
+        let second = CacheAddress::Memory(MemoryId::PipelineContext(2));
+
+        // Force `first` to be spilled by inserting `second` right behind it.
+        cache.insert(first, gray_container(4, 4, vec![1.0; 16]));
+        cache.insert(second, gray_container(4, 4, vec![2.0; 16]));
+        assert_eq!(disk_file_count(&cache), 1);
+
+        // Re-inserting `first` with a fresh value must not leave the old
+        // spilled file behind.
+        cache.insert(first, gray_container(4, 4, vec![3.0; 16]));
+        assert_eq!(disk_file_count(&cache), 1);
+
+        let fetched = cache.get(&first).unwrap();
+        assert_eq!(fetched.as_f32_slice(), Some([3.0; 16].as_slice()));
+    }
 }
