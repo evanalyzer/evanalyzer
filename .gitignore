@@ -42,3 +42,4 @@ docs/watershed
 tests/G7_03.vsi
 tests/_G7_03_/stack1/frame_t_0.ets
 tests/IPOD detection test.nd2
+tests/performance

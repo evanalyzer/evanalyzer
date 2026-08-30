@@ -12,7 +12,6 @@ use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
-use rayon::prelude::*;
 
 /// Removes non-uniform background illumination by calculating a local intensity baseline.
 ///
@@ -335,23 +334,6 @@ struct BallPatch {
     shrink_factor: usize,
 }
 
-/// Wraps a raw mutable pointer so multiple rayon tasks can each write to it
-/// concurrently from `filter1d` - normally forbidden by `&mut [T]`'s
-/// exclusivity rules (the borrow checker has no way to see that different
-/// tasks touch disjoint indices), but sound here because `filter1d`'s own
-/// doc comment establishes that every line it hands out partitions the
-/// image without overlap, for every direction. Never exposed outside this
-/// file; each task reconstructs its own scoped `&mut [f32]` from it right
-/// before use, and never holds onto that slice past the single
-/// `line_slide_parabola` call it's used for.
-#[derive(Clone, Copy)]
-struct DisjointLineBuffer(*mut f32, usize);
-// SAFETY: sound exactly when the disjointness invariant documented above
-// holds, which every caller in this file (there's only one: `filter1d`)
-// guarantees.
-unsafe impl Send for DisjointLineBuffer {}
-unsafe impl Sync for DisjointLineBuffer {}
-
 impl RollingBall {
     /// Builds the spherical-cap structural element for `BallType::Ball`.
     /// `BallType::Paraboloid` never calls this - it uses the sliding
@@ -397,23 +379,12 @@ impl RollingBall {
         }
     }
 
-    // High-performance allocation-free 3x3 blur separating horizontal and vertical tracks.
-    // Both passes are parallelized by row: `par_chunks_mut(width)` splits the
-    // *output* buffer into disjoint, contiguous per-row chunks, which rayon
-    // can safely hand to different threads, while the input buffer is only
-    // ever read (shared references, no aliasing issue). The vertical pass is
-    // iterated row-major here (`y` outer, `x` inner) rather than the
-    // column-major order a naive port would use - a pure loop-order change
-    // that doesn't affect any computed value (each output pixel only reads
-    // `temp` at its own column, rows y-1/y/y+1 - never another column's
-    // result), but is what makes each output row a contiguous chunk instead
-    // of a strided one, which is what actually makes this a safe parallel
-    // split.
+    // High-performance allocation-free 3x3 blur separating horizontal and vertical tracks
     fn pre_smooth_separable(&self, data: &mut [f32], width: usize, height: usize) {
         let mut temp = vec![0.0f32; data.len()];
 
         // Horizontal Pass
-        temp.par_chunks_mut(width).enumerate().for_each(|(y, out_row)| {
+        for y in 0..height {
             let row_offset = y * width;
             for x in 0..width {
                 let v1 = if x > 0 {
@@ -427,13 +398,13 @@ impl RollingBall {
                 } else {
                     data[row_offset + x]
                 };
-                out_row[x] = (v1 + v2 + v3) / 3.0;
+                temp[row_offset + x] = (v1 + v2 + v3) / 3.0;
             }
-        });
+        }
 
         // Vertical Pass (reading from temp, saving back into data)
-        data.par_chunks_mut(width).enumerate().for_each(|(y, out_row)| {
-            for x in 0..width {
+        for x in 0..width {
+            for y in 0..height {
                 let v1 = if y > 0 {
                     temp[(y - 1) * width + x]
                 } else {
@@ -445,9 +416,9 @@ impl RollingBall {
                 } else {
                     temp[y * width + x]
                 };
-                out_row[x] = (v1 + v2 + v3) / 3.0;
+                data[y * width + x] = (v1 + v2 + v3) / 3.0;
             }
-        });
+        }
     }
 
     /// ImageJ's "Sliding Paraboloid" background (`BallType::Paraboloid`).
@@ -492,15 +463,87 @@ impl RollingBall {
 
         Self::correct_corners(&mut bg, width, height, coeff2, &mut cache, &mut next_point);
 
-        Self::filter1d(&mut bg, width, height, X_DIRECTION, coeff2);
-        Self::filter1d(&mut bg, width, height, Y_DIRECTION, coeff2);
-        Self::filter1d(&mut bg, width, height, X_DIRECTION, coeff2); // redo for better accuracy
-        Self::filter1d(&mut bg, width, height, DIAGONAL_1A, coeff2diag);
-        Self::filter1d(&mut bg, width, height, DIAGONAL_1B, coeff2diag);
-        Self::filter1d(&mut bg, width, height, DIAGONAL_2A, coeff2diag);
-        Self::filter1d(&mut bg, width, height, DIAGONAL_2B, coeff2diag);
-        Self::filter1d(&mut bg, width, height, DIAGONAL_1A, coeff2diag); // redo for better accuracy
-        Self::filter1d(&mut bg, width, height, DIAGONAL_1B, coeff2diag); // redo for better accuracy
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            X_DIRECTION,
+            coeff2,
+            &mut cache,
+            &mut next_point,
+        );
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            Y_DIRECTION,
+            coeff2,
+            &mut cache,
+            &mut next_point,
+        );
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            X_DIRECTION,
+            coeff2,
+            &mut cache,
+            &mut next_point,
+        ); // redo for better accuracy
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            DIAGONAL_1A,
+            coeff2diag,
+            &mut cache,
+            &mut next_point,
+        );
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            DIAGONAL_1B,
+            coeff2diag,
+            &mut cache,
+            &mut next_point,
+        );
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            DIAGONAL_2A,
+            coeff2diag,
+            &mut cache,
+            &mut next_point,
+        );
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            DIAGONAL_2B,
+            coeff2diag,
+            &mut cache,
+            &mut next_point,
+        );
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            DIAGONAL_1A,
+            coeff2diag,
+            &mut cache,
+            &mut next_point,
+        ); // redo for better accuracy
+        Self::filter1d(
+            &mut bg,
+            width,
+            height,
+            DIAGONAL_1B,
+            coeff2diag,
+            &mut cache,
+            &mut next_point,
+        );
 
         if self.pre_smooth {
             let shift = shift_by as f32;
@@ -516,66 +559,52 @@ impl RollingBall {
     /// called with ImageJ's `MAXIMUM` type. Returns the average per-pixel
     /// upward shift introduced, which is subtracted back out once the
     /// paraboloid slide is done.
-    ///
-    /// Parallelized the same way as `pre_smooth_separable` (row chunks, see
-    /// its doc comment), plus a parallel sum for `shift_by`: each row
-    /// contributes its own partial sum, combined via `.sum()` afterwards.
-    /// Floating-point addition isn't associative, so this can differ from
-    /// the original strictly-sequential accumulation in the last bit or so -
-    /// immaterial here since `shift_by` is only ever used as a heuristic
-    /// de-biasing shift, not compared for exact equality anywhere.
     fn filter3x3_max(data: &mut [f32], width: usize, height: usize) -> f64 {
         let mut temp = vec![0.0f32; data.len()];
+        let mut shift_by = 0.0f64;
 
         // Horizontal pass
-        let horizontal_shift: f64 = data
-            .par_chunks(width)
-            .zip(temp.par_chunks_mut(width))
-            .map(|(in_row, out_row)| {
-                let mut row_shift = 0.0f64;
-                for x in 0..width {
-                    let v1 = if x > 0 { in_row[x - 1] } else { in_row[x] };
-                    let v2 = in_row[x];
-                    let v3 = if x < width - 1 {
-                        in_row[x + 1]
-                    } else {
-                        in_row[x]
-                    };
-                    let m = v1.max(v2).max(v3);
-                    row_shift += (m - v2) as f64;
-                    out_row[x] = m;
-                }
-                row_shift
-            })
-            .sum();
+        for y in 0..height {
+            let row_offset = y * width;
+            for x in 0..width {
+                let v1 = if x > 0 {
+                    data[row_offset + x - 1]
+                } else {
+                    data[row_offset + x]
+                };
+                let v2 = data[row_offset + x];
+                let v3 = if x < width - 1 {
+                    data[row_offset + x + 1]
+                } else {
+                    data[row_offset + x]
+                };
+                let m = v1.max(v2).max(v3);
+                shift_by += (m - v2) as f64;
+                temp[row_offset + x] = m;
+            }
+        }
 
         // Vertical pass (reading from temp, saving back into data)
-        let vertical_shift: f64 = data
-            .par_chunks_mut(width)
-            .enumerate()
-            .map(|(y, out_row)| {
-                let mut row_shift = 0.0f64;
-                for x in 0..width {
-                    let v1 = if y > 0 {
-                        temp[(y - 1) * width + x]
-                    } else {
-                        temp[y * width + x]
-                    };
-                    let v2 = temp[y * width + x];
-                    let v3 = if y < height - 1 {
-                        temp[(y + 1) * width + x]
-                    } else {
-                        temp[y * width + x]
-                    };
-                    let m = v1.max(v2).max(v3);
-                    row_shift += (m - v2) as f64;
-                    out_row[x] = m;
-                }
-                row_shift
-            })
-            .sum();
+        for x in 0..width {
+            for y in 0..height {
+                let v1 = if y > 0 {
+                    temp[(y - 1) * width + x]
+                } else {
+                    temp[y * width + x]
+                };
+                let v2 = temp[y * width + x];
+                let v3 = if y < height - 1 {
+                    temp[(y + 1) * width + x]
+                } else {
+                    temp[y * width + x]
+                };
+                let m = v1.max(v2).max(v3);
+                shift_by += (m - v2) as f64;
+                data[y * width + x] = m;
+            }
+        }
 
-        (horizontal_shift + vertical_shift) / width as f64 / height as f64
+        shift_by / width as f64 / height as f64
     }
 
     /// Detects corner particles and lowers the four corner pixels toward the
@@ -697,18 +726,16 @@ impl RollingBall {
     /// Filters by subtracting a sliding parabola for all lines in one
     /// direction (x, y, or one of the two diagonals - diagonals only cover
     /// half the image per call). Port of `filter1D`.
-    ///
-    /// The `start_line..n_lines` lines processed by one call are, by
-    /// construction of `line_inc`/`point_inc` above, always a *partition* of
-    /// the image for that direction: every pixel is touched by exactly one
-    /// line, for every one of the six directions (rows for `X_DIRECTION`,
-    /// columns for `Y_DIRECTION`, parallel diagonal offsets for the
-    /// diagonals - two different lines can never revisit the same index).
-    /// `line_slide_parabola` also only ever reads/writes within its own
-    /// line's `start + k*point_inc` indices. That's what makes it sound to
-    /// process every line in parallel here via `DisjointLineBuffer` - see
-    /// its own doc comment.
-    fn filter1d(data: &mut [f32], width: usize, height: usize, direction: usize, coeff2: f32) {
+    #[allow(clippy::too_many_arguments)]
+    fn filter1d(
+        data: &mut [f32],
+        width: usize,
+        height: usize,
+        direction: usize,
+        coeff2: f32,
+        cache: &mut [f32],
+        next_point: &mut [i32],
+    ) {
         const X_DIRECTION: usize = 0;
         const Y_DIRECTION: usize = 1;
         const DIAGONAL_1A: usize = 2;
@@ -718,7 +745,6 @@ impl RollingBall {
 
         let w = width as i32;
         let h = height as i32;
-        let max_len = width.max(height);
 
         let (start_line, n_lines, line_inc, point_inc): (i32, i32, i32, i32) = match direction {
             X_DIRECTION => (0, h, w, 1),
@@ -730,60 +756,31 @@ impl RollingBall {
             _ => unreachable!("invalid filter1d direction"),
         };
 
-        // SAFETY: see the doc comment above - every line in this call's
-        // range touches a disjoint set of indices, and `DisjointLineBuffer`
-        // exists exactly to let that be exploited safely.
-        let buf = DisjointLineBuffer(data.as_mut_ptr(), data.len());
-
-        // `with_min_len(4)`: some lines (diagonals near a corner) are very
-        // short, down to length 1 - without a floor, rayon could split work
-        // finely enough that the per-task scheduling overhead exceeds the
-        // (tiny) amount of work being done. `for_each_init` allocates each
-        // task's `cache`/`next_point` scratch buffers once per rayon
-        // work-stealing split, not once per line - the same reuse the
-        // original sequential loop got from passing them in from the
-        // caller, just scoped per parallel task instead of globally shared.
-        (start_line..n_lines)
-            .into_par_iter()
-            .with_min_len(4)
-            .for_each_init(
-                || (vec![0.0f32; max_len], vec![0i32; max_len]),
-                move |(cache, next_point), i| {
-                    // Forces the closure to capture the whole `DisjointLineBuffer`
-                    // (whose `Send`/`Sync` impls make this closure itself
-                    // `Send + Sync`), not just its `*mut f32` field in
-                    // isolation - Rust 2021's disjoint field capture would
-                    // otherwise capture that raw pointer field on its own,
-                    // which has no such impl.
-                    let buf = buf;
-                    // SAFETY: disjoint from every other `i` processed
-                    // concurrently - see this function's doc comment.
-                    let data = unsafe { std::slice::from_raw_parts_mut(buf.0, buf.1) };
-                    let mut start_pixel = i * line_inc;
-                    if direction == DIAGONAL_2B {
-                        start_pixel += w - 1;
-                    }
-                    let length = match direction {
-                        X_DIRECTION => w,
-                        Y_DIRECTION => h,
-                        DIAGONAL_1A => h.min(w - i),
-                        DIAGONAL_1B => w.min(h - i),
-                        DIAGONAL_2A => h.min(i + 1),
-                        DIAGONAL_2B => w.min(h - i),
-                        _ => unreachable!("invalid filter1d direction"),
-                    };
-                    Self::line_slide_parabola(
-                        data,
-                        start_pixel,
-                        point_inc,
-                        length,
-                        coeff2,
-                        cache,
-                        next_point,
-                        None,
-                    );
-                },
+        for i in start_line..n_lines {
+            let mut start_pixel = i * line_inc;
+            if direction == DIAGONAL_2B {
+                start_pixel += w - 1;
+            }
+            let length = match direction {
+                X_DIRECTION => w,
+                Y_DIRECTION => h,
+                DIAGONAL_1A => h.min(w - i),
+                DIAGONAL_1B => w.min(h - i),
+                DIAGONAL_2A => h.min(i + 1),
+                DIAGONAL_2B => w.min(h - i),
+                _ => unreachable!("invalid filter1d direction"),
+            };
+            Self::line_slide_parabola(
+                data,
+                start_pixel,
+                point_inc,
+                length,
+                coeff2,
+                cache,
+                next_point,
+                None,
             );
+        }
     }
 
     /// Processes one straight line by sliding a parabola along it (from the
@@ -1173,13 +1170,12 @@ mod tests {
         Ok(())
     }
 
-    /// `pre_smooth: true` on `BallType::Paraboloid` is the one code path no
-    /// other test exercises: it's what runs `filter3x3_max`/
-    /// `pre_smooth_separable`, both parallelized (see their own doc
-    /// comments) alongside `filter1d`'s parallel line processing. This pins
-    /// down that the combination still behaves sanely - removes a flat-ish
-    /// background gradient, preserves a signal peak, never goes negative -
-    /// rather than leaving that combination completely untested.
+    /// `pre_smooth: true` on `BallType::Paraboloid` was, until this test,
+    /// the one code path nothing exercised - every other Paraboloid test
+    /// uses `pre_smooth: false`, and every `pre_smooth: true` test uses
+    /// `BallType::Ball`. Pins down that the combination still behaves
+    /// sanely: removes a flat-ish background gradient, preserves a signal
+    /// peak, never goes negative.
     #[test]
     fn test_rolling_ball_paraboloid_with_pre_smooth_removes_background_and_preserves_signal()
     -> Result<(), Box<dyn std::error::Error>> {
