@@ -1,5 +1,5 @@
 use clru::{CLruCache, CLruCacheConfig, WeightScale};
-use log::warn;
+use log::{info, warn};
 
 use crate::{ImageContainer, ImagePlane, ManagedImage, pipeline::pipeline_cache::CacheAddress};
 use kornia_apriltag::utils::Point2d;
@@ -12,6 +12,7 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 /// On-disk tag for which `ImageContainer` variant a cache file holds -
@@ -365,8 +366,17 @@ impl ImageCache {
     /// fallback, but a hard error here would take down the whole pipeline
     /// over what's just a scratch file.
     fn load_from_disk(&self, path: &PathBuf) -> Option<Arc<ImageContainer>> {
+        let start = Instant::now();
         match Self::try_load_from_disk(path) {
-            Ok(image) => Some(Arc::new(image)),
+            Ok(image) => {
+                info!(
+                    "Loaded image ({} bytes) from cache file {:?} in {:?}",
+                    image.get_image_memory_usage(),
+                    path,
+                    start.elapsed()
+                );
+                Some(Arc::new(image))
+            }
             Err(e) => {
                 warn!("Could not load image from cache file {:?}: {}", path, e);
                 None
@@ -514,10 +524,18 @@ fn spill_to_disk(
     }
     let uuid = fast_uuid_v7::gen_id_u128();
     let img_path = temp_dir.join(format!("{}", uuid));
+    let start = Instant::now();
     if let Err(e) = ImageCache::try_write_to_disk(&img_path, img) {
         warn!("Could not write image to cache file {:?}: {}", img_path, e);
         return;
     }
+    info!(
+        "Spilled image at {:?} ({} bytes) to cache file {:?} in {:?}",
+        address,
+        img.get_image_memory_usage(),
+        img_path,
+        start.elapsed()
+    );
     image_index.insert(address, img_path);
 }
 
