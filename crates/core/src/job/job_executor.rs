@@ -153,10 +153,19 @@ impl From<evanalyzer_cfg::settings::project_settings::TileMergeConnectivity> for
     }
 }
 
+/// The `PipelineId` `job_generator` assigns to the system-inserted `TileMerge`
+/// post-process pipeline (see its own doc comment: not a user-pickable
+/// command, prepended by `job_generator` from project-level settings). Needs
+/// to be a name both `job_generator` (constructs it) and `job_executor`
+/// (must run it before any other post-process pipeline - `get_execution_order`
+/// alone doesn't guarantee that, see `analyze_image`) can reference, rather
+/// than each hand-writing the same magic sentinel value.
+pub(crate) const TILE_MERGE_PIPELINE_ID: PipelineId = PipelineId(0xFFFFFFFF);
+
 pub struct JobExecutor {
     pub project_path: PathBuf,
     pub output_path: PathBuf,
-    
+
     // The job_generator splits the user created pipelines in two parts.
     // The pipelines steps which can be executed in parallel and thos which has to be executed
     // after the preprocessing has been finished
@@ -805,7 +814,9 @@ impl<'a> JobExecutor {
 
     
 
-                    // Run every pipeline's whole-image-scoped commands
+                    // Run every pipeline's whole-image-scoped commands. `order`
+                    // (from `get_execution_order`) already guarantees TileMerge
+                    // comes first.
                     for pipe_id in order {
                         let Some(p) = self.pipelines_post_process.get(pipe_id) else {
                             continue;
@@ -1186,6 +1197,13 @@ impl<'a> JobExecutor {
                 &mut order,
             );
         }
+
+        // TileMerge must run before any other whole-image command
+        if let Some(pos) = order.iter().position(|id| *id == TILE_MERGE_PIPELINE_ID) {
+            let tile_merge_id = order.remove(pos);
+            order.insert(0, tile_merge_id);
+        }
+
         order
     }
 

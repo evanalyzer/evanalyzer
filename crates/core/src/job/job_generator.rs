@@ -2,14 +2,14 @@ use crate::{
     DuckDbExporter, MemoryExporter,
     algos::TileMerge,
     image::PixelSizes,
-    job::job_executor::JobExecutor,
+    job::job_executor::{JobExecutor, TILE_MERGE_PIPELINE_ID},
     pipeline::pipeline::{CorePipelineSettings, Pipeline},
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
 use evanalyzer_cfg::{
     PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION,
-    core_types::{ImageAddress, PipelineId},
+    core_types::ImageAddress,
 };
 use evanalyzer_cfg::{
     core_types::InternalErrors,
@@ -186,7 +186,7 @@ fn generate_job_from_project_settings_intenal(
     // This command must run before any other object command
     if config.tile_merge.enabled {
         let mut tile_merge_pipeline = Pipeline::new(
-            PipelineId(0xFFFFFFFF),
+            TILE_MERGE_PIPELINE_ID,
             CorePipelineSettings {
                 start_image: ImageAddress::Scratchpad,
             },
