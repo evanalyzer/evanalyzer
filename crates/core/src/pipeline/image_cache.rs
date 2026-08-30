@@ -42,9 +42,11 @@ impl WeightScale<CacheAddress, Arc<ImageContainer>> for ImageWeight {
 
 type HotCache = CLruCache<CacheAddress, Arc<ImageContainer>, RandomState, ImageWeight>;
 
-fn new_hot_cache() -> HotCache {
-    // unwrap: DEFAULT_HOT_CACHE_CAPACITY_BYTES is a nonzero constant.
-    let capacity = NonZeroUsize::new(DEFAULT_HOT_CACHE_CAPACITY_BYTES).unwrap();
+fn new_hot_cache(capacity_bytes: usize) -> HotCache {
+    // `.max(1)`: `NonZeroUsize` can't hold 0 - a real caller should never
+    // ask for a zero-byte cache, but this avoids a panic if one ever does,
+    // same as this whole module's other `.max(1)` guards.
+    let capacity = NonZeroUsize::new(capacity_bytes.max(1)).unwrap();
     CLruCache::with_config(CLruCacheConfig::new(capacity).with_scale(ImageWeight))
 }
 
@@ -100,9 +102,10 @@ pub struct ImageCache {
 impl Clone for ImageCache {
     fn clone(&self) -> Self {
         // `CLruCache` isn't `Clone` either, so rebuild one from `self`'s
-        // entries rather than cloning the container directly.
+        // entries rather than cloning the container directly - preserving
+        // `self`'s actual configured capacity, not the default.
         let source = self.inner.lock().expect("Poisned thread");
-        let mut hot_cache = new_hot_cache();
+        let mut hot_cache = new_hot_cache(source.hot_cache.capacity());
         for (address, image) in source.hot_cache.iter() {
             let _ = hot_cache.put_with_weight(*address, Arc::clone(image));
         }
@@ -117,20 +120,31 @@ impl Clone for ImageCache {
 }
 
 impl ImageCache {
-    /// Creates a cache backed by its own fresh scratch directory. Fails
-    /// only if the OS can't create a temp directory (disk full, no
-    /// permissions) - callers should treat that as fatal for whatever
-    /// operation needed a disk-backed cache in the first place, the same
-    /// way `job::object_scratch::TileObjectStore::new` already does for an
-    /// analogous scratch directory.
+    /// Creates a cache backed by its own fresh scratch directory, with
+    /// `hot_cache` capped at [`DEFAULT_HOT_CACHE_CAPACITY_BYTES`]. For
+    /// production pipeline runs, prefer [`with_capacity_bytes`](Self::with_capacity_bytes)
+    /// with a budget sized against actual parallelism/available RAM (see
+    /// `resources::recommended_image_cache_bytes`) - this default exists for
+    /// callers (tests, ad-hoc/GUI-preview caches) that don't have that
+    /// context.
     pub fn new() -> io::Result<Self> {
+        Self::with_capacity_bytes(DEFAULT_HOT_CACHE_CAPACITY_BYTES as u64)
+    }
+
+    /// Creates a cache backed by its own fresh scratch directory, with
+    /// `hot_cache` capped at `capacity_bytes`. Fails only if the OS can't
+    /// create a temp directory (disk full, no permissions) - callers should
+    /// treat that as fatal for whatever operation needed a disk-backed cache
+    /// in the first place, the same way `job::object_scratch::TileObjectStore::new`
+    /// already does for an analogous scratch directory.
+    pub fn with_capacity_bytes(capacity_bytes: u64) -> io::Result<Self> {
         let temp_dir = tempfile::Builder::new()
             .prefix("evanalyzer-image-cache-")
             .tempdir()?;
         Ok(Self {
             inner: Mutex::new(ImageCacheInner {
                 image_index: Default::default(),
-                hot_cache: new_hot_cache(),
+                hot_cache: new_hot_cache(capacity_bytes as usize),
             }),
             temp_dir: Arc::new(temp_dir),
         })

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
+use std::time::Instant;
 
 /// One resident ("anchor") `Connection` per results file path, so every
 /// caller in this file that needs a connection to a given `.evadb` shares
@@ -402,6 +403,8 @@ fn compute_coloc_stats(
 
 impl PipelineResultExporter for DuckDbExporter {
     fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+        let start = Instant::now();
+        let object_count = cache.object_cache.len();
         let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
         // Objects and their colocalization stats must land together or not at
         // all - without a transaction, a failure partway through (disk full,
@@ -593,6 +596,12 @@ impl PipelineResultExporter for DuckDbExporter {
         }
 
         tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
+
+        log::info!(
+            "Database: exported {object_count} object(s) for {} in {:?}",
+            cache.image_rel_path.display(),
+            start.elapsed()
+        );
         Ok(())
     }
 
@@ -608,7 +617,10 @@ impl PipelineResultExporter for DuckDbExporter {
         image_rel_path: &Path,
         error: Option<&str>,
     ) -> Result<(), InternalErrors> {
-        let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
+        let conn = self
+            .conn
+            .lock()
+            .expect("Database connection mutex poisoned");
         let image_rel = image_rel_path.display().to_string();
         let image_name = image_display_name(image_rel_path);
         let successful = error.is_none();

@@ -1,7 +1,7 @@
 use crate::{
     ImageInfo, ZProjection, algos::Connectivity, image::{ImageReader, ImageTile, PixelSizes, ReadMode}, pipeline::{
         image_cache::ImageCache, object_cache::ObjectCache, pipeline::{ Pipeline, PipelineImageMeta}, pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
-    }, resources::{CACHE_QUEUE_DEPTH, MAX_TILE_SIZE}, storage::PipelineResultExporter,
+    }, resources::MAX_TILE_SIZE, storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
     core_types::{ImageAddress, InternalErrors, PipelineId},
@@ -251,6 +251,19 @@ impl<'a> JobExecutor {
         info!("Starting pipeline with {} parallel threads", parallelism);
         let start = Instant::now();
 
+        let ram_budget = self.estimate_ram_budget();
+        let image_cache_bytes = crate::resources::recommended_image_cache_bytes(
+            parallelism,
+            ram_budget.working_set_bytes + ram_budget.object_cache_margin_bytes,
+            ram_budget.min_image_cache_bytes,
+        );
+        info!(
+            "Image cache capacity: {} bytes/worker ({}) x {} worker(s)",
+            image_cache_bytes,
+            crate::resources::format_binary_bytes(image_cache_bytes),
+            parallelism
+        );
+
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(parallelism)
             .build()
@@ -275,6 +288,7 @@ impl<'a> JobExecutor {
                     self.result_storage.clone(),
                     cancel,
                     Some(progress.clone()),
+                    image_cache_bytes,
                 ) {
                     Ok(()) => {
                         progress
@@ -324,6 +338,7 @@ impl<'a> JobExecutor {
                         self.result_storage.clone(),
                         cancel.clone(),
                         None,
+                        image_cache_bytes,
                     ) {
                         Ok(()) => {
                             let index = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -469,6 +484,7 @@ impl<'a> JobExecutor {
         exporter: Arc<Mutex<dyn PipelineResultExporter>>,
         cancel: Arc<AtomicBool>,
         progress: Option<Sender<ProgressEvent>>,
+        image_cache_bytes: u64,
     ) -> Result<(), InternalErrors> {
         let start_image = Instant::now();
         const RES_IDX: i32 = 0;
@@ -624,6 +640,7 @@ impl<'a> JobExecutor {
                     image_rel_path,
                     nr_bits,
                     pixel_sizes.clone(),
+                    image_cache_bytes,
                 ) {
                     Ok(cache) => cache,
                     Err(e) => {
@@ -1029,12 +1046,11 @@ impl<'a> JobExecutor {
         image_rel_path: &PathBuf,
         nr_of_bits: u16,
         pixel_sizes: PixelSizes,
+        image_cache_bytes: u64,
     ) -> Result<GlobalPipelineCache, InternalErrors> {
         Ok(GlobalPipelineCache {
-            // `ImageCache::new` creates its own scratch directory and can only
-            // fail if the OS can't (disk full, permissions) - fatal for this
-            // image, same as any other I/O setup failure here.
-            image_cache: ImageCache::new()
+
+            image_cache: ImageCache::with_capacity_bytes(image_cache_bytes)
                 .map_err(|e| InternalErrors::Io(format!("Failed to create image cache: {e}")))?,
             image_meta: GlobalImageMeta {
                 full_image_width,
@@ -1226,41 +1242,42 @@ impl<'a> JobExecutor {
         }
     }
 
-    /// Estimates the peak RAM one parallel worker in this job can need, from
-    /// the images actually being analyzed - for [`recommended_parallelism`](crate::recommended_parallelism)
-    /// instead of a flat guess that either over-commits on a large/many-channel
-    /// image or needlessly caps a small one down to a single thread on a
-    /// low-RAM machine.
+    /// Estimates the peak per-worker RAM breakdown for this job, from the
+    /// images actually being analyzed - see [`RamBudget`](crate::resources::RamBudget)
+    /// for what each component covers, and [`RamBudget::total_bytes`] for
+    /// [`recommended_parallelism`](crate::recommended_parallelism)'s flat
+    /// input, which either over-commits on a large/many-channel image or
+    /// needlessly caps a small one down to a single thread on a low-RAM
+    /// machine if left as a flat guess instead.
     ///
-    /// Takes the worst case across every image in the job (the largest by
-    /// tile pixel count and channel count, not necessarily the same image for
-    /// both), since parallelism is decided once up front for the whole batch,
-    /// not per image. Each image's own dimensions/channel count come from
-    /// already-scanned metadata (`ImageEntry`/`SeriesSettings`) - this never
-    /// reopens a file, so it's cheap to call before starting a run.
-    pub fn estimate_ram_per_worker_bytes(&self) -> u64 {
+    /// Takes the worst case *total* across every image in the job (not
+    /// necessarily the image with the largest tile or the most channels
+    /// individually - see [`RamBudget::total_bytes`]), since parallelism
+    /// (and the resulting image-cache budget, see `run`) are decided once
+    /// up front for the whole batch, not per image. Each image's own
+    /// dimensions/channel count come from already-scanned metadata
+    /// (`ImageEntry`/`SeriesSettings`) - this never reopens a file, so it's
+    /// cheap to call before starting a run.
+    pub fn estimate_ram_budget(&self) -> crate::resources::RamBudget {
         self.images
             .values()
             .filter_map(|entry| entry.series.get(&entry.selected_series))
             .map(|series| {
                 let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
                 let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
-                crate::resources::estimate_ram_per_worker_bytes(
-                    tile_width,
-                    tile_height,
-                    series.channels.len(),
-                    CACHE_QUEUE_DEPTH,
-                )
+                crate::resources::estimate_ram_budget(tile_width, tile_height, series.channels.len())
             })
-            .max()
+            .max_by_key(|budget| budget.total_bytes())
             .unwrap_or_else(|| {
-                crate::resources::estimate_ram_per_worker_bytes(
-                    MAX_TILE_SIZE,
-                    MAX_TILE_SIZE,
-                    1,
-                    CACHE_QUEUE_DEPTH,
-                )
+                crate::resources::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
             })
+    }
+
+    /// Flat total of [`estimate_ram_budget`](Self::estimate_ram_budget) -
+    /// what [`recommended_parallelism`](crate::recommended_parallelism)
+    /// actually wants.
+    pub fn estimate_ram_per_worker_bytes(&self) -> u64 {
+        self.estimate_ram_budget().total_bytes()
     }
 }
 
@@ -2786,8 +2803,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("large.tif"), image_entry(2048, 2048, 4));
         let job = job_with(images);
 
-        let expected =
-            crate::resources::estimate_ram_per_worker_bytes(2048, 2048, 4, CACHE_QUEUE_DEPTH);
+        let expected = crate::resources::estimate_ram_budget(2048, 2048, 4).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
@@ -2801,8 +2817,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("huge.tif"), image_entry(20_000, 20_000, 2));
         let job = job_with(images);
 
-        let expected =
-            crate::resources::estimate_ram_per_worker_bytes(4096, 4096, 2, CACHE_QUEUE_DEPTH);
+        let expected = crate::resources::estimate_ram_budget(4096, 4096, 2).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
