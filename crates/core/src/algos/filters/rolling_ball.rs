@@ -7,11 +7,13 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
+use crate::ImageContainer;
 use crate::algos::{ExecutionScope, ImageAlgorithm};
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::pipeline::pipeline_context::PipelineContext;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
+use std::sync::Arc;
 
 /// Removes non-uniform background illumination by calculating a local intensity baseline.
 ///
@@ -92,10 +94,6 @@ impl ImageAlgorithm for RollingBall {
         let max_intensity = (1u64 << meta.nr_of_bits) - 1;
         let scale_factor = max_intensity.max(1) as f64;
 
-        let working_img = ctx.get_f32_gray_image_mut()?;
-        let size = working_img.size();
-        let data = working_img.as_slice_mut();
-
         if self.ball_type == BallType::Paraboloid {
             // ImageJ's "Sliding Paraboloid" is NOT the ball-rolling opening
             // with a parabolic height profile - it's a different algorithm
@@ -103,13 +101,50 @@ impl ImageAlgorithm for RollingBall {
             // `slidingParaboloidFloatBackground`): a 1D parabola is slid along
             // every row, column, and both diagonals of the full-resolution
             // image directly (no shrink/ball/enlarge at all).
-            let background =
-                self.sliding_paraboloid_background(data, size.width, size.height, scale_factor);
-            for (d, bg) in data.iter_mut().zip(background.iter()) {
-                *d = (*d - *bg).max(0.0);
+            //
+            // Reads `ctx.image` immutably and writes into `ctx.scratch_pad`,
+            // then swaps - the scratch+swap pattern every other filter uses
+            // (see `Blur::execute`) - instead of the old `get_f32_gray_image_mut`
+            // (`Arc::make_mut` on `ctx.image` directly). That matters here
+            // specifically: Rolling Ball is always the first command in a
+            // pipeline, so `ctx.image` is still the exact `Arc` the pipeline
+            // cache also holds at this point (nothing has written to it yet)
+            // - `Arc::make_mut` would therefore always find the refcount > 1
+            // and clone the whole tile, on every single call, just to get
+            // exclusive access. `ctx.scratch_pad` is never shared with the
+            // cache, so `Arc::make_mut` on it is a no-op clone. Accessing
+            // `ctx.image`/`ctx.scratch_pad` as the plain fields they are
+            // (rather than through two separate accessor calls) is what lets
+            // the borrow checker see they're disjoint and allow both at once.
+            match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
+                (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
+                    let size = input.data.size();
+                    let data = input.data.as_slice();
+                    let background = self.sliding_paraboloid_background(
+                        data,
+                        size.width,
+                        size.height,
+                        scale_factor,
+                    );
+                    let out = output.data.as_slice_mut();
+                    for ((o, d), bg) in out.iter_mut().zip(data.iter()).zip(background.iter()) {
+                        *o = (*d - *bg).max(0.0);
+                    }
+                    ctx.swap()?;
+                    return Ok(());
+                }
+                _ => {
+                    return Err(InternalErrors::FormatMismatch {
+                        expected: "F32Gray".into(),
+                        found: format!("{:?}", ctx.image),
+                    });
+                }
             }
-            return Ok(());
         }
+
+        let working_img = ctx.get_f32_gray_image_mut()?;
+        let size = working_img.size();
+        let data = working_img.as_slice_mut();
 
         // Generate the 3D structural element scaled perfectly to the 0.0..1.0 range.
         let ball = self.build_ball(scale_factor);
@@ -972,12 +1007,14 @@ mod tests {
         }
     }
 
-    /// RollingBall is the one filter that mutates `ctx.image` in place (via
-    /// `get_f32_gray_image_mut`) instead of the scratch+swap pattern every
-    /// other filter uses. If `ctx.image`'s `Arc` is shared with something
-    /// else - the pipeline cache, another pipeline reading the same channel -
-    /// that in-place write must not be observed by the other holder. This is
-    /// exactly the copy-on-write boundary `Arc::make_mut` provides.
+    /// `BallType::Ball` still mutates `ctx.image` in place (via
+    /// `get_f32_gray_image_mut`) rather than the scratch+swap pattern every
+    /// other filter - and now `BallType::Paraboloid` too, see
+    /// `paraboloid_does_not_mutate_a_shared_original_image` - uses. If
+    /// `ctx.image`'s `Arc` is shared with something else - the pipeline
+    /// cache, another pipeline reading the same channel - that in-place
+    /// write must not be observed by the other holder. This is exactly the
+    /// copy-on-write boundary `Arc::make_mut` provides.
     #[test]
     fn rolling_ball_does_not_mutate_a_shared_original_image()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1067,6 +1104,107 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&ctx.image, &shared_original),
             "mutation must have produced a distinct buffer, not aliased the shared one"
+        );
+
+        Ok(())
+    }
+
+    /// `BallType::Paraboloid` now goes through the scratch+swap pattern
+    /// (reads `ctx.image` immutably, writes into `ctx.scratch_pad`, then
+    /// `ctx.swap()`s) specifically to avoid `Arc::make_mut`'s clone when
+    /// `ctx.image` is shared - this pins down that swapping in the new
+    /// buffer doesn't leave the *old* shared Arc (still held by whatever
+    /// else was reading it, e.g. the pipeline cache) mutated, exactly the
+    /// same invariant `rolling_ball_does_not_mutate_a_shared_original_image`
+    /// checks for `BallType::Ball`.
+    #[test]
+    fn paraboloid_does_not_mutate_a_shared_original_image() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let width = 40;
+        let height = 40;
+        let mut data = vec![0.0f32; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                data[y * width + x] = (x as f32) * 0.01;
+            }
+        }
+        let signal_value = 0.5;
+        let (center_x, center_y) = (20isize, 20isize);
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let idx = ((center_y + dy) * (width as isize) + (center_x + dx)) as usize;
+                data[idx] += signal_value;
+            }
+        }
+        let original_pixels = data.clone();
+
+        let image =
+            Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
+        // This Arc stands in for the pipeline cache's own reference to the
+        // channel image - something that keeps reading it after this run.
+        let shared_original: Arc<ImageContainer> =
+            ImageContainer::new_f32_gray_from_image_test(image).into();
+
+        let mut ctx = PipelineContext::new_from_image(
+            PathBuf::default(),
+            PipelineImageMeta {
+                image_tile_info: crate::ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: 40,
+                    height: 40,
+                },
+                full_image_width: ImageSize {
+                    width: 40,
+                    height: 40,
+                },
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: PixelSizes {
+                    px_size_x: 1.0,
+                    px_size_y: 1.0,
+                    px_size_z: 1.0,
+                },
+            },
+            Arc::clone(&shared_original), // no clone: shares the same Arc as `shared_original`
+        )?;
+
+        let rb = RollingBall {
+            radius: 10.0,
+            ball_type: BallType::Paraboloid,
+            pre_smooth: true,
+        };
+        let mut cache = GlobalPipelineCache::default();
+        rb.execute(&mut ctx, &mut cache)?;
+
+        // The shared handle must still read back the exact original pixels.
+        match shared_original.as_ref() {
+            ImageContainer::F32Gray(img) => {
+                assert_eq!(
+                    img.as_slice(),
+                    original_pixels.as_slice(),
+                    "Paraboloid must not mutate a shared/cached original image"
+                );
+            }
+            other => panic!("expected F32Gray, got {other:?}"),
+        }
+
+        // ...and the pipeline's own output must actually differ (Paraboloid
+        // did do real work, just on its own private buffer).
+        match ctx.image.as_ref() {
+            ImageContainer::F32Gray(img) => {
+                assert_ne!(
+                    img.as_slice(),
+                    original_pixels.as_slice(),
+                    "Paraboloid should have changed the pipeline's own image"
+                );
+            }
+            other => panic!("expected F32Gray, got {other:?}"),
+        }
+
+        assert!(
+            !Arc::ptr_eq(&ctx.image, &shared_original),
+            "the swapped-in buffer must not alias the shared one"
         );
 
         Ok(())
