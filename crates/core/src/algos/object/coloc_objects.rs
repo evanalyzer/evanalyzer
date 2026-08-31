@@ -1823,4 +1823,128 @@ mod tests {
             }
         }
     }
+
+    // --- Composed correctness with TileMerge ---
+
+    /// A fully-filled rectangular object carrying an explicit `source_tile` -
+    /// what `TileMerge` needs to recognize a tile-edge fragment, unlike
+    /// `make_filled_object` above (which leaves `source_tile` defaulted and
+    /// is only ever used untiled in this file's other tests).
+    fn tile_fragment(id: u128, bbox: [u32; 4], class: ObjectClass, source_tile: ImageTile) -> Object {
+        let [x0, y0, x1, y1] = bbox;
+        let w = (x1 - x0 + 1) as usize;
+        let h = (y1 - y0 + 1) as usize;
+        let mut object = Object::new(ObjectInit {
+            id: ObjectId(id),
+            bbox,
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, w * h),
+            area: w * h,
+            plane: ImagePlane::default(),
+            source_tile,
+            ..Default::default()
+        });
+        object.add_object_class(class);
+        object
+    }
+
+    /// Composed-correctness regression: a real object split across a tile
+    /// boundary must colocalize correctly once `TileMerge` has reconstructed
+    /// it, in a case where *neither fragment alone* would clear
+    /// `min_coloc_area` against the same partner - i.e. without merging,
+    /// this would be a silent false negative (no colocalization recorded at
+    /// all), not just a slightly-off area. Proves the specific claim that
+    /// colocalization is correct for whole-slide (tiled) images, not merely
+    /// that `Colocalization` is `WholeImage`-scoped.
+    #[test]
+    fn tile_merged_object_colocalizes_correctly_even_though_neither_fragment_alone_clears_the_threshold() {
+        use crate::algos::{Connectivity, TileMerge};
+
+        let tile_a = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 10,
+            height: 10,
+        };
+        let tile_b = ImageTile {
+            offset_x: 10,
+            offset_y: 0,
+            width: 10,
+            height: 10,
+        };
+        // One real CLASS_A object, split by the tile boundary at x=10:
+        // fragment A [8,4,9,5] (2x2=4px), fragment B [10,4,11,5] (2x2=4px).
+        // Merged, it spans [8,4,11,5] (4x2=8px) - exactly the CLASS_B
+        // object's own bbox, so the merged overlap is the full 8px, while
+        // each fragment overlaps CLASS_B by only 4px.
+        let objects = || {
+            vec![
+                tile_fragment(ID_A, [8, 4, 9, 5], CLASS_A, tile_a.clone()),
+                tile_fragment(200_001, [10, 4, 11, 5], CLASS_A, tile_b.clone()),
+                make_filled_object(ID_B, [8, 4, 11, 5], ImagePlane::default(), CLASS_B),
+            ]
+        };
+        let coloc = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            filter_classes: vec![],
+            exclude_classes: vec![],
+            class_for_overlapping_areas: ObjectClass::Unset,
+            multiplicity: ColocMultiplicity::ManyToMany,
+            // Above each fragment's own 4px overlap, but at/below the merged
+            // object's 8px overlap.
+            min_coloc_area: 5.0,
+            size_unit: SizeUnits::Pixels,
+        };
+
+        // Sanity check: without tile-merge, neither fragment's overlap with
+        // CLASS_B clears the threshold alone - a silent false negative, and
+        // proof this scenario actually exercises the bug being guarded
+        // against.
+        let mut unmerged_cache = GlobalPipelineCache::default();
+        for o in objects() {
+            unmerged_cache.object_cache.insert(o.id.clone(), o);
+        }
+        run(&coloc, &mut unmerged_cache);
+        assert!(
+            unmerged_cache
+                .object_cache
+                .values()
+                .all(|o| o.colocalized_with.is_empty()),
+            "sanity check: unmerged fragments must each fall below min_coloc_area alone"
+        );
+
+        // Now merge first, exactly as the real whole-image pipeline order
+        // does (TileMerge always runs before any other whole-image command).
+        let mut cache = GlobalPipelineCache::default();
+        for o in objects() {
+            cache.object_cache.insert(o.id.clone(), o);
+        }
+        TileMerge {
+            classes_to_not_merge: Vec::new(),
+            connectivity: Connectivity::EightConnected,
+            max_fragments_per_group: 100,
+        }
+        .execute(&mut make_ctx(), &mut cache)
+        .unwrap();
+        let merged_a = cache
+            .object_cache
+            .values()
+            .find(|o| o.has_object_class(&CLASS_A))
+            .expect("the two CLASS_A fragments must have merged into one object")
+            .id
+            .clone();
+
+        run(&coloc, &mut cache);
+
+        let merged = cache.object_cache.get(&merged_a).unwrap();
+        assert!(
+            merged.colocalized_with.get(&CLASS_B).is_some_and(|ids| ids.contains(&ObjectId(ID_B))),
+            "the reconstructed object's full 8px overlap must clear min_coloc_area even \
+             though neither fragment did alone"
+        );
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
+        assert!(
+            b.colocalized_with.get(&CLASS_A).is_some_and(|ids| ids.contains(&merged_a)),
+            "CLASS_B's own record must point back at the merged object, not a stale fragment id"
+        );
+    }
 }

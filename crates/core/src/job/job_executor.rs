@@ -2649,6 +2649,7 @@ mod tile_merge_end_to_end_tests {
     use crate::Object;
     use crate::algos::TileMerge;
 use crate::algos::touches_tile_edge;
+    use crate::algos::Voronoi;
     use crate::algos::{
         ConnectedComponents, Connectivity, ExtractObjects, Threshold, ThresholdEntry,
         ThresholdMethod, ThresholdValueSource,
@@ -2656,7 +2657,7 @@ use crate::algos::touches_tile_edge;
     use crate::image::{ImageContainer, ManagedImage};
     use crate::pipeline::image_cache::ImageCache;
 use crate::pipeline::pipeline::CorePipelineSettings;
-    use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass};
+    use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass, SizeUnits};
     use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
     use kornia_tensor::CpuAllocator;
@@ -2926,6 +2927,192 @@ use crate::pipeline::pipeline::CorePipelineSettings;
             merged[0].intensities.get(&0).unwrap().sum_intensity,
             reference_sum,
             "merged intensity sum must match the untiled reference exactly"
+        );
+    }
+
+    /// Runs the real whole-image chain `TileMerge -> Voronoi` (in that
+    /// order, matching `get_execution_order`'s system-inserted placement of
+    /// `TileMerge` first) against `cache`.
+    fn run_tile_merge_and_voronoi(cache: GlobalPipelineCache, voronoi: Voronoi) -> GlobalPipelineCache {
+        let mut whole_image_pipeline = Pipeline::new(
+            PipelineId(0),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        whole_image_pipeline.add_command(Box::new(TileMerge {
+            classes_to_not_merge: Vec::new(),
+            connectivity: Connectivity::EightConnected,
+            max_fragments_per_group: 100,
+        }));
+        whole_image_pipeline.add_command(Box::new(voronoi));
+        whole_image_pipeline
+            .run_commands(PathBuf::new(), None, cache, None, false)
+            .unwrap()
+            .cache
+    }
+
+    const CENTER_CLASS: ObjectClass = ObjectClass::Valid(1);
+    const VORONOI_CLASS: ObjectClass = ObjectClass::Valid(2);
+
+    fn default_voronoi() -> Voronoi {
+        Voronoi {
+            centers: CENTER_CLASS,
+            center_filter_classes: Vec::new(),
+            mask: ObjectClass::Unset,
+            mask_filter_classes: Vec::new(),
+            output_class: VORONOI_CLASS,
+            unit: SizeUnits::Pixels,
+            max_radius: 0.0,
+            exclude_areas_at_the_edges: false,
+            exclude_areas_with_no_center: false,
+        }
+    }
+
+    /// 12x6 image with two objects: a 4px blob at row y=1 that a tile split
+    /// at x=6 cuts into two 2px fragments (like `whole_image_data` above,
+    /// just wider so there's room for a second, untouched object), and a
+    /// separate 2px blob at row y=4 entirely inside the first tile - a
+    /// second Voronoi seed the tessellation has to correctly divide space
+    /// with once the first object is properly reconstructed.
+    fn two_object_image_data() -> Vec<f32> {
+        // Centers land at (5.5, 1) and (1.5, 4) - chosen so their
+        // perpendicular bisector never crosses an exact integer pixel
+        // coordinate, which would otherwise make a pixel's nearest-center
+        // assignment an exact tie. `CenterKdTree`'s tie-break is "lowest
+        // index in the `centers` Vec wins", and that index depends on
+        // `cache.object_cache`'s (an `IndexMap`) iteration order - which
+        // differs between the untiled reference (objects inserted directly)
+        // and the tiled run (fragments buffered, merged, then folded back
+        // in), even though both produce geometrically identical objects. An
+        // exact tie is therefore genuinely ambiguous, not a correctness bug
+        // in either `TileMerge` or `Voronoi` - avoiding one entirely keeps
+        // this test about the actual claim under test.
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        data
+    }
+
+    /// End-to-end proof of the paper-facing claim that Voronoi tessellation
+    /// is computed *correctly* for whole-slide (tiled) images, not merely
+    /// that it runs once whole-image-scoped: drives the real
+    /// `Threshold -> ConnectedComponents -> ExtractObjects` per-tile
+    /// extraction, `TileMerge`, and `Voronoi` exactly as `job_executor`
+    /// would for a real analysis run, and checks the resulting regions
+    /// against an untiled reference of the same full chain - not just that
+    /// the merged *object* matches (already proven by
+    /// `tiled_merge_reproduces_the_untiled_reference_object`), but that a
+    /// downstream whole-image algorithm consuming it produces identical
+    /// output too.
+    #[test]
+    fn tiled_pipeline_produces_the_same_voronoi_tessellation_as_the_untiled_reference() {
+        // Reference: single tile covering the whole image.
+        let reference_objects_cache = run_pipeline(
+            gray_tile_cache(two_object_image_data(), 12, 6, 0, 12, 6),
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: 12,
+                height: 6,
+            },
+        );
+        assert_eq!(
+            reference_objects_cache.object_cache.len(),
+            2,
+            "the untiled reference must find exactly two objects"
+        );
+        let reference_cache = run_tile_merge_and_voronoi(reference_objects_cache, default_voronoi());
+        let mut reference_regions: Vec<_> = reference_cache
+            .object_cache
+            .values()
+            .filter(|o| o.has_object_class(&VORONOI_CLASS))
+            .map(|o| (o.bbox, o.area))
+            .collect();
+        reference_regions.sort();
+        assert_eq!(
+            reference_regions.len(),
+            2,
+            "the untiled reference must tessellate into exactly two Voronoi regions"
+        );
+
+        // Tiled: split into two 6-wide tiles at x=6, process each
+        // independently (exactly like two rayon workers would), then merge.
+        let full = two_object_image_data();
+        let mut tile_a_data = Vec::with_capacity(36);
+        let mut tile_b_data = Vec::with_capacity(36);
+        for y in 0..6 {
+            let row = &full[y * 12..(y + 1) * 12];
+            tile_a_data.extend_from_slice(&row[0..6]);
+            tile_b_data.extend_from_slice(&row[6..12]);
+        }
+        let tile_a = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 6,
+            height: 6,
+        };
+        let tile_b = ImageTile {
+            offset_x: 6,
+            offset_y: 0,
+            width: 6,
+            height: 6,
+        };
+        let mut cache_a = run_pipeline(gray_tile_cache(tile_a_data, 6, 6, 0, 12, 6), tile_a);
+        let mut cache_b = run_pipeline(gray_tile_cache(tile_b_data, 6, 6, 6, 12, 6), tile_b);
+        assert_eq!(
+            cache_a.object_cache.len() + cache_b.object_cache.len(),
+            3,
+            "tile A must find the untouched blob plus a tile-edge fragment, tile B just the fragment"
+        );
+
+        let classes_to_not_merge: [ObjectClass; 0] = [];
+        let mut pending = split_fragments(&mut cache_a, &tile_a, &classes_to_not_merge);
+        pending.extend(split_fragments(
+            &mut cache_b,
+            &tile_b,
+            &classes_to_not_merge,
+        ));
+        assert_eq!(pending.len(), 2, "both tile-edge fragments must have been buffered");
+
+        let mut whole_image_cache = GlobalPipelineCache {
+            object_cache: pending.into_iter().map(|o| (o.id.clone(), o)).collect(),
+            image_meta: GlobalImageMeta {
+                full_image_width: ImageSize {
+                    width: 12,
+                    height: 6,
+                },
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: PixelSizes::default(),
+            },
+            ..Default::default()
+        };
+        // The untouched blob (interior to tile A, never buffered) merges
+        // back in exactly as `analyze_image`'s own `merge_caches` closure
+        // folds each tile's leftover cache into the shared whole-image one.
+        whole_image_cache.object_cache.extend(cache_a.object_cache);
+        whole_image_cache.object_cache.extend(cache_b.object_cache);
+        assert_eq!(whole_image_cache.object_cache.len(), 3);
+
+        let tiled_cache = run_tile_merge_and_voronoi(whole_image_cache, default_voronoi());
+        let mut tiled_regions: Vec<_> = tiled_cache
+            .object_cache
+            .values()
+            .filter(|o| o.has_object_class(&VORONOI_CLASS))
+            .map(|o| (o.bbox, o.area))
+            .collect();
+        tiled_regions.sort();
+
+        assert_eq!(
+            tiled_regions, reference_regions,
+            "the tiled pipeline's Voronoi tessellation must exactly match the untiled reference"
         );
     }
 }

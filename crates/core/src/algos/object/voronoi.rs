@@ -1146,4 +1146,108 @@ mod tests {
 
         assert_kdtree_matches_brute_force("dense cluster", &centers, img_w, img_h);
     }
+
+    /// A fully-filled rectangular object carrying an explicit `source_tile` -
+    /// what `TileMerge` needs to recognize a tile-edge fragment, unlike
+    /// `make_filled_object` above (which leaves `source_tile` defaulted and
+    /// is only ever used untiled in this file's other tests).
+    fn tile_fragment(id: u128, bbox: [u32; 4], class: ObjectClass, source_tile: ImageTile) -> Object {
+        let [x0, y0, x1, y1] = bbox;
+        let w = (x1 - x0 + 1) as usize;
+        let h = (y1 - y0 + 1) as usize;
+        let mut object = Object::new(ObjectInit {
+            id: ObjectId(id),
+            bbox,
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, w * h),
+            area: w * h,
+            plane: ImagePlane::default(),
+            source_tile,
+            ..Default::default()
+        });
+        object.add_object_class(class);
+        object
+    }
+
+    /// Composed-correctness regression: a real nucleus split across a tile
+    /// boundary must seed exactly one Voronoi region once `TileMerge` has
+    /// reconstructed it - not two, which would carve a spurious internal
+    /// boundary straight through what should be one cell's territory.
+    /// Proves the specific claim that Voronoi is correct for whole-slide
+    /// (tiled) images, not just that it's `WholeImage`-scoped (already
+    /// covered by `voronoi_regions_are_computed_once_across_the_whole_image_not_per_tile`
+    /// in `pipeline.rs`, using a plain union as a tile-merge stand-in rather
+    /// than running the real algorithm).
+    #[test]
+    fn tile_merged_object_produces_one_voronoi_region_not_a_spurious_split() {
+        use crate::algos::{Connectivity, TileMerge};
+
+        let tile_a = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 10,
+            height: 10,
+        };
+        let tile_b = ImageTile {
+            offset_x: 10,
+            offset_y: 0,
+            width: 10,
+            height: 10,
+        };
+        // One real nucleus, split by the tile boundary at x=10: fragment A
+        // ends at x=9 (its tile's right edge), fragment B starts at x=10
+        // (its tile's left edge).
+        let objects = || {
+            vec![
+                tile_fragment(ID_A, [8, 4, 9, 5], CENTER_CLASS, tile_a.clone()),
+                tile_fragment(ID_B, [10, 4, 11, 5], CENTER_CLASS, tile_b.clone()),
+                // An unrelated, genuinely separate center, entirely interior
+                // to its own tile - a fixed point the region count is
+                // checked against.
+                tile_fragment(300_000, [0, 0, 1, 1], CENTER_CLASS, tile_a.clone()),
+            ]
+        };
+
+        // Sanity check: without tile-merge, the split fragments wrongly seed
+        // two separate regions (the bug this test guards against) - proves
+        // this scenario actually exercises it, not just that any layout
+        // happens to produce two regions.
+        let mut unmerged_ctx = make_ctx(20, 10);
+        let mut unmerged_cache = GlobalPipelineCache::default();
+        for o in objects() {
+            unmerged_cache.object_cache.insert(o.id.clone(), o);
+        }
+        run(&default_voronoi(), &mut unmerged_ctx, &mut unmerged_cache);
+        assert_eq!(
+            voronoi_objects(&unmerged_cache).len(),
+            3,
+            "sanity check: unmerged split fragments must wrongly seed two regions (plus the far one)"
+        );
+
+        // Now merge first, exactly as the real whole-image pipeline order
+        // does (TileMerge always runs before any other whole-image command).
+        let mut ctx = make_ctx(20, 10);
+        let mut cache = GlobalPipelineCache::default();
+        for o in objects() {
+            cache.object_cache.insert(o.id.clone(), o);
+        }
+        TileMerge {
+            classes_to_not_merge: Vec::new(),
+            connectivity: Connectivity::EightConnected,
+            max_fragments_per_group: 100,
+        }
+        .execute(&mut ctx, &mut cache)
+        .unwrap();
+        assert_eq!(
+            cache.object_cache.len(),
+            2,
+            "the two tile fragments must have merged into one object"
+        );
+
+        run(&default_voronoi(), &mut ctx, &mut cache);
+        assert_eq!(
+            voronoi_objects(&cache).len(),
+            2,
+            "after merging, the reconstructed object must seed exactly one Voronoi region, not two"
+        );
+    }
 }
