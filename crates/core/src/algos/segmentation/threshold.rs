@@ -5,9 +5,10 @@ use macros::CommandsMeta;
 use std::collections::HashMap;
 
 use crate::{
-    algos::ImageAlgorithm,
+    ImageTile,
+    algos::{ExecutionScope, ImageAlgorithm},
     image::ImageContainer,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
 /// The mathematical strategy used to determine the optimal global threshold.
@@ -169,7 +170,7 @@ pub struct ThresholdEntry {
 /// [`ThresholdSettings`]. Each pixel is evaluated against the settings to
 /// determine which `object_class_id` it belongs to.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "segment", next = "object")]
+#[cmdsmeta(category = "segment", next = "instance_segmentation")]
 pub struct Threshold {
     /// A list of thresholding layers. Overlapping ranges are resolved
     /// by the order of the vector (last-in priority).
@@ -180,12 +181,13 @@ impl ImageAlgorithm for Threshold {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let nr_of_bits = ctx.image_meta.nr_of_bits;
         // Resolved before the mutable borrow below, since `RawImage` needs to
         // know which channel the pipeline's current image belongs to.
         let channel = ctx.get_image_plane().map(|p| p.c);
+        let tile = ctx.image_meta.image_tile_info.clone();
         let (input_data, segmentation_map) = ctx.get_f32_gray_and_segmentation_mask_mut()?;
         let actual_slice = input_data.as_slice();
 
@@ -232,20 +234,32 @@ impl ImageAlgorithm for Threshold {
                     upper_outlier_fraction,
                     averaging_method,
                     deviations_above_average,
-                } => with_source_slice(s.value_source, channel, cache, actual_slice, |data| {
-                    thresh_robust_background(
-                        data,
-                        *lower_outlier_fraction,
-                        *upper_outlier_fraction,
-                        *averaging_method,
-                        *deviations_above_average,
-                    )
-                })?
+                } => with_source_slice(
+                    s.value_source,
+                    channel,
+                    tile.clone(),
+                    cache,
+                    actual_slice,
+                    |data| {
+                        thresh_robust_background(
+                            data,
+                            *lower_outlier_fraction,
+                            *upper_outlier_fraction,
+                            *averaging_method,
+                            *deviations_above_average,
+                        )
+                    },
+                )?
                 .clamp(floor, ceiling),
                 method => {
                     if !hist_memo.contains_key(&s.value_source) {
-                        let hist =
-                            build_source_histogram(s.value_source, channel, cache, actual_slice)?;
+                        let hist = build_source_histogram(
+                            s.value_source,
+                            channel,
+                            tile.clone(),
+                            cache,
+                            actual_slice,
+                        )?;
                         hist_memo.insert(s.value_source, hist);
                     }
                     let (hist, dmin, dmax) = hist_memo.get(&s.value_source).unwrap();
@@ -292,6 +306,10 @@ impl ImageAlgorithm for Threshold {
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
     }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
+    }
 }
 
 /// Resolves `source` to a 256-bin histogram (plus its observed min/max),
@@ -300,10 +318,18 @@ impl ImageAlgorithm for Threshold {
 fn build_source_histogram(
     source: ThresholdValueSource,
     channel: Option<i32>,
-    cache: &PipelineCache,
+    tile: ImageTile,
+    cache: &GlobalPipelineCache,
     actual_data: &[f32],
 ) -> Result<([f32; 256], f32, f32), InternalErrors> {
-    with_source_slice(source, channel, cache, actual_data, histogram_from_slice)
+    with_source_slice(
+        source,
+        channel,
+        tile,
+        cache,
+        actual_data,
+        histogram_from_slice,
+    )
 }
 
 /// Resolves `source` to a pixel slice and applies `f` to it while the slice
@@ -316,7 +342,8 @@ fn build_source_histogram(
 fn with_source_slice<R>(
     source: ThresholdValueSource,
     channel: Option<i32>,
-    cache: &PipelineCache,
+    tile: ImageTile,
+    cache: &GlobalPipelineCache,
     actual_data: &[f32],
     f: impl FnOnce(&[f32]) -> R,
 ) -> Result<R, InternalErrors> {
@@ -331,8 +358,7 @@ fn with_source_slice<R>(
                 )
             })?;
             let raw = cache
-                .image_cache
-                .get_image_from_channel_cache(channel)
+                .get_image_from_channel_cache(channel, tile)
                 .ok_or_else(|| {
                     InternalErrors::CacheMiss(format!(
                         "Threshold: no raw image cached for channel {channel}"
@@ -341,14 +367,11 @@ fn with_source_slice<R>(
             gray_slice(&raw).map(f)
         }
         ThresholdValueSource::Memory(id) => {
-            let snapshot = cache
-                .image_cache
-                .get_image_from_memory_cache(id)
-                .ok_or_else(|| {
-                    InternalErrors::CacheMiss(format!(
-                        "Threshold: no image found in memory cache at {id:?}"
-                    ))
-                })?;
+            let snapshot = cache.get_image_from_memory_cache(id).ok_or_else(|| {
+                InternalErrors::CacheMiss(format!(
+                    "Threshold: no image found in memory cache at {id:?}"
+                ))
+            })?;
             gray_slice(&snapshot).map(f)
         }
     }
@@ -1269,7 +1292,10 @@ fn median_of_sorted(sorted: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::{ImageContainer, ImageDebugExt};
+    use crate::{
+        image::{ImageContainer, ImageDebugExt},
+        pipeline::pipeline_cache::CacheAddress,
+    };
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
     use std::sync::Arc;
@@ -1315,7 +1341,7 @@ mod tests {
             thresholds: settings,
         };
         let mut ctx = PipelineContext::new_from_image_test(input_img)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache)?;
         ctx.get_segmentation_map()?.print_window();
 
@@ -1458,7 +1484,7 @@ mod tests {
             thresholds: settings,
         };
         let mut ctx = PipelineContext::new_from_image_test(input_img)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache)?;
 
         let result_pixels = ctx
@@ -1568,7 +1594,7 @@ mod tests {
                 thresholds: settings,
             };
             let mut ctx = PipelineContext::new_from_image_test(input_img)?;
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             cmd.execute(&mut ctx, &mut cache)?;
 
             let result_pixels = ctx
@@ -1716,7 +1742,7 @@ mod tests {
                 thresholds: settings,
             };
             let mut ctx = PipelineContext::new_from_image_test(input_img)?;
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             cmd.execute(&mut ctx, &mut cache)?;
             let result_pixels = ctx
                 .segmentation_map
@@ -1941,7 +1967,7 @@ mod tests {
             thresholds: settings,
         };
         let mut ctx = PipelineContext::new_from_image_test(input_img)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache)?;
 
         let result_pixels = ctx
@@ -2102,7 +2128,7 @@ mod tests {
                 value_source: ThresholdValueSource::ActualImage,
             }],
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache)?;
 
         let fg = ctx
@@ -2173,7 +2199,7 @@ mod tests {
     fn test_value_source_actual_image_is_the_default_behavior()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = Threshold {
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::ActualImage)],
         };
@@ -2202,10 +2228,11 @@ mod tests {
         };
         let raw_image =
             Image::<f32, 1, CpuAllocator>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0], CpuAllocator)?;
-        let mut cache = PipelineCache::default();
-        cache.image_cache.add_to_channel_cache(
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),
             channel,
+            ctx.image_meta.image_tile_info.clone(),
         );
 
         let cmd = Threshold {
@@ -2225,7 +2252,7 @@ mod tests {
     fn test_value_source_raw_image_missing_from_cache_is_a_cache_miss()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = Threshold {
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::RawImage)],
         };
@@ -2253,9 +2280,9 @@ mod tests {
             CpuAllocator,
         )?;
         let memory_id = MemoryId::PipelineContext(7);
-        let mut cache = PipelineCache::default();
-        cache.image_cache.images.insert(
-            evanalyzer_cfg::core_types::ImageAddress::Memory(memory_id),
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_cache.insert(
+            CacheAddress::Memory(memory_id),
             Arc::new(ImageContainer::new_f32_gray_from_image_test(snapshot_image)),
         );
 
@@ -2278,7 +2305,7 @@ mod tests {
     fn test_value_source_memory_missing_from_cache_is_a_cache_miss()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut ctx = PipelineContext::new_from_image_test(constant_gray_image(0.5)?)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = Threshold {
             thresholds: vec![mean_threshold_entry(ThresholdValueSource::Memory(
                 MemoryId::PipelineContext(9),
@@ -2304,10 +2331,11 @@ mod tests {
         };
         let rgb_image =
             Image::<f32, 3, CpuAllocator>::new(rgb_size, vec![0.1, 0.2, 0.3], CpuAllocator)?;
-        let mut cache = PipelineCache::default();
-        cache.image_cache.add_to_channel_cache(
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_rgb_from_image_test(rgb_image)),
             channel,
+            ctx.image_meta.image_tile_info.clone(),
         );
 
         let cmd = Threshold {
@@ -2336,10 +2364,11 @@ mod tests {
         };
         let raw_image =
             Image::<f32, 1, CpuAllocator>::new(raw_size, vec![0.0, 0.0, 0.0, 1.0], CpuAllocator)?;
-        let mut cache = PipelineCache::default();
-        cache.image_cache.add_to_channel_cache(
+        let mut cache = GlobalPipelineCache::default();
+        cache.add_to_channel_cache(
             Arc::new(ImageContainer::new_f32_gray_from_image_test(raw_image)),
             channel,
+            ctx.image_meta.image_tile_info.clone(),
         );
 
         let cmd = Threshold {

@@ -1,11 +1,11 @@
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use evanalyzer_cfg::core_types::InternalErrors;
 pub mod duckdb;
 pub mod file;
 pub mod memory;
 
 pub trait PipelineResultExporter: Send + Sync {
-    fn export(&self, cache: &PipelineCache) -> Result<(), InternalErrors>;
+    fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors>;
 
     /// Called once per image, after every tile/plane `export()` call for that
     /// image has completed, so an image that produced zero objects is still

@@ -13,8 +13,8 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, Kind, Tensor};
 
 use crate::{
-    algos::{ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
 /// How a multi-channel U-Net output should be turned into a single foreground
@@ -103,7 +103,7 @@ impl ImageAlgorithm for UNet {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let device = Device::cuda_if_available();
         let model = load_cached_model(&self.model_path, || {
@@ -183,6 +183,10 @@ impl ImageAlgorithm for UNet {
             url: Some("https://doi.org/10.1007/978-3-319-24574-4_28"),
             pages: Some("234-241"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -273,7 +277,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cmd = unet(dir.path().join("missing.pt"));
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
@@ -292,7 +296,7 @@ mod tests {
             ..unet(model_path)
         };
         let mut ctx = gray_ctx(2, 1, vec![0.1, 0.9]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();
@@ -317,7 +321,7 @@ mod tests {
         };
         // x = -1 -> fg softmax ~0 (background); x = 1 -> fg softmax ~1 (foreground).
         let mut ctx = gray_ctx(2, 1, vec![-1.0, 1.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();
@@ -340,7 +344,7 @@ mod tests {
             ..unet(model_path)
         };
         let mut ctx = gray_ctx(2, 1, vec![0.1, 0.9]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();
@@ -371,7 +375,7 @@ mod tests {
         // x=1: fg saturates to 1.0, boundary = sigmoid(-4) ~0 (open) -> foreground.
         // x=20: fg saturates to 1.0, boundary = sigmoid(15) ~1 (closed) -> background.
         let mut ctx = gray_ctx(2, 1, vec![1.0, 20.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();
@@ -397,7 +401,7 @@ mod tests {
             ..unet(model_path)
         };
         let mut ctx = gray_ctx(1, 1, vec![1.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();

@@ -13,8 +13,8 @@ use macros::CommandsMeta;
 use tch::{CModule, Device, IValue, Kind, Tensor};
 
 use crate::{
-    algos::{ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    algos::{ExecutionScope, ImageAlgorithm, ai_segmentation::model_cache::load_cached_model},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 
 /// Instance segmentation using a pretrained StarDist model exported as TorchScript.
@@ -79,7 +79,7 @@ impl ImageAlgorithm for Stardist {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let device = Device::cuda_if_available();
         let model = load_cached_model(&self.model_path, || {
@@ -165,6 +165,10 @@ impl ImageAlgorithm for Stardist {
             url: Some("https://doi.org/10.1007/978-3-030-00934-2_30"),
             pages: Some("265-273"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -537,7 +541,7 @@ mod tests {
             ..stardist(0.5, 0.3)
         };
         let mut ctx = gray_ctx(2, 2, vec![0.0; 4]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(_)));
@@ -572,7 +576,7 @@ mod tests {
         let mut values = vec![0.0f32; 36];
         values[3 * 6 + 3] = 1.0; // row 3, col 3
         let mut ctx = gray_ctx(6, 6, values);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cmd.execute(&mut ctx, &mut cache).unwrap();
 
         let seg = ctx.get_segmentation_map().unwrap();
@@ -599,7 +603,7 @@ mod tests {
             ..stardist(0.5, 0.3)
         };
         let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(matches!(err, InternalErrors::Generic(msg) if msg.contains("too few dimensions")));
@@ -613,7 +617,7 @@ mod tests {
             ..stardist(0.5, 0.3)
         };
         let mut ctx = gray_ctx(2, 1, vec![0.0, 1.0]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let err = cmd.execute(&mut ctx, &mut cache).unwrap_err();
         assert!(

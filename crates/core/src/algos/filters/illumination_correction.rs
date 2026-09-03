@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
@@ -144,7 +144,7 @@ impl ImageAlgorithm for IlluminationCorrection {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         if self.block_size == 0 {
             return Err(InternalErrors::Generic(
@@ -152,15 +152,25 @@ impl ImageAlgorithm for IlluminationCorrection {
             ));
         }
 
-        match Arc::make_mut(&mut ctx.image) {
-            ImageContainer::F32Gray(img) => {
-                let (width, height) = (img.width(), img.height());
-                self.correct_channel(img.as_slice_mut(), width, height)
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
+            (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
+                let (width, height) = (input.width(), input.height());
+                output
+                    .data
+                    .as_slice_mut()
+                    .copy_from_slice(input.data.as_slice());
+                self.correct_channel(output.data.as_slice_mut(), width, height)?;
+                ctx.swap()?;
+                Ok(())
             }
-            ImageContainer::F32Rgb(img) => {
-                let (width, height) = (img.width(), img.height());
+            (ImageContainer::F32Rgb(input), ImageContainer::F32Rgb(output)) => {
+                let (width, height) = (input.width(), input.height());
                 let pixels = width * height;
-                let slice = img.as_slice_mut();
+                output
+                    .data
+                    .as_slice_mut()
+                    .copy_from_slice(input.data.as_slice());
+                let slice = output.data.as_slice_mut();
                 let mut channel = vec![0.0f32; pixels];
                 for c in 0..3 {
                     for i in 0..pixels {
@@ -171,6 +181,7 @@ impl ImageAlgorithm for IlluminationCorrection {
                         slice[i * 3 + c] = channel[i];
                     }
                 }
+                ctx.swap()?;
                 Ok(())
             }
             _ => Err(InternalErrors::FormatMismatch {
@@ -186,6 +197,10 @@ impl ImageAlgorithm for IlluminationCorrection {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -602,7 +617,7 @@ mod tests {
         data[5 * width + 5] = 0.9;
 
         let mut ctx = ctx_from_gray(width, height, data);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Regular,
             // A finer grid (10x10) than the vignetting scale (30px) lets the
@@ -677,7 +692,7 @@ mod tests {
             ImageContainer::new_f32_rgb_from_image_test(image).into(),
         )
         .unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Regular,
             // A finer grid (10x10) keeps the Gaussian smoothing (sigma 1.0,
@@ -727,7 +742,7 @@ mod tests {
         }
 
         let mut ctx = ctx_from_gray(width, height, data);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Regular,
             block_size: 6,
@@ -760,7 +775,7 @@ mod tests {
         data[10 * width + 10] = 0.2;
 
         let mut ctx = ctx_from_gray(width, height, data);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Regular,
             block_size: 4,
@@ -792,7 +807,7 @@ mod tests {
         }
 
         let mut ctx = ctx_from_gray(width, height, data);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Regular,
             block_size: 5,
@@ -817,7 +832,7 @@ mod tests {
     #[test]
     fn zero_block_size_returns_error() {
         let mut ctx = ctx_from_gray(10, 10, vec![0.5f32; 100]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Regular,
             block_size: 0,
@@ -831,7 +846,7 @@ mod tests {
     #[test]
     fn non_positive_gaussian_sigma_returns_error() {
         let mut ctx = ctx_from_gray(10, 10, vec![0.5f32; 100]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Regular,
             block_size: 4,
@@ -845,7 +860,7 @@ mod tests {
     #[test]
     fn zero_median_radius_returns_error() {
         let mut ctx = ctx_from_gray(10, 10, vec![0.5f32; 100]);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Background,
             block_size: 4,
@@ -863,7 +878,7 @@ mod tests {
         let data = vec![0.4f32; width * height];
 
         let mut ctx = ctx_from_gray(width, height, data);
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cmd = IlluminationCorrection {
             method: CorrectionMethod::Regular,
             block_size: 4,

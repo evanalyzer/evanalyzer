@@ -4,5 +4,6 @@ pub mod classify_objects;
 pub mod coloc_objects;
 pub mod extract_objects;
 pub mod object_math;
+pub(crate) mod tile_merge;
 pub mod transform_objects;
 pub mod voronoi;

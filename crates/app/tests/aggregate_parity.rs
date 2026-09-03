@@ -13,7 +13,7 @@ use evanalyzer_app::result::{
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 use evanalyzer_core::{
-    DuckDbExporter, Intensity, Object, ObjectInit, PipelineCache, PipelineResultExporter,
+    DuckDbExporter, GlobalPipelineCache, Intensity, Object, ObjectInit, PipelineResultExporter,
 };
 use indexmap::IndexMap;
 use std::path::PathBuf;
@@ -61,10 +61,14 @@ fn export_fixture(images: Vec<(&str, Vec<Object>)>) -> (tempfile::TempDir, Resul
     let exporter = DuckDbExporter::new(&db_path, std::collections::HashMap::new())
         .expect("exporter init failed");
     for (image_rel_path, objects) in images {
-        let mut cache = PipelineCache {
+        let mut cache = GlobalPipelineCache {
             image_rel_path: PathBuf::from(image_rel_path),
             ..Default::default()
         };
+        // The exporter rejects an implausible bit depth (guards against
+        // `1u64 << nr_of_bits` overflowing); these tests only care about
+        // object/aggregation data, so just supply a plausible value.
+        cache.image_meta.nr_of_bits = 16;
         for object in objects {
             cache.object_cache.insert(object.id.clone(), object);
         }

@@ -9,6 +9,12 @@ import { AppButton } from "../components/app_button.slint";
 export global PipelineRunningState {
     in-out property <int> processed: 0;
     in-out property <int> total: 0;
+    // True once every tile is done and the pipeline has moved on to
+    // whole-image-scoped work (tile-merge, Voronoi, DB export, ...). The
+    // remaining `processed`/`total` units no longer correspond 1:1 to
+    // images, so the label switches to a phase description instead of a
+    // counter that would otherwise look "stuck".
+    in-out property <bool> whole-image-phase: false;
     in-out property <bool> done: false;
     in-out property <bool> has-error: false;
     in-out property <string> status-message: "";
@@ -56,7 +62,7 @@ export component PipelineRunningDialog inherits Rectangle {
             HorizontalLayout {
                 alignment: space-between;
                 Text {
-                    text: PipelineRunningState.total > 0 ? (PipelineRunningState.processed + " of " + PipelineRunningState.total + " images processed") : "Starting…";
+                    text: PipelineRunningState.whole-image-phase ? "Processing objects…" : (PipelineRunningState.total > 0 ? (PipelineRunningState.processed + " of " + PipelineRunningState.total + " images processed") : "Starting…");
                     font-size: 13px;
                     color: Theme.text-dim;
                 }

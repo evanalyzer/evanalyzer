@@ -14,7 +14,7 @@
 //! to regions of interest based on configurable criteria and machine learning models.
 
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     image::PixelSizes,
     object::Object, // ... other imports
     spatial_grid::BboxGrid,
@@ -61,7 +61,7 @@ pub enum ClassifyMatchHandling {
 /// to extracted ROIs. Classification is performed using configurable criteria
 /// including area, shape descriptors, and intensity statistics.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify")]
+#[cmdsmeta(category = "object")]
 pub struct ClassifyObjects {
     /// Apply only to objects with this given segmentation class
     ///
@@ -271,7 +271,7 @@ impl ImageAlgorithm for ClassifyObjects {
     fn execute(
         &self,
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
-        cache: &mut crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         let px_size = ctx.pixel_sizes();
         let pixel_area_size_nm = px_size.px_size_x * px_size.px_size_y;
@@ -384,6 +384,10 @@ impl ImageAlgorithm for ClassifyObjects {
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
     }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
+    }
 }
 
 impl ClassifyObjects {
@@ -460,7 +464,7 @@ impl ClassifyObjects {
     fn matches_overlap(
         &self,
         object: &Object,
-        cache: &crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &crate::pipeline::pipeline_cache::GlobalPipelineCache,
         grid: &BboxGrid,
         min_intersection_px: usize,
     ) -> bool {
@@ -489,7 +493,7 @@ mod tests {
         image::PixelSizes,
         object::ObjectInit,
         pipeline::{
-            pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
+            pipeline::PipelineImageMeta, pipeline_cache::GlobalPipelineCache,
             pipeline_context::PipelineContext,
         },
     };
@@ -567,7 +571,7 @@ mod tests {
     const ID_A: u128 = 100_000;
     const ID_B: u128 = 200_000;
 
-    fn run(cmd: &ClassifyObjects, cache: &mut PipelineCache) {
+    fn run(cmd: &ClassifyObjects, cache: &mut GlobalPipelineCache) {
         cmd.execute(&mut make_ctx(), cache).unwrap();
     }
 
@@ -579,7 +583,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
         let object_b = make_filled_object(ID_B, [10, 10, 14, 14], CLASS_B);
         cache.object_cache.insert(object_a.id.clone(), object_a);
@@ -612,7 +616,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
         let object_b = make_filled_object(ID_B, [10, 10, 14, 14], CLASS_B);
         cache.object_cache.insert(object_a.id.clone(), object_a);
@@ -639,7 +643,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // A=[0,4]x[0,4], B=[2,6]x[2,6] -> overlap [2,4]x[2,4]
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 6, 6], CLASS_B);
@@ -669,7 +673,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // A=[0,4]x[0,4], B=[4,8]x[4,8] -> overlap is the single pixel (4,4)
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
         let object_b = make_filled_object(ID_B, [4, 4, 8, 8], CLASS_B);
@@ -702,7 +706,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::AddOutputClassIfMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
@@ -725,7 +729,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::AddOutputClassIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
@@ -748,7 +752,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveInputClassIfMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
         object.add_object_class(CLASS_B);
         cache.object_cache.insert(ObjectId(ID_A), object);
@@ -773,7 +777,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveInputClassIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
@@ -796,7 +800,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveOutputClassIfMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
         object.add_object_class(CLASS_B);
         cache.object_cache.insert(ObjectId(ID_A), object);
@@ -818,7 +822,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
@@ -840,7 +844,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let mut object = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
         object.add_object_class(CLASS_B);
         cache.object_cache.insert(ObjectId(ID_A), object);
@@ -863,7 +867,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::ReclassifyIfMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
@@ -888,7 +892,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::ReclassifyIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         cache.object_cache.insert(
             ObjectId(ID_A),
             make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A),
@@ -910,7 +914,7 @@ mod tests {
             match_handling: ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
             ..Default::default()
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], CLASS_A);
         cache.object_cache.insert(object_a.id.clone(), object_a);
 
@@ -951,7 +955,7 @@ mod tests {
 
         for seed in 1..12u32 {
             let mut rng = Rng(seed * 104_729 + 1);
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             let mut subject_ids = Vec::new();
             let mut candidate_ids = Vec::new();
             let mut next_id: u128 = 1;

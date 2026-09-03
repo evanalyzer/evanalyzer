@@ -8,7 +8,7 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::ImagePlane;
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_apriltag::utils::Point2d;
@@ -89,7 +89,7 @@ impl ImageAlgorithm for ColorFilterCommand {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // Get the input image (must be RGB)
         let input = match ctx.image.as_ref() {
@@ -170,6 +170,10 @@ impl ImageAlgorithm for ColorFilterCommand {
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
     }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
+    }
 }
 
 fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
@@ -209,7 +213,6 @@ mod tests {
     use super::*;
     use crate::image::PixelSizes;
     use crate::pipeline::pipeline::PipelineImageMeta;
-    use crate::pipeline::pipeline_cache::ImageCache;
     use kornia_image::allocator::CpuAllocator;
     use kornia_image::{Image, ImageSize};
 
@@ -264,7 +267,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Define Filter: Target Green (Hue around 120)
         let filter = ColorFilterCommand {
@@ -342,7 +345,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Range that wraps: 350 to 10 degrees
         let filter = ColorFilterCommand {
@@ -363,6 +366,60 @@ mod tests {
                 *out_img.get_pixel(0, 0, 0).unwrap() > 0.0,
                 "Red pixel should have passed wrap-around filter"
             );
+        }
+    }
+
+    #[test]
+    fn a_stale_wrong_sized_scratch_pad_is_transparently_resized() {
+        // Scratch pad left over from an earlier step at the wrong size (and
+        // wrong type) - `execute` must resize/retype it rather than reusing
+        // it as-is or erroring, since a stale scratch pad is a normal
+        // in-pipeline occurrence, not a caller mistake.
+        let img = Image::<f32, 3, CpuAllocator>::from_size_val(
+            ImageSize {
+                width: 3,
+                height: 2,
+            },
+            0.0,
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
+        ctx.scratch_pad = std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::from_size_val(
+                ImageSize {
+                    width: 1,
+                    height: 1,
+                },
+                0.0,
+                CpuAllocator,
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }));
+        let mut cache = GlobalPipelineCache::default();
+        let filter = ColorFilterCommand {
+            range: HsvRange {
+                min_h: 0.0,
+                max_h: 360.0,
+                min_s: 0.0,
+                max_s: 1.0,
+                min_v: 0.0,
+                max_v: 1.0,
+            },
+        };
+
+        filter
+            .execute(&mut ctx, &mut cache)
+            .expect("execute should resize the stale scratch pad, not error");
+
+        match ctx.image.as_ref() {
+            ImageContainer::F32Gray(out_img) => {
+                assert_eq!(out_img.width(), 3);
+                assert_eq!(out_img.height(), 2);
+            }
+            _ => panic!("Output should be F32Gray, correctly sized to the 3x2 input"),
         }
     }
 
@@ -405,7 +462,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Setup the command
         let filter = ColorFilterCommand {
@@ -447,5 +504,7 @@ mod tests {
         };
         let name = extractor.name();
         assert_eq!(name, "HsvColorFilter");
+        assert!(extractor.cite().is_none());
+        assert!(matches!(extractor.execution_scope(), ExecutionScope::Tile));
     }
 }

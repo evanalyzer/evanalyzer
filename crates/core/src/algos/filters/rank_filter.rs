@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -85,7 +85,7 @@ impl ImageAlgorithm for RankFilter {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         match ctx.image.as_ref() {
             ImageContainer::F32Gray(img) => {
@@ -121,6 +121,10 @@ impl ImageAlgorithm for RankFilter {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -259,10 +263,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::{
-        image::PixelSizes,
-        pipeline::{pipeline::PipelineImageMeta, pipeline_cache::ImageCache},
-    };
+    use crate::{image::PixelSizes, pipeline::pipeline::PipelineImageMeta};
     use kornia_image::ImageSize;
 
     #[test]
@@ -306,7 +307,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Test MAX filter (Radius 1.0)
         // A Max filter should spread the '9.0' value to all 8 neighbors.
@@ -392,7 +393,7 @@ mod tests {
             ImageContainer::new_f32_rgb_from_image_test(image).into(),
         )
         .unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let max_filter = RankFilter {
             radius: 1.0,
@@ -422,7 +423,7 @@ mod tests {
         .unwrap();
 
         let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let filter = RankFilter {
             radius: 1.0,
@@ -490,7 +491,7 @@ mod tests {
             ImageContainer::new_f32_gray_from_image_test(image).into(),
         )
         .unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Setup outlier filter with threshold 2.0
         // (5.0 - 1.0) = 4.0, which is > 2.0, so it should be replaced by the median (5.0)

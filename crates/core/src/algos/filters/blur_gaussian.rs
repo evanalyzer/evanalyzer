@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::gaussian_blur;
@@ -64,7 +64,7 @@ impl ImageAlgorithm for GaussianBlur {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
             // Handle Grayscale (1 Channel)
@@ -105,6 +105,10 @@ impl ImageAlgorithm for GaussianBlur {
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
     }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
+    }
 }
 
 // --- Test ------------------------------------------------------
@@ -112,7 +116,6 @@ impl ImageAlgorithm for GaussianBlur {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::pipeline_cache::ImageCache;
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
 
@@ -133,7 +136,7 @@ mod tests {
 
         let mut ctx = PipelineContext::new_from_image_test(input_img).unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Setup the command
         let blur = GaussianBlur {
@@ -191,7 +194,7 @@ mod tests {
         .expect("Failed to create RGB test image");
 
         let mut ctx = PipelineContext::new_from_image_test_rgb(input_img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Setup the command
         let blur = GaussianBlur {
@@ -248,7 +251,7 @@ mod tests {
         // Assuming you have a way to inject a U32 image into the context
         // This relies on your specific PipelineContext API for U32 images
         let mut ctx = PipelineContext::new_from_u32_image_test(input_img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Setup the command
         let blur = GaussianBlur {

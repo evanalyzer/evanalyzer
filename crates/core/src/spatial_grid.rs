@@ -12,7 +12,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use evanalyzer_cfg::core_types::ObjectId;
 use std::collections::{HashMap, HashSet};
 
@@ -37,15 +37,27 @@ pub(crate) struct BboxGrid {
 }
 
 impl BboxGrid {
-    pub(crate) fn build(ids: &[ObjectId], cache: &PipelineCache) -> Self {
+    pub(crate) fn build(ids: &[ObjectId], cache: &GlobalPipelineCache) -> Self {
+        let entries: Vec<(ObjectId, [u32; 4])> = ids
+            .iter()
+            .filter_map(|id| cache.object_cache.get(id).map(|o| (id.clone(), o.bbox)))
+            .collect();
+        Self::build_from_bboxes(&entries)
+    }
+
+    /// Builds the grid directly from `(id, bbox)` pairs, without requiring
+    /// each object's full data to be resident - e.g. from a lightweight
+    /// whole-image metadata index (`job::object_index::WholeImageIndex`)
+    /// rather than a `PipelineCache`, so indexing every object across a
+    /// whole-slide image doesn't force every object's mask/intensities to
+    /// stay in memory just to place it in the grid.
+    pub(crate) fn build_from_bboxes(entries: &[(ObjectId, [u32; 4])]) -> Self {
         let mut sum_extent: u64 = 0;
         let mut count: u64 = 0;
-        for id in ids {
-            if let Some(object) = cache.object_cache.get(id) {
-                let [x_min, y_min, x_max, y_max] = object.bbox;
-                sum_extent += (x_max - x_min + 1) as u64 + (y_max - y_min + 1) as u64;
-                count += 1;
-            }
+        for (_, bbox) in entries {
+            let [x_min, y_min, x_max, y_max] = *bbox;
+            sum_extent += (x_max - x_min + 1) as u64 + (y_max - y_min + 1) as u64;
+            count += 1;
         }
         // Average object extent (width+height, averaged) as the cell size: most objects
         // then span a small, roughly constant number of cells regardless of how many
@@ -58,11 +70,9 @@ impl BboxGrid {
         };
 
         let mut cells: HashMap<(i64, i64), Vec<ObjectId>> = HashMap::new();
-        for id in ids {
-            if let Some(object) = cache.object_cache.get(id) {
-                for cell in Self::cell_range(object.bbox, cell_size) {
-                    cells.entry(cell).or_default().push(id.clone());
-                }
+        for (id, bbox) in entries {
+            for cell in Self::cell_range(*bbox, cell_size) {
+                cells.entry(cell).or_default().push(id.clone());
             }
         }
 
@@ -121,8 +131,8 @@ mod tests {
         object
     }
 
-    fn cache_with(objects: Vec<Object>) -> (PipelineCache, Vec<ObjectId>) {
-        let mut cache = PipelineCache::default();
+    fn cache_with(objects: Vec<Object>) -> (GlobalPipelineCache, Vec<ObjectId>) {
+        let mut cache = GlobalPipelineCache::default();
         let mut ids = Vec::new();
         for object in objects {
             ids.push(object.id.clone());
@@ -135,6 +145,20 @@ mod tests {
     /// overlap on both axes.
     fn bboxes_intersect(a: [u32; 4], b: [u32; 4]) -> bool {
         a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
+    }
+
+    /// `build_from_bboxes` is `build`'s underlying implementation (every test
+    /// above already exercises it indirectly), but this pins its own
+    /// contract directly: it must work from bare `(id, bbox)` pairs with no
+    /// `PipelineCache`/full `Object` involved at all - the whole point of
+    /// adding it for the whole-image metadata index.
+    #[test]
+    fn build_from_bboxes_finds_touching_pairs_without_a_pipeline_cache() {
+        let entries = vec![(ObjectId(1), [0, 0, 4, 4]), (ObjectId(2), [4, 4, 8, 8])];
+        let grid = BboxGrid::build_from_bboxes(&entries);
+
+        assert!(grid.candidates([0, 0, 4, 4]).contains(&ObjectId(2)));
+        assert!(grid.candidates([4, 4, 8, 8]).contains(&ObjectId(1)));
     }
 
     #[test]

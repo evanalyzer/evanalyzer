@@ -21,12 +21,6 @@ kornia-apriltag = { workspace = true }
 zune-core = "=0.5.3"
 image = { workspace = true }
 log = { workspace = true }
-# Pinned to a specific commit (not `branch = "main"`) for reproducible builds
-# - bump deliberately with `cargo update -p bioformats --precise <rev>`, don't
-# let it float. The "gpl" feature is deliberately *not* listed here; it's
-# wired through our own `bioformats-gpl` feature below instead, so the
-# workspace root can toggle it (see the `evanalyzer_core` comment in the root
-# Cargo.toml).
 bioformats = { git = "https://github.com/joda01/bioformats-rs", branch = "tif-read-fix", features = [
     "jpegxr",
     "zarr",
@@ -49,15 +43,14 @@ serde_json = { workspace = true, optional = true }
 petname = "3.1.0"
 chrono = { workspace = true }
 sysinfo = "0.39.6"
+bincode = { workspace = true }
+tempfile = { workspace = true }
+fast-uuid-v7 = { workspace = true }
+clru = "0.6.3"
+
 
 [features]
 ai = ["dep:tch", "dep:smartcore", "dep:burn", "dep:serde_json"]
-# Enables bioformats' own "gpl" feature - the GPL-2.0-or-later readers ported
-# from upstream Bio-Formats' `formats-gpl` module (CZI, ND2, LIF, LSM, and
-# others - see bioformats-rs' README for the full list). Disabling this drops
-# those formats but yields a BSD-2-Clause-only bioformats build. Toggle from
-# the workspace root, not here - see the `evanalyzer_core` comment in the
-# root Cargo.toml.
 bioformats-gpl = ["bioformats/gpl"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -66,7 +59,6 @@ duckdb = { workspace = true, features = ["bundled"] }
 [dev-dependencies]
 approx = "0.5"
 env_logger = { workspace = true }
-tempfile = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["zune-core"]

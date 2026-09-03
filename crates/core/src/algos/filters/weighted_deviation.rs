@@ -8,9 +8,9 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     image::ImageContainer,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -81,7 +81,7 @@ impl ImageAlgorithm for WeightedDeviation {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // Get input image as F32Gray (assuming conversion is handled upstream)
         // If your input is F32Rgb, you'll need a conversion step here first.
@@ -182,6 +182,10 @@ impl ImageAlgorithm for WeightedDeviation {
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
     }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
+    }
 }
 
 // --- Test ------------------------------------------------------
@@ -214,7 +218,7 @@ mod tests {
             kernel_size: 3,
             sigma: 1.0,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let result = algo.execute(&mut ctx, &mut cache);
 
         // Either compute correctly (self-heal to F32Gray) or fail loudly -
@@ -262,7 +266,7 @@ mod tests {
         };
 
         // 3. Execute
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         algo.execute(&mut ctx, &mut cache)?;
 
         // 4. Verification
@@ -293,5 +297,44 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn execute_returns_format_mismatch_when_ctx_image_is_not_f32_gray() {
+        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+            ImageSize {
+                width: 4,
+                height: 4,
+            },
+            0,
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        let algo = WeightedDeviation {
+            kernel_size: 3,
+            sigma: 1.0,
+        };
+
+        let result = algo.execute(&mut ctx, &mut cache);
+
+        match result {
+            Err(InternalErrors::FormatMismatch { expected, .. }) => {
+                assert_eq!(expected, "F32Gray for both input and scratch pad");
+            }
+            _ => panic!("Expected FormatMismatch, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn metadata_is_reported_correctly() {
+        let algo = WeightedDeviation {
+            kernel_size: 3,
+            sigma: 1.0,
+        };
+        assert_eq!(algo.name(), "Weighted Deviation");
+        assert!(algo.cite().is_none());
+        assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 }

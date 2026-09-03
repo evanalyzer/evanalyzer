@@ -8,7 +8,8 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::algos::{
-    ImageAlgorithm, ImageMath, PipelineCache, PipelineContext, RankFilter, RankFilterType,
+    ExecutionScope, GlobalPipelineCache, ImageAlgorithm, ImageMath, PipelineContext, RankFilter,
+    RankFilterType,
 };
 use evanalyzer_cfg::core_types::CitationMetadata;
 use evanalyzer_cfg::core_types::ImageAddress;
@@ -53,7 +54,7 @@ impl ImageAlgorithm for MedianSubtract {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         ctx.scratch_pad = ctx.image.clone();
 
@@ -79,6 +80,10 @@ impl ImageAlgorithm for MedianSubtract {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -135,7 +140,7 @@ mod tests {
             },
             input_img.into(),
         )?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Setup Algorithm (Radius 1 = 3x3 window)
         let algo = MedianSubtract { radius: 1.0 };
@@ -179,5 +184,7 @@ mod tests {
     fn test_median_subtract_name() {
         let algo = MedianSubtract { radius: 10.0 };
         assert_eq!(algo.name(), "Median Subtract");
+        assert!(algo.cite().is_none());
+        assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 }

@@ -369,9 +369,9 @@ fn generate_config_code(commands: &[CommandInfo], enums: &[EnumInfo]) -> String 
     for category in &[
         "Preprocessing",
         "Segmentation",
-        "Object",
+        "InstanceSegmentation",
         "Measure",
-        "Classification",
+        "Object",
         "Other",
     ] {
         if let Some(cmds) = by_category.get(*category) {
@@ -934,7 +934,16 @@ fn extract_command_structs(
 
 fn determine_category(file_path: &Path) -> String {
     let path_str = file_path.to_string_lossy();
-    if path_str.contains("filters")
+    // Checked first, ahead of the generic filename-substring checks below:
+    // a file living under `algos/object/` (e.g. `object_math.rs`) would
+    // otherwise get misclassified by, say, the `"math"` check meant for
+    // `algos/math/`.
+    if path_str.contains("/object/")
+        || path_str.contains("classification")
+        || path_str.contains("extract")
+    {
+        "Object".to_string()
+    } else if path_str.contains("filters")
         || path_str.contains("blur")
         || path_str.contains("morphology")
         || path_str.contains("edge")
@@ -946,8 +955,6 @@ fn determine_category(file_path: &Path) -> String {
         "Preprocessing".to_string()
     } else if path_str.contains("segmentation") || path_str.contains("threshold") {
         "Segmentation".to_string()
-    } else if path_str.contains("classification") || path_str.contains("extract") {
-        "Classification".to_string()
     } else {
         "Other".to_string()
     }
@@ -959,9 +966,9 @@ fn normalize_category(raw: &str) -> String {
     match raw.to_ascii_lowercase().as_str() {
         "Preprocessing" | "preprocessing" => "Preprocessing".to_string(),
         "segment" | "segmentation" | "ai_segmentation" => "Segmentation".to_string(),
-        "object" | "object_detection" | "detect" => "Object".to_string(),
+        "instance_segmentation" => "InstanceSegmentation".to_string(),
         "measure" | "measurement" => "Measure".to_string(),
-        "classify" | "classification" => "Classification".to_string(),
+        "object" | "classify" | "classification" => "Object".to_string(),
         _ => "Other".to_string(),
     }
 }
@@ -2492,29 +2499,31 @@ fn category_to_enum_variant(category: &str) -> &str {
     match category {
         "Preprocessing" => "Preprocess",
         "Segmentation" => "Segment",
-        "Object" => "Object",
+        "InstanceSegmentation" => "InstanceSegmentation",
         "Measure" => "Measure",
-        "Classification" => "Classify",
+        "Object" => "Object",
         _ => "Preprocess",
     }
 }
 
 /// Default successor categories for a command that does not declare an explicit
 /// `#[cmdsmeta(next = "...")]`. Mirrors the linear pipeline order
-/// (Preprocess → Segment → Object → Measure → Classify) but lets a stage repeat
-/// (e.g. Object → Object so Watershed can follow ConnectedComponents).
+/// (Preprocess → Segment → InstanceSegmentation → Measure → Object) but lets a
+/// stage repeat (e.g. InstanceSegmentation → InstanceSegmentation so Watershed
+/// can follow ConnectedComponents).
 ///
 /// Ordering is significant: the **first** entry is the *suggested* next category
 /// (the command picker pre-selects its chip), the rest are merely allowed. So the
-/// default after an Object step suggests Measure but still permits another Object;
-/// ConnectedComponents overrides this to suggest Object (Watershed) first.
+/// default after an InstanceSegmentation step suggests Measure but still permits
+/// another InstanceSegmentation step; ConnectedComponents overrides this to
+/// suggest InstanceSegmentation (Watershed) first.
 fn default_next_for_category(variant: &str) -> &'static [&'static str] {
     match variant {
         "Preprocess" => &["Segment", "Preprocess"],
-        "Segment" => &["Object"],
-        "Object" => &["Measure", "Object"],
-        "Measure" => &["Classify", "Measure"],
-        "Classify" => &["Classify"],
+        "Segment" => &["InstanceSegmentation"],
+        "InstanceSegmentation" => &["Measure", "InstanceSegmentation"],
+        "Measure" => &["Object", "Measure"],
+        "Object" => &["Object"],
         _ => &["Segment"],
     }
 }
@@ -2542,9 +2551,9 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("pub enum CommandCategory {\n");
     out.push_str("    Preprocess,\n");
     out.push_str("    Segment,\n");
-    out.push_str("    Object,\n");
+    out.push_str("    InstanceSegmentation,\n");
     out.push_str("    Measure,\n");
-    out.push_str("    Classify,\n");
+    out.push_str("    Object,\n");
     out.push_str("}\n\n");
 
     // --- CommandCategory methods (ordering rules) ---
@@ -2553,32 +2562,36 @@ fn generate_pipeline_command_enum(commands: &[CommandInfo], enums: &[EnumInfo]) 
     out.push_str("#[allow(dead_code)]\n");
     out.push_str("    pub fn display_order(self) -> u8 {\n");
     out.push_str("        match self {\n");
-    out.push_str("            Self::Preprocess => 0,\n");
-    out.push_str("            Self::Segment    => 1,\n");
-    out.push_str("            Self::Object     => 2,\n");
-    out.push_str("            Self::Measure    => 3,\n");
-    out.push_str("            Self::Classify   => 4,\n");
+    out.push_str("            Self::Preprocess           => 0,\n");
+    out.push_str("            Self::Segment              => 1,\n");
+    out.push_str("            Self::InstanceSegmentation => 2,\n");
+    out.push_str("            Self::Measure              => 3,\n");
+    out.push_str("            Self::Object               => 4,\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// Which categories are valid immediately before this one in a pipeline.\n");
     out.push_str("    /// An empty slice means this category can start a pipeline.\n");
     out.push_str("#[allow(dead_code)]\n");
     out.push_str("    pub fn allowed_after(self) -> &'static [CommandCategory] {\n");
     out.push_str("        match self {\n");
-    out.push_str("            Self::Preprocess => &[Self::Preprocess],\n");
-    out.push_str("            Self::Segment    => &[Self::Preprocess, Self::Segment],\n");
-    out.push_str("            Self::Object     => &[Self::Segment, Self::Object],\n");
-    out.push_str("            Self::Measure    => &[Self::Object, Self::Measure],\n");
-    out.push_str("            Self::Classify   => &[Self::Measure, Self::Classify],\n");
+    out.push_str("            Self::Preprocess           => &[Self::Preprocess],\n");
+    out.push_str("            Self::Segment              => &[Self::Preprocess, Self::Segment],\n");
+    out.push_str(
+        "            Self::InstanceSegmentation => &[Self::Segment, Self::InstanceSegmentation],\n",
+    );
+    out.push_str(
+        "            Self::Measure              => &[Self::InstanceSegmentation, Self::Measure],\n",
+    );
+    out.push_str("            Self::Object               => &[Self::Measure, Self::Object],\n");
     out.push_str("        }\n    }\n\n");
     out.push_str("    /// The natural next category after this one, used to pre-filter the command picker.\n");
     out.push_str("#[allow(dead_code)]\n");
     out.push_str("    pub fn suggested_next(self) -> CommandCategory {\n");
     out.push_str("        match self {\n");
-    out.push_str("            Self::Preprocess => Self::Segment,\n");
-    out.push_str("            Self::Segment    => Self::Object,\n");
-    out.push_str("            Self::Object     => Self::Measure,\n");
-    out.push_str("            Self::Measure    => Self::Classify,\n");
-    out.push_str("            Self::Classify   => Self::Classify,\n");
+    out.push_str("            Self::Preprocess           => Self::Segment,\n");
+    out.push_str("            Self::Segment              => Self::InstanceSegmentation,\n");
+    out.push_str("            Self::InstanceSegmentation => Self::Measure,\n");
+    out.push_str("            Self::Measure              => Self::Object,\n");
+    out.push_str("            Self::Object               => Self::Object,\n");
     out.push_str("        }\n    }\n");
     out.push_str("}\n\n");
 

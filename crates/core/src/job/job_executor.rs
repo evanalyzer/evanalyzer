@@ -1,12 +1,14 @@
-use super::tile_merge::{PendingFragment, merge_pending_fragments, touches_tile_edge};
 use crate::{
     ImageInfo, ZProjection,
+    algos::Connectivity,
     image::{ImageReader, ImageTile, PixelSizes, ReadMode},
     pipeline::{
+        image_cache::ImageCache,
+        object_cache::ObjectCache,
         pipeline::{Pipeline, PipelineImageMeta},
-        pipeline_cache::{ImageCache, ImageMap, PipelineCache},
+        pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
     },
-    resources::{CACHE_QUEUE_DEPTH, MAX_TILE_SIZE},
+    resources::MAX_TILE_SIZE,
     storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
@@ -16,7 +18,6 @@ use evanalyzer_cfg::{
             GlobalImageSettings, ImageEntry, TStackHandling, ZStackHandling, ZStackSettings,
         },
         object_settings::ObjectMetricSettings,
-        project_settings::TileMergeSettings,
     },
 };
 use indexmap::IndexMap;
@@ -24,7 +25,7 @@ use kornia_image::ImageSize;
 use log::{info, warn};
 use rayon::prelude::*;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     ops::RangeInclusive,
     path::PathBuf,
     sync::{
@@ -51,6 +52,20 @@ pub enum ProgressEvent {
         tile_index: usize,
         total_tiles: usize,
         objects: Vec<ObjectMetricSettings>,
+    },
+    /// Emitted once the whole-image-scoped phase (tile-merge, plus any
+    /// `WholeImage`-scoped commands like Voronoi, plus the DB export) for
+    /// one (t, z) stack completes - always *after* every tile of that stack
+    /// has already reported `TileCompleted`. `total_tiles` (see
+    /// `TilesScheduled`) reserves one unit per (t, z) stack for exactly this
+    /// event, so a progress bar driven by `TileCompleted`/this event
+    /// together never claims 100% before the pipeline is actually done -
+    /// this phase can itself take a long time (e.g. Voronoi across a
+    /// whole-slide image's full object set), and without a dedicated event
+    /// there was nothing to report while it ran.
+    WholeImagePhaseCompleted {
+        completed: usize,
+        total_tiles: usize,
     },
     ImageCompleted {
         index: usize,
@@ -135,10 +150,43 @@ pub struct BreakpointSettings {
     pub mode: BreakpointMode,
 }
 
+/// The one place `evanalyzer_cfg::settings::project_settings::TileMergeConnectivity`
+/// (project settings) gets converted into `algos::Connectivity` (the algorithm's
+/// own parameter type) - `TileMerge` itself never references project settings
+/// or `job_executor` at all; this is where that boundary gets crossed, right
+/// where `TileMerge` actually gets constructed below.
+impl From<evanalyzer_cfg::settings::project_settings::TileMergeConnectivity> for Connectivity {
+    fn from(value: evanalyzer_cfg::settings::project_settings::TileMergeConnectivity) -> Self {
+        match value {
+            evanalyzer_cfg::settings::project_settings::TileMergeConnectivity::FourConnected => {
+                Connectivity::FourConnected
+            }
+            evanalyzer_cfg::settings::project_settings::TileMergeConnectivity::EightConnected => {
+                Connectivity::EightConnected
+            }
+        }
+    }
+}
+
+/// The `PipelineId` `job_generator` assigns to the system-inserted `TileMerge`
+/// post-process pipeline (see its own doc comment: not a user-pickable
+/// command, prepended by `job_generator` from project-level settings). Needs
+/// to be a name both `job_generator` (constructs it) and `job_executor`
+/// (must run it before any other post-process pipeline - `get_execution_order`
+/// alone doesn't guarantee that, see `analyze_image`) can reference, rather
+/// than each hand-writing the same magic sentinel value.
+pub(crate) const TILE_MERGE_PIPELINE_ID: PipelineId = PipelineId(0xFFFFFFFF);
+
 pub struct JobExecutor {
     pub project_path: PathBuf,
     pub output_path: PathBuf,
-    pub pipelines: IndexMap<PipelineId, Pipeline>,
+
+    // The job_generator splits the user created pipelines in two parts.
+    // The pipelines steps which can be executed in parallel and thos which has to be executed
+    // after the preprocessing has been finished
+    pub pipelines_pre_process: IndexMap<PipelineId, Pipeline>,
+    pub pipelines_post_process: IndexMap<PipelineId, Pipeline>,
+
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
     pub global_image_settings: GlobalImageSettings,
@@ -150,12 +198,6 @@ pub struct JobExecutor {
 
     /// Debugging settings, if set the pipeline stops at this point and returns the actual image
     pub breakpoint: Option<BreakpointSettings>,
-
-    /// Opt-in setting to reassemble objects that got split across an
-    /// internal tile boundary back into one correct object - see
-    /// `docs/tile_merge_plan.md`. Defaults to disabled (a complete no-op);
-    /// set by `job_generator` from the project's own `ProjectSettings`.
-    pub tile_merge: TileMergeSettings,
 }
 
 impl<'a> JobExecutor {
@@ -169,7 +211,8 @@ impl<'a> JobExecutor {
         override_pixel_sizes: Option<PixelSizes>,
     ) -> Self {
         Self {
-            pipelines: IndexMap::new(),
+            pipelines_pre_process: IndexMap::new(),
+            pipelines_post_process: IndexMap::new(),
             project_path,
             output_path,
             image_base_path,
@@ -179,12 +222,15 @@ impl<'a> JobExecutor {
             override_pixel_sizes,
             preview_tile_settings: None,
             breakpoint: None,
-            tile_merge: TileMergeSettings::default(),
         }
     }
 
-    pub fn add_pipeline(&mut self, p: Pipeline) {
-        self.pipelines.insert(p.id, p);
+    pub fn add_pre_process_pipeline(&mut self, p: Pipeline) {
+        self.pipelines_pre_process.insert(p.id, p);
+    }
+
+    pub fn add_post_process_pipeline(&mut self, p: Pipeline) {
+        self.pipelines_post_process.insert(p.id, p);
     }
 
     /// Runs all images through the configured pipelines, blocking until complete.
@@ -226,6 +272,19 @@ impl<'a> JobExecutor {
         info!("Starting pipeline with {} parallel threads", parallelism);
         let start = Instant::now();
 
+        let ram_budget = self.estimate_ram_budget();
+        let image_cache_bytes = crate::resources::recommended_image_cache_bytes(
+            parallelism,
+            ram_budget.working_set_bytes + ram_budget.object_cache_margin_bytes,
+            ram_budget.min_image_cache_bytes,
+        );
+        info!(
+            "Image cache capacity: {} bytes/worker ({}) x {} worker(s)",
+            image_cache_bytes,
+            crate::resources::format_binary_bytes(image_cache_bytes),
+            parallelism
+        );
+
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(parallelism)
             .build()
@@ -250,6 +309,7 @@ impl<'a> JobExecutor {
                     self.result_storage.clone(),
                     cancel,
                     Some(progress.clone()),
+                    image_cache_bytes,
                 ) {
                     Ok(()) => {
                         progress
@@ -299,6 +359,7 @@ impl<'a> JobExecutor {
                         self.result_storage.clone(),
                         cancel.clone(),
                         None,
+                        image_cache_bytes,
                     ) {
                         Ok(()) => {
                             let index = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -444,6 +505,7 @@ impl<'a> JobExecutor {
         exporter: Arc<Mutex<dyn PipelineResultExporter>>,
         cancel: Arc<AtomicBool>,
         progress: Option<Sender<ProgressEvent>>,
+        image_cache_bytes: u64,
     ) -> Result<(), InternalErrors> {
         let start_image = Instant::now();
         const RES_IDX: i32 = 0;
@@ -554,360 +616,359 @@ impl<'a> JobExecutor {
             None
         };
 
-        // Build a flat list of every (t, z, tile) combination. Each work item
-        // carries its own `Option<Sender>` clone because `Sender` is not
-        // `Sync` - it can't be captured by shared reference in the `Fn + Sync`
-        // closure rayon needs, only moved in per item (cloning `None` is free).
-        let total_tiles = tiles.len() * z_stacks.len() * t_stacks.len();
-        let completed = Arc::new(AtomicUsize::new(0));
-
-        let mut all_work: Vec<(i32, i32, ImageTile, bool, Option<Sender<ProgressEvent>>)> =
-            Vec::with_capacity(total_tiles);
-        for &t in &t_stacks {
-            for &z in &z_stacks {
-                for tile in &tiles {
-                    let is_bp_target = breakpoint_target
-                        .map(|(ox, oy)| tile.offset_x == ox && tile.offset_y == oy)
-                        .unwrap_or(false);
-                    all_work.push((t, z, tile.clone(), is_bp_target, progress.clone()));
+        // Visible/hidden only depends on tile geometry (x, y), never on which
+        // (t, z) stack a tile belongs to - compute the split once and reuse it
+        // for every (t, z) group below, so the viewport area is processed
+        // first for every plane, not just the first one processed.
+        let (visible_tiles, hidden_tiles): (Vec<ImageTile>, Vec<ImageTile>) =
+            match &self.preview_tile_settings {
+                Some(settings) => {
+                    let (visible, hidden): (Vec<_>, Vec<_>) = tiles
+                        .iter()
+                        .copied()
+                        .partition(|t| settings.is_tile_visible(t));
+                    let hidden = if settings.process_all_tiles {
+                        hidden
+                    } else {
+                        vec![]
+                    };
+                    (visible, hidden)
                 }
-            }
-        }
+                None => (tiles.clone(), vec![]),
+            };
 
-        // When preview tile settings are present, split into visible / hidden
-        // so the viewport area is processed first, giving fast first results.
-        // In a batch run `self.preview_tile_settings` is never set, so this
-        // always degenerates to one pass over every tile.
-        let (first_pass, second_pass) = match &self.preview_tile_settings {
-            Some(settings) => {
-                let (visible, hidden): (Vec<_>, Vec<_>) = all_work
-                    .into_iter()
-                    .partition(|(_, _, tile, _, _)| settings.is_tile_visible(tile));
-                let hidden = if settings.process_all_tiles {
-                    hidden
-                } else {
-                    vec![]
-                };
-                (visible, hidden)
-            }
-            None => (all_work, vec![]),
-        };
+        // One `WholeImagePhaseCompleted` unit per whole-image-scoped pipeline
+        // that actually has commands to run (TileMerge, plus any user
+        // pipeline's WholeImage-scoped steps, e.g. Voronoi or
+        // Colocalization), plus one more for the final export - matches
+        // exactly what the loop below ticks off, so a long-running whole-image
+        // command (Voronoi across many objects, say) shows up as one of
+        // *several* visible steps instead of the bar freezing on a single
+        // step for however long the whole phase takes. `.max(1)`: even if
+        // every whole-image pipeline is empty, the "object cache empty"
+        // early-exit path (see below) still needs its own single reserved
+        // unit.
+        let whole_image_units_per_stack = self.count_whole_image_progress_units(order);
 
         // Recalculate so progress events reflect only the tiles actually being processed.
-        let total_tiles = first_pass.len() + second_pass.len();
+        let total_tiles =
+            (visible_tiles.len() + hidden_tiles.len()) * z_stacks.len() * t_stacks.len()
+                + whole_image_units_per_stack * z_stacks.len() * t_stacks.len();
+        let completed = Arc::new(AtomicUsize::new(0));
         if let Some(progress) = &progress {
             progress
                 .send(ProgressEvent::TilesScheduled { total_tiles })
                 .ok();
         }
 
-        // Buffer for objects that touch their own tile's edge (but not the
-        // full image's edge) and don't carry a class in
-        // `tile_merge.classes_to_not_merge` - held back from the normal
-        // per-tile export path and matched/merged once every tile of this
-        // image has finished, see
-        // `docs/tile_merge_plan.md`. `None` when the feature is off, which
-        // must be a complete no-op on the existing per-tile export path -
-        // every `run_tile` invocation below checks this once and does
-        // nothing extra when it's `None`. One buffer per image (not global):
-        // merging is per-image, and `analyze_image` itself is already the
-        // per-image unit of work.
-        let pending: Option<Arc<Mutex<Vec<PendingFragment>>>> = self
-            .tile_merge
-            .enabled
-            .then(|| Arc::new(Mutex::new(Vec::new())));
+        // Images from different t/z stacks are never used together, so each
+        // (t, z) combination gets its own `global_cache`, merged from that
+        // stack's tiles alone, and runs its own whole-image phase and export -
+        // never mixed with another stack's objects.
+        let mut analyze_result: Result<(), InternalErrors> = Ok(());
 
-        // Spawn a dedicated DB writer thread so one tile's image loading and
-        // pipeline execution can overlap with another tile's DuckDB insert.
-        // Rayon workers send their completed caches through a bounded channel
-        // instead of locking a mutex - they block only when the channel is
-        // full (backpressure), not for the entire duration of a DuckDB insert.
-        let (cache_tx, cache_rx) =
-            std::sync::mpsc::sync_channel::<PipelineCache>(CACHE_QUEUE_DEPTH);
-        let writer_handle = {
-            let exporter = exporter.clone();
-            std::thread::spawn(move || -> Result<(), InternalErrors> {
-                for cache in cache_rx {
-                    let t0 = Instant::now();
-                    // Recover from poison rather than propagating the panic: this
-                    // mutex is shared across every concurrently-running image's
-                    // writer thread, so one image's writer panicking must not
-                    // crash every other image's export too.
+        // `image_entry` is the same value for every tile/stack of this image -
+        // built once here and `Arc::clone()`d (a refcount bump) per tile
+        // below, instead of the tile closure itself doing `Arc::new(image_entry.clone())`
+        // (a full deep clone, including its `BTreeMap<i32, SeriesSettings>`)
+        // on every single tile.
+        let image_entry_arc = Arc::new(image_entry.clone());
+
+        'stacks: for &t in &t_stacks {
+            for &z in &z_stacks {
+                let global_cache = match self.prepare_global_image_cache(
+                    full_size,
+                    is_rgb,
+                    image_rel_path,
+                    nr_bits,
+                    pixel_sizes.clone(),
+                    image_cache_bytes,
+                ) {
+                    Ok(cache) => cache,
+                    Err(e) => {
+                        analyze_result = Err(e);
+                        break 'stacks;
+                    }
+                };
+
+                let z_range_in = matches!(
+                    z_handling,
+                    ZStackHandling::AllStacks | ZStackHandling::SingleStack
+                )
+                .then(|| z..=z);
+
+                // Processes one tile against its own copy of `global_cache` and
+                // returns it - `try_reduce` below folds every tile's copy back
+                // into one cache for this (t, z) stack (rayon's `try_for_each`
+                // can't be used here since it discards each call's output).
+                let run_tile = |tile: ImageTile,
+                                sender: Option<Sender<ProgressEvent>>|
+                 -> Result<GlobalPipelineCache, InternalErrors> {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(InternalErrors::Cancelled);
+                    }
+
+                    let is_bp_target = breakpoint_target
+                        .map(|(ox, oy)| tile.offset_x == ox && tile.offset_y == oy)
+                        .unwrap_or(false);
+
+                    // A fresh reader per tile, not pooled: measured to be
+                    // faster in practice than sharing a small mutex-guarded
+                    // pool across many concurrent tiles (see
+                    // `prepare_pipeline_cache`'s doc comment) - the pool's
+                    // per-tile lock contention cost more wall-clock time
+                    // than the reader construction it was meant to save.
+                    let reader = ImageReader::new(image_path, ReadMode::Default)?;
+
+                    let mut cache = self.prepare_pipeline_cache(
+                        global_cache.clone(),
+                        &reader,
+                        image_entry_arc.clone(),
+                        &tile,
+                        t,
+                        &z_proj,
+                        &z_range_in,
+                        RES_IDX,
+                    )?;
+
+                    let mut stop_capture: Option<crate::pipeline::pipeline::BreakpointCapture> =
+                        None;
+                    let mut snapshot_capture: Option<crate::pipeline::pipeline::BreakpointCapture> =
+                        None;
+                    // The channel the breakpointed pipeline actually started from, so
+                    // the UI can look up that channel's histogram/LUT settings
+                    // instead of guessing (previously hardcoded to channel 0 on the
+                    // GUI side, which showed the wrong - often black, since it read
+                    // an unrelated channel's histogram range - image whenever the
+                    // pipeline didn't start from channel 0).
+                    let mut breakpoint_channel_idx: Option<i32> = None;
+                    for pipe_id in order {
+                        if stop_capture.is_some() {
+                            break;
+                        }
+                        if let Some(p) = self.pipelines_pre_process.get(pipe_id) {
+                            let (bp_step, snapshot_mode) = self
+                                .breakpoint
+                                .as_ref()
+                                .filter(|b| b.pipeline_id == *pipe_id)
+                                .map(|b| {
+                                    (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot)
+                                })
+                                .unwrap_or((None, false));
+                            let result = p.run_commands(
+                                self.output_path.clone(),
+                                Some(tile),
+                                cache,
+                                bp_step,
+                                snapshot_mode,
+                            )?;
+                            if result.breakpoint_hit {
+                                stop_capture = result.breakpoint_capture;
+                                if let ImageAddress::Channel(idx) = p.settings.start_image {
+                                    breakpoint_channel_idx = Some(idx);
+                                }
+                            } else if let Some(capture) = result.breakpoint_capture {
+                                snapshot_capture = Some(capture);
+                                if let ImageAddress::Channel(idx) = p.settings.start_image {
+                                    breakpoint_channel_idx = Some(idx);
+                                }
+                            }
+                            cache = result.cache;
+                        }
+                    }
+
+                    // Snapshot: send the captured buffers but continue merging normally.
+                    if let Some(capture) = snapshot_capture {
+                        if is_bp_target && let Some(sender) = &sender {
+                            sender
+                                .send(ProgressEvent::BreakpointReached {
+                                    image: (*capture.image).clone(),
+                                    segmentation: capture.segmentation.map(|s| (*s).clone()),
+                                    instances: capture.instances.map(|i| (*i).clone()),
+                                    tile_offset_x: tile.offset_x,
+                                    tile_offset_y: tile.offset_y,
+                                    tile_width: tile.width,
+                                    tile_height: tile.height,
+                                    nr_bits,
+                                    channel_idx: breakpoint_channel_idx,
+                                })
+                                .ok();
+                        }
+                        // fall through — the full pipeline ran, merge results normally.
+                    }
+
+                    // Stop: send the buffers, discard this tile's (partial) output
+                    // instead of merging it in - an empty copy of `global_cache`
+                    // contributes nothing when folded together below.
+                    if let Some(capture) = stop_capture {
+                        if is_bp_target && let Some(sender) = &sender {
+                            sender
+                                .send(ProgressEvent::BreakpointReached {
+                                    image: (*capture.image).clone(),
+                                    segmentation: capture.segmentation.map(|s| (*s).clone()),
+                                    instances: capture.instances.map(|i| (*i).clone()),
+                                    tile_offset_x: tile.offset_x,
+                                    tile_offset_y: tile.offset_y,
+                                    tile_width: tile.width,
+                                    tile_height: tile.height,
+                                    nr_bits,
+                                    channel_idx: breakpoint_channel_idx,
+                                })
+                                .ok();
+                        }
+                        return Ok(global_cache.clone());
+                    }
+
+                    // Only interactive runs consume per-tile objects (for the
+                    // TileCompleted event below) - skip the clone/collect otherwise.
+                    let tile_objects: Vec<ObjectMetricSettings> = if sender.is_some() {
+                        cache
+                            .object_cache
+                            .values()
+                            .map(|r| r.to_object_settings())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    if let Some(sender) = &sender {
+                        let tile_index = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                        sender
+                            .send(ProgressEvent::TileCompleted {
+                                tile_index,
+                                total_tiles,
+                                objects: tile_objects,
+                            })
+                            .ok();
+                    }
+
+                    Ok(cache)
+                };
+
+                // Merge cache clouser
+                let merge_caches = |mut a: GlobalPipelineCache,
+                                    b: GlobalPipelineCache|
+                 -> Result<GlobalPipelineCache, InternalErrors> {
+                    a.object_cache.extend(b.object_cache);
+                    a.image_cache.extend(b.image_cache);
+                    Ok(a)
+                };
+
+                // Execute the tiles in prallel
+                let stack_result = visible_tiles
+                    .par_iter()
+                    .map(|&tile| run_tile(tile, progress.clone()))
+                    .try_reduce(|| global_cache.clone(), merge_caches)
+                    .and_then(|acc| {
+                        if hidden_tiles.is_empty() {
+                            return Ok(acc);
+                        }
+                        hidden_tiles
+                            .par_iter()
+                            .map(|&tile| run_tile(tile, progress.clone()))
+                            .try_reduce(|| acc.clone(), merge_caches)
+                    });
+
+                let stack_merge_result = stack_result.and_then(|mut merged_cache| {
+                    if merged_cache.object_cache.is_empty() {
+                        // Object buffer is empty - no whole-image-scoped
+                        // commands or export to run, but this stack's
+                        // reserved progress unit (see `total_tiles` above)
+                        // still needs to be accounted for, or the bar would
+                        // sit permanently one unit short of 100%.
+                        if let Some(sender) = &progress {
+                            let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            sender
+                                .send(ProgressEvent::WholeImagePhaseCompleted {
+                                    completed: idx,
+                                    total_tiles,
+                                })
+                                .ok();
+                        }
+                        return Ok(());
+                    }
+
+                    // Run every pipeline's whole-image-scoped commands. `order`
+                    // (from `get_execution_order`) already guarantees TileMerge
+                    // comes first.
+                    for pipe_id in order {
+                        let Some(p) = self.pipelines_post_process.get(pipe_id) else {
+                            continue;
+                        };
+
+                        if p.commands.is_empty() {
+                            continue;
+                        }
+                        let (bp_step, snapshot_mode) = self
+                            .breakpoint
+                            .as_ref()
+                            .filter(|b| b.pipeline_id == *pipe_id)
+                            .map(|b| (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot))
+                            .unwrap_or((None, false));
+                        let result = p.run_commands(
+                            self.output_path.clone(),
+                            None,
+                            merged_cache,
+                            bp_step,
+                            snapshot_mode,
+                        )?;
+                        merged_cache = result.cache;
+
+                        // One reserved unit per non-empty whole-image
+                        // pipeline (see `whole_image_units_per_stack`) - a
+                        // long-running command here (Voronoi, say) now shows
+                        // up as one of several visible progress steps
+                        // instead of the bar freezing on a single step.
+                        if let Some(sender) = &progress {
+                            let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            sender
+                                .send(ProgressEvent::WholeImagePhaseCompleted {
+                                    completed: idx,
+                                    total_tiles,
+                                })
+                                .ok();
+                        }
+
+                        if result.breakpoint_hit {
+
+                            info!(
+                                "Whole-image breakpoint hit for pipeline {} on image {:?} (t={}, z={})",
+                                pipe_id, image_rel_path, t, z
+                            );
+                            break;
+                        }
+                    }
+
                     exporter
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .export(&cache)?;
-                    info!("DB write: {:.1?}", t0.elapsed());
-                }
-                Ok(())
-            })
-        };
+                        .export(&merged_cache)?;
 
-        // Closure that processes one (t, z, tile, is_bp_target, sender) work
-        // item. `cache_tx: SyncSender` is `Sync`, so the closure itself is
-        // `Fn + Send + Sync` and can be shared across all rayon workers.
-        let run_tile = |(t, z, tile, is_bp_target, sender): (
-            i32,
-            i32,
-            ImageTile,
-            bool,
-            Option<Sender<ProgressEvent>>,
-        )|
-         -> Result<(), InternalErrors> {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(InternalErrors::Cancelled);
-            }
-
-            let reader = ImageReader::new(image_path, ReadMode::Default)?;
-
-            let z_range_in = matches!(
-                z_handling,
-                ZStackHandling::AllStacks | ZStackHandling::SingleStack
-            )
-            .then(|| z..=z);
-
-            let mut cache = self.prepare_pipeline_cache(
-                &reader,
-                Arc::new(image_entry.clone()),
-                &tile,
-                t,
-                &z_proj,
-                &z_range_in,
-                RES_IDX,
-                full_size,
-                is_rgb,
-                image_rel_path,
-                nr_bits,
-                pixel_sizes.clone(),
-            )?;
-
-            let mut stop_capture: Option<crate::pipeline::pipeline::BreakpointCapture> = None;
-            let mut snapshot_capture: Option<crate::pipeline::pipeline::BreakpointCapture> = None;
-            // The channel the breakpointed pipeline actually started from, so
-            // the UI can look up that channel's histogram/LUT settings
-            // instead of guessing (previously hardcoded to channel 0 on the
-            // GUI side, which showed the wrong - often black, since it read
-            // an unrelated channel's histogram range - image whenever the
-            // pipeline didn't start from channel 0).
-            let mut breakpoint_channel_idx: Option<i32> = None;
-            for pipe_id in order {
-                if stop_capture.is_some() {
-                    break;
-                }
-                if let Some(p) = self.pipelines.get(pipe_id) {
-                    let (bp_step, snapshot_mode) = self
-                        .breakpoint
-                        .as_ref()
-                        .filter(|b| b.pipeline_id == *pipe_id)
-                        .map(|b| (Some(b.pipeline_step_id), b.mode == BreakpointMode::Snapshot))
-                        .unwrap_or((None, false));
-                    let result = p.run(self.output_path.clone(), cache, bp_step, snapshot_mode)?;
-                    if result.breakpoint_hit {
-                        stop_capture = result.breakpoint_capture;
-                        if let ImageAddress::Channel(idx) = p.settings.start_image {
-                            breakpoint_channel_idx = Some(idx);
-                        }
-                    } else if let Some(capture) = result.breakpoint_capture {
-                        snapshot_capture = Some(capture);
-                        if let ImageAddress::Channel(idx) = p.settings.start_image {
-                            breakpoint_channel_idx = Some(idx);
-                        }
+                    if let Some(sender) = &progress {
+                        let idx = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                        sender
+                            .send(ProgressEvent::WholeImagePhaseCompleted {
+                                completed: idx,
+                                total_tiles,
+                            })
+                            .ok();
                     }
-                    cache = result.cache;
-                }
-            }
-
-            // Snapshot: send the captured buffers but continue to DB write.
-            if let Some(capture) = snapshot_capture {
-                if is_bp_target && let Some(sender) = &sender {
-                    sender
-                        .send(ProgressEvent::BreakpointReached {
-                            image: (*capture.image).clone(),
-                            segmentation: capture.segmentation.map(|s| (*s).clone()),
-                            instances: capture.instances.map(|i| (*i).clone()),
-                            tile_offset_x: tile.offset_x,
-                            tile_offset_y: tile.offset_y,
-                            tile_width: tile.width,
-                            tile_height: tile.height,
-                            nr_bits,
-                            channel_idx: breakpoint_channel_idx,
-                        })
-                        .ok();
-                }
-                // fall through — the full pipeline ran, write results normally.
-            }
-
-            // Stop: send the buffers and skip DB write.
-            if let Some(capture) = stop_capture {
-                if is_bp_target && let Some(sender) = &sender {
-                    sender
-                        .send(ProgressEvent::BreakpointReached {
-                            image: (*capture.image).clone(),
-                            segmentation: capture.segmentation.map(|s| (*s).clone()),
-                            instances: capture.instances.map(|i| (*i).clone()),
-                            tile_offset_x: tile.offset_x,
-                            tile_offset_y: tile.offset_y,
-                            tile_width: tile.width,
-                            tile_height: tile.height,
-                            nr_bits,
-                            channel_idx: breakpoint_channel_idx,
-                        })
-                        .ok();
-                }
-                return Ok(());
-            }
-
-            // Split out tile-edge-touching, merge-eligible objects into
-            // `pending` instead of letting them flow through the normal
-            // per-tile export below - they're matched against fragments from
-            // other tiles and (re-)exported once every tile of this image
-            // has finished, see `docs/tile_merge_plan.md`. A no-op whenever
-            // `pending` is `None` (`tile_merge.enabled == false`). Every
-            // class merges by default - `classes_to_not_merge` is an
-            // opt-out deny-list, not an opt-in allow-list, since a user
-            // turning this on has no reason to know about tiles at all and
-            // just expects their objects to be detected correctly.
-            if let Some(pending) = &pending {
-                let fragment_ids: Vec<_> = cache
-                    .object_cache
-                    .iter()
-                    .filter(|(_, object)| {
-                        !object.touches_edge
-                            && touches_tile_edge(object.bbox, &tile)
-                            && !object
-                                .object_class
-                                .iter()
-                                .any(|c| self.tile_merge.classes_to_not_merge.contains(c))
-                    })
-                    .map(|(id, _)| id.clone())
-                    .collect();
-                if !fragment_ids.is_empty() {
-                    let mut buffer = pending.lock().unwrap_or_else(|e| e.into_inner());
-                    for id in fragment_ids {
-                        if let Some(object) = cache.object_cache.remove(&id) {
-                            buffer.push(PendingFragment {
-                                object,
-                                tile: tile.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Only interactive runs consume per-tile objects (for the
-            // TileCompleted event below) - skip the clone/collect otherwise.
-            let tile_objects: Vec<ObjectMetricSettings> = if sender.is_some() {
-                cache
-                    .object_cache
-                    .values()
-                    .map(|r| r.to_object_settings())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-
-            match cache_tx.try_send(cache) {
-                Ok(()) => {}
-                Err(std::sync::mpsc::TrySendError::Full(cache)) => {
-                    warn!("DB writer backpressure: channel full, tile stalling");
-                    cache_tx
-                        .send(cache)
-                        .map_err(|e| InternalErrors::Io(format!("DB writer exited: {e}")))?;
-                }
-                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                    return Err(InternalErrors::Io(
-                        "DB writer thread exited unexpectedly".into(),
-                    ));
-                }
-            }
-
-            if let Some(sender) = &sender {
-                let tile_index = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                sender
-                    .send(ProgressEvent::TileCompleted {
-                        tile_index,
-                        total_tiles,
-                        objects: tile_objects,
-                    })
-                    .ok();
-            }
-
-            Ok(())
-        };
-
-        // Run both passes; collect the combined result before touching the
-        // channel so the writer always has a chance to drain cleanly.
-        let tile_result = first_pass
-            .into_par_iter()
-            .try_for_each(&run_tile)
-            .and_then(|()| second_pass.into_par_iter().try_for_each(&run_tile));
-
-        // Dropping cache_tx closes the channel so the writer thread's loop exits.
-        // The closure borrows &cache_tx by reference (it's Copy); NLL ends that
-        // borrow at the last try_for_each call above, so drop(cache_tx) is valid.
-        drop(cache_tx);
-        let writer_result = writer_handle.join().expect("DB writer thread panicked");
-
-        // -- ALL TILES FINISHED -- every tile of this image has been
-        // processed and its output handed to `exporter` by this point,
-        // regardless of which calling context (`progress` above) got us here.
-
-        // Match/merge every tile-edge fragment buffered above (a no-op when
-        // `pending` is `None`) and export the merged objects via a synthetic
-        // whole-image `PipelineCache` - see `docs/tile_merge_plan.md`. Must
-        // run before `finalize_image` below, which the exporter uses as the
-        // "this image is done" signal.
-        let merge_result: Result<(), InternalErrors> = match &pending {
-            Some(pending) => {
-                let fragments =
-                    std::mem::take(&mut *pending.lock().unwrap_or_else(|e| e.into_inner()));
-                if fragments.is_empty() {
                     Ok(())
-                } else {
-                    merge_pending_fragments(fragments, &self.tile_merge).and_then(|merged| {
-                        if merged.is_empty() {
-                            return Ok(());
-                        }
-                        let synthetic_cache = PipelineCache {
-                            image_cache: ImageCache {
-                                image_meta: PipelineImageMeta {
-                                    image_tile_info: ImageTile {
-                                        offset_x: 0,
-                                        offset_y: 0,
-                                        width: full_size.width,
-                                        height: full_size.height,
-                                    },
-                                    full_image_width: full_size,
-                                    is_rgb,
-                                    nr_of_bits: nr_bits,
-                                    pixel_sizes: pixel_sizes.clone(),
-                                },
-                                images: ImageMap::new(),
-                            },
-                            object_cache: merged.into_iter().map(|o| (o.id.clone(), o)).collect(),
-                            image_rel_path: image_rel_path.clone(),
-                        };
-                        exporter
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .export(&synthetic_cache)
-                    })
+                });
+
+                if let Err(e) = stack_merge_result {
+                    analyze_result = Err(e);
+                    break 'stacks;
                 }
             }
-            None => Ok(()),
-        };
+        }
 
         // Record the image was processed even if it produced zero objects -
-        // run regardless of tile/writer/merge errors so a partially-failed
-        // image still shows up rather than vanishing entirely. The error (if
-        // any) is passed through so it's recorded as failed rather than
-        // looking identical to a genuinely complete image.
-        let combined_error = tile_result
-            .as_ref()
-            .and(writer_result.as_ref())
-            .and(merge_result.as_ref())
-            .err()
-            .map(|e| e.to_string());
+        // run regardless of a partial failure so a partially-failed image
+        // still shows up rather than vanishing entirely. The error (if any)
+        // is passed through so it's recorded as failed rather than looking
+        // identical to a genuinely complete image.
+        let combined_error = analyze_result.as_ref().err().map(|e| e.to_string());
         let finalize_result = exporter
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -916,10 +977,7 @@ impl<'a> JobExecutor {
         let duration = start_image.elapsed();
         info!("Executed image pipeline in {:?}", duration);
 
-        tile_result
-            .and(writer_result)
-            .and(merge_result)
-            .and(finalize_result)
+        analyze_result.and(finalize_result)
     }
 
     /// Generates an iterator over image tiles for processing large images.
@@ -1066,6 +1124,29 @@ impl<'a> JobExecutor {
         (projection, handling, range)
     }
 
+    fn prepare_global_image_cache(
+        &self,
+        full_image_width: ImageSize,
+        is_rgb: bool,
+        image_rel_path: &PathBuf,
+        nr_of_bits: u16,
+        pixel_sizes: PixelSizes,
+        image_cache_bytes: u64,
+    ) -> Result<GlobalPipelineCache, InternalErrors> {
+        Ok(GlobalPipelineCache {
+            image_cache: ImageCache::with_capacity_bytes(image_cache_bytes)
+                .map_err(|e| InternalErrors::Io(format!("Failed to create image cache: {e}")))?,
+            image_meta: GlobalImageMeta {
+                full_image_width,
+                is_rgb,
+                nr_of_bits,
+                pixel_sizes,
+            },
+            object_cache: ObjectCache::default(),
+            image_rel_path: image_rel_path.into(),
+        })
+    }
+
     /// Prepares the pipeline cache
     ///
     /// Loads the selected image plane from the image and inits the
@@ -1073,6 +1154,7 @@ impl<'a> JobExecutor {
     /// This cache can now be used for processing the pipelines of the image
     fn prepare_pipeline_cache(
         &self,
+        mut global_cache: GlobalPipelineCache,
         image_reader: &ImageReader,
         image_entry: Arc<ImageEntry>,
         image_tile: &ImageTile,
@@ -1080,12 +1162,7 @@ impl<'a> JobExecutor {
         z_projection: &ZProjection,
         z_range: &Option<RangeInclusive<i32>>,
         resolution_index: i32,
-        full_image_width: ImageSize,
-        is_rgb: bool,
-        image_rel_path: &PathBuf,
-        nr_of_bits: u16,
-        pixel_sizes: PixelSizes,
-    ) -> Result<PipelineCache, InternalErrors> {
+    ) -> Result<GlobalPipelineCache, InternalErrors> {
         let loaded_channels = image_reader.read_image_tile_combined(
             image_entry.selected_series,
             resolution_index,
@@ -1105,32 +1182,27 @@ impl<'a> JobExecutor {
                 height: 0,
             });
 
-        // Collect Vec into HashMap automatically
-        let image_cache_map: ImageMap = loaded_channels
-            .into_iter()
-            .map(|img| (ImageAddress::Channel(img.c_stack), img.image))
-            .collect();
-
+        // Store image meta
         let image_meta = PipelineImageMeta {
             image_tile_info: ImageTile {
                 width: loaded_size.width,
                 height: loaded_size.height,
                 ..*image_tile // Copies offset_x and offset_y from image_tile
             },
-            full_image_width,
-            is_rgb,
-            nr_of_bits,
-            pixel_sizes,
+            full_image_width: global_cache.image_meta.full_image_width,
+            is_rgb: global_cache.image_meta.is_rgb,
+            nr_of_bits: global_cache.image_meta.nr_of_bits,
+            pixel_sizes: global_cache.image_meta.pixel_sizes.clone(),
         };
 
-        Ok(PipelineCache {
-            image_cache: ImageCache {
-                image_meta: image_meta,
-                images: image_cache_map,
-            },
-            object_cache: BTreeMap::new(),
-            image_rel_path: image_rel_path.clone(),
-        })
+        for img in loaded_channels {
+            global_cache.image_cache.insert(
+                CacheAddress::Channel((img.c_stack, image_meta.image_tile_info.clone())),
+                img.image,
+            );
+        }
+
+        Ok(global_cache)
     }
 
     /// Pure tile-count math, factored out of [`count_preview_visible_tiles`] so it
@@ -1182,7 +1254,8 @@ impl<'a> JobExecutor {
 
         fn visit(
             name: &PipelineId,
-            pipelines: &IndexMap<PipelineId, Pipeline>,
+            pre_pipelines: &IndexMap<PipelineId, Pipeline>,
+            post_pipelines: &IndexMap<PipelineId, Pipeline>,
             visited: &mut HashSet<PipelineId>,
             temp_visited: &mut HashSet<PipelineId>,
             order: &mut Vec<PipelineId>,
@@ -1192,9 +1265,16 @@ impl<'a> JobExecutor {
             }
             if !visited.contains(name) {
                 temp_visited.insert(name.clone());
-                if let Some(p) = pipelines.get(name) {
+                if let Some(p) = pre_pipelines.get(name).or_else(|| post_pipelines.get(name)) {
                     for dep in &p.dependencies {
-                        visit(dep, pipelines, visited, temp_visited, order);
+                        visit(
+                            dep,
+                            pre_pipelines,
+                            post_pipelines,
+                            visited,
+                            temp_visited,
+                            order,
+                        );
                     }
                 }
                 temp_visited.remove(name);
@@ -1203,16 +1283,54 @@ impl<'a> JobExecutor {
             }
         }
 
-        for name in self.pipelines.keys() {
+        // Both maps share one dependency graph - a post-process pipeline can
+        // depend on a pre-process one finishing first (and vice versa isn't
+        // ruled out by the type system either), so the order must be computed
+        // over their union, not just `pipelines_post_process` alone.
+        for name in self
+            .pipelines_pre_process
+            .keys()
+            .chain(self.pipelines_post_process.keys())
+        {
             visit(
                 name,
-                &self.pipelines,
+                &self.pipelines_pre_process,
+                &self.pipelines_post_process,
                 &mut visited,
                 &mut temp_visited,
                 &mut order,
             );
         }
+
+        // TileMerge must run before any other whole-image command
+        if let Some(pos) = order.iter().position(|id| *id == TILE_MERGE_PIPELINE_ID) {
+            let tile_merge_id = order.remove(pos);
+            order.insert(0, tile_merge_id);
+        }
+
         order
+    }
+
+    /// Number of `ProgressEvent::WholeImagePhaseCompleted` units one (t, z)
+    /// stack's whole-image phase will emit: one per pipeline in `order`
+    /// that's registered in `pipelines_post_process` and has at least one
+    /// command, plus one more for the final export - matching exactly what
+    /// `analyze_image`'s whole-image loop ticks off, so a progress bar
+    /// driven by these events reaches 100% exactly when that phase actually
+    /// finishes. `.max(1)`: even when every whole-image pipeline is empty,
+    /// the "object cache empty" early-exit path still emits its own single
+    /// unit.
+    fn count_whole_image_progress_units(&self, order: &[PipelineId]) -> usize {
+        order
+            .iter()
+            .filter(|&pipe_id| {
+                self.pipelines_post_process
+                    .get(pipe_id)
+                    .is_some_and(|p| !p.commands.is_empty())
+            })
+            .count()
+            .saturating_add(1)
+            .max(1)
     }
 
     /// Picks the tile size for a single-image preview run.
@@ -1237,41 +1355,46 @@ impl<'a> JobExecutor {
         }
     }
 
-    /// Estimates the peak RAM one parallel worker in this job can need, from
-    /// the images actually being analyzed - for [`recommended_parallelism`](crate::recommended_parallelism)
-    /// instead of a flat guess that either over-commits on a large/many-channel
-    /// image or needlessly caps a small one down to a single thread on a
-    /// low-RAM machine.
+    /// Estimates the peak per-worker RAM breakdown for this job, from the
+    /// images actually being analyzed - see [`RamBudget`](crate::resources::RamBudget)
+    /// for what each component covers, and [`RamBudget::total_bytes`] for
+    /// [`recommended_parallelism`](crate::recommended_parallelism)'s flat
+    /// input, which either over-commits on a large/many-channel image or
+    /// needlessly caps a small one down to a single thread on a low-RAM
+    /// machine if left as a flat guess instead.
     ///
-    /// Takes the worst case across every image in the job (the largest by
-    /// tile pixel count and channel count, not necessarily the same image for
-    /// both), since parallelism is decided once up front for the whole batch,
-    /// not per image. Each image's own dimensions/channel count come from
-    /// already-scanned metadata (`ImageEntry`/`SeriesSettings`) - this never
-    /// reopens a file, so it's cheap to call before starting a run.
-    pub fn estimate_ram_per_worker_bytes(&self) -> u64 {
+    /// Takes the worst case *total* across every image in the job (not
+    /// necessarily the image with the largest tile or the most channels
+    /// individually - see [`RamBudget::total_bytes`]), since parallelism
+    /// (and the resulting image-cache budget, see `run`) are decided once
+    /// up front for the whole batch, not per image. Each image's own
+    /// dimensions/channel count come from already-scanned metadata
+    /// (`ImageEntry`/`SeriesSettings`) - this never reopens a file, so it's
+    /// cheap to call before starting a run.
+    pub fn estimate_ram_budget(&self) -> crate::resources::RamBudget {
         self.images
             .values()
             .filter_map(|entry| entry.series.get(&entry.selected_series))
             .map(|series| {
                 let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
                 let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
-                crate::resources::estimate_ram_per_worker_bytes(
+                crate::resources::estimate_ram_budget(
                     tile_width,
                     tile_height,
                     series.channels.len(),
-                    CACHE_QUEUE_DEPTH,
                 )
             })
-            .max()
+            .max_by_key(|budget| budget.total_bytes())
             .unwrap_or_else(|| {
-                crate::resources::estimate_ram_per_worker_bytes(
-                    MAX_TILE_SIZE,
-                    MAX_TILE_SIZE,
-                    1,
-                    CACHE_QUEUE_DEPTH,
-                )
+                crate::resources::estimate_ram_budget(MAX_TILE_SIZE, MAX_TILE_SIZE, 1)
             })
+    }
+
+    /// Flat total of [`estimate_ram_budget`](Self::estimate_ram_budget) -
+    /// what [`recommended_parallelism`](crate::recommended_parallelism)
+    /// actually wants.
+    pub fn estimate_ram_per_worker_bytes(&self) -> u64 {
+        self.estimate_ram_budget().total_bytes()
     }
 }
 
@@ -1959,8 +2082,11 @@ mod z_stack_iterator_tests {
 #[cfg(test)]
 mod execution_order_tests {
     use super::*;
+    use crate::algos::{ExecutionScope, ImageAlgorithm};
     use crate::pipeline::pipeline::CorePipelineSettings;
+    use crate::pipeline::pipeline_context::PipelineContext;
     use crate::storage::memory::MemoryExporter;
+    use evanalyzer_cfg::core_types::CitationMetadata;
     use std::sync::{Arc, Mutex};
 
     fn make_job_executor() -> JobExecutor {
@@ -1993,9 +2119,9 @@ mod execution_order_tests {
     #[test]
     fn pipelines_without_dependencies_preserve_insertion_order() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[]));
-        job.add_pipeline(make_pipeline(2, &[]));
-        job.add_pipeline(make_pipeline(3, &[]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[]));
+        job.add_pre_process_pipeline(make_pipeline(3, &[]));
 
         let order = job.get_execution_order();
 
@@ -2005,8 +2131,8 @@ mod execution_order_tests {
     #[test]
     fn dependency_runs_before_dependent() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[2]));
-        job.add_pipeline(make_pipeline(2, &[]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[2]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[]));
 
         let order = job.get_execution_order();
 
@@ -2016,9 +2142,9 @@ mod execution_order_tests {
     #[test]
     fn transitive_dependency_chain_is_fully_ordered() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[2]));
-        job.add_pipeline(make_pipeline(2, &[3]));
-        job.add_pipeline(make_pipeline(3, &[]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[2]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[3]));
+        job.add_pre_process_pipeline(make_pipeline(3, &[]));
 
         let order = job.get_execution_order();
 
@@ -2028,10 +2154,10 @@ mod execution_order_tests {
     #[test]
     fn diamond_dependency_orders_shared_dependency_first() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[])); // A
-        job.add_pipeline(make_pipeline(2, &[1])); // B depends on A
-        job.add_pipeline(make_pipeline(3, &[1])); // C depends on A
-        job.add_pipeline(make_pipeline(4, &[2, 3])); // D depends on B, C
+        job.add_pre_process_pipeline(make_pipeline(1, &[])); // A
+        job.add_pre_process_pipeline(make_pipeline(2, &[1])); // B depends on A
+        job.add_pre_process_pipeline(make_pipeline(3, &[1])); // C depends on A
+        job.add_pre_process_pipeline(make_pipeline(4, &[2, 3])); // D depends on B, C
 
         let order = job.get_execution_order();
         let pos = |id: u32| order.iter().position(|x| *x == PipelineId(id)).unwrap();
@@ -2045,7 +2171,7 @@ mod execution_order_tests {
     #[test]
     fn dependency_on_unregistered_pipeline_is_still_included_in_order() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[99]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[99]));
 
         let order = job.get_execution_order();
 
@@ -2063,8 +2189,8 @@ mod execution_order_tests {
     #[should_panic(expected = "Circular dependency detected!")]
     fn direct_circular_dependency_panics() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[2]));
-        job.add_pipeline(make_pipeline(2, &[1]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[2]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[1]));
 
         job.get_execution_order();
     }
@@ -2073,7 +2199,7 @@ mod execution_order_tests {
     #[should_panic(expected = "Circular dependency detected!")]
     fn self_dependency_panics() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[1]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[1]));
 
         job.get_execution_order();
     }
@@ -2082,11 +2208,82 @@ mod execution_order_tests {
     #[should_panic(expected = "Circular dependency detected!")]
     fn transitive_circular_dependency_panics() {
         let mut job = make_job_executor();
-        job.add_pipeline(make_pipeline(1, &[2]));
-        job.add_pipeline(make_pipeline(2, &[3]));
-        job.add_pipeline(make_pipeline(3, &[1]));
+        job.add_pre_process_pipeline(make_pipeline(1, &[2]));
+        job.add_pre_process_pipeline(make_pipeline(2, &[3]));
+        job.add_pre_process_pipeline(make_pipeline(3, &[1]));
 
         job.get_execution_order();
+    }
+
+    // ---- count_whole_image_progress_units ----
+
+    struct NoopCommand;
+    impl ImageAlgorithm for NoopCommand {
+        fn execute(
+            &self,
+            _ctx: &mut PipelineContext,
+            _cache: &mut GlobalPipelineCache,
+        ) -> Result<(), InternalErrors> {
+            Ok(())
+        }
+        fn name(&self) -> &'static str {
+            "Noop"
+        }
+        fn cite(&self) -> Option<&'static CitationMetadata> {
+            None
+        }
+        fn execution_scope(&self) -> ExecutionScope {
+            ExecutionScope::WholeImage
+        }
+    }
+
+    /// Like `make_pipeline`, but with one real command, so
+    /// `commands.is_empty()` is `false` - what actually distinguishes a
+    /// whole-image pipeline that contributes a progress unit from one that
+    /// doesn't.
+    fn make_pipeline_with_command(id: u32) -> Pipeline {
+        let mut p = make_pipeline(id, &[]);
+        p.add_command(Box::new(NoopCommand));
+        p
+    }
+
+    #[test]
+    fn no_post_process_pipelines_still_reserves_one_unit_for_the_empty_object_cache_exit() {
+        let job = make_job_executor();
+        assert_eq!(job.count_whole_image_progress_units(&[]), 1);
+    }
+
+    #[test]
+    fn empty_post_process_pipelines_in_order_do_not_add_units() {
+        let mut job = make_job_executor();
+        job.add_post_process_pipeline(make_pipeline(1, &[])); // no commands
+
+        let order = vec![PipelineId(1)];
+        assert_eq!(job.count_whole_image_progress_units(&order), 1);
+    }
+
+    #[test]
+    fn one_unit_per_non_empty_post_process_pipeline_plus_one_for_export() {
+        let mut job = make_job_executor();
+        job.add_post_process_pipeline(make_pipeline_with_command(1));
+        job.add_post_process_pipeline(make_pipeline_with_command(2));
+
+        let order = vec![PipelineId(1), PipelineId(2)];
+        assert_eq!(job.count_whole_image_progress_units(&order), 3);
+    }
+
+    #[test]
+    fn a_pipeline_id_in_order_but_not_registered_is_not_counted() {
+        let mut job = make_job_executor();
+        job.add_post_process_pipeline(make_pipeline_with_command(1));
+
+        // `order` can name a pipeline id that was never registered as a
+        // post-process pipeline (e.g. a pre-process-only id, or a stale
+        // dependency) - `count_whole_image_progress_units` must skip it,
+        // same as the real whole-image loop's own `let Some(p) = ... else
+        // { continue }`.
+        let order = vec![PipelineId(1), PipelineId(99)];
+        assert_eq!(job.count_whole_image_progress_units(&order), 2);
     }
 }
 
@@ -2162,7 +2359,7 @@ mod full_run_integration_tests {
             Arc::new(Mutex::new(MemoryExporter { out_objects })),
             None,
         );
-        job.add_pipeline(threshold_connected_components_extract_pipeline());
+        job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
     }
 
@@ -2188,9 +2385,23 @@ mod full_run_integration_tests {
                 .any(|e| matches!(e, ProgressEvent::ImageFailed { .. })),
             "no image should have failed"
         );
+        let exported = out_objects.lock().unwrap();
         assert!(
-            !out_objects.lock().unwrap().is_empty(),
+            !exported.is_empty(),
             "thresholding the whole 8-bit range should extract at least one object"
+        );
+        // Regression guard: each tile's objects used to be exported
+        // immediately *and* re-exported again via the whole-image cache
+        // after the whole-image phase - every object doubled, and anything
+        // `TileMerge` actually merged left its stale pre-merge fragments
+        // behind too. There must be exactly one exported row per id now.
+        let unique_ids: std::collections::HashSet<_> =
+            exported.iter().map(|o| o.id.clone()).collect();
+        assert_eq!(
+            unique_ids.len(),
+            exported.len(),
+            "every exported object id must appear exactly once, not be duplicated \
+             across the per-tile and whole-image export paths"
         );
     }
 
@@ -2222,7 +2433,7 @@ mod full_run_integration_tests {
             Arc::new(Mutex::new(MemoryExporter { out_objects })),
             None,
         );
-        job.add_pipeline(threshold_connected_components_extract_pipeline());
+        job.add_pre_process_pipeline(threshold_connected_components_extract_pipeline());
         job
     }
 
@@ -2450,13 +2661,18 @@ mod full_run_integration_tests {
 mod tile_merge_end_to_end_tests {
     use super::*;
     use crate::ImagePlane;
+    use crate::Object;
+    use crate::algos::TileMerge;
+    use crate::algos::Voronoi;
+    use crate::algos::touches_tile_edge;
     use crate::algos::{
-        ConnectedComponents, ExtractObjects, Threshold, ThresholdEntry, ThresholdMethod,
-        ThresholdValueSource,
+        ConnectedComponents, Connectivity, ExtractObjects, Threshold, ThresholdEntry,
+        ThresholdMethod, ThresholdValueSource,
     };
     use crate::image::{ImageContainer, ManagedImage};
+    use crate::pipeline::image_cache::ImageCache;
     use crate::pipeline::pipeline::CorePipelineSettings;
-    use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass};
+    use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass, SizeUnits};
     use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
     use kornia_tensor::CpuAllocator;
@@ -2496,7 +2712,7 @@ mod tile_merge_end_to_end_tests {
         tile_offset_x: usize,
         full_width: usize,
         full_height: usize,
-    ) -> PipelineCache {
+    ) -> GlobalPipelineCache {
         let image = Image::<f32, 1, CpuAllocator>::new(
             ImageSize {
                 width: tile_width,
@@ -2514,48 +2730,59 @@ mod tile_merge_end_to_end_tests {
             },
             plane: Some(ImagePlane { z: 0, c: 0, t: 0 }),
         }));
-        let mut images: ImageMap = ImageMap::new();
-        images.insert(ImageAddress::Channel(0), container);
-        PipelineCache {
-            image_cache: ImageCache {
-                image_meta: PipelineImageMeta {
-                    image_tile_info: ImageTile {
-                        offset_x: tile_offset_x,
-                        offset_y: 0,
-                        width: tile_width,
-                        height: tile_height,
-                    },
-                    full_image_width: ImageSize {
-                        width: full_width,
-                        height: full_height,
-                    },
-                    is_rgb: false,
-                    nr_of_bits: 8,
-                    pixel_sizes: PixelSizes::default(),
+        let mut images: ImageCache = ImageCache::new().unwrap();
+        images.insert(
+            CacheAddress::Channel((
+                0,
+                ImageTile {
+                    offset_x: tile_offset_x,
+                    offset_y: 0,
+                    width: tile_width,
+                    height: tile_height,
                 },
-                images,
-            },
-            object_cache: BTreeMap::new(),
+            )),
+            container,
+        );
+        GlobalPipelineCache {
+            image_cache: images,
+
+            object_cache: Default::default(),
             image_rel_path: PathBuf::new(),
+            image_meta: GlobalImageMeta {
+                full_image_width: ImageSize {
+                    width: full_width,
+                    height: full_height,
+                },
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: PixelSizes::default(),
+            },
         }
     }
 
-    fn run_pipeline(cache: PipelineCache) -> PipelineCache {
+    /// `tile` must match the `ImageTile` key `gray_tile_cache` stored the
+    /// channel image under - `run_commands`'s `None` fallback assumes the
+    /// tile covers the *whole* image (`cache.image_meta.full_image_width`),
+    /// which is only true for the untiled reference run, not for a real
+    /// sub-tile like `tile_a`/`tile_b` below.
+    fn run_pipeline(cache: GlobalPipelineCache, tile: ImageTile) -> GlobalPipelineCache {
         threshold_connected_components_extract_pipeline()
-            .run(PathBuf::new(), cache, None, false)
+            .run_commands(PathBuf::new(), Some(tile), cache, None, false)
             .expect("pipeline must run successfully")
             .cache
     }
 
     /// Splits every tile-edge-touching, merge-eligible object out of `cache`
-    /// into `PendingFragment`s - the same filter `analyze_image`'s tile loop
-    /// applies before `cache_tx.try_send`. Every class merges unless it's on
-    /// `classes_to_not_merge`.
+    /// - the same filter `analyze_image`'s tile loop applies before
+    /// `cache_tx.try_send`. Every class merges unless it's on
+    /// `classes_to_not_merge`. Each `Object` already carries its own
+    /// `source_tile` (set by `ExtractObjects`), so unlike the old
+    /// `PendingFragment` wrapper this just returns plain objects.
     fn split_fragments(
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
         tile: &ImageTile,
         classes_to_not_merge: &[ObjectClass],
-    ) -> Vec<PendingFragment> {
+    ) -> Vec<Object> {
         let ids: Vec<_> = cache
             .object_cache
             .iter()
@@ -2570,15 +2797,7 @@ mod tile_merge_end_to_end_tests {
             .map(|(id, _)| id.clone())
             .collect();
         ids.into_iter()
-            .filter_map(|id| {
-                cache
-                    .object_cache
-                    .remove(&id)
-                    .map(|object| PendingFragment {
-                        object,
-                        tile: tile.clone(),
-                    })
-            })
+            .filter_map(|id| cache.object_cache.remove(&id))
             .collect()
     }
 
@@ -2599,7 +2818,15 @@ mod tile_merge_end_to_end_tests {
     #[test]
     fn tiled_merge_reproduces_the_untiled_reference_object() {
         // Reference: single tile covering the whole image.
-        let reference_cache = run_pipeline(gray_tile_cache(whole_image_data(), 6, 3, 0, 6, 3));
+        let reference_cache = run_pipeline(
+            gray_tile_cache(whole_image_data(), 6, 3, 0, 6, 3),
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: 6,
+                height: 3,
+            },
+        );
         let reference_objects: Vec<_> = reference_cache.object_cache.values().collect();
         assert_eq!(
             reference_objects.len(),
@@ -2633,8 +2860,8 @@ mod tile_merge_end_to_end_tests {
             width: 3,
             height: 3,
         };
-        let mut cache_a = run_pipeline(gray_tile_cache(tile_a_data, 3, 3, 0, 6, 3));
-        let mut cache_b = run_pipeline(gray_tile_cache(tile_b_data, 3, 3, 3, 6, 3));
+        let mut cache_a = run_pipeline(gray_tile_cache(tile_a_data, 3, 3, 0, 6, 3), tile_a);
+        let mut cache_b = run_pipeline(gray_tile_cache(tile_b_data, 3, 3, 3, 6, 3), tile_b);
 
         assert_eq!(
             cache_a.object_cache.len(),
@@ -2677,15 +2904,27 @@ mod tile_merge_end_to_end_tests {
             "buffered fragments must be removed from their tile's own export"
         );
 
-        let settings = TileMergeSettings {
-            enabled: true,
-            classes_to_not_merge: Vec::new(),
-            connectivity:
-                evanalyzer_cfg::settings::project_settings::TileMergeConnectivity::EightConnected,
-            max_fragments_per_group: 100,
+        let mut whole_image_cache = GlobalPipelineCache {
+            object_cache: pending.into_iter().map(|o| (o.id.clone(), o)).collect(),
+            ..Default::default()
         };
-        let merged = merge_pending_fragments(pending, &settings).unwrap();
+        let mut tile_merge_pipeline = Pipeline::new(
+            PipelineId(0),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        tile_merge_pipeline.add_command(Box::new(TileMerge {
+            classes_to_not_merge: Vec::new(),
+            connectivity: Connectivity::EightConnected,
+            max_fragments_per_group: 100,
+        }));
+        whole_image_cache = tile_merge_pipeline
+            .run_commands(PathBuf::new(), None, whole_image_cache, None, false)
+            .unwrap()
+            .cache;
 
+        let merged: Vec<_> = whole_image_cache.object_cache.values().collect();
         assert_eq!(
             merged.len(),
             1,
@@ -2705,6 +2944,200 @@ mod tile_merge_end_to_end_tests {
             "merged intensity sum must match the untiled reference exactly"
         );
     }
+
+    /// Runs the real whole-image chain `TileMerge -> Voronoi` (in that
+    /// order, matching `get_execution_order`'s system-inserted placement of
+    /// `TileMerge` first) against `cache`.
+    fn run_tile_merge_and_voronoi(
+        cache: GlobalPipelineCache,
+        voronoi: Voronoi,
+    ) -> GlobalPipelineCache {
+        let mut whole_image_pipeline = Pipeline::new(
+            PipelineId(0),
+            CorePipelineSettings {
+                start_image: ImageAddress::Scratchpad,
+            },
+        );
+        whole_image_pipeline.add_command(Box::new(TileMerge {
+            classes_to_not_merge: Vec::new(),
+            connectivity: Connectivity::EightConnected,
+            max_fragments_per_group: 100,
+        }));
+        whole_image_pipeline.add_command(Box::new(voronoi));
+        whole_image_pipeline
+            .run_commands(PathBuf::new(), None, cache, None, false)
+            .unwrap()
+            .cache
+    }
+
+    const CENTER_CLASS: ObjectClass = ObjectClass::Valid(1);
+    const VORONOI_CLASS: ObjectClass = ObjectClass::Valid(2);
+
+    fn default_voronoi() -> Voronoi {
+        Voronoi {
+            centers: CENTER_CLASS,
+            center_filter_classes: Vec::new(),
+            mask: ObjectClass::Unset,
+            mask_filter_classes: Vec::new(),
+            output_class: VORONOI_CLASS,
+            unit: SizeUnits::Pixels,
+            max_radius: 0.0,
+            exclude_areas_at_the_edges: false,
+            exclude_areas_with_no_center: false,
+        }
+    }
+
+    /// 12x6 image with two objects: a 4px blob at row y=1 that a tile split
+    /// at x=6 cuts into two 2px fragments (like `whole_image_data` above,
+    /// just wider so there's room for a second, untouched object), and a
+    /// separate 2px blob at row y=4 entirely inside the first tile - a
+    /// second Voronoi seed the tessellation has to correctly divide space
+    /// with once the first object is properly reconstructed.
+    fn two_object_image_data() -> Vec<f32> {
+        // Centers land at (5.5, 1) and (1.5, 4) - chosen so their
+        // perpendicular bisector never crosses an exact integer pixel
+        // coordinate, which would otherwise make a pixel's nearest-center
+        // assignment an exact tie. `CenterKdTree`'s tie-break is "lowest
+        // index in the `centers` Vec wins", and that index depends on
+        // `cache.object_cache`'s (an `IndexMap`) iteration order - which
+        // differs between the untiled reference (objects inserted directly)
+        // and the tiled run (fragments buffered, merged, then folded back
+        // in), even though both produce geometrically identical objects. An
+        // exact tie is therefore genuinely ambiguous, not a correctness bug
+        // in either `TileMerge` or `Voronoi` - avoiding one entirely keeps
+        // this test about the actual claim under test.
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        data
+    }
+
+    /// End-to-end proof of the paper-facing claim that Voronoi tessellation
+    /// is computed *correctly* for whole-slide (tiled) images, not merely
+    /// that it runs once whole-image-scoped: drives the real
+    /// `Threshold -> ConnectedComponents -> ExtractObjects` per-tile
+    /// extraction, `TileMerge`, and `Voronoi` exactly as `job_executor`
+    /// would for a real analysis run, and checks the resulting regions
+    /// against an untiled reference of the same full chain - not just that
+    /// the merged *object* matches (already proven by
+    /// `tiled_merge_reproduces_the_untiled_reference_object`), but that a
+    /// downstream whole-image algorithm consuming it produces identical
+    /// output too.
+    #[test]
+    fn tiled_pipeline_produces_the_same_voronoi_tessellation_as_the_untiled_reference() {
+        // Reference: single tile covering the whole image.
+        let reference_objects_cache = run_pipeline(
+            gray_tile_cache(two_object_image_data(), 12, 6, 0, 12, 6),
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: 12,
+                height: 6,
+            },
+        );
+        assert_eq!(
+            reference_objects_cache.object_cache.len(),
+            2,
+            "the untiled reference must find exactly two objects"
+        );
+        let reference_cache =
+            run_tile_merge_and_voronoi(reference_objects_cache, default_voronoi());
+        let mut reference_regions: Vec<_> = reference_cache
+            .object_cache
+            .values()
+            .filter(|o| o.has_object_class(&VORONOI_CLASS))
+            .map(|o| (o.bbox, o.area))
+            .collect();
+        reference_regions.sort();
+        assert_eq!(
+            reference_regions.len(),
+            2,
+            "the untiled reference must tessellate into exactly two Voronoi regions"
+        );
+
+        // Tiled: split into two 6-wide tiles at x=6, process each
+        // independently (exactly like two rayon workers would), then merge.
+        let full = two_object_image_data();
+        let mut tile_a_data = Vec::with_capacity(36);
+        let mut tile_b_data = Vec::with_capacity(36);
+        for y in 0..6 {
+            let row = &full[y * 12..(y + 1) * 12];
+            tile_a_data.extend_from_slice(&row[0..6]);
+            tile_b_data.extend_from_slice(&row[6..12]);
+        }
+        let tile_a = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 6,
+            height: 6,
+        };
+        let tile_b = ImageTile {
+            offset_x: 6,
+            offset_y: 0,
+            width: 6,
+            height: 6,
+        };
+        let mut cache_a = run_pipeline(gray_tile_cache(tile_a_data, 6, 6, 0, 12, 6), tile_a);
+        let mut cache_b = run_pipeline(gray_tile_cache(tile_b_data, 6, 6, 6, 12, 6), tile_b);
+        assert_eq!(
+            cache_a.object_cache.len() + cache_b.object_cache.len(),
+            3,
+            "tile A must find the untouched blob plus a tile-edge fragment, tile B just the fragment"
+        );
+
+        let classes_to_not_merge: [ObjectClass; 0] = [];
+        let mut pending = split_fragments(&mut cache_a, &tile_a, &classes_to_not_merge);
+        pending.extend(split_fragments(
+            &mut cache_b,
+            &tile_b,
+            &classes_to_not_merge,
+        ));
+        assert_eq!(
+            pending.len(),
+            2,
+            "both tile-edge fragments must have been buffered"
+        );
+
+        let mut whole_image_cache = GlobalPipelineCache {
+            object_cache: pending.into_iter().map(|o| (o.id.clone(), o)).collect(),
+            image_meta: GlobalImageMeta {
+                full_image_width: ImageSize {
+                    width: 12,
+                    height: 6,
+                },
+                is_rgb: false,
+                nr_of_bits: 8,
+                pixel_sizes: PixelSizes::default(),
+            },
+            ..Default::default()
+        };
+        // The untouched blob (interior to tile A, never buffered) merges
+        // back in exactly as `analyze_image`'s own `merge_caches` closure
+        // folds each tile's leftover cache into the shared whole-image one.
+        whole_image_cache.object_cache.extend(cache_a.object_cache);
+        whole_image_cache.object_cache.extend(cache_b.object_cache);
+        assert_eq!(whole_image_cache.object_cache.len(), 3);
+
+        let tiled_cache = run_tile_merge_and_voronoi(whole_image_cache, default_voronoi());
+        let mut tiled_regions: Vec<_> = tiled_cache
+            .object_cache
+            .values()
+            .filter(|o| o.has_object_class(&VORONOI_CLASS))
+            .map(|o| (o.bbox, o.area))
+            .collect();
+        tiled_regions.sort();
+
+        assert_eq!(
+            tiled_regions, reference_regions,
+            "the tiled pipeline's Voronoi tessellation must exactly match the untiled reference"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2712,6 +3145,7 @@ mod estimate_ram_per_worker_bytes_tests {
     use super::*;
     use crate::storage::memory::MemoryExporter;
     use evanalyzer_cfg::settings::images_settings::{ChannelSettings, SeriesSettings};
+    use std::collections::BTreeMap;
 
     fn image_entry(width: u64, height: u64, channel_count: usize) -> ImageEntry {
         let channels = (0..channel_count as i32)
@@ -2755,8 +3189,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("large.tif"), image_entry(2048, 2048, 4));
         let job = job_with(images);
 
-        let expected =
-            crate::resources::estimate_ram_per_worker_bytes(2048, 2048, 4, CACHE_QUEUE_DEPTH);
+        let expected = crate::resources::estimate_ram_budget(2048, 2048, 4).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
@@ -2770,8 +3203,7 @@ mod estimate_ram_per_worker_bytes_tests {
         images.insert(PathBuf::from("huge.tif"), image_entry(20_000, 20_000, 2));
         let job = job_with(images);
 
-        let expected =
-            crate::resources::estimate_ram_per_worker_bytes(4096, 4096, 2, CACHE_QUEUE_DEPTH);
+        let expected = crate::resources::estimate_ram_budget(4096, 4096, 2).total_bytes();
         assert_eq!(job.estimate_ram_per_worker_bytes(), expected);
     }
 
