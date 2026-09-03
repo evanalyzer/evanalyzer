@@ -134,7 +134,13 @@ impl CenterKdTree {
         }
 
         let axis = depth % 2;
-        let coord = |i: usize| if axis == 0 { centers[i].1 } else { centers[i].2 };
+        let coord = |i: usize| {
+            if axis == 0 {
+                centers[i].1
+            } else {
+                centers[i].2
+            }
+        };
         let mid = indices.len() / 2;
         indices.select_nth_unstable_by(mid, |&a, &b| coord(a).partial_cmp(&coord(b)).unwrap());
         let idx = indices[mid];
@@ -1151,7 +1157,12 @@ mod tests {
     /// what `TileMerge` needs to recognize a tile-edge fragment, unlike
     /// `make_filled_object` above (which leaves `source_tile` defaulted and
     /// is only ever used untiled in this file's other tests).
-    fn tile_fragment(id: u128, bbox: [u32; 4], class: ObjectClass, source_tile: ImageTile) -> Object {
+    fn tile_fragment(
+        id: u128,
+        bbox: [u32; 4],
+        class: ObjectClass,
+        source_tile: ImageTile,
+    ) -> Object {
         let [x0, y0, x1, y1] = bbox;
         let w = (x1 - x0 + 1) as usize;
         let h = (y1 - y0 + 1) as usize;

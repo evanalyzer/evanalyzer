@@ -461,6 +461,18 @@ mod tests {
     }
 
     #[test]
+    fn metadata_is_reported_correctly() {
+        let algo = ImageMath {
+            operand: Operand::Add,
+            second_image_address: ImageAddress::Scratchpad,
+            swap_operands: false,
+        };
+        assert_eq!(algo.name(), "Image Math");
+        assert!(algo.cite().is_none());
+        assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
+    }
+
+    #[test]
     fn test_commutative_ops_unaffected() {
         // For Add, swapping 0.1 and 0.4 should always result in 0.5
         let res1 = run_math_test(Operand::Add, 0.1, 0.4, false);

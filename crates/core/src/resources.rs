@@ -81,7 +81,11 @@ impl RamBudget {
 /// never holds more than one tile's worth of pixels per buffer regardless of
 /// how large the source image is. Heuristic guardrail against over-committing
 /// on low-RAM machines, not a measured per-pipeline bound.
-pub fn estimate_ram_budget(tile_width: usize, tile_height: usize, channel_count: usize) -> RamBudget {
+pub fn estimate_ram_budget(
+    tile_width: usize,
+    tile_height: usize,
+    channel_count: usize,
+) -> RamBudget {
     let tile_pixels = tile_width as u64 * tile_height as u64;
     let plane_bytes = tile_pixels * BYTES_PER_PIXEL;
 
@@ -367,10 +371,7 @@ mod tests {
         // machine's RAM could give a meaningful share to) must still fall
         // back to the minimum, not starve the cache to near-zero.
         let min = 64_000_000;
-        assert_eq!(
-            recommended_image_cache_bytes(1_000_000, 10_000, min),
-            min
-        );
+        assert_eq!(recommended_image_cache_bytes(1_000_000, 10_000, min), min);
     }
 
     #[test]

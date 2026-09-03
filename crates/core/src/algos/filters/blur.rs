@@ -140,8 +140,15 @@ impl Blur {
         let mut out = vec![0.0f32; w * h * C];
         Self::box_blur_pass_transposed::<C>(&transposed, &mut out, h, w, radius);
 
-        Image::<f32, C, CpuAllocator>::new(ImageSize { width: w, height: h }, out, CpuAllocator)
-            .map_err(InternalErrors::from_kornia)
+        Image::<f32, C, CpuAllocator>::new(
+            ImageSize {
+                width: w,
+                height: h,
+            },
+            out,
+            CpuAllocator,
+        )
+        .map_err(InternalErrors::from_kornia)
     }
 
     /// One box-blur pass along `src`'s row axis (length `width`, `height`

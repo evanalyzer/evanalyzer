@@ -121,10 +121,7 @@ impl ImageAlgorithm for ExtractObjects {
         let channel_slices: Vec<(bool, &[f32])> = channel_views
             .iter()
             .map(|(_, is_rgb, container)| {
-                (
-                    *is_rgb,
-                    channel_pixel_slice(container).unwrap_or_default(),
-                )
+                (*is_rgb, channel_pixel_slice(container).unwrap_or_default())
             })
             .collect();
         let n_obj = max_id + 1;

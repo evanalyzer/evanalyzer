@@ -1,7 +1,15 @@
 use crate::{
-    ImageInfo, ZProjection, algos::Connectivity, image::{ImageReader, ImageTile, PixelSizes, ReadMode}, pipeline::{
-        image_cache::ImageCache, object_cache::ObjectCache, pipeline::{ Pipeline, PipelineImageMeta}, pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
-    }, resources::MAX_TILE_SIZE, storage::PipelineResultExporter,
+    ImageInfo, ZProjection,
+    algos::Connectivity,
+    image::{ImageReader, ImageTile, PixelSizes, ReadMode},
+    pipeline::{
+        image_cache::ImageCache,
+        object_cache::ObjectCache,
+        pipeline::{Pipeline, PipelineImageMeta},
+        pipeline_cache::{CacheAddress, GlobalImageMeta, GlobalPipelineCache},
+    },
+    resources::MAX_TILE_SIZE,
+    storage::PipelineResultExporter,
 };
 use evanalyzer_cfg::{
     core_types::{ImageAddress, InternalErrors, PipelineId},
@@ -178,7 +186,6 @@ pub struct JobExecutor {
     // after the preprocessing has been finished
     pub pipelines_pre_process: IndexMap<PipelineId, Pipeline>,
     pub pipelines_post_process: IndexMap<PipelineId, Pipeline>,
-
 
     pub image_base_path: PathBuf,
     pub images: IndexMap<PathBuf, ImageEntry>,
@@ -644,8 +651,9 @@ impl<'a> JobExecutor {
         let whole_image_units_per_stack = self.count_whole_image_progress_units(order);
 
         // Recalculate so progress events reflect only the tiles actually being processed.
-        let total_tiles = (visible_tiles.len() + hidden_tiles.len()) * z_stacks.len() * t_stacks.len()
-            + whole_image_units_per_stack * z_stacks.len() * t_stacks.len();
+        let total_tiles =
+            (visible_tiles.len() + hidden_tiles.len()) * z_stacks.len() * t_stacks.len()
+                + whole_image_units_per_stack * z_stacks.len() * t_stacks.len();
         let completed = Arc::new(AtomicUsize::new(0));
         if let Some(progress) = &progress {
             progress
@@ -852,7 +860,6 @@ impl<'a> JobExecutor {
                     .map(|&tile| run_tile(tile, progress.clone()))
                     .try_reduce(|| global_cache.clone(), merge_caches)
                     .and_then(|acc| {
-    
                         if hidden_tiles.is_empty() {
                             return Ok(acc);
                         }
@@ -880,8 +887,6 @@ impl<'a> JobExecutor {
                         }
                         return Ok(());
                     }
-
-    
 
                     // Run every pipeline's whole-image-scoped commands. `order`
                     // (from `get_execution_order`) already guarantees TileMerge
@@ -1129,7 +1134,6 @@ impl<'a> JobExecutor {
         image_cache_bytes: u64,
     ) -> Result<GlobalPipelineCache, InternalErrors> {
         Ok(GlobalPipelineCache {
-
             image_cache: ImageCache::with_capacity_bytes(image_cache_bytes)
                 .map_err(|e| InternalErrors::Io(format!("Failed to create image cache: {e}")))?,
             image_meta: GlobalImageMeta {
@@ -1263,7 +1267,14 @@ impl<'a> JobExecutor {
                 temp_visited.insert(name.clone());
                 if let Some(p) = pre_pipelines.get(name).or_else(|| post_pipelines.get(name)) {
                     for dep in &p.dependencies {
-                        visit(dep, pre_pipelines, post_pipelines, visited, temp_visited, order);
+                        visit(
+                            dep,
+                            pre_pipelines,
+                            post_pipelines,
+                            visited,
+                            temp_visited,
+                            order,
+                        );
                     }
                 }
                 temp_visited.remove(name);
@@ -1367,7 +1378,11 @@ impl<'a> JobExecutor {
             .map(|series| {
                 let tile_width = (series.image_width as usize).min(MAX_TILE_SIZE);
                 let tile_height = (series.image_height as usize).min(MAX_TILE_SIZE);
-                crate::resources::estimate_ram_budget(tile_width, tile_height, series.channels.len())
+                crate::resources::estimate_ram_budget(
+                    tile_width,
+                    tile_height,
+                    series.channels.len(),
+                )
             })
             .max_by_key(|budget| budget.total_bytes())
             .unwrap_or_else(|| {
@@ -2648,15 +2663,15 @@ mod tile_merge_end_to_end_tests {
     use crate::ImagePlane;
     use crate::Object;
     use crate::algos::TileMerge;
-use crate::algos::touches_tile_edge;
     use crate::algos::Voronoi;
+    use crate::algos::touches_tile_edge;
     use crate::algos::{
         ConnectedComponents, Connectivity, ExtractObjects, Threshold, ThresholdEntry,
         ThresholdMethod, ThresholdValueSource,
     };
     use crate::image::{ImageContainer, ManagedImage};
     use crate::pipeline::image_cache::ImageCache;
-use crate::pipeline::pipeline::CorePipelineSettings;
+    use crate::pipeline::pipeline::CorePipelineSettings;
     use evanalyzer_cfg::core_types::{ObjectClass, PixelUnits, SegmentationClass, SizeUnits};
     use kornia_apriltag::utils::Point2d;
     use kornia_image::Image;
@@ -2905,7 +2920,7 @@ use crate::pipeline::pipeline::CorePipelineSettings;
             max_fragments_per_group: 100,
         }));
         whole_image_cache = tile_merge_pipeline
-            .run_commands(PathBuf::new(),None, whole_image_cache, None, false)
+            .run_commands(PathBuf::new(), None, whole_image_cache, None, false)
             .unwrap()
             .cache;
 
@@ -2933,7 +2948,10 @@ use crate::pipeline::pipeline::CorePipelineSettings;
     /// Runs the real whole-image chain `TileMerge -> Voronoi` (in that
     /// order, matching `get_execution_order`'s system-inserted placement of
     /// `TileMerge` first) against `cache`.
-    fn run_tile_merge_and_voronoi(cache: GlobalPipelineCache, voronoi: Voronoi) -> GlobalPipelineCache {
+    fn run_tile_merge_and_voronoi(
+        cache: GlobalPipelineCache,
+        voronoi: Voronoi,
+    ) -> GlobalPipelineCache {
         let mut whole_image_pipeline = Pipeline::new(
             PipelineId(0),
             CorePipelineSettings {
@@ -3028,7 +3046,8 @@ use crate::pipeline::pipeline::CorePipelineSettings;
             2,
             "the untiled reference must find exactly two objects"
         );
-        let reference_cache = run_tile_merge_and_voronoi(reference_objects_cache, default_voronoi());
+        let reference_cache =
+            run_tile_merge_and_voronoi(reference_objects_cache, default_voronoi());
         let mut reference_regions: Vec<_> = reference_cache
             .object_cache
             .values()
@@ -3079,7 +3098,11 @@ use crate::pipeline::pipeline::CorePipelineSettings;
             &tile_b,
             &classes_to_not_merge,
         ));
-        assert_eq!(pending.len(), 2, "both tile-edge fragments must have been buffered");
+        assert_eq!(
+            pending.len(),
+            2,
+            "both tile-edge fragments must have been buffered"
+        );
 
         let mut whole_image_cache = GlobalPipelineCache {
             object_cache: pending.into_iter().map(|o| (o.id.clone(), o)).collect(),

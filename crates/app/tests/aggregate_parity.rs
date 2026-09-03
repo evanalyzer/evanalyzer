@@ -13,7 +13,7 @@ use evanalyzer_app::result::{
 };
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
 use evanalyzer_core::{
-    DuckDbExporter, Intensity, Object, ObjectInit, GlobalPipelineCache, PipelineResultExporter,
+    DuckDbExporter, GlobalPipelineCache, Intensity, Object, ObjectInit, PipelineResultExporter,
 };
 use indexmap::IndexMap;
 use std::path::PathBuf;

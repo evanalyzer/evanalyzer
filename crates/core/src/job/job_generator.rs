@@ -7,10 +7,7 @@ use crate::{
     storage::PipelineResultExporter,
 };
 use chrono::Utc;
-use evanalyzer_cfg::{
-    PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION,
-    core_types::ImageAddress,
-};
+use evanalyzer_cfg::{PROJECT_FILE_EXTENSIONS, RESULTS_FILE_EXTENSION, core_types::ImageAddress};
 use evanalyzer_cfg::{
     core_types::InternalErrors,
     settings::{object_settings::ObjectMetricSettings, project_settings::ProjectSettings},

@@ -75,13 +75,15 @@ impl TileObjectStore {
     }
 
     /// Reads back one tile's objects and the tile they came from.
-    pub(crate) fn read_tile(&self, tile_index: usize) -> Result<(ImageTile, Vec<Object>), InternalErrors> {
+    pub(crate) fn read_tile(
+        &self,
+        tile_index: usize,
+    ) -> Result<(ImageTile, Vec<Object>), InternalErrors> {
         let bytes = std::fs::read(self.path_for(tile_index)).map_err(|e| {
             InternalErrors::Io(format!("Failed to read tile-object scratch file: {e}"))
         })?;
-        let record: TileObjectRecord = bincode::deserialize(&bytes).map_err(|e| {
-            InternalErrors::Io(format!("Failed to deserialize tile objects: {e}"))
-        })?;
+        let record: TileObjectRecord = bincode::deserialize(&bytes)
+            .map_err(|e| InternalErrors::Io(format!("Failed to deserialize tile objects: {e}")))?;
         Ok((record.tile, record.objects))
     }
 }
@@ -168,5 +170,21 @@ mod tests {
     fn reading_a_tile_that_was_never_written_fails_instead_of_panicking() {
         let store = TileObjectStore::new().expect("scratch dir must be creatable");
         assert!(store.read_tile(0).is_err());
+    }
+
+    #[test]
+    fn reading_a_corrupted_scratch_file_returns_an_error_instead_of_panicking() {
+        let store = TileObjectStore::new().expect("scratch dir must be creatable");
+        // Bypass `write_tile` entirely so the file exists but isn't valid
+        // bincode - a real-world stand-in for a truncated/corrupted write
+        // (e.g. a crash mid-write), not just a missing file.
+        std::fs::write(store.path_for(0), b"not valid bincode").unwrap();
+
+        let result = store.read_tile(0);
+
+        match result {
+            Err(InternalErrors::Io(msg)) => assert!(msg.contains("deserialize")),
+            _ => panic!("Expected an Io error for corrupted scratch data, got {result:?}"),
+        }
     }
 }

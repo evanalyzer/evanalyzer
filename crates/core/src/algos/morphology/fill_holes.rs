@@ -8,7 +8,10 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
-use crate::{algos::{ExecutionScope, ImageAlgorithm}, pipeline::pipeline_context::PipelineContext};
+use crate::{
+    algos::{ExecutionScope, ImageAlgorithm},
+    pipeline::pipeline_context::PipelineContext,
+};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use macros::CommandsMeta;
 

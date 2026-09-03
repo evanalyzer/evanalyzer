@@ -176,5 +176,7 @@ mod tests {
         let extractor = EdgeDetectionSobel { kernel_size: 3 };
         let name = extractor.name();
         assert_eq!(name, "Edge Detection Sobel");
+        assert!(extractor.cite().is_none());
+        assert!(matches!(extractor.execution_scope(), ExecutionScope::Tile));
     }
 }

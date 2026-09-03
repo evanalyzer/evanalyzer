@@ -9,7 +9,10 @@
 
 use crate::image::ImageContainer;
 use crate::pipeline::pipeline_context::PipelineContext;
-use crate::{algos::{ExecutionScope, ImageAlgorithm}, pipeline::pipeline_cache::GlobalPipelineCache};
+use crate::{
+    algos::{ExecutionScope, ImageAlgorithm},
+    pipeline::pipeline_cache::GlobalPipelineCache,
+};
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;

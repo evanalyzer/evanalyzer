@@ -375,8 +375,7 @@ impl ImageAlgorithm for Colocalization {
                                 // and never sampled pixel data, and this object never passes
                                 // through `ExtractObjects` (the step that normally measures
                                 // intensities), so it needs its own measurement pass here.
-                                intersection.intensities =
-                                    intersection.measure_intensities(cache);
+                                intersection.intensities = intersection.measure_intensities(cache);
                                 new_objects.push(intersection);
                             }
                         }
@@ -1830,7 +1829,12 @@ mod tests {
     /// what `TileMerge` needs to recognize a tile-edge fragment, unlike
     /// `make_filled_object` above (which leaves `source_tile` defaulted and
     /// is only ever used untiled in this file's other tests).
-    fn tile_fragment(id: u128, bbox: [u32; 4], class: ObjectClass, source_tile: ImageTile) -> Object {
+    fn tile_fragment(
+        id: u128,
+        bbox: [u32; 4],
+        class: ObjectClass,
+        source_tile: ImageTile,
+    ) -> Object {
         let [x0, y0, x1, y1] = bbox;
         let w = (x1 - x0 + 1) as usize;
         let h = (y1 - y0 + 1) as usize;
@@ -1856,7 +1860,8 @@ mod tests {
     /// colocalization is correct for whole-slide (tiled) images, not merely
     /// that `Colocalization` is `WholeImage`-scoped.
     #[test]
-    fn tile_merged_object_colocalizes_correctly_even_though_neither_fragment_alone_clears_the_threshold() {
+    fn tile_merged_object_colocalizes_correctly_even_though_neither_fragment_alone_clears_the_threshold()
+     {
         use crate::algos::{Connectivity, TileMerge};
 
         let tile_a = ImageTile {
@@ -1937,13 +1942,18 @@ mod tests {
 
         let merged = cache.object_cache.get(&merged_a).unwrap();
         assert!(
-            merged.colocalized_with.get(&CLASS_B).is_some_and(|ids| ids.contains(&ObjectId(ID_B))),
+            merged
+                .colocalized_with
+                .get(&CLASS_B)
+                .is_some_and(|ids| ids.contains(&ObjectId(ID_B))),
             "the reconstructed object's full 8px overlap must clear min_coloc_area even \
              though neither fragment did alone"
         );
         let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
         assert!(
-            b.colocalized_with.get(&CLASS_A).is_some_and(|ids| ids.contains(&merged_a)),
+            b.colocalized_with
+                .get(&CLASS_A)
+                .is_some_and(|ids| ids.contains(&merged_a)),
             "CLASS_B's own record must point back at the merged object, not a stale fragment id"
         );
     }

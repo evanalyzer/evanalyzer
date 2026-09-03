@@ -298,4 +298,43 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn execute_returns_format_mismatch_when_ctx_image_is_not_f32_gray() {
+        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+            ImageSize {
+                width: 4,
+                height: 4,
+            },
+            0,
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        let algo = WeightedDeviation {
+            kernel_size: 3,
+            sigma: 1.0,
+        };
+
+        let result = algo.execute(&mut ctx, &mut cache);
+
+        match result {
+            Err(InternalErrors::FormatMismatch { expected, .. }) => {
+                assert_eq!(expected, "F32Gray for both input and scratch pad");
+            }
+            _ => panic!("Expected FormatMismatch, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn metadata_is_reported_correctly() {
+        let algo = WeightedDeviation {
+            kernel_size: 3,
+            sigma: 1.0,
+        };
+        assert_eq!(algo.name(), "Weighted Deviation");
+        assert!(algo.cite().is_none());
+        assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
+    }
 }

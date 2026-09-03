@@ -353,4 +353,115 @@ mod tests {
             "expected an error for a zero-width image, got Ok"
         );
     }
+
+    /// Same vertical-edge layout as `test_structure_tensor_edge_detection`
+    /// (left half 0.0, right half 1.0) - reused by the `EigenvaluesX`/
+    /// `EigenvaluesY` tests below, which need a fresh context per run since
+    /// `execute` consumes/swaps it.
+    fn vertical_edge_ctx() -> PipelineContext {
+        let size = ImageSize {
+            width: 10,
+            height: 10,
+        };
+        let mut data = vec![0.0f32; 100];
+        for y in 0..10 {
+            for x in 5..10 {
+                data[y * 10 + x] = 1.0;
+            }
+        }
+        let input_img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap();
+        PipelineContext::new_from_image_test(input_img).unwrap()
+    }
+
+    #[test]
+    fn eigenvalues_x_reports_the_larger_eigenvalue_which_is_high_at_a_straight_edge() {
+        let mut ctx = vertical_edge_ctx();
+        let mut cache = GlobalPipelineCache::default();
+        let algo = StructureTensor {
+            kernel_size: 3,
+            sigma: 1.0,
+            mode: TensorMode::EigenvaluesX,
+        };
+
+        algo.execute(&mut ctx, &mut cache).unwrap();
+
+        if let ImageContainer::F32Gray(result) = ctx.image.as_ref() {
+            let res_slice = result.as_slice();
+            let edge_value = res_slice[5 * 10 + 5];
+            let flat_value = res_slice[5 * 10 + 1];
+            assert!(
+                edge_value > flat_value,
+                "the larger eigenvalue must be higher at the edge ({edge_value}) than in a flat region ({flat_value})"
+            );
+        } else {
+            panic!("Output image was not Grayscale");
+        }
+    }
+
+    #[test]
+    fn eigenvalues_y_never_exceeds_eigenvalues_x_at_the_same_pixel() {
+        // l1 (EigenvaluesX) = trace/2 + sqrt(discriminant)/2, l2
+        // (EigenvaluesY) = trace/2 - sqrt(discriminant)/2 - l1 >= l2 always,
+        // by construction, for every pixel, not just at this particular edge.
+        let mut ctx_x = vertical_edge_ctx();
+        let mut cache = GlobalPipelineCache::default();
+        StructureTensor {
+            kernel_size: 3,
+            sigma: 1.0,
+            mode: TensorMode::EigenvaluesX,
+        }
+        .execute(&mut ctx_x, &mut cache)
+        .unwrap();
+        let ImageContainer::F32Gray(l1_result) = ctx_x.image.as_ref() else {
+            panic!("Output image was not Grayscale");
+        };
+        let l1 = l1_result.as_slice()[5 * 10 + 5];
+
+        let mut ctx_y = vertical_edge_ctx();
+        StructureTensor {
+            kernel_size: 3,
+            sigma: 1.0,
+            mode: TensorMode::EigenvaluesY,
+        }
+        .execute(&mut ctx_y, &mut cache)
+        .unwrap();
+        let ImageContainer::F32Gray(l2_result) = ctx_y.image.as_ref() else {
+            panic!("Output image was not Grayscale");
+        };
+        let l2 = l2_result.as_slice()[5 * 10 + 5];
+
+        assert!(
+            l2 <= l1 + 1e-5,
+            "the secondary eigenvalue ({l2}) must never exceed the primary one ({l1})"
+        );
+    }
+
+    #[test]
+    fn execute_returns_format_mismatch_for_an_unsupported_image_type() {
+        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+            ImageSize {
+                width: 5,
+                height: 5,
+            },
+            0,
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        let algo = StructureTensor {
+            kernel_size: 3,
+            sigma: 1.0,
+            mode: TensorMode::Coherence,
+        };
+
+        let result = algo.execute(&mut ctx, &mut cache);
+
+        match result {
+            Err(InternalErrors::FormatMismatch { expected, .. }) => {
+                assert_eq!(expected, "F32Gray for both input and scratch pad");
+            }
+            _ => panic!("Expected FormatMismatch, got {:?}", result),
+        }
+    }
 }

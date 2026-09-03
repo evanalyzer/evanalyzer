@@ -183,12 +183,108 @@ impl IntensityTransformation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::pipeline_context::PipelineContext;
     use kornia_image::{Image, ImageSize};
 
     // Helper to create a dummy context
     fn setup_test_image(width: usize, height: usize, val: f32) -> Image<f32, 1, CpuAllocator> {
         let size = ImageSize { width, height };
         Image::<f32, 1, CpuAllocator>::from_size_val(size, val, CpuAllocator).unwrap()
+    }
+
+    // --- execute() (the real Arc::make_mut/ctx.swap() path) ---
+
+    #[test]
+    fn execute_applies_the_manual_transform_through_the_real_scratch_pad_swap_path() {
+        let img = setup_test_image(2, 2, 0.5); // 0.5 * 1.2 + 0.1 = 0.7
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        let algo = IntensityTransformation {
+            mode: IntensityTransformMode::Manual,
+            contrast: 1.2,
+            brightness: 0.1,
+        };
+
+        algo.execute(&mut ctx, &mut cache).unwrap();
+
+        if let ImageContainer::F32Gray(result) = ctx.image.as_ref() {
+            for &pixel in result.as_slice() {
+                assert!((pixel - 0.7).abs() < 1e-6);
+            }
+        } else {
+            panic!("Expected F32Gray in ctx.image after swap");
+        }
+    }
+
+    #[test]
+    fn execute_applies_the_manual_transform_to_rgb_through_the_real_scratch_pad_swap_path() {
+        let img = Image::<f32, 3, CpuAllocator>::from_size_val(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            0.5,
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        let algo = IntensityTransformation {
+            mode: IntensityTransformMode::Manual,
+            contrast: 2.0,
+            brightness: 0.0, // 0.5 * 2.0 = 1.0
+        };
+
+        algo.execute(&mut ctx, &mut cache).unwrap();
+
+        if let ImageContainer::F32Rgb(result) = ctx.image.as_ref() {
+            for &pixel in result.as_slice() {
+                assert_eq!(pixel, 1.0);
+            }
+        } else {
+            panic!("Expected F32Rgb in ctx.image after swap");
+        }
+    }
+
+    #[test]
+    fn execute_returns_format_mismatch_for_an_unsupported_image_type() {
+        let img = Image::<u32, 1, CpuAllocator>::from_size_val(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            0,
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        let algo = IntensityTransformation {
+            mode: IntensityTransformMode::Manual,
+            contrast: 1.0,
+            brightness: 0.0,
+        };
+
+        let result = algo.execute(&mut ctx, &mut cache);
+
+        match result {
+            Err(InternalErrors::FormatMismatch { expected, .. }) => {
+                assert_eq!(expected, "F32Gray or F32Rgb");
+            }
+            _ => panic!("Expected FormatMismatch, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn metadata_is_reported_correctly() {
+        let algo = IntensityTransformation {
+            mode: IntensityTransformMode::Manual,
+            contrast: 1.0,
+            brightness: 0.0,
+        };
+        assert_eq!(algo.name(), "Intensity Transformation");
+        assert!(algo.cite().is_none());
+        assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 
     #[test]

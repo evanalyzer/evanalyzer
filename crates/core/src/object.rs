@@ -886,7 +886,9 @@ impl Object {
                     let sample = tile_y * tile.width + tile_x;
                     let val = sample_channel_pixel(*is_rgb, slice, sample);
 
-                    let entry = acc.get_mut(channel_id).expect("seeded from by_channel above");
+                    let entry = acc
+                        .get_mut(channel_id)
+                        .expect("seeded from by_channel above");
                     entry.0 += val as f64;
                     entry.1 = entry.1.min(val);
                     entry.2 = entry.2.max(val);

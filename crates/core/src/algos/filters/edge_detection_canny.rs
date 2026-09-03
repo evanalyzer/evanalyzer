@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ExecutionScope, ImageAlgorithm, GlobalPipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_imgproc::filter::gaussian_blur;

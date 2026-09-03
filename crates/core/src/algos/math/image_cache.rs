@@ -217,6 +217,91 @@ mod tests {
     }
 
     #[test]
+    fn scratchpad_address_stores_and_loads_by_the_scratchpad_key()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Only `ImageAddress::Memory` was exercised above - `Scratchpad` and
+        // `Channel` (below) map to their own distinct `CacheAddress`
+        // variants entirely untested until now.
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let test_image =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![1.0f32, 2.0, 3.0, 4.0], CpuAllocator)?;
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size)?;
+        ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(test_image));
+        let mut cache = GlobalPipelineCache::default();
+
+        ImageCache {
+            address: ImageAddress::Scratchpad,
+            mode: ImageCacheMode::Store,
+        }
+        .execute(&mut ctx, &mut cache)?;
+        assert!(cache.image_cache.contains_key(&CacheAddress::Scratchpad));
+
+        ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(Image::new(
+            size,
+            vec![0.0f32; 4],
+            CpuAllocator,
+        )?));
+        ImageCache {
+            address: ImageAddress::Scratchpad,
+            mode: ImageCacheMode::Load,
+        }
+        .execute(&mut ctx, &mut cache)?;
+
+        if let ImageContainer::F32Gray(result_img) = ctx.image.as_ref() {
+            assert_eq!(result_img.as_slice()[0], 1.0);
+        } else {
+            panic!("Loaded image is not F32Gray");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn channel_address_stores_and_loads_keyed_by_channel_and_tile()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let size = ImageSize {
+            width: 2,
+            height: 2,
+        };
+        let test_image =
+            Image::<f32, 1, CpuAllocator>::new(size, vec![1.0f32, 2.0, 3.0, 4.0], CpuAllocator)?;
+        let mut ctx = PipelineContext::new_test::<F32Gray>(size)?;
+        ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(test_image));
+        let mut cache = GlobalPipelineCache::default();
+        let address = ImageAddress::Channel(3);
+
+        ImageCache {
+            address: address.clone(),
+            mode: ImageCacheMode::Store,
+        }
+        .execute(&mut ctx, &mut cache)?;
+        assert!(cache.image_cache.contains_key(&CacheAddress::Channel((
+            3,
+            ctx.image_meta.image_tile_info.clone()
+        ))));
+
+        ctx.image = Arc::new(ImageContainer::new_f32_gray_from_image_test(Image::new(
+            size,
+            vec![0.0f32; 4],
+            CpuAllocator,
+        )?));
+        ImageCache {
+            address,
+            mode: ImageCacheMode::Load,
+        }
+        .execute(&mut ctx, &mut cache)?;
+
+        if let ImageContainer::F32Gray(result_img) = ctx.image.as_ref() {
+            assert_eq!(result_img.as_slice()[0], 1.0);
+        } else {
+            panic!("Loaded image is not F32Gray");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_load_non_existent_address_fails() {
         let size = ImageSize {
             width: 1,
@@ -247,5 +332,7 @@ mod tests {
             address: ImageAddress::Memory(MemoryId::PipelineContext(1)),
         };
         assert_eq!(algo.name(), "Image Cache");
+        assert!(algo.cite().is_none());
+        assert!(matches!(algo.execution_scope(), ExecutionScope::Tile));
     }
 }

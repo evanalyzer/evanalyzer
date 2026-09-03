@@ -370,6 +370,60 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_wrong_sized_scratch_pad_is_transparently_resized() {
+        // Scratch pad left over from an earlier step at the wrong size (and
+        // wrong type) - `execute` must resize/retype it rather than reusing
+        // it as-is or erroring, since a stale scratch pad is a normal
+        // in-pipeline occurrence, not a caller mistake.
+        let img = Image::<f32, 3, CpuAllocator>::from_size_val(
+            ImageSize {
+                width: 3,
+                height: 2,
+            },
+            0.0,
+            CpuAllocator,
+        )
+        .unwrap();
+        let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
+        ctx.scratch_pad = std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
+            data: Image::<f32, 1, CpuAllocator>::from_size_val(
+                ImageSize {
+                    width: 1,
+                    height: 1,
+                },
+                0.0,
+                CpuAllocator,
+            )
+            .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }));
+        let mut cache = GlobalPipelineCache::default();
+        let filter = ColorFilterCommand {
+            range: HsvRange {
+                min_h: 0.0,
+                max_h: 360.0,
+                min_s: 0.0,
+                max_s: 1.0,
+                min_v: 0.0,
+                max_v: 1.0,
+            },
+        };
+
+        filter
+            .execute(&mut ctx, &mut cache)
+            .expect("execute should resize the stale scratch pad, not error");
+
+        match ctx.image.as_ref() {
+            ImageContainer::F32Gray(out_img) => {
+                assert_eq!(out_img.width(), 3);
+                assert_eq!(out_img.height(), 2);
+            }
+            _ => panic!("Output should be F32Gray, correctly sized to the 3x2 input"),
+        }
+    }
+
+    #[test]
     fn test_color_filter_format_mismatch_error() {
         // 1. Create a 1x1 Grayscale image (Unsupported input type for Color Filter)
         let img = Image::<f32, 1, CpuAllocator>::from_size_val(
@@ -450,5 +504,7 @@ mod tests {
         };
         let name = extractor.name();
         assert_eq!(name, "HsvColorFilter");
+        assert!(extractor.cite().is_none());
+        assert!(matches!(extractor.execution_scope(), ExecutionScope::Tile));
     }
 }

@@ -240,6 +240,34 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn execute_errors_when_ctx_has_no_output_path() {
+        let img = Image::<f32, 1, _>::from_size_val(
+            ImageSize {
+                width: 2,
+                height: 2,
+            },
+            0.0,
+            CpuAllocator,
+        )
+        .unwrap();
+        // `new_from_image_test` leaves `output_path: None` - never set here,
+        // unlike every other test in this module.
+        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
+        let mut cache = GlobalPipelineCache::default();
+        let saver = SaveImage {
+            name: "unused".into(),
+            source: ImageSource::Image,
+        };
+
+        let result = saver.execute(&mut ctx, &mut cache);
+
+        match result {
+            Err(InternalErrors::Io(msg)) => assert!(msg.contains("No output path")),
+            _ => panic!("Expected an Io error for a missing output path, got {result:?}"),
+        }
+    }
+
+    #[test]
     fn test_save_command_execution() {
         // 1. Create a dummy 2x2 grayscale image (4 pixels)
         let image_data = vec![0.0f32, 0.5, 0.5, 1.0];
@@ -425,37 +453,29 @@ mod tests {
     }
 
     #[test]
-    fn test_save_image_buffer_mismatch_internal_error() {
-        // Create a 2x2 image (expecting 4 pixels)
+    fn image_construction_rejects_a_length_mismatched_buffer() {
+        // `SaveImage::execute`'s "Buffer size mismatch" branch
+        // (`ImageBuffer::from_raw(...).ok_or_else(...)`) can never actually
+        // fire in practice: its `size`/pixel-data pair always both come
+        // from the same already-constructed `ctx.image`, and kornia's own
+        // `Image` constructors (`new`/`from_size_slice`) already reject a
+        // length-mismatched buffer before `execute` ever sees it - this
+        // pins down *that* guarantee directly, rather than the previous
+        // version of this test, which tried to reach `SaveImage`'s branch
+        // through a mismatched `Image` and silently no-opped every time it
+        // ran, since construction always failed first.
         let size = ImageSize {
             width: 2,
             height: 2,
         };
-        // Provide only 1 pixel (length 1) instead of 4.
-        // from_raw will return None because 1 != 2*2
-        let data = vec![0.0f32; 1];
+        let data = vec![0.0f32; 1]; // 1 pixel, not the 4 a 2x2 image needs
 
-        let Ok(img) = Image::<f32, 1, _>::from_size_slice(size, &data, CpuAllocator) else {
-            return;
-        };
-        let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = GlobalPipelineCache::default();
+        let result = Image::<f32, 1, _>::from_size_slice(size, &data, CpuAllocator);
 
-        let saver = SaveImage {
-            name: "fail".into(),
-            source: ImageSource::Image,
-        };
-        let result = saver.execute(&mut ctx, &mut cache);
-
-        // Verify it hits the 'None' branch and returns Internal Error
-        assert!(result.is_err());
-        match result {
-            Err(InternalErrors::Internal(msg)) => assert!(msg.contains("Buffer size mismatch")),
-            _ => panic!(
-                "Expected Internal buffer size mismatch error, got {:?}",
-                result
-            ),
-        }
+        assert!(
+            result.is_err(),
+            "a length-mismatched buffer must be rejected at construction, before SaveImage ever runs"
+        );
     }
 
     #[test]
@@ -543,5 +563,7 @@ mod tests {
             source: ImageSource::Image,
         };
         assert_eq!(saver.name(), "Save Image");
+        assert!(saver.cite().is_none());
+        assert!(matches!(saver.execution_scope(), ExecutionScope::Tile));
     }
 }
