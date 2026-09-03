@@ -16,7 +16,7 @@
 //! transformed shape either replaces the input object in place or is added as a new, separate object.
 //!
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     image::PixelSizes,
     object::{Object, ObjectInit, TransformedGeometry},
 };
@@ -110,7 +110,7 @@ pub enum TransformFunction {
 /// If `output_class` is unset (or equal to `input_class`) the input object is replaced in place;
 /// otherwise a new object carrying `output_class` is created alongside the untouched input object.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify")]
+#[cmdsmeta(category = "object")]
 pub struct TransformObjects {
     /// Geometric transform applied to each input object
     #[cmdsmeta(summary = true)]
@@ -131,7 +131,7 @@ impl ImageAlgorithm for TransformObjects {
     fn execute(
         &self,
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
-        cache: &mut crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         if self.input_class == ObjectClass::Unset {
             return Ok(());
@@ -185,7 +185,7 @@ impl ImageAlgorithm for TransformObjects {
                 sum_xy: geometry.sum_xy,
                 ..Default::default()
             });
-            let intensities = transformed.measure_intensities(ctx, cache);
+            let intensities = transformed.measure_intensities(cache);
 
             if replace_in_place {
                 if let Some(object) = cache.object_cache.get_mut(&id) {
@@ -213,6 +213,10 @@ impl ImageAlgorithm for TransformObjects {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
     }
 }
 
@@ -290,9 +294,10 @@ fn bbox_max_dimension(object: &Object) -> f32 {
 mod tests {
     use super::*;
     use crate::{
-        ImageContainer, ImagePlane, ManagedImage,
+        ImageContainer, ImagePlane, ImageTile, ManagedImage,
         pipeline::{
-            pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
+            pipeline::PipelineImageMeta,
+            pipeline_cache::{GlobalImageMeta, GlobalPipelineCache},
             pipeline_context::PipelineContext,
         },
     };
@@ -356,7 +361,7 @@ mod tests {
         object
     }
 
-    fn run(cmd: &TransformObjects, cache: &mut PipelineCache, image_size: ImageSize) {
+    fn run(cmd: &TransformObjects, cache: &mut GlobalPipelineCache, image_size: ImageSize) {
         cmd.execute(&mut make_ctx(image_size), cache).unwrap();
     }
 
@@ -364,7 +369,7 @@ mod tests {
     /// `cache`, so intensity measurement has something real to sample.
     fn make_ctx_with_channel(
         size: ImageSize,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
         value: f32,
     ) -> PipelineContext {
         let ctx = make_ctx(size);
@@ -374,13 +379,7 @@ mod tests {
             CpuAllocator,
         )
         .unwrap();
-        cache.image_cache.image_meta = PipelineImageMeta {
-            image_tile_info: crate::ImageTile {
-                offset_x: 0,
-                offset_y: 0,
-                width: size.width,
-                height: size.height,
-            },
+        cache.image_meta = GlobalImageMeta {
             full_image_width: size,
             is_rgb: false,
             nr_of_bits: 8,
@@ -390,13 +389,19 @@ mod tests {
                 px_size_z: 1.0,
             },
         };
-        cache.image_cache.add_to_channel_cache(
+        cache.add_to_channel_cache(
             std::sync::Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
             })),
             0,
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
         );
         ctx
     }
@@ -408,7 +413,7 @@ mod tests {
             input_class: ObjectClass::Unset,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_square_object(ID_A, 10, 10, 4, CLASS_IN);
         let original_bbox = object.bbox;
         cache.object_cache.insert(object.id.clone(), object);
@@ -435,7 +440,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // 4x4 square centered at (12, 12) -> scaled by 2 should roughly double to ~8x8.
         let object = make_square_object(ID_A, 10, 10, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
@@ -476,7 +481,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: CLASS_OUT,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_square_object(ID_A, 10, 10, 4, CLASS_IN);
         let original_bbox = object.bbox;
         cache.object_cache.insert(object.id.clone(), object);
@@ -515,7 +520,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_square_object(ID_A, 20, 20, 6, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
@@ -545,7 +550,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_square_object(ID_A, 20, 20, 6, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
@@ -577,7 +582,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_square_object(ID_A, 20, 20, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
@@ -607,7 +612,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_square_object(ID_A, 20, 20, 8, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
@@ -636,7 +641,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // Small image: scaling by 5 will push the shape past the image bounds.
         let object = make_square_object(ID_A, 4, 4, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
@@ -668,7 +673,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // 4x4 square at (20,20) -> bbox [20,20,23,23].
         let object = make_square_object(ID_A, 20, 20, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
@@ -704,7 +709,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // 8x8 square at (20,20) -> bbox [20,20,27,27].
         let object = make_square_object(ID_A, 20, 20, 8, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
@@ -737,7 +742,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: ObjectClass::Unset,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_square_object(ID_A, 20, 20, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 
@@ -767,7 +772,7 @@ mod tests {
             input_class: CLASS_IN,
             output_class: CLASS_OUT,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_square_object(ID_A, 10, 10, 4, CLASS_IN);
         cache.object_cache.insert(object.id.clone(), object);
 

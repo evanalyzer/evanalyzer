@@ -2751,14 +2751,17 @@ name = "evanalyzer_core"
 version = "0.1.0"
 dependencies = [
  "approx",
+ "bincode 1.3.3",
  "bioformats",
  "bitvec",
  "burn",
  "chrono",
+ "clru",
  "csv",
  "duckdb",
  "env_logger",
  "evanalyzer_cfg",
+ "fast-uuid-v7",
  "image 0.25.10",
  "indexmap",
  "kornia-apriltag",

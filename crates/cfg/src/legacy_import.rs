@@ -963,7 +963,7 @@ fn convert_classifier(
                 )],
                 input_classes: vec![],
                 match_handling:
-                    ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch,
+                    ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch,
                 output_class,
                 overlapping_with: ObjectClass::Unset,
                 min_intersection_area: 0.0,
@@ -1013,25 +1013,23 @@ fn convert_object_transform(
     );
 
     let function = match s.function.as_str() {
-        "Scale" => {
-            ClassificationTransformObjectsTransformFunctionSettings::Scale { factor: s.factor }
-        }
-        "SnapArea" => ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
+        "Scale" => ObjectTransformObjectsTransformFunctionSettings::Scale { factor: s.factor },
+        "SnapArea" => ObjectTransformObjectsTransformFunctionSettings::SnapArea {
             extra_size: s.factor,
             unit: SizeUnits::Pixels,
         },
         // Old's `factor` for circle functions is documented as a *radius*; the
         // new fields take a *diameter*.
-        "CircleMin" => ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
+        "CircleMin" => ObjectTransformObjectsTransformFunctionSettings::MinCircle {
             min_diameter: s.factor * 2.0,
             unit: SizeUnits::Pixels,
         },
-        "Circle" => ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
+        "Circle" => ObjectTransformObjectsTransformFunctionSettings::DrawCircle {
             diameter: s.factor * 2.0,
             unit: SizeUnits::Pixels,
         },
         "FitEllipse" => {
-            ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 1.0 }
+            ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 1.0 }
         }
         other => {
             warnings.push(format!(
@@ -2261,7 +2259,7 @@ mod tests {
         match only_command(&outcome) {
             PipelineCommand::TransformObjects(s) => assert_eq!(
                 s.function,
-                ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
+                ObjectTransformObjectsTransformFunctionSettings::SnapArea {
                     extra_size: 3.0,
                     unit: SizeUnits::Pixels,
                 }
@@ -2276,7 +2274,7 @@ mod tests {
         match only_command(&outcome) {
             PipelineCommand::TransformObjects(s) => assert_eq!(
                 s.function,
-                ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
+                ObjectTransformObjectsTransformFunctionSettings::MinCircle {
                     min_diameter: 6.0,
                     unit: SizeUnits::Pixels,
                 }
@@ -2291,7 +2289,7 @@ mod tests {
         match only_command(&outcome) {
             PipelineCommand::TransformObjects(s) => assert_eq!(
                 s.function,
-                ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
+                ObjectTransformObjectsTransformFunctionSettings::DrawCircle {
                     diameter: 6.0,
                     unit: SizeUnits::Pixels,
                 }
@@ -2309,9 +2307,7 @@ mod tests {
         match only_command(&outcome) {
             PipelineCommand::TransformObjects(s) => assert_eq!(
                 s.function,
-                ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse {
-                    scale: 1.0
-                }
+                ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 1.0 }
             ),
             other => panic!("expected TransformObjects, got {other:?}"),
         }

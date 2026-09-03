@@ -33,7 +33,7 @@ fn ball_type_paraboloid_setting_converts_to_balltype_paraboloid() {
 #[test]
 fn classify_match_handling_first_variant_converts() {
     let result: ClassifyMatchHandling =
-        ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch.into();
+        ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch.into();
     assert!(matches!(
         result,
         ClassifyMatchHandling::AddOutputClassIfMatch
@@ -43,7 +43,7 @@ fn classify_match_handling_first_variant_converts() {
 #[test]
 fn classify_match_handling_middle_variant_converts() {
     let result: ClassifyMatchHandling =
-        ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch.into();
+        ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch.into();
     assert!(matches!(
         result,
         ClassifyMatchHandling::RemoveAllClassesIfMatch
@@ -53,7 +53,7 @@ fn classify_match_handling_middle_variant_converts() {
 #[test]
 fn classify_match_handling_last_variant_converts() {
     let result: ClassifyMatchHandling =
-        ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch.into();
+        ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch.into();
     assert!(matches!(
         result,
         ClassifyMatchHandling::ReclassifyIfNotMatch
@@ -205,26 +205,25 @@ fn rank_filter_type_outliers_setting_converts_and_preserves_value() {
 
 #[test]
 fn object_set_operation_and_setting_converts() {
-    let result: ObjectSetOperation = ClassificationObjectMathObjectSetOperationSettings::And.into();
+    let result: ObjectSetOperation = ObjectObjectMathObjectSetOperationSettings::And.into();
     assert!(matches!(result, ObjectSetOperation::And));
 }
 
 #[test]
 fn object_set_operation_or_setting_converts() {
-    let result: ObjectSetOperation = ClassificationObjectMathObjectSetOperationSettings::Or.into();
+    let result: ObjectSetOperation = ObjectObjectMathObjectSetOperationSettings::Or.into();
     assert!(matches!(result, ObjectSetOperation::Or));
 }
 
 #[test]
 fn object_set_operation_xor_setting_converts() {
-    let result: ObjectSetOperation = ClassificationObjectMathObjectSetOperationSettings::Xor.into();
+    let result: ObjectSetOperation = ObjectObjectMathObjectSetOperationSettings::Xor.into();
     assert!(matches!(result, ObjectSetOperation::Xor));
 }
 
 #[test]
 fn object_set_operation_subtract_setting_converts() {
-    let result: ObjectSetOperation =
-        ClassificationObjectMathObjectSetOperationSettings::Subtract.into();
+    let result: ObjectSetOperation = ObjectObjectMathObjectSetOperationSettings::Subtract.into();
     assert!(matches!(result, ObjectSetOperation::Subtract));
 }
 
@@ -293,7 +292,7 @@ fn threshold_method_yen_setting_converts() {
 #[test]
 fn transform_function_scale_setting_converts_and_clamps_factor() {
     let result: TransformFunction =
-        ClassificationTransformObjectsTransformFunctionSettings::Scale { factor: 999999.0 }.into();
+        ObjectTransformObjectsTransformFunctionSettings::Scale { factor: 999999.0 }.into();
     match result {
         TransformFunction::Scale { factor } => assert_eq!(factor, 65535.0),
         _ => panic!("expected Scale variant"),
@@ -303,7 +302,7 @@ fn transform_function_scale_setting_converts_and_clamps_factor() {
 #[test]
 fn transform_function_scale_setting_clamps_negative_factor_to_zero() {
     let result: TransformFunction =
-        ClassificationTransformObjectsTransformFunctionSettings::Scale { factor: -10.0 }.into();
+        ObjectTransformObjectsTransformFunctionSettings::Scale { factor: -10.0 }.into();
     match result {
         TransformFunction::Scale { factor } => assert_eq!(factor, 0.0),
         _ => panic!("expected Scale variant"),
@@ -312,12 +311,11 @@ fn transform_function_scale_setting_clamps_negative_factor_to_zero() {
 
 #[test]
 fn transform_function_snap_area_setting_converts_and_carries_unit() {
-    let result: TransformFunction =
-        ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
-            extra_size: 12.0,
-            unit: SizeUnits::Pixels,
-        }
-        .into();
+    let result: TransformFunction = ObjectTransformObjectsTransformFunctionSettings::SnapArea {
+        extra_size: 12.0,
+        unit: SizeUnits::Pixels,
+    }
+    .into();
     match result {
         TransformFunction::SnapArea { extra_size, unit } => {
             assert_eq!(extra_size, 12.0);
@@ -329,12 +327,11 @@ fn transform_function_snap_area_setting_converts_and_carries_unit() {
 
 #[test]
 fn transform_function_min_circle_setting_converts() {
-    let result: TransformFunction =
-        ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
-            min_diameter: 5.0,
-            unit: SizeUnits::NanoMeter,
-        }
-        .into();
+    let result: TransformFunction = ObjectTransformObjectsTransformFunctionSettings::MinCircle {
+        min_diameter: 5.0,
+        unit: SizeUnits::NanoMeter,
+    }
+    .into();
     match result {
         TransformFunction::MinCircle { min_diameter, unit } => {
             assert_eq!(min_diameter, 5.0);
@@ -346,12 +343,11 @@ fn transform_function_min_circle_setting_converts() {
 
 #[test]
 fn transform_function_draw_circle_setting_converts() {
-    let result: TransformFunction =
-        ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
-            diameter: 8.0,
-            unit: SizeUnits::Pixels,
-        }
-        .into();
+    let result: TransformFunction = ObjectTransformObjectsTransformFunctionSettings::DrawCircle {
+        diameter: 8.0,
+        unit: SizeUnits::Pixels,
+    }
+    .into();
     match result {
         TransformFunction::DrawCircle { diameter, unit } => {
             assert_eq!(diameter, 8.0);
@@ -364,8 +360,7 @@ fn transform_function_draw_circle_setting_converts() {
 #[test]
 fn transform_function_fitting_ellipse_setting_converts() {
     let result: TransformFunction =
-        ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 2.0 }
-            .into();
+        ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 2.0 }.into();
     match result {
         TransformFunction::FittingEllipse { scale } => assert_eq!(scale, 2.0),
         _ => panic!("expected FittingEllipse variant"),
@@ -374,12 +369,11 @@ fn transform_function_fitting_ellipse_setting_converts() {
 
 #[test]
 fn transform_function_expand_setting_converts() {
-    let result: TransformFunction =
-        ClassificationTransformObjectsTransformFunctionSettings::Expand {
-            margin: 3.0,
-            unit: SizeUnits::NanoMeter,
-        }
-        .into();
+    let result: TransformFunction = ObjectTransformObjectsTransformFunctionSettings::Expand {
+        margin: 3.0,
+        unit: SizeUnits::NanoMeter,
+    }
+    .into();
     match result {
         TransformFunction::Expand { margin, unit } => {
             assert_eq!(margin, 3.0);
@@ -391,12 +385,11 @@ fn transform_function_expand_setting_converts() {
 
 #[test]
 fn transform_function_shrink_setting_converts() {
-    let result: TransformFunction =
-        ClassificationTransformObjectsTransformFunctionSettings::Shrink {
-            margin: 4.0,
-            unit: SizeUnits::Pixels,
-        }
-        .into();
+    let result: TransformFunction = ObjectTransformObjectsTransformFunctionSettings::Shrink {
+        margin: 4.0,
+        unit: SizeUnits::Pixels,
+    }
+    .into();
     match result {
         TransformFunction::Shrink { margin, unit } => {
             assert_eq!(margin, 4.0);
@@ -506,7 +499,7 @@ fn colocalization_settings_convert_all_fields() {
         filter_classes: vec![ObjectClass::Valid(3)],
         class_for_overlapping_areas: ObjectClass::Valid(9),
         exclude_classes: vec![ObjectClass::Valid(4)],
-        multiplicity: ClassificationColocObjectsColocMultiplicitySettings::ManyToMany,
+        multiplicity: ObjectColocObjectsColocMultiplicitySettings::ManyToMany,
         size_unit: SizeUnits::Pixels,
         min_coloc_area: 12.5,
     };
@@ -733,7 +726,7 @@ fn rank_filter_settings_convert_all_fields() {
 #[test]
 fn object_math_settings_convert_all_fields() {
     let settings = ObjectMathSettings {
-        operation: ClassificationObjectMathObjectSetOperationSettings::Subtract,
+        operation: ObjectObjectMathObjectSetOperationSettings::Subtract,
         input_class: ObjectClass::Valid(1),
         other_class: ObjectClass::Valid(2),
         other_filter_classes: vec![ObjectClass::Valid(3)],
@@ -867,9 +860,7 @@ fn threshold_entry_settings_convert_and_clamp_thresholds() {
 #[test]
 fn transform_objects_settings_convert_all_fields() {
     let settings = TransformObjectsSettings {
-        function: ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse {
-            scale: 1.2,
-        },
+        function: ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { scale: 1.2 },
         input_class: ObjectClass::Valid(1),
         output_class: ObjectClass::Valid(2),
     };

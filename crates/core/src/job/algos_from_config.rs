@@ -5,13 +5,15 @@ use evanalyzer_cfg::settings::pipeline_command_settings::*;
 // ============ ENUM FROM IMPLS ============
 
 #[cfg(feature = "ai")]
-impl From<ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings>
-    for AiClassifyMatchHandling
-{
-    fn from(_s: ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings) -> Self {
+impl From<ObjectAiObjectClassifierAiClassifyMatchHandlingSettings> for AiClassifyMatchHandling {
+    fn from(_s: ObjectAiObjectClassifierAiClassifyMatchHandlingSettings) -> Self {
         match _s {
-            ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch => AiClassifyMatchHandling::AddOutputClassIfMatch,
-            ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch => AiClassifyMatchHandling::ReclassifyIfMatch,
+            ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::AddOutputClassIfMatch => {
+                AiClassifyMatchHandling::AddOutputClassIfMatch
+            }
+            ObjectAiObjectClassifierAiClassifyMatchHandlingSettings::ReclassifyIfMatch => {
+                AiClassifyMatchHandling::ReclassifyIfMatch
+            }
         }
     }
 }
@@ -43,33 +45,51 @@ impl From<FiltersRollingBallBallTypeSettings> for BallType {
     }
 }
 
-impl From<ClassificationClassifyObjectsClassifyMatchHandlingSettings> for ClassifyMatchHandling {
-    fn from(_s: ClassificationClassifyObjectsClassifyMatchHandlingSettings) -> Self {
+impl From<ObjectClassifyObjectsClassifyMatchHandlingSettings> for ClassifyMatchHandling {
+    fn from(_s: ObjectClassifyObjectsClassifyMatchHandlingSettings) -> Self {
         match _s {
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => ClassifyMatchHandling::AddOutputClassIfMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => ClassifyMatchHandling::AddOutputClassIfNotMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => ClassifyMatchHandling::RemoveInputClassIfMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => ClassifyMatchHandling::RemoveInputClassIfNotMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => ClassifyMatchHandling::RemoveOutputClassIfMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => ClassifyMatchHandling::RemoveOutputClassIfNotMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => ClassifyMatchHandling::RemoveAllClassesIfMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => ClassifyMatchHandling::RemoveAllClassesIfNotMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => ClassifyMatchHandling::ReclassifyIfMatch,
-            ClassificationClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => ClassifyMatchHandling::ReclassifyIfNotMatch,
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfMatch => {
+                ClassifyMatchHandling::AddOutputClassIfMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::AddOutputClassIfNotMatch => {
+                ClassifyMatchHandling::AddOutputClassIfNotMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfMatch => {
+                ClassifyMatchHandling::RemoveInputClassIfMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveInputClassIfNotMatch => {
+                ClassifyMatchHandling::RemoveInputClassIfNotMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfMatch => {
+                ClassifyMatchHandling::RemoveOutputClassIfMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveOutputClassIfNotMatch => {
+                ClassifyMatchHandling::RemoveOutputClassIfNotMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfMatch => {
+                ClassifyMatchHandling::RemoveAllClassesIfMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::RemoveAllClassesIfNotMatch => {
+                ClassifyMatchHandling::RemoveAllClassesIfNotMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfMatch => {
+                ClassifyMatchHandling::ReclassifyIfMatch
+            }
+            ObjectClassifyObjectsClassifyMatchHandlingSettings::ReclassifyIfNotMatch => {
+                ClassifyMatchHandling::ReclassifyIfNotMatch
+            }
         }
     }
 }
 
-impl From<ClassificationColocObjectsColocMultiplicitySettings> for ColocMultiplicity {
-    fn from(_s: ClassificationColocObjectsColocMultiplicitySettings) -> Self {
+impl From<ObjectColocObjectsColocMultiplicitySettings> for ColocMultiplicity {
+    fn from(_s: ObjectColocObjectsColocMultiplicitySettings) -> Self {
         match _s {
-            ClassificationColocObjectsColocMultiplicitySettings::OneToOne => {
-                ColocMultiplicity::OneToOne
-            }
-            ClassificationColocObjectsColocMultiplicitySettings::ManyToMany => {
+            ObjectColocObjectsColocMultiplicitySettings::OneToOne => ColocMultiplicity::OneToOne,
+            ObjectColocObjectsColocMultiplicitySettings::ManyToMany => {
                 ColocMultiplicity::ManyToMany
             }
-            ClassificationColocObjectsColocMultiplicitySettings::MultiFor(v) => {
+            ObjectColocObjectsColocMultiplicitySettings::MultiFor(v) => {
                 ColocMultiplicity::MultiFor(v)
             }
         }
@@ -154,15 +174,13 @@ impl From<MorphologyMorphologicalTransformationMorphOpsSettings> for MorphOps {
     }
 }
 
-impl From<ClassificationObjectMathObjectSetOperationSettings> for ObjectSetOperation {
-    fn from(_s: ClassificationObjectMathObjectSetOperationSettings) -> Self {
+impl From<ObjectObjectMathObjectSetOperationSettings> for ObjectSetOperation {
+    fn from(_s: ObjectObjectMathObjectSetOperationSettings) -> Self {
         match _s {
-            ClassificationObjectMathObjectSetOperationSettings::And => ObjectSetOperation::And,
-            ClassificationObjectMathObjectSetOperationSettings::Or => ObjectSetOperation::Or,
-            ClassificationObjectMathObjectSetOperationSettings::Xor => ObjectSetOperation::Xor,
-            ClassificationObjectMathObjectSetOperationSettings::Subtract => {
-                ObjectSetOperation::Subtract
-            }
+            ObjectObjectMathObjectSetOperationSettings::And => ObjectSetOperation::And,
+            ObjectObjectMathObjectSetOperationSettings::Or => ObjectSetOperation::Or,
+            ObjectObjectMathObjectSetOperationSettings::Xor => ObjectSetOperation::Xor,
+            ObjectObjectMathObjectSetOperationSettings::Subtract => ObjectSetOperation::Subtract,
         }
     }
 }
@@ -316,47 +334,44 @@ impl From<SegmentationThresholdThresholdValueSourceSettings> for ThresholdValueS
     }
 }
 
-impl From<ClassificationTransformObjectsTransformFunctionSettings> for TransformFunction {
-    fn from(_s: ClassificationTransformObjectsTransformFunctionSettings) -> Self {
+impl From<ObjectTransformObjectsTransformFunctionSettings> for TransformFunction {
+    fn from(_s: ObjectTransformObjectsTransformFunctionSettings) -> Self {
         match _s {
-            ClassificationTransformObjectsTransformFunctionSettings::Scale { factor } => {
+            ObjectTransformObjectsTransformFunctionSettings::Scale { factor } => {
                 TransformFunction::Scale {
                     factor: factor.clamp(0.0, 65535.0),
                 }
             }
-            ClassificationTransformObjectsTransformFunctionSettings::SnapArea {
-                extra_size,
-                unit,
-            } => TransformFunction::SnapArea {
-                extra_size: extra_size.clamp(0.0, 65535.0),
-                unit: unit,
-            },
-            ClassificationTransformObjectsTransformFunctionSettings::MinCircle {
-                min_diameter,
-                unit,
-            } => TransformFunction::MinCircle {
-                min_diameter: min_diameter.clamp(0.0, 65535.0),
-                unit: unit,
-            },
-            ClassificationTransformObjectsTransformFunctionSettings::DrawCircle {
-                diameter,
-                unit,
-            } => TransformFunction::DrawCircle {
-                diameter: diameter.clamp(0.0, 65535.0),
-                unit: unit,
-            },
-            ClassificationTransformObjectsTransformFunctionSettings::FittingEllipse { scale } => {
+            ObjectTransformObjectsTransformFunctionSettings::SnapArea { extra_size, unit } => {
+                TransformFunction::SnapArea {
+                    extra_size: extra_size.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
+            }
+            ObjectTransformObjectsTransformFunctionSettings::MinCircle { min_diameter, unit } => {
+                TransformFunction::MinCircle {
+                    min_diameter: min_diameter.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
+            }
+            ObjectTransformObjectsTransformFunctionSettings::DrawCircle { diameter, unit } => {
+                TransformFunction::DrawCircle {
+                    diameter: diameter.clamp(0.0, 65535.0),
+                    unit: unit,
+                }
+            }
+            ObjectTransformObjectsTransformFunctionSettings::FittingEllipse { scale } => {
                 TransformFunction::FittingEllipse {
                     scale: scale.clamp(0.0, 65535.0),
                 }
             }
-            ClassificationTransformObjectsTransformFunctionSettings::Expand { margin, unit } => {
+            ObjectTransformObjectsTransformFunctionSettings::Expand { margin, unit } => {
                 TransformFunction::Expand {
                     margin: margin.clamp(0.0, 65535.0),
                     unit: unit,
                 }
             }
-            ClassificationTransformObjectsTransformFunctionSettings::Shrink { margin, unit } => {
+            ObjectTransformObjectsTransformFunctionSettings::Shrink { margin, unit } => {
                 TransformFunction::Shrink {
                     margin: margin.clamp(0.0, 65535.0),
                     unit: unit,

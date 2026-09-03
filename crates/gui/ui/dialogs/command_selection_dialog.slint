@@ -13,7 +13,7 @@
 //   ├------------------------------------------------------------------┤
 //   │  🔍  Search commands…                              ⌘K            │   ← search (52)
 //   │                                                                  │
-//   │  All · Preprocess · Segment · Classify · Measure · Recents · ★   │   ← filter chips (40)
+//   │  All · Preprocess · Segment · Instance Seg. · Measure · Object   │   ← filter chips (40)
 //   ├----------------------------┬-------------------------------------┤
 //   │ PREPROCESS  ---------------│   Gaussian Blur                     │
 //   │ ƒ Gaussian Blur     σ ▸    │   ------------------------------    │
@@ -135,7 +135,7 @@ global PickerStyle {
         if c == StepCategory.segment {
             return Theme.cat-segment;
         }
-        if c == StepCategory.object {
+        if c == StepCategory.instance-segmentation {
             return Theme.cat-object;
         }
         if c == StepCategory.measure {
@@ -158,13 +158,13 @@ global PickerStyle {
         if c == StepCategory.segment {
             return "Segment";
         }
-        if c == StepCategory.object {
-            return "Object";
+        if c == StepCategory.instance-segmentation {
+            return "Instance Seg.";
         }
         if c == StepCategory.measure {
             return "Measure";
         }
-        return "Classify";
+        return "Object";
     }
 }
 
@@ -899,7 +899,7 @@ export component CommandSelectionDialog inherits Rectangle {
                     }
 
                     FilterChip {
-                        label: "Object";
+                        label: "Instance Seg.";
                         count: cat-count-obj;
                         tint: Theme.cat-object;
                         active: fcat-obj;
@@ -925,7 +925,7 @@ export component CommandSelectionDialog inherits Rectangle {
                     }
 
                     FilterChip {
-                        label: "Classify";
+                        label: "Object";
                         count: cat-count-cls;
                         tint: Theme.cat-classify;
                         active: fcat-cls;
@@ -1088,11 +1088,11 @@ export component CommandSelectionDialog inherits Rectangle {
                                     }
                                 }
 
-                                // Object
+                                // Instance Segmentation
                             if shown-object.length > 0 && !filter-favorites: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
-                                        category: StepCategory.object;
+                                        category: StepCategory.instance-segmentation;
                                         count: shown-object.length;
                                     }
 
@@ -1136,11 +1136,11 @@ export component CommandSelectionDialog inherits Rectangle {
                                     }
                                 }
 
-                                // Classify
+                                // Object
                             if shown-classify.length > 0 && !filter-favorites: VerticalLayout {
                                     spacing: 0;
                                     SectionHeader {
-                                        category: StepCategory.classify;
+                                        category: StepCategory.object;
                                         count: shown-classify.length;
                                     }
 

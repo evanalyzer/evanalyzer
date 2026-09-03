@@ -7,9 +7,9 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ImageAlgorithm, PipelineContext};
+use crate::algos::{ExecutionScope, ImageAlgorithm, PipelineContext};
 use crate::image::{ImageContainer, ManagedImage, PixelSizes};
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
 use kornia_tensor::CpuAllocator;
@@ -80,16 +80,17 @@ impl ImageAlgorithm for Hessian {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        match Arc::make_mut(&mut ctx.image) {
-            ImageContainer::F32Gray(img) => {
-                let result = process_f32_gray(img, self.mode)?;
-                *img = ManagedImage {
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
+            (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
+                let result = process_f32_gray(&input.data, self.mode)?;
+                *output = ManagedImage {
                     data: result,
-                    tile_offset: img.tile_offset,
-                    plane: img.plane,
+                    tile_offset: input.tile_offset,
+                    plane: input.plane,
                 };
+                ctx.swap()?;
                 Ok(())
             }
             _ => Err(InternalErrors::FormatMismatch {
@@ -114,6 +115,10 @@ impl ImageAlgorithm for Hessian {
             url: Some("https://doi.org/10.1109/34.659930"),
             pages: Some("113-125"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -205,15 +210,10 @@ fn process_f32_gray(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use kornia_image::ImageSize;
-
     use super::*;
-    use crate::pipeline::{
-        pipeline::PipelineImageMeta,
-        pipeline_cache::{ImageCache, PipelineCache},
-    };
+    use crate::pipeline::{pipeline::PipelineImageMeta, pipeline_cache::GlobalPipelineCache};
+    use kornia_image::ImageSize;
+    use std::path::PathBuf;
 
     #[test]
     fn test_hessian_determinant() {
@@ -232,7 +232,7 @@ mod tests {
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let detector = Hessian {
             mode: HessianMode::Determinant,
@@ -283,7 +283,7 @@ mod tests {
             crate::image::ImageContainer::new_f32_rgb_from_image_test(img).into(),
         )
         .unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let detector = Hessian {
             mode: HessianMode::Determinant,
@@ -321,7 +321,7 @@ mod tests {
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Test EigenvaluesX (Larger curvature/principal axis)
         let detector_x = Hessian {
@@ -369,7 +369,7 @@ mod tests {
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let detector = Hessian {
             mode: HessianMode::Determinant,

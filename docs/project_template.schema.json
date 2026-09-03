@@ -51,7 +51,7 @@
         },
         "matchHandling": {
           "description": "What to do with object class labels after prediction\n\n- **AddOutputClassIfMatch** - append the mapped class alongside the object's existing classes.\n- **ReclassifyIfMatch** - clear every class the object carries and assign only the mapped class.",
-          "$ref": "#/$defs/ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings",
+          "$ref": "#/$defs/ObjectAiObjectClassifierAiClassifyMatchHandlingSettings",
           "default": "RECLASSIFY_IF_MATCH"
         },
         "modelPath": {
@@ -177,60 +177,6 @@
         "notes"
       ]
     },
-    "ClassificationAiObjectClassifierAiClassifyMatchHandlingSettings": {
-      "description": "What to do with an object's class labels once the model has predicted (and\n`segmentation_mapping` has remapped) a class for it.",
-      "type": "string",
-      "enum": [
-        "ADD_OUTPUT_CLASS_IF_MATCH",
-        "RECLASSIFY_IF_MATCH"
-      ]
-    },
-    "ClassificationClassifyObjectsClassifyMatchHandlingSettings": {
-      "type": "string",
-      "enum": [
-        "ADD_OUTPUT_CLASS_IF_MATCH",
-        "ADD_OUTPUT_CLASS_IF_NOT_MATCH",
-        "REMOVE_INPUT_CLASS_IF_MATCH",
-        "REMOVE_INPUT_CLASS_IF_NOT_MATCH",
-        "REMOVE_OUTPUT_CLASS_IF_MATCH",
-        "REMOVE_OUTPUT_CLASS_IF_NOT_MATCH",
-        "REMOVE_ALL_CLASSES_IF_MATCH",
-        "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
-        "RECLASSIFY_IF_MATCH",
-        "RECLASSIFY_IF_NOT_MATCH"
-      ]
-    },
-    "ClassificationColocObjectsColocMultiplicitySettings": {
-      "description": "How many partners an object may coloc with at once.",
-      "oneOf": [
-        {
-          "description": "Every object keeps only its single best-overlap match per other class -\ne.g. a small object sitting on the border of two larger ones picks\nexactly one (the larger overlap; ties go to the lower `ObjectId`).",
-          "type": "string",
-          "const": "ONE_TO_ONE"
-        },
-        {
-          "description": "Every object may coloc with every overlapping partner meeting `min_coloc_area`.",
-          "type": "string",
-          "const": "MANY_TO_MANY"
-        },
-        {
-          "description": "Only objects of these classes may coloc with more than one partner;\nevery other class in `classes_to_coloc` is capped to its single\nbest-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and\n`MultiFor([Cell])`, a cell can coloc with any number of spots, but\neach spot colocs with exactly one cell (the one it overlaps most).",
-          "type": "object",
-          "properties": {
-            "MULTI_FOR": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ObjectClass"
-              }
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "MULTI_FOR"
-          ]
-        }
-      ]
-    },
     "ClassificationMappingSettings": {
       "description": "Maps one class the model was trained to predict to a class ID meaningful\nin this project. Model class IDs are a snapshot taken at training time\n(see `evanalyzer_cfg::ObjectClassLabel`'s doc comment) and aren't\nguaranteed to line up with this project's own `ObjectClass` IDs - this is\nthe bridge between the two.",
       "type": "object",
@@ -249,31 +195,6 @@
         "outputClass"
       ]
     },
-    "ClassificationObjectMathObjectSetOperationSettings": {
-      "description": "Boolean set operation applied between an `input_class` object (\"A\") and the union of\nits overlapping `other_class` ROIs (\"B\").",
-      "oneOf": [
-        {
-          "description": "Intersection: pixels present in both A and B. With no overlapping B, the\nresult is empty - there is nothing to keep regardless of `keep_unmatched`.",
-          "type": "string",
-          "const": "AND"
-        },
-        {
-          "description": "Union: pixels present in A or B (or both). The result can extend beyond A's\nown bounding box into B's territory.",
-          "type": "string",
-          "const": "OR"
-        },
-        {
-          "description": "Symmetric difference: pixels present in exactly one of A, B (the overlap\nitself is excluded). Like `Or`, the result can extend beyond A's bbox.",
-          "type": "string",
-          "const": "XOR"
-        },
-        {
-          "description": "Set difference: pixels in A that are NOT in B (A \\ B). The classic use case\nis deriving a cytoplasm-only region from a whole-cell mask and its nucleus.",
-          "type": "string",
-          "const": "SUBTRACT"
-        }
-      ]
-    },
     "ClassificationSettings": {
       "type": "object",
       "properties": {
@@ -286,183 +207,6 @@
       },
       "required": [
         "classes"
-      ]
-    },
-    "ClassificationTransformObjectsTransformFunctionSettings": {
-      "description": "Each variant carries only the parameters it actually uses, so there's no shared field whose\nmeaning shifts depending on which function is selected (e.g. a \"factor\" that's a unitless\nmultiplier for `Scale` but a length in `size_unit` for `SnapArea`).",
-      "oneOf": [
-        {
-          "description": "Scale the object by the given scale factor.\n\nShape keeps and center of the object keeps the same, it is just shrinked or expanded.",
-          "type": "object",
-          "properties": {
-            "factor": {
-              "description": "Unitless scale factor",
-              "type": "number",
-              "format": "float",
-              "maximum": 65535,
-              "minimum": 0
-            },
-            "type": {
-              "type": "string",
-              "const": "SCALE"
-            }
-          },
-          "required": [
-            "type",
-            "factor"
-          ]
-        },
-        {
-          "description": "Draws a circle around the object which is `extra_size` bigger than the object's bounding box.",
-          "type": "object",
-          "properties": {
-            "extraSize": {
-              "description": "Size added on top of the object's bounding-box diameter",
-              "type": "number",
-              "format": "float",
-              "maximum": 65535,
-              "minimum": 0
-            },
-            "type": {
-              "type": "string",
-              "const": "SNAP_AREA"
-            },
-            "unit": {
-              "description": "Unit `extra_size` is expressed in",
-              "$ref": "#/$defs/SizeUnits"
-            }
-          },
-          "required": [
-            "type",
-            "extraSize",
-            "unit"
-          ]
-        },
-        {
-          "description": "Draws a circle around the object's bounding box, with `min_diameter` as the minimum diameter.",
-          "type": "object",
-          "properties": {
-            "minDiameter": {
-              "description": "Minimum circle diameter",
-              "type": "number",
-              "format": "float",
-              "maximum": 65535,
-              "minimum": 0
-            },
-            "type": {
-              "type": "string",
-              "const": "MIN_CIRCLE"
-            },
-            "unit": {
-              "description": "Unit `min_diameter` is expressed in",
-              "$ref": "#/$defs/SizeUnits"
-            }
-          },
-          "required": [
-            "type",
-            "minDiameter",
-            "unit"
-          ]
-        },
-        {
-          "description": "Draws a circle with exactly `diameter` as diameter around the object.\n\nIf `diameter` is 0, the object's bounding box is used as the diameter instead.",
-          "type": "object",
-          "properties": {
-            "diameter": {
-              "description": "Circle diameter (0 = use the object's bounding box)",
-              "type": "number",
-              "format": "float",
-              "maximum": 65535,
-              "minimum": 0
-            },
-            "type": {
-              "type": "string",
-              "const": "DRAW_CIRCLE"
-            },
-            "unit": {
-              "description": "Unit `diameter` is expressed in",
-              "$ref": "#/$defs/SizeUnits"
-            }
-          },
-          "required": [
-            "type",
-            "diameter",
-            "unit"
-          ]
-        },
-        {
-          "description": "Replaces the object with the ellipse fitted to its mask.",
-          "type": "object",
-          "properties": {
-            "scale": {
-              "description": "Unitless scale factor for the fitted ellipse",
-              "type": "number",
-              "format": "float",
-              "maximum": 65535,
-              "minimum": 0
-            },
-            "type": {
-              "type": "string",
-              "const": "FITTING_ELLIPSE"
-            }
-          },
-          "required": [
-            "type",
-            "scale"
-          ]
-        },
-        {
-          "description": "Grows the object outward by `margin`, following its actual contour (standard flat\ndilation with a disk structuring element) - unlike `Scale`, irregular shapes\ngrow by a uniform margin instead of being stretched proportionally.",
-          "type": "object",
-          "properties": {
-            "margin": {
-              "description": "Margin added on every side of the mask's contour",
-              "type": "number",
-              "format": "float",
-              "maximum": 65535,
-              "minimum": 0
-            },
-            "type": {
-              "type": "string",
-              "const": "EXPAND"
-            },
-            "unit": {
-              "description": "Unit `margin` is expressed in",
-              "$ref": "#/$defs/SizeUnits"
-            }
-          },
-          "required": [
-            "type",
-            "margin",
-            "unit"
-          ]
-        },
-        {
-          "description": "Shrinks the object inward by `margin`, following its actual contour (standard flat\nerosion with a disk structuring element).",
-          "type": "object",
-          "properties": {
-            "margin": {
-              "description": "Margin removed from every side of the mask's contour",
-              "type": "number",
-              "format": "float",
-              "maximum": 65535,
-              "minimum": 0
-            },
-            "type": {
-              "type": "string",
-              "const": "SHRINK"
-            },
-            "unit": {
-              "description": "Unit `margin` is expressed in",
-              "$ref": "#/$defs/SizeUnits"
-            }
-          },
-          "required": [
-            "type",
-            "margin",
-            "unit"
-          ]
-        }
       ]
     },
     "ClassifyObjectsSettings": {
@@ -484,7 +228,7 @@
         },
         "matchHandling": {
           "description": "What to do with object class labels after criteria evaluation\n\nControls whether the output class is added or existing classes are removed,\nand whether the action is triggered on a criteria **match** or a **non-match**:\n\n- **AddOutputClassIfMatch** - append the output class to objects that pass the criteria.\n- **AddOutputClassIfNotMatch** - append the output class to objects that fail the criteria.\n- **RemoveInputClassIfMatch / NotMatch** - strip all input classes from matching / non-matching objects.\n- **RemoveOutputClassIfMatch / NotMatch** - strip the output class from matching / non-matching objects.\n- **RemoveAllClassesIfMatch / NotMatch** - clear every class label from matching / non-matching objects.",
-          "$ref": "#/$defs/ClassificationClassifyObjectsClassifyMatchHandlingSettings",
+          "$ref": "#/$defs/ObjectClassifyObjectsClassifyMatchHandlingSettings",
           "default": "REMOVE_ALL_CLASSES_IF_NOT_MATCH"
         },
         "maxArea": {
@@ -657,7 +401,7 @@
         },
         "multiplicity": {
           "description": "How many partners an object may coloc with at once.",
-          "$ref": "#/$defs/ClassificationColocObjectsColocMultiplicitySettings",
+          "$ref": "#/$defs/ObjectColocObjectsColocMultiplicitySettings",
           "default": "ONE_TO_ONE"
         },
         "sizeUnit": {
@@ -1520,6 +1264,14 @@
         }
       ]
     },
+    "ObjectAiObjectClassifierAiClassifyMatchHandlingSettings": {
+      "description": "What to do with an object's class labels once the model has predicted (and\n`segmentation_mapping` has remapped) a class for it.",
+      "type": "string",
+      "enum": [
+        "ADD_OUTPUT_CLASS_IF_MATCH",
+        "RECLASSIFY_IF_MATCH"
+      ]
+    },
     "ObjectClass": {
       "oneOf": [
         {
@@ -1540,6 +1292,52 @@
           "additionalProperties": false,
           "required": [
             "VALID"
+          ]
+        }
+      ]
+    },
+    "ObjectClassifyObjectsClassifyMatchHandlingSettings": {
+      "type": "string",
+      "enum": [
+        "ADD_OUTPUT_CLASS_IF_MATCH",
+        "ADD_OUTPUT_CLASS_IF_NOT_MATCH",
+        "REMOVE_INPUT_CLASS_IF_MATCH",
+        "REMOVE_INPUT_CLASS_IF_NOT_MATCH",
+        "REMOVE_OUTPUT_CLASS_IF_MATCH",
+        "REMOVE_OUTPUT_CLASS_IF_NOT_MATCH",
+        "REMOVE_ALL_CLASSES_IF_MATCH",
+        "REMOVE_ALL_CLASSES_IF_NOT_MATCH",
+        "RECLASSIFY_IF_MATCH",
+        "RECLASSIFY_IF_NOT_MATCH"
+      ]
+    },
+    "ObjectColocObjectsColocMultiplicitySettings": {
+      "description": "How many partners an object may coloc with at once.",
+      "oneOf": [
+        {
+          "description": "Every object keeps only its single best-overlap match per other class -\ne.g. a small object sitting on the border of two larger ones picks\nexactly one (the larger overlap; ties go to the lower `ObjectId`).",
+          "type": "string",
+          "const": "ONE_TO_ONE"
+        },
+        {
+          "description": "Every object may coloc with every overlapping partner meeting `min_coloc_area`.",
+          "type": "string",
+          "const": "MANY_TO_MANY"
+        },
+        {
+          "description": "Only objects of these classes may coloc with more than one partner;\nevery other class in `classes_to_coloc` is capped to its single\nbest-overlap match. E.g. with `classes_to_coloc: [Cell, Spot]` and\n`MultiFor([Cell])`, a cell can coloc with any number of spots, but\neach spot colocs with exactly one cell (the one it overlaps most).",
+          "type": "object",
+          "properties": {
+            "MULTI_FOR": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ObjectClass"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "MULTI_FOR"
           ]
         }
       ]
@@ -1566,7 +1364,7 @@
         },
         "operation": {
           "description": "Boolean set operation to apply",
-          "$ref": "#/$defs/ClassificationObjectMathObjectSetOperationSettings",
+          "$ref": "#/$defs/ObjectObjectMathObjectSetOperationSettings",
           "default": "AND"
         },
         "otherClass": {
@@ -1593,6 +1391,208 @@
           "default": "PIXELS"
         }
       }
+    },
+    "ObjectObjectMathObjectSetOperationSettings": {
+      "description": "Boolean set operation applied between an `input_class` object (\"A\") and the union of\nits overlapping `other_class` ROIs (\"B\").",
+      "oneOf": [
+        {
+          "description": "Intersection: pixels present in both A and B. With no overlapping B, the\nresult is empty - there is nothing to keep regardless of `keep_unmatched`.",
+          "type": "string",
+          "const": "AND"
+        },
+        {
+          "description": "Union: pixels present in A or B (or both). The result can extend beyond A's\nown bounding box into B's territory.",
+          "type": "string",
+          "const": "OR"
+        },
+        {
+          "description": "Symmetric difference: pixels present in exactly one of A, B (the overlap\nitself is excluded). Like `Or`, the result can extend beyond A's bbox.",
+          "type": "string",
+          "const": "XOR"
+        },
+        {
+          "description": "Set difference: pixels in A that are NOT in B (A \\ B). The classic use case\nis deriving a cytoplasm-only region from a whole-cell mask and its nucleus.",
+          "type": "string",
+          "const": "SUBTRACT"
+        }
+      ]
+    },
+    "ObjectTransformObjectsTransformFunctionSettings": {
+      "description": "Each variant carries only the parameters it actually uses, so there's no shared field whose\nmeaning shifts depending on which function is selected (e.g. a \"factor\" that's a unitless\nmultiplier for `Scale` but a length in `size_unit` for `SnapArea`).",
+      "oneOf": [
+        {
+          "description": "Scale the object by the given scale factor.\n\nShape keeps and center of the object keeps the same, it is just shrinked or expanded.",
+          "type": "object",
+          "properties": {
+            "factor": {
+              "description": "Unitless scale factor",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "SCALE"
+            }
+          },
+          "required": [
+            "type",
+            "factor"
+          ]
+        },
+        {
+          "description": "Draws a circle around the object which is `extra_size` bigger than the object's bounding box.",
+          "type": "object",
+          "properties": {
+            "extraSize": {
+              "description": "Size added on top of the object's bounding-box diameter",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "SNAP_AREA"
+            },
+            "unit": {
+              "description": "Unit `extra_size` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "extraSize",
+            "unit"
+          ]
+        },
+        {
+          "description": "Draws a circle around the object's bounding box, with `min_diameter` as the minimum diameter.",
+          "type": "object",
+          "properties": {
+            "minDiameter": {
+              "description": "Minimum circle diameter",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "MIN_CIRCLE"
+            },
+            "unit": {
+              "description": "Unit `min_diameter` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "minDiameter",
+            "unit"
+          ]
+        },
+        {
+          "description": "Draws a circle with exactly `diameter` as diameter around the object.\n\nIf `diameter` is 0, the object's bounding box is used as the diameter instead.",
+          "type": "object",
+          "properties": {
+            "diameter": {
+              "description": "Circle diameter (0 = use the object's bounding box)",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "DRAW_CIRCLE"
+            },
+            "unit": {
+              "description": "Unit `diameter` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "diameter",
+            "unit"
+          ]
+        },
+        {
+          "description": "Replaces the object with the ellipse fitted to its mask.",
+          "type": "object",
+          "properties": {
+            "scale": {
+              "description": "Unitless scale factor for the fitted ellipse",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "FITTING_ELLIPSE"
+            }
+          },
+          "required": [
+            "type",
+            "scale"
+          ]
+        },
+        {
+          "description": "Grows the object outward by `margin`, following its actual contour (standard flat\ndilation with a disk structuring element) - unlike `Scale`, irregular shapes\ngrow by a uniform margin instead of being stretched proportionally.",
+          "type": "object",
+          "properties": {
+            "margin": {
+              "description": "Margin added on every side of the mask's contour",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "EXPAND"
+            },
+            "unit": {
+              "description": "Unit `margin` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "margin",
+            "unit"
+          ]
+        },
+        {
+          "description": "Shrinks the object inward by `margin`, following its actual contour (standard flat\nerosion with a disk structuring element).",
+          "type": "object",
+          "properties": {
+            "margin": {
+              "description": "Margin removed from every side of the mask's contour",
+              "type": "number",
+              "format": "float",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "SHRINK"
+            },
+            "unit": {
+              "description": "Unit `margin` is expressed in",
+              "$ref": "#/$defs/SizeUnits"
+            }
+          },
+          "required": [
+            "type",
+            "margin",
+            "unit"
+          ]
+        }
+      ]
     },
     "PipelineCommand": {
       "oneOf": [
@@ -2748,7 +2748,7 @@
       "properties": {
         "function": {
           "description": "Geometric transform applied to each input object",
-          "$ref": "#/$defs/ClassificationTransformObjectsTransformFunctionSettings",
+          "$ref": "#/$defs/ObjectTransformObjectsTransformFunctionSettings",
           "default": {
             "factor": 1.0,
             "type": "SCALE"

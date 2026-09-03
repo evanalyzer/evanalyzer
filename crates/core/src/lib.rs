@@ -43,7 +43,7 @@ pub use crate::image::ZProjection;
 pub use crate::object::Intensity;
 pub use crate::object::Object;
 pub use crate::object::ObjectInit;
-pub use crate::pipeline::pipeline_cache::PipelineCache;
+pub use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 
 // Job execution
 pub use crate::job::algos_from_config::into_algorithm;

@@ -7,7 +7,7 @@
 //! Copyright 2026 Joachim Danmayr.
 //! Licensed under the **AGPL-3.0**.
 
-use crate::algos::{ImageAlgorithm, PipelineCache, PipelineContext};
+use crate::algos::{ExecutionScope, GlobalPipelineCache, ImageAlgorithm, PipelineContext};
 use crate::image::ImageContainer;
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -72,15 +72,25 @@ impl ImageAlgorithm for EnhanceContrast {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
-        match Arc::make_mut(&mut ctx.image) {
-            ImageContainer::F32Gray(img) => {
-                self.process_f32_gray(img);
+        match (ctx.image.as_ref(), Arc::make_mut(&mut ctx.scratch_pad)) {
+            (ImageContainer::F32Gray(input), ImageContainer::F32Gray(output)) => {
+                output
+                    .data
+                    .as_slice_mut()
+                    .copy_from_slice(input.data.as_slice());
+                self.process_f32_gray(&mut output.data);
+                ctx.swap()?;
                 Ok(())
             }
-            ImageContainer::F32Rgb(img) => {
-                self.process_f32_rgb(img);
+            (ImageContainer::F32Rgb(input), ImageContainer::F32Rgb(output)) => {
+                output
+                    .data
+                    .as_slice_mut()
+                    .copy_from_slice(input.data.as_slice());
+                self.process_f32_rgb(&mut output.data);
+                ctx.swap()?;
                 Ok(())
             }
             _ => Err(InternalErrors::FormatMismatch {
@@ -96,6 +106,10 @@ impl ImageAlgorithm for EnhanceContrast {
 
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -302,10 +316,7 @@ fn sample_lut(lut: &[f32], val: f32) -> f32 {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::{
-        image::PixelSizes,
-        pipeline::{pipeline::PipelineImageMeta, pipeline_cache::ImageCache},
-    };
+    use crate::{image::PixelSizes, pipeline::pipeline::PipelineImageMeta};
 
     use super::*;
     use kornia_image::{Image, ImageSize};
@@ -328,7 +339,7 @@ mod tests {
         // 2. Prepare Context
 
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 3. Configure Algorithm: Pure Stretch (no saturation, no equalization)
 
@@ -395,7 +406,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let enhancer = EnhanceContrast {
             saturated_pixels: 0.0,
@@ -431,7 +442,7 @@ mod tests {
 
         // 2. Initialize Context with U32 image
         let mut ctx = PipelineContext::new_from_u32_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 3. Setup the command
         let enhancer = EnhanceContrast {
@@ -466,7 +477,7 @@ mod tests {
             Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
                 .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let enhancer = EnhanceContrast {
             saturated_pixels: 0.0,
@@ -500,7 +511,7 @@ mod tests {
             Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
                 .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let enhancer = EnhanceContrast {
             saturated_pixels: 0.0,
@@ -536,7 +547,7 @@ mod tests {
             Image::<f32, 3, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
                 .unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let enhancer = EnhanceContrast {
             saturated_pixels: 0.0,
@@ -577,7 +588,7 @@ mod tests {
             Image::<f32, 3, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)
                 .unwrap();
         let mut ctx = PipelineContext::new_from_image_test_rgb(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let enhancer = EnhanceContrast {
             saturated_pixels: 0.0,

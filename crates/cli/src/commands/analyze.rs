@@ -105,6 +105,7 @@ fn apply_progress_event(event: ProgressEvent, total: &mut usize, failed: &mut us
         ProgressEvent::Finished => println!(),
         ProgressEvent::TilesScheduled { .. }
         | ProgressEvent::TileCompleted { .. }
+        | ProgressEvent::WholeImagePhaseCompleted { .. }
         | ProgressEvent::BreakpointReached { .. } => {}
     }
 }
@@ -187,6 +188,33 @@ mod tests {
             panic!("expected InvalidArgument, got {err:?}");
         };
         assert!(msg.contains("no images"));
+    }
+
+    /// The only test that drives `run`'s full happy path (job creation,
+    /// `run_async`, the progress loop, thread join, final println) - every
+    /// other test above only reaches the early "no images" return. Reuses
+    /// the same real fixture image `core`'s own tests read from
+    /// (`multi-channel-4D-series.ome.tif`), copied into an isolated
+    /// directory so `--images` scans exactly one image, not `core/tests`'
+    /// whole mixed fixture directory.
+    #[test]
+    fn run_succeeds_end_to_end_against_a_real_image_with_no_pipelines() {
+        let file = TempProjectFile::new(&ProjectSettings::default());
+        let images_dir = file.path.parent().unwrap().join("images");
+        std::fs::create_dir_all(&images_dir).unwrap();
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../core/tests/multi-channel-4D-series.ome.tif");
+        std::fs::copy(&fixture, images_dir.join("fixture.ome.tif"))
+            .expect("copy the real fixture image into an isolated scan directory");
+
+        let result = run(AnalyzeArgs {
+            project: file.path.clone(),
+            images: Some(images_dir),
+            threads: Some(1),
+            job_name: Some("cli_test".into()),
+        });
+
+        result.expect("a real image with zero enabled pipelines should still run to completion");
     }
 
     // -- apply_progress_event -------------------------------------------------

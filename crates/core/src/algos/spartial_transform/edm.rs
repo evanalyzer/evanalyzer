@@ -8,8 +8,8 @@
 //! Licensed under the **AGPL-3.0**.
 
 use crate::{
-    algos::ImageAlgorithm,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    algos::{ExecutionScope, ImageAlgorithm},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -58,7 +58,7 @@ impl ImageAlgorithm for DistanceTransform {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        _cache: &mut PipelineCache,
+        _cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // Access the f32 image from context
         let (input, mut scratch) = ctx.get_gray_img_gray_buf()?;
@@ -150,6 +150,10 @@ impl ImageAlgorithm for DistanceTransform {
             url: Some("https://doi.org/10.1145/321356.321357"),
             pages: Some("471-494"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -300,7 +304,7 @@ mod tests {
         let img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
 
         let mut ctx = PipelineContext::new_from_image_test(img)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // 2. Configure EDM: No edge background to keep distances relative to our seed.
         let edm = DistanceTransform {
@@ -374,7 +378,7 @@ mod tests {
         let img = Image::<f32, 1, CpuAllocator>::new(size, data, CpuAllocator)?;
 
         let mut ctx = PipelineContext::new_from_image_test(img)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         // Simulate a scratch_pad reused from a previous pipeline step: same
         // container type and size, but full of non-zero garbage instead of
@@ -461,7 +465,7 @@ mod tests {
         let img =
             Image::<f32, 1, CpuAllocator>::new(ImageSize { width, height }, data, CpuAllocator)?;
         let mut ctx = PipelineContext::new_from_image_test(img)?;
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let edm = DistanceTransform {
             threshold: 0.0,

@@ -9,14 +9,14 @@
 
 use crate::{
     algos::{
-        ImageAlgorithm,
+        ExecutionScope, ImageAlgorithm,
         segmentation::maximum_finder::{
             find_intensity_seeds, watershed_segment_edm, watershed_segment_from_seeds,
         },
         spartial_transform::edm::DistanceTransform,
     },
     image::ImageContainer,
-    pipeline::{pipeline_cache::PipelineCache, pipeline_context::PipelineContext},
+    pipeline::{pipeline_cache::GlobalPipelineCache, pipeline_context::PipelineContext},
 };
 use evanalyzer_cfg::core_types::{CitationMetadata, InternalErrors};
 use kornia_image::Image;
@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 /// A morphological segmentation algorithm that splits touching objects using distance topography.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "object", next = "measure")]
+#[cmdsmeta(category = "instance_segmentation", next = "measure")]
 ///
 /// This is a faithful port of ImageJ's `Process > Binary > Watershed`
 /// (`MaximumFinder` applied to the Euclidean distance map). Touching objects that
@@ -120,7 +120,7 @@ impl ImageAlgorithm for Watershed {
     fn execute(
         &self,
         ctx: &mut PipelineContext,
-        cache: &mut PipelineCache,
+        cache: &mut GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         if self.maximum_finder_tolerance <= 0.0 {
             return Ok(());
@@ -246,6 +246,10 @@ impl ImageAlgorithm for Watershed {
             url: Some("https://doi.org/10.1109/34.87344"),
             pages: Some("583-598"),
         })
+    }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::Tile
     }
 }
 
@@ -411,7 +415,7 @@ mod tests {
             let mut ctx = PipelineContext::new_test::<F32Gray>(image_size).unwrap();
             ctx.segmentation_map =
                 Some(Image::<u32, 1, CpuAllocator>::new(image_size, mask, CpuAllocator).unwrap());
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
 
             let t0 = std::time::Instant::now();
             crate::algos::segmentation::connected_components::ConnectedComponents { min_size: 0 }
@@ -495,7 +499,7 @@ mod tests {
             let mut ctx = PipelineContext::new_test::<F32Gray>(image_size).unwrap();
             ctx.segmentation_map =
                 Some(Image::<u32, 1, CpuAllocator>::new(image_size, mask, CpuAllocator).unwrap());
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
 
             crate::algos::segmentation::connected_components::ConnectedComponents { min_size: 0 }
                 .execute(&mut ctx, &mut cache)
@@ -552,7 +556,7 @@ mod tests {
             let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
             ctx.instance_map =
                 Some(Image::<u32, 1, CpuAllocator>::new(size, seed.clone(), CpuAllocator).unwrap());
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
 
             let cmd = Watershed {
                 maximum_finder_tolerance: tolerance,
@@ -607,7 +611,7 @@ mod tests {
             .expect("No classes")
             .print_window();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let watershed = Watershed {
             maximum_finder_tolerance: 0.1,
@@ -692,7 +696,7 @@ mod tests {
         println!("--- Input Mask ---");
         ctx.get_instance_map().unwrap().print_window();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let watershed = Watershed {
             maximum_finder_tolerance: 0.8,
             smoothing_sigma: 0.0,
@@ -938,7 +942,7 @@ mod tests {
         ctx.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let watershed = Watershed {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 0.0,
@@ -1008,7 +1012,7 @@ mod tests {
         ctx.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // High enough to swallow the shallow saddle between the two disc peaks
         // (which split correctly at tolerance = 0.5 in the test above).
         let watershed = Watershed {
@@ -1073,7 +1077,7 @@ mod tests {
         ctx.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // Comfortably above the bump's own prominence (~0.24) but far below
         // the dominant peak's height above the saddle (~4.08) — a tolerance
         // a user would plausibly pick for real nuclei, not an extreme value.
@@ -1138,7 +1142,7 @@ mod tests {
             let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
             ctx.instance_map =
                 Some(Image::<u32, 1, CpuAllocator>::new(size, build(), CpuAllocator).unwrap());
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             Watershed {
                 // Low enough that the bump's ~0.24px prominence is NOT merged,
                 // so it survives as a separate basin without the size filter.
@@ -1200,7 +1204,7 @@ mod tests {
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
         ctx.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         Watershed {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 1.0,
@@ -1260,7 +1264,7 @@ mod tests {
         ctx.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, input_labels, CpuAllocator).unwrap());
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         let watershed = Watershed {
             maximum_finder_tolerance: 0.5,
@@ -1347,7 +1351,7 @@ mod tests {
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
         ctx.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         Watershed {
             maximum_finder_tolerance: 0.5, // ImageJ default
@@ -1417,7 +1421,7 @@ mod tests {
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
         ctx.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         Watershed {
             maximum_finder_tolerance: 1.0,
@@ -1525,7 +1529,7 @@ mod tests {
             peak1,
             peak2,
         );
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         Watershed {
             maximum_finder_tolerance: 1.0,
             smoothing_sigma: 0.0,
@@ -1557,7 +1561,7 @@ mod tests {
             peak1,
             peak2,
         );
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         Watershed {
             maximum_finder_tolerance: 2.0,
             smoothing_sigma: 0.0,
@@ -1623,7 +1627,7 @@ mod tests {
         let mut ctx_ref = PipelineContext::new_test::<F32Gray>(size).unwrap();
         ctx_ref.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data.clone(), CpuAllocator).unwrap());
-        let mut cache_ref = PipelineCache::default();
+        let mut cache_ref = GlobalPipelineCache::default();
         let seed_instances_ref = ctx_ref.get_instance_map().unwrap().clone();
         {
             let scratch = ctx_ref.get_f32_gray_image_mut().unwrap();
@@ -1660,7 +1664,7 @@ mod tests {
         let mut ctx = PipelineContext::new_test::<F32Gray>(size).unwrap();
         ctx.instance_map =
             Some(Image::<u32, 1, CpuAllocator>::new(size, data, CpuAllocator).unwrap());
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         Watershed {
             maximum_finder_tolerance: 0.5,
             smoothing_sigma: 0.0,

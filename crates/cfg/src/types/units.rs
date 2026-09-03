@@ -53,6 +53,39 @@ impl SizeUnits {
 mod tests {
     use super::*;
 
+    // --- Conversion logic (marked `#[allow(dead_code)]` since this crate
+    // never calls them itself - only `core` does - but the logic is real
+    // and untested otherwise) ---
+
+    #[test]
+    fn to_relative_normalizes_bit_values_by_the_bit_depths_max() {
+        assert_eq!(PixelUnits::Bit.to_relative(255.0, 8), 1.0);
+        assert_eq!(PixelUnits::Bit.to_relative(65535.0, 16), 1.0);
+        assert!((PixelUnits::Bit.to_relative(127.5, 8) - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn to_relative_divides_percent_by_one_hundred() {
+        assert_eq!(PixelUnits::Percent.to_relative(50.0, 8), 0.5);
+        assert_eq!(PixelUnits::Percent.to_relative(100.0, 8), 1.0);
+    }
+
+    #[test]
+    fn to_relative_passes_relative_through_unchanged() {
+        assert_eq!(PixelUnits::Relative.to_relative(0.75, 8), 0.75);
+    }
+
+    #[test]
+    fn to_pixel_passes_pixels_through_unchanged() {
+        assert_eq!(SizeUnits::Pixels.to_pixel(10.0, 100.0), 10);
+    }
+
+    #[test]
+    fn to_pixel_divides_nanometers_by_the_pixel_size() {
+        // 200nm at 100nm/px = 2px
+        assert_eq!(SizeUnits::NanoMeter.to_pixel(200.0, 100.0), 2);
+    }
+
     /// `SCREAMING_SNAKE_CASE` is the canonical on-disk shape, matching every
     /// other enum in the codebase - see `PixelUnits`/`SizeUnits` old `rename`
     /// short forms, kept only as read aliases below.

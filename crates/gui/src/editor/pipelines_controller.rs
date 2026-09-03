@@ -1607,9 +1607,9 @@ impl PipelinesController {
             match target {
                 CommandCategory::Preprocess => fc_pre,
                 CommandCategory::Segment => fc_seg,
-                CommandCategory::Object => fc_obj,
+                CommandCategory::InstanceSegmentation => fc_obj,
                 CommandCategory::Measure => fc_mea,
-                CommandCategory::Classify => fc_cls,
+                CommandCategory::Object => fc_cls,
             }
         };
         let make = |m: &evanalyzer_cfg::settings::pipeline_command::CommandMeta,
@@ -1636,11 +1636,11 @@ impl PipelinesController {
         let obj: Vec<CommandDef> = metas
             .iter()
             .filter(|m| {
-                matches!(m.category, CommandCategory::Object)
+                matches!(m.category, CommandCategory::InstanceSegmentation)
                     && cat_enabled(m.category)
                     && text_matches(m)
             })
-            .map(|m| make(m, StepCategory::Object))
+            .map(|m| make(m, StepCategory::InstanceSegmentation))
             .collect();
         let mea: Vec<CommandDef> = metas
             .iter()
@@ -1654,11 +1654,11 @@ impl PipelinesController {
         let cls: Vec<CommandDef> = metas
             .iter()
             .filter(|m| {
-                matches!(m.category, CommandCategory::Classify)
+                matches!(m.category, CommandCategory::Object)
                     && cat_enabled(m.category)
                     && text_matches(m)
             })
-            .map(|m| make(m, StepCategory::Classify))
+            .map(|m| make(m, StepCategory::Object))
             .collect();
         let templates_lock = self.pipeline_templates.lock().expect("Poisoned");
         let templates: Vec<CommandDef> = templates_lock
@@ -1759,7 +1759,7 @@ impl PipelinesController {
                     .collect();
                 let shown_obj: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Object))
+                    .filter(|m| matches!(m.category, CommandCategory::InstanceSegmentation))
                     .map(to_command_def)
                     .collect();
                 let shown_mea: Vec<CommandDef> = raw
@@ -1769,7 +1769,7 @@ impl PipelinesController {
                     .collect();
                 let shown_cls: Vec<CommandDef> = raw
                     .iter()
-                    .filter(|m| matches!(m.category, CommandCategory::Classify))
+                    .filter(|m| matches!(m.category, CommandCategory::Object))
                     .map(to_command_def)
                     .collect();
                 let total = all.len() as i32;
@@ -1859,9 +1859,11 @@ impl PipelinesController {
                         category: match step.command.category() {
                             CommandCategory::Preprocess => StepCategory::Preprocess,
                             CommandCategory::Segment => StepCategory::Segment,
-                            CommandCategory::Object => StepCategory::Object,
+                            CommandCategory::InstanceSegmentation => {
+                                StepCategory::InstanceSegmentation
+                            }
                             CommandCategory::Measure => StepCategory::Measure,
-                            CommandCategory::Classify => StepCategory::Classify,
+                            CommandCategory::Object => StepCategory::Object,
                         },
                         enabled: step.enabled,
                         parameters: step.command.to_parameters(),
@@ -2116,9 +2118,9 @@ fn template_to_command_def(idx: usize, template: &PipelineTemplate) -> CommandDe
         .map(|s| match s.command.category() {
             CommandCategory::Preprocess => StepCategory::Preprocess,
             CommandCategory::Segment => StepCategory::Segment,
-            CommandCategory::Object => StepCategory::Object,
+            CommandCategory::InstanceSegmentation => StepCategory::InstanceSegmentation,
             CommandCategory::Measure => StepCategory::Measure,
-            CommandCategory::Classify => StepCategory::Classify,
+            CommandCategory::Object => StepCategory::Object,
         })
         .unwrap_or(StepCategory::Preprocess);
 
@@ -2154,9 +2156,9 @@ fn to_command_def(m: &CommandMeta) -> CommandDef {
     let cat = match m.category {
         CommandCategory::Preprocess => StepCategory::Preprocess,
         CommandCategory::Segment => StepCategory::Segment,
-        CommandCategory::Object => StepCategory::Object,
+        CommandCategory::InstanceSegmentation => StepCategory::InstanceSegmentation,
         CommandCategory::Measure => StepCategory::Measure,
-        CommandCategory::Classify => StepCategory::Classify,
+        CommandCategory::Object => StepCategory::Object,
     };
     let detail = CommandDef {
         id: m.id,
@@ -2489,14 +2491,14 @@ mod tests {
 
     #[test]
     fn template_to_command_def_takes_its_category_from_the_first_step() {
-        // id 6 is "ConnectedComponents" -> CommandCategory::Object.
+        // id 6 is "ConnectedComponents" -> CommandCategory::InstanceSegmentation.
         let step = PipelineStepSettings {
             enabled: true,
             command: default_command(6).unwrap(),
         };
         let t = template("Multi", vec![step]);
         let def = template_to_command_def(0, &t);
-        assert_eq!(def.category, StepCategory::Object);
+        assert_eq!(def.category, StepCategory::InstanceSegmentation);
     }
 
     #[test]
@@ -2558,9 +2560,9 @@ mod tests {
             let expected_category = match meta.category {
                 CommandCategory::Preprocess => StepCategory::Preprocess,
                 CommandCategory::Segment => StepCategory::Segment,
-                CommandCategory::Object => StepCategory::Object,
+                CommandCategory::InstanceSegmentation => StepCategory::InstanceSegmentation,
                 CommandCategory::Measure => StepCategory::Measure,
-                CommandCategory::Classify => StepCategory::Classify,
+                CommandCategory::Object => StepCategory::Object,
             };
             assert_eq!(
                 def.category, expected_category,

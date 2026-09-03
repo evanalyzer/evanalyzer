@@ -1,5 +1,5 @@
 use crate::object::Intensity;
-use crate::pipeline::pipeline_cache::PipelineCache;
+use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
 use duckdb::types::Value;
 use duckdb::{Connection, params};
@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
+use std::time::Instant;
 
 /// One resident ("anchor") `Connection` per results file path, so every
 /// caller in this file that needs a connection to a given `.evadb` shares
@@ -356,7 +357,7 @@ struct ColocStat {
 }
 
 fn compute_coloc_stats(
-    cache: &PipelineCache,
+    cache: &GlobalPipelineCache,
     label: &dyn Fn(&ObjectClass) -> String,
 ) -> Vec<ColocStat> {
     let mut total_per_class: HashMap<String, u64> = HashMap::new();
@@ -401,7 +402,9 @@ fn compute_coloc_stats(
 // ---------------------------------------------------------------------------
 
 impl PipelineResultExporter for DuckDbExporter {
-    fn export(&self, cache: &PipelineCache) -> Result<(), InternalErrors> {
+    fn export(&self, cache: &GlobalPipelineCache) -> Result<(), InternalErrors> {
+        let start = Instant::now();
+        let object_count = cache.object_cache.len();
         let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
         // Objects and their colocalization stats must land together or not at
         // all - without a transaction, a failure partway through (disk full,
@@ -416,8 +419,8 @@ impl PipelineResultExporter for DuckDbExporter {
             .unchecked_transaction()
             .map_err(|e| InternalErrors::Io(e.to_string()))?;
 
-        let px = &cache.image_cache.image_meta.pixel_sizes;
-        let nr_of_bits = cache.image_cache.image_meta.nr_of_bits;
+        let px = &cache.image_meta.pixel_sizes;
+        let nr_of_bits = cache.image_meta.nr_of_bits;
         // Same implausible-bit-depth guard as image_reader.rs's read path -
         // `nr_of_bits` should already have been rejected there before a
         // cache carrying it could exist, but this shouldn't trust that
@@ -593,6 +596,12 @@ impl PipelineResultExporter for DuckDbExporter {
         }
 
         tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;
+
+        log::info!(
+            "Database: exported {object_count} object(s) for {} in {:?}",
+            cache.image_rel_path.display(),
+            start.elapsed()
+        );
         Ok(())
     }
 
@@ -608,7 +617,10 @@ impl PipelineResultExporter for DuckDbExporter {
         image_rel_path: &Path,
         error: Option<&str>,
     ) -> Result<(), InternalErrors> {
-        let conn = self.conn.lock().expect("DuckDB connection mutex poisoned");
+        let conn = self
+            .conn
+            .lock()
+            .expect("Database connection mutex poisoned");
         let image_rel = image_rel_path.display().to_string();
         let image_name = image_display_name(image_rel_path);
         let successful = error.is_none();
@@ -1709,7 +1721,7 @@ mod tests {
         let dir = TempDir::new().expect("failed to create temp dir");
         let path = dir.path().join("results.duckdb");
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         for object in objects {
             cache.object_cache.insert(object.id.clone(), object);
         }
@@ -1733,7 +1745,7 @@ mod tests {
 
         let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
         for (image_rel_path, objects) in images {
-            let mut cache = PipelineCache {
+            let mut cache = GlobalPipelineCache {
                 image_rel_path: image_rel_path.into(),
                 ..Default::default()
             };
@@ -1755,7 +1767,7 @@ mod tests {
 
         let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
         // export() is still called for the image's tile(s), but with no objects.
-        let cache = PipelineCache {
+        let cache = GlobalPipelineCache {
             image_rel_path: "empty.tif".into(),
             ..Default::default()
         };
@@ -1818,7 +1830,7 @@ mod tests {
         let path = dir.path().join("results.duckdb");
 
         let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
-        let cache = PipelineCache {
+        let cache = GlobalPipelineCache {
             image_rel_path: "still_open.tif".into(),
             ..Default::default()
         };
@@ -1944,7 +1956,7 @@ mod tests {
                 .expect("failed to drop coloc_stats for the test");
         }
 
-        let mut cache = PipelineCache {
+        let mut cache = GlobalPipelineCache {
             image_rel_path: "broken.tif".into(),
             ..Default::default()
         };
@@ -1976,7 +1988,7 @@ mod tests {
 
         let exporter = DuckDbExporter::new(&path, HashMap::new()).expect("exporter init failed");
 
-        let mut with_objects = PipelineCache {
+        let mut with_objects = GlobalPipelineCache {
             image_rel_path: "has_objects.tif".into(),
             ..Default::default()
         };
@@ -1987,7 +1999,7 @@ mod tests {
             .finalize_image(Path::new("has_objects.tif"), None)
             .expect("finalize_image failed");
 
-        let empty = PipelineCache {
+        let empty = GlobalPipelineCache {
             image_rel_path: "empty.tif".into(),
             ..Default::default()
         };
@@ -2172,7 +2184,7 @@ mod tests {
         class_names.insert(ObjectClass::Valid(5), "Unused".to_string());
 
         let exporter = DuckDbExporter::new(&path, class_names).expect("exporter init failed");
-        let mut cache = PipelineCache {
+        let mut cache = GlobalPipelineCache {
             image_rel_path: "img.tif".into(),
             ..Default::default()
         };
@@ -2215,7 +2227,7 @@ mod tests {
         class_names.insert(ObjectClass::Valid(1), "Positive".to_string());
 
         let exporter = DuckDbExporter::new(&path, class_names).expect("exporter init failed");
-        let mut cache = PipelineCache {
+        let mut cache = GlobalPipelineCache {
             image_rel_path: "img.tif".into(),
             ..Default::default()
         };

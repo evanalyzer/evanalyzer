@@ -925,7 +925,7 @@ mod cpp_reference_tests {
     use super::*;
     use crate::algos::ImageAlgorithm;
     use crate::algos::spartial_transform::edm::DistanceTransform;
-    use crate::pipeline::pipeline_cache::PipelineCache;
+    use crate::pipeline::pipeline_cache::GlobalPipelineCache;
     use crate::pipeline::pipeline_context::PipelineContext;
     use kornia_image::{Image, ImageSize};
     use kornia_tensor::CpuAllocator;
@@ -962,7 +962,7 @@ mod cpp_reference_tests {
         )
         .unwrap();
         let mut ctx = PipelineContext::new_from_image_test(img).unwrap();
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         DistanceTransform {
             threshold: 0.0,
             edges_are_background: false,

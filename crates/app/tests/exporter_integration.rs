@@ -8,7 +8,9 @@
 use bitvec::prelude::*;
 use evanalyzer_app::result::{DatabaseFilter, GroupConfig, ResultsExporter, ResultsLoader};
 use evanalyzer_cfg::core_types::{ObjectClass, ObjectId};
-use evanalyzer_core::{DuckDbExporter, Object, ObjectInit, PipelineCache, PipelineResultExporter};
+use evanalyzer_core::{
+    DuckDbExporter, GlobalPipelineCache, Object, ObjectInit, PipelineResultExporter,
+};
 use std::sync::Arc;
 
 fn make_filled_object(id: u128, bbox: [u32; 4], class: ObjectClass) -> Object {
@@ -34,7 +36,11 @@ fn export_fixture(objects: Vec<Object>) -> (tempfile::TempDir, ResultsLoader) {
     let dir = tempfile::TempDir::new().expect("failed to create temp dir");
     let db_path = dir.path().join("results.duckdb");
 
-    let mut cache = PipelineCache::default();
+    let mut cache = GlobalPipelineCache::default();
+    // The exporter rejects an implausible bit depth (guards against
+    // `1u64 << nr_of_bits` overflowing); these tests only care about
+    // object data, so just supply a plausible value.
+    cache.image_meta.nr_of_bits = 16;
     for object in objects {
         cache.object_cache.insert(object.id.clone(), object);
     }

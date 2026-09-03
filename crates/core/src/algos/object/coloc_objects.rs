@@ -16,7 +16,7 @@
 //! regions as distinct ROIs based on configuration settings.
 //!
 use crate::{
-    algos::ImageAlgorithm,
+    algos::{ExecutionScope, ImageAlgorithm},
     object::{Object, ObjectInit},
     spatial_grid::BboxGrid,
 };
@@ -57,7 +57,7 @@ pub enum ColocMultiplicity {
 /// between intersecting entities and can optionally generate new child ROIs representing
 /// the precise intersection regions.
 #[derive(CommandsMeta)]
-#[cmdsmeta(category = "classify")]
+#[cmdsmeta(category = "object")]
 pub struct Colocalization {
     /// Theses are the classes the coloclization should be calculated for
     pub classes_to_coloc: Vec<ObjectClass>,
@@ -102,7 +102,7 @@ impl ImageAlgorithm for Colocalization {
     fn execute(
         &self,
         ctx: &mut crate::pipeline::pipeline_context::PipelineContext,
-        cache: &mut crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &mut crate::pipeline::pipeline_cache::GlobalPipelineCache,
     ) -> Result<(), InternalErrors> {
         // If there aren't at least two classes, colocalization is impossible.
         if self.classes_to_coloc.len() < 2 {
@@ -375,8 +375,7 @@ impl ImageAlgorithm for Colocalization {
                                 // and never sampled pixel data, and this object never passes
                                 // through `ExtractObjects` (the step that normally measures
                                 // intensities), so it needs its own measurement pass here.
-                                intersection.intensities =
-                                    intersection.measure_intensities(ctx, cache);
+                                intersection.intensities = intersection.measure_intensities(cache);
                                 new_objects.push(intersection);
                             }
                         }
@@ -414,6 +413,10 @@ impl ImageAlgorithm for Colocalization {
     fn cite(&self) -> Option<&'static CitationMetadata> {
         None
     }
+
+    fn execution_scope(&self) -> ExecutionScope {
+        ExecutionScope::WholeImage
+    }
 }
 
 impl Colocalization {
@@ -435,7 +438,7 @@ impl Colocalization {
         object: &Object,
         exclude_id: &ObjectId,
         bucket: &[ObjectId],
-        cache: &crate::pipeline::pipeline_cache::PipelineCache,
+        cache: &crate::pipeline::pipeline_cache::GlobalPipelineCache,
         min_area_px: usize,
     ) -> Option<ObjectId> {
         bucket
@@ -462,10 +465,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        ImageContainer, ImagePlane, ManagedImage,
+        ImageContainer, ImagePlane, ImageTile, ManagedImage,
         image::PixelSizes,
         pipeline::{
-            pipeline::PipelineImageMeta, pipeline_cache::PipelineCache,
+            pipeline::PipelineImageMeta, pipeline_cache::GlobalPipelineCache,
             pipeline_context::PipelineContext,
         },
     };
@@ -544,7 +547,7 @@ mod tests {
     const ID_B: u128 = 200_000;
     const ID_C: u128 = 300_000;
 
-    fn run(coloc: &Colocalization, cache: &mut PipelineCache) {
+    fn run(coloc: &Colocalization, cache: &mut GlobalPipelineCache) {
         coloc.execute(&mut make_ctx(), cache).unwrap();
     }
 
@@ -615,7 +618,7 @@ mod tests {
 
         for &n in &[500u32, 2_000, 8_000, 20_000] {
             let span = (n as f64).sqrt().ceil() as u32 + 1;
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             for o in scattered_objects(n, CLASS_A, 100_000, span, 111) {
                 cache.object_cache.insert(o.id.clone(), o);
             }
@@ -655,7 +658,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         cache.object_cache.insert(object.id.clone(), object);
 
@@ -680,7 +683,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // object A: [0,0,4,4], object B: [2,2,6,6] → overlap [2,2,4,4]
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
@@ -715,7 +718,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // No shared bounding box region
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [10, 10, 14, 14], ImagePlane::default(), CLASS_B);
@@ -745,7 +748,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let plane_ch0 = ImagePlane { z: 0, c: 0, t: 0 };
         let plane_ch1 = ImagePlane { z: 0, c: 1, t: 0 };
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], plane_ch0, CLASS_A);
@@ -778,7 +781,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // object_a has CLASS_A but NOT CLASS_C → filtered out
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         // object_b has CLASS_B and CLASS_C → passes filter
@@ -809,7 +812,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // Inclusive bboxes: A covers [0,3]×[0,3], B covers [2,5]×[2,5] → overlap [2,3]×[2,3]=2×2=4 px
         let object_a = make_filled_object(ID_A, [0, 0, 3, 3], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 5, 5], ImagePlane::default(), CLASS_B);
@@ -874,17 +877,23 @@ mod tests {
         )
         .unwrap();
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         // Constant-value channel so the expected sum/avg/min/max are trivial to compute.
         let channel_img =
             Image::<f32, 1, CpuAllocator>::new(size, vec![VALUE; 100], CpuAllocator).unwrap();
-        cache.image_cache.add_to_channel_cache(
+        cache.add_to_channel_cache(
             Arc::new(ImageContainer::F32Gray(ManagedImage {
                 data: channel_img,
                 tile_offset: Point2d { x: 0, y: 0 },
                 plane: None,
             })),
             CHANNEL,
+            ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
         );
 
         // Inclusive bboxes: A covers [0,5]×[0,5], B covers [3,8]×[3,8] → overlap [3,5]×[3,5] = 3×3 = 9 px
@@ -935,7 +944,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 8, 8], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [4, 4, 10, 10], ImagePlane::default(), CLASS_C);
@@ -995,7 +1004,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 7, 7], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [4, 4, 9, 9], ImagePlane::default(), CLASS_C);
@@ -1037,7 +1046,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 10, 10], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [1, 1, 4, 4], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [6, 6, 9, 9], ImagePlane::default(), CLASS_C);
@@ -1084,7 +1093,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 5, 5], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [3, 3, 8, 8], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [6, 6, 11, 11], ImagePlane::default(), CLASS_C);
@@ -1134,7 +1143,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         const ID_X: u128 = 400_000;
         const ID_W: u128 = 500_000;
@@ -1188,7 +1197,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 6, 6], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 8, 8], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [4, 4, 10, 10], ImagePlane::default(), CLASS_C);
@@ -1220,7 +1229,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
         let object_c = make_filled_object(ID_C, [20, 20, 24, 24], ImagePlane::default(), CLASS_C);
@@ -1250,7 +1259,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let object_a = make_filled_object(ID_A, [0, 0, 4, 4], ImagePlane::default(), CLASS_A);
         let object_b = make_filled_object(ID_B, [2, 2, 6, 6], ImagePlane::default(), CLASS_B);
         cache.object_cache.insert(object_a.id.clone(), object_a);
@@ -1283,7 +1292,7 @@ mod tests {
             min_coloc_area: 0.0,
             size_unit: SizeUnits::Pixels,
         };
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
 
         const ID_CELL_A: u128 = 900_001; // lower id - wins area ties
         const ID_CELL_B: u128 = 900_002;
@@ -1388,7 +1397,7 @@ mod tests {
         const ID_CELL_3: u128 = 910_003;
         const ID_CELL_4: u128 = 910_004;
 
-        let mut cache = PipelineCache::default();
+        let mut cache = GlobalPipelineCache::default();
         let cell_0 = make_filled_object(ID_CELL_0, [0, 0, 9, 9], ImagePlane::default(), CLASS_A);
         let cell_1 = make_filled_object(ID_CELL_1, [10, 0, 19, 9], ImagePlane::default(), CLASS_A);
         let cell_2 = make_filled_object(ID_CELL_2, [40, 0, 49, 9], ImagePlane::default(), CLASS_A);
@@ -1513,7 +1522,7 @@ mod tests {
         run(&coloc_b, &mut cache);
         run(&coloc_c, &mut cache);
 
-        let coloc_count = |cache: &PipelineCache, id: u128, class: ObjectClass| -> usize {
+        let coloc_count = |cache: &GlobalPipelineCache, id: u128, class: ObjectClass| -> usize {
             cache
                 .object_cache
                 .get(&ObjectId(id))
@@ -1711,7 +1720,7 @@ mod tests {
 
         for seed in 1..12u32 {
             let mut rng = Rng(seed * 104_729 + 1);
-            let mut cache = PipelineCache::default();
+            let mut cache = GlobalPipelineCache::default();
             let mut ids_by_class: std::collections::HashMap<ObjectClass, Vec<ObjectId>> =
                 std::collections::HashMap::new();
             let mut next_id: u128 = 1;
@@ -1812,5 +1821,140 @@ mod tests {
                 }
             }
         }
+    }
+
+    // --- Composed correctness with TileMerge ---
+
+    /// A fully-filled rectangular object carrying an explicit `source_tile` -
+    /// what `TileMerge` needs to recognize a tile-edge fragment, unlike
+    /// `make_filled_object` above (which leaves `source_tile` defaulted and
+    /// is only ever used untiled in this file's other tests).
+    fn tile_fragment(
+        id: u128,
+        bbox: [u32; 4],
+        class: ObjectClass,
+        source_tile: ImageTile,
+    ) -> Object {
+        let [x0, y0, x1, y1] = bbox;
+        let w = (x1 - x0 + 1) as usize;
+        let h = (y1 - y0 + 1) as usize;
+        let mut object = Object::new(ObjectInit {
+            id: ObjectId(id),
+            bbox,
+            mask_data: BitVec::<u64, Lsb0>::repeat(true, w * h),
+            area: w * h,
+            plane: ImagePlane::default(),
+            source_tile,
+            ..Default::default()
+        });
+        object.add_object_class(class);
+        object
+    }
+
+    /// Composed-correctness regression: a real object split across a tile
+    /// boundary must colocalize correctly once `TileMerge` has reconstructed
+    /// it, in a case where *neither fragment alone* would clear
+    /// `min_coloc_area` against the same partner - i.e. without merging,
+    /// this would be a silent false negative (no colocalization recorded at
+    /// all), not just a slightly-off area. Proves the specific claim that
+    /// colocalization is correct for whole-slide (tiled) images, not merely
+    /// that `Colocalization` is `WholeImage`-scoped.
+    #[test]
+    fn tile_merged_object_colocalizes_correctly_even_though_neither_fragment_alone_clears_the_threshold()
+     {
+        use crate::algos::{Connectivity, TileMerge};
+
+        let tile_a = ImageTile {
+            offset_x: 0,
+            offset_y: 0,
+            width: 10,
+            height: 10,
+        };
+        let tile_b = ImageTile {
+            offset_x: 10,
+            offset_y: 0,
+            width: 10,
+            height: 10,
+        };
+        // One real CLASS_A object, split by the tile boundary at x=10:
+        // fragment A [8,4,9,5] (2x2=4px), fragment B [10,4,11,5] (2x2=4px).
+        // Merged, it spans [8,4,11,5] (4x2=8px) - exactly the CLASS_B
+        // object's own bbox, so the merged overlap is the full 8px, while
+        // each fragment overlaps CLASS_B by only 4px.
+        let objects = || {
+            vec![
+                tile_fragment(ID_A, [8, 4, 9, 5], CLASS_A, tile_a.clone()),
+                tile_fragment(200_001, [10, 4, 11, 5], CLASS_A, tile_b.clone()),
+                make_filled_object(ID_B, [8, 4, 11, 5], ImagePlane::default(), CLASS_B),
+            ]
+        };
+        let coloc = Colocalization {
+            classes_to_coloc: vec![CLASS_A, CLASS_B],
+            filter_classes: vec![],
+            exclude_classes: vec![],
+            class_for_overlapping_areas: ObjectClass::Unset,
+            multiplicity: ColocMultiplicity::ManyToMany,
+            // Above each fragment's own 4px overlap, but at/below the merged
+            // object's 8px overlap.
+            min_coloc_area: 5.0,
+            size_unit: SizeUnits::Pixels,
+        };
+
+        // Sanity check: without tile-merge, neither fragment's overlap with
+        // CLASS_B clears the threshold alone - a silent false negative, and
+        // proof this scenario actually exercises the bug being guarded
+        // against.
+        let mut unmerged_cache = GlobalPipelineCache::default();
+        for o in objects() {
+            unmerged_cache.object_cache.insert(o.id.clone(), o);
+        }
+        run(&coloc, &mut unmerged_cache);
+        assert!(
+            unmerged_cache
+                .object_cache
+                .values()
+                .all(|o| o.colocalized_with.is_empty()),
+            "sanity check: unmerged fragments must each fall below min_coloc_area alone"
+        );
+
+        // Now merge first, exactly as the real whole-image pipeline order
+        // does (TileMerge always runs before any other whole-image command).
+        let mut cache = GlobalPipelineCache::default();
+        for o in objects() {
+            cache.object_cache.insert(o.id.clone(), o);
+        }
+        TileMerge {
+            classes_to_not_merge: Vec::new(),
+            connectivity: Connectivity::EightConnected,
+            max_fragments_per_group: 100,
+        }
+        .execute(&mut make_ctx(), &mut cache)
+        .unwrap();
+        let merged_a = cache
+            .object_cache
+            .values()
+            .find(|o| o.has_object_class(&CLASS_A))
+            .expect("the two CLASS_A fragments must have merged into one object")
+            .id
+            .clone();
+
+        run(&coloc, &mut cache);
+
+        let merged = cache.object_cache.get(&merged_a).unwrap();
+        assert!(
+            merged
+                .colocalized_with
+                .get(&CLASS_B)
+                .is_some_and(|ids| ids.contains(&ObjectId(ID_B))),
+            "the reconstructed object's full 8px overlap must clear min_coloc_area even \
+             though neither fragment did alone"
+        );
+        let b = cache.object_cache.get(&ObjectId(ID_B)).unwrap();
+        assert!(
+            b.colocalized_with
+                .get(&CLASS_A)
+                .is_some_and(|ids| ids.contains(&merged_a)),
+            "CLASS_B's own record must point back at the merged object, not a stale fragment id"
+        );
     }
 }

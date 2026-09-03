@@ -1,3 +1,5 @@
+pub mod image_cache;
+pub mod object_cache;
 pub mod pipeline;
 pub mod pipeline_cache;
 pub mod pipeline_context;
