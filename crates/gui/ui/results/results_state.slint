@@ -1,0 +1,131 @@
+// results_state.slint
+// Central state + callbacks for the redesigned Results window. Mirrors the
+// naming style of the existing ResultsState (results_table.slint) so this
+// can be merged into it rather than kept as a second global — every
+// property here is meant to be backed by Rust, every callback fired on
+// user action for Rust to handle.
+//
+// Kept separate from results_table.slint (not modified — unseen in this
+// pass) so nothing you already have wired up is touched. Fold these fields
+// into your existing ResultsState when integrating.
+
+export enum ResultsRailMode { list, matrix, charts, coloc }
+// Matrix drill depth: plate (grouped grid) -> well (fields of one well) ->
+// object (single image + detected objects).
+export enum MatrixLevel { plate, well, object }
+export enum ResultsChartKind2 { histogram, scatter, heatmap }
+
+export struct BreadcrumbItem {
+    label: string,
+}
+
+export struct ColumnItem {
+    label: string,
+    checked: bool,
+    // "" for ungrouped identifier/geometry columns; else e.g. "Intensity"
+    // or a per-Coloc-class name — same shape as export_dialog's FilterItem.
+    group: string,
+    group-header: bool,
+    group-all-checked: bool,
+}
+
+export struct MatrixCell {
+    key: string,       // e.g. "D5" (well) or "img_03" (field)
+    value: float,
+    has-value: bool,
+    label: string,
+}
+
+export struct ObjectMarker {
+    id: int,
+    x-pct: float,
+    y-pct: float,
+    class-color: color,
+    selected: bool,
+}
+
+export struct ColocPartner {
+    id: int,
+    class-label: string,
+    class-color: color,
+    overlap-pct: int,
+}
+
+export global ResultsState2 {
+    // -------- Navigation --------
+    in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
+    in-out property <MatrixLevel> matrix-level: MatrixLevel.plate;
+    in-out property <[BreadcrumbItem]> breadcrumb: [{ label: "All results" }];
+    callback rail-mode-selected(ResultsRailMode);
+    // Index of the clicked breadcrumb segment (always < length - 1).
+    callback breadcrumb-nav(int);
+
+    // -------- Global Z/T plane filter (applies to every view) --------
+    in-out property <int> z-stack: 0;
+    in-out property <int> z-stack-max: 0;
+    in-out property <int> t-stack: 0;
+    in-out property <int> t-stack-max: 0;
+    in-out property <bool> z-stack-active: false;
+    in-out property <bool> t-stack-active: false;
+    callback z-changed(int);
+    callback t-changed(int);
+
+    // -------- List view --------
+    in-out property <string> list-image-filter: "";
+    in-out property <string> list-class-filter: "All classes";
+    in-out property <[ColumnItem]> list-columns: [];
+    in-out property <int> list-row-count: 0;
+    callback list-image-filter-changed(string);
+    callback list-class-filter-clicked();
+    callback list-column-toggled(string);
+    callback list-column-group-toggled(string);
+    callback list-columns-select-all();
+    callback list-columns-select-none();
+
+    // -------- Matrix / plate / well / object --------
+    in-out property <string> matrix-value-label: "Number of objects";
+    in-out property <string> matrix-aggregate: "Average";
+    in-out property <string> matrix-class-filter: "All classes";
+    in-out property <string> matrix-group-regex: "";
+    in-out property <[string]> matrix-aggregate-options: ["Average", "Median", "Sum", "Max", "Min"];
+    in-out property <[MatrixCell]> plate-cells: [];
+    in-out property <int> plate-rows: 8;
+    in-out property <int> plate-cols: 12;
+    in-out property <float> plate-min: 0;
+    in-out property <float> plate-max: 0;
+    in-out property <string> active-well: "";
+    in-out property <[MatrixCell]> well-fields: [];
+    in-out property <float> well-min: 0;
+    in-out property <float> well-max: 0;
+    in-out property <string> active-field: "";
+    in-out property <[ObjectMarker]> object-markers: [];
+    in-out property <string> active-image-name: "";
+    callback matrix-value-clicked();
+    callback matrix-aggregate-selected(string);
+    callback matrix-class-clicked();
+    callback matrix-regex-changed(string);
+    callback plate-cell-clicked(string);
+    callback well-field-clicked(string);
+    callback object-marker-clicked(int);
+    callback matrix-back-to-plate();
+    callback matrix-back-to-well();
+
+    // -------- Charts --------
+    in-out property <ResultsChartKind2> chart-kind: ResultsChartKind2.histogram;
+    in-out property <string> chart-property: "Area (µm²)";
+    in-out property <string> chart-class-filter: "All classes";
+    callback chart-kind-selected(ResultsChartKind2);
+    callback chart-property-clicked();
+
+    // -------- Colocalization --------
+    in-out property <[string]> coloc-object-ids: [];
+    in-out property <int> coloc-selected-id: 0;
+    in-out property <[string]> coloc-properties: ["Intensity", "Size", "Circularity"];
+    in-out property <[string]> coloc-active-properties: ["Intensity", "Size"];
+    in-out property <[ColocPartner]> coloc-partners: [];
+    callback coloc-object-selected(int);
+    callback coloc-property-toggled(string);
+
+    // -------- Export --------
+    callback export-dialog-open();
+}
