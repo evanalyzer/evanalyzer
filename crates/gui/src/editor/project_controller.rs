@@ -1046,7 +1046,7 @@ mod tests {
     use crate::editor::histogram_controller::HistogramController;
     use crate::editor::image_meta_controller::ImageMetaController;
     use crate::editor::object_list_controller::ObjectListController;
-    use crate::editor::results_table_controller::ResultsTableController;
+    use crate::editor::results_state_controller::ResultsStateController;
     use crate::editor::test_support::test_ui_state;
     use crate::editor::viewport_controller::ViewportController;
 
@@ -1099,11 +1099,9 @@ mod tests {
             viewport_controller.clone(),
             template_controller.clone(),
         ));
-        let results_table_controller = Arc::new(ResultsTableController::new(
+        let results_table_controller = Arc::new(ResultsStateController::new(
             slint::Weak::default(),
             ui_state.clone(),
-            image_list_controller.clone(),
-            project_settings_controller.clone(),
         ));
         let results_list_controller = Arc::new(ResultsListController::new(
             slint::Weak::default(),

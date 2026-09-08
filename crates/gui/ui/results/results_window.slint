@@ -10,7 +10,7 @@
 
 import { Theme } from "../style.slint";
 import {
-    ResultsState2,
+    ResultsState,
     ResultsRailMode,
     MatrixLevel,
 } from "results_state.slint";
@@ -40,28 +40,28 @@ export component ResultsWindow inherits Window {
 
             ResultsBreadcrumb { }
 
-            if ResultsState2.rail-mode == ResultsRailMode.list: ResultsListView {
+            if ResultsState.rail-mode == ResultsRailMode.list: ResultsListView {
                 vertical-stretch: 1;
             }
-            if ResultsState2.rail-mode == ResultsRailMode.matrix: ResultsMatrixView {
+            if ResultsState.rail-mode == ResultsRailMode.matrix: ResultsMatrixView {
                 vertical-stretch: 1;
             }
-            if ResultsState2.rail-mode == ResultsRailMode.coloc: ResultsColocView {
+            if ResultsState.rail-mode == ResultsRailMode.coloc: ResultsColocView {
                 vertical-stretch: 1;
             }
-            if ResultsState2.rail-mode == ResultsRailMode.charts: ResultsChartsView {
+            if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {
                 vertical-stretch: 1;
             }
         }
     }
 
-    // if ResultsState2.export_dialog_active: ExportDialog { width: 100%; height: 100%; }
+    // if ResultsState.export_dialog_active: ExportDialog { width: 100%; height: 100%; }
 }
 
 // -------------------------------------------------------------------------
 // Rust wiring notes
 // -------------------------------------------------------------------------
-// Breadcrumb / drill-down (keep ResultsState2.breadcrumb in sync in Rust):
+// Breadcrumb / drill-down (keep ResultsState.breadcrumb in sync in Rust):
 //   plate-cell-clicked(well_id)   -> push "Well {id}", set matrix-level=well,
 //                                     load well-fields, active-well=well_id
 //   well-field-clicked(field_id)  -> push "{field_id}.vsi", matrix-level=object,

@@ -51,7 +51,7 @@ export struct ColocPartner {
     overlap-pct: int,
 }
 
-export global ResultsState2 {
+export global ResultsState {
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
     in-out property <MatrixLevel> matrix-level: MatrixLevel.plate;
@@ -64,7 +64,7 @@ export global ResultsState2 {
     // TEMPORARY: -active defaults flipped to true and -max given non-zero
     // previews so GlobalPlaneStepper is visible for design review before
     // Rust wires these up (see "Rust wiring notes" below). Reset both to
-    // `false` once results_table_controller.rs drives ResultsState2.
+    // `false` once results_table_controller.rs drives ResultsState.
     in-out property <int> z-stack: 0;
     in-out property <int> z-stack-max: 6;
     in-out property <int> t-stack: 0;

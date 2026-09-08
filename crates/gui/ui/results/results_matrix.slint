@@ -1,11 +1,16 @@
 // results_matrix.slint — Plate (grouped grid) -> Well (fields) -> Object
 // (single image + detected-object markers), all three drill levels driven
-// by ResultsState2.matrix-level so the breadcrumb + this one view swap in
+// by ResultsState.matrix-level so the breadcrumb + this one view swap in
 // place rather than opening new windows.
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
-import { ResultsState2, MatrixLevel, MatrixCell, ObjectMarker } from "results_state.slint";
+import {
+    ResultsState,
+    MatrixLevel,
+    MatrixCell,
+    ObjectMarker,
+} from "results_state.slint";
 import { FilterPill, LegendBar, ValueColor } from "results_common.slint";
 
 component MatrixCellView inherits Rectangle {
@@ -27,8 +32,22 @@ component MatrixCellView inherits Rectangle {
 
     if root.cell.has-value: VerticalLayout {
         alignment: center;
-        Text { text: root.cell.key; font-size: 9.5px; color: #0B0C0F; opacity: 0.75; horizontal-alignment: center; }
-        Text { text: root.cell.label; font-size: 11.5px; font-family: Theme.font-mono; font-weight: 600; color: #0B0C0F; horizontal-alignment: center; }
+        Text {
+            text: root.cell.key;
+            font-size: 9.5px;
+            color: #0B0C0F;
+            opacity: 0.75;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.cell.label;
+            font-size: 11.5px;
+            font-family: Theme.font-mono;
+            font-weight: 600;
+            color: #0B0C0F;
+            horizontal-alignment: center;
+        }
     }
 }
 
@@ -36,15 +55,45 @@ component MatrixCellView inherits Rectangle {
 component PlateGrid inherits Rectangle {
     padding: 20px;
 
-    property <[string]> row-letters: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
+    property <[string]> row-letters: [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J",
+        "K",
+        "L",
+        "M",
+        "N",
+        "O",
+        "P",
+        "Q",
+        "R",
+        "S",
+        "T",
+        "U",
+        "V",
+        "W",
+        "X",
+        "Y",
+        "Z"
+    ];
 
     VerticalLayout {
         spacing: 4px;
 
         HorizontalLayout {
             spacing: 4px;
-            Rectangle { width: 26px; }
-            for c in ResultsState2.plate-cols: Text {
+            Rectangle {
+                width: 26px;
+            }
+
+            for c in ResultsState.plate-cols: Text {
                 text: c + 1;
                 horizontal-stretch: 1;
                 horizontal-alignment: center;
@@ -54,21 +103,28 @@ component PlateGrid inherits Rectangle {
             }
         }
 
-        for r in ResultsState2.plate-rows: HorizontalLayout {
+        for r in ResultsState.plate-rows: HorizontalLayout {
             vertical-stretch: 1;
             spacing: 4px;
 
             Rectangle {
                 width: 26px;
-                Text { text: root.row-letters[mod(r, 26)]; font-size: 10px; font-family: Theme.font-mono; color: Theme.text-faint; horizontal-alignment: center; vertical-alignment: center; }
+                Text {
+                    text: root.row-letters[mod(r, 26)];
+                    font-size: 10px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text-faint;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
 
-            for c in ResultsState2.plate-cols: MatrixCellView {
+            for c in ResultsState.plate-cols: MatrixCellView {
                 horizontal-stretch: 1;
-                cell: ResultsState2.plate-cells[r * ResultsState2.plate-cols + c];
-                range-min: ResultsState2.plate-min;
-                range-max: ResultsState2.plate-max;
-                clicked => { ResultsState2.plate-cell-clicked(self.cell.key); }
+                cell: ResultsState.plate-cells[r * ResultsState.plate-cols + c];
+                range-min: ResultsState.plate-min;
+                range-max: ResultsState.plate-max;
+                clicked => { ResultsState.plate-cell-clicked(self.cell.key); }
             }
         }
     }
@@ -80,13 +136,13 @@ component WellGrid inherits Rectangle {
 
     GridLayout {
         spacing: 14px;
-        for field[i] in ResultsState2.well-fields: MatrixCellView {
+        for field[i] in ResultsState.well-fields: MatrixCellView {
             row: i / 3;
             col: mod(i, 3);
             cell: field;
-            range-min: ResultsState2.well-min;
-            range-max: ResultsState2.well-max;
-            clicked => { ResultsState2.well-field-clicked(self.cell.key); }
+            range-min: ResultsState.well-min;
+            range-max: ResultsState.well-max;
+            clicked => { ResultsState.well-field-clicked(self.cell.key); }
         }
     }
 }
@@ -98,14 +154,15 @@ component ObjectImage inherits Rectangle {
     clip: true;
 
     Text {
-        x: 12px; y: 12px;
-        text: ResultsState2.active-image-name;
+        x: 12px;
+        y: 12px;
+        text: ResultsState.active-image-name;
         font-size: 10.5px;
         font-family: Theme.font-mono;
         color: Theme.text-mute;
     }
 
-    for marker in ResultsState2.object-markers: Rectangle {
+    for marker in ResultsState.object-markers: Rectangle {
         width: 16px;
         height: 16px;
         x: parent.width * marker.x-pct - self.width / 2;
@@ -117,7 +174,8 @@ component ObjectImage inherits Rectangle {
 
         Rectangle {
             visible: marker.selected;
-            x: -3px; y: -3px;
+            x: -3px;
+            y: -3px;
             width: parent.width + 6px;
             height: parent.height + 6px;
             border-radius: (parent.width + 6px) / 2;
@@ -127,7 +185,7 @@ component ObjectImage inherits Rectangle {
 
         TouchArea {
             mouse-cursor: pointer;
-            clicked => { ResultsState2.object-marker-clicked(marker.id); }
+            clicked => { ResultsState.object-marker-clicked(marker.id); }
         }
     }
 }
@@ -141,7 +199,7 @@ export component ResultsMatrixView inherits Rectangle {
         // -- Toolbar: differs slightly by level, but Value/Aggregate/Class/
         // regex only make sense at the Plate level (fields are already the
         // finest per-image grouping).
-        if ResultsState2.matrix-level == MatrixLevel.plate: Rectangle {
+        if ResultsState.matrix-level == MatrixLevel.plate: Rectangle {
             height: 54px;
             HorizontalLayout {
                 padding-left: 16px;
@@ -149,15 +207,37 @@ export component ResultsMatrixView inherits Rectangle {
                 spacing: 10px;
                 cross-axis-alignment: center;
 
-                FilterPill { label: "VALUE"; value: ResultsState2.matrix-value-label; pill-width: 160px; clicked => { ResultsState2.matrix-value-clicked(); } }
-                FilterPill { label: "AGGREGATE"; value: ResultsState2.matrix-aggregate; pill-width: 120px; clicked => { ResultsState2.matrix-aggregate-selected(ResultsState2.matrix-aggregate); } }
-                FilterPill { label: "CLASS"; value: ResultsState2.matrix-class-filter; pill-width: 120px; clicked => { ResultsState2.matrix-class-clicked(); } }
+                FilterPill {
+                    label: "VALUE";
+                    value: ResultsState.matrix-value-label;
+                    pill-width: 160px;
+                    clicked => { ResultsState.matrix-value-clicked(); }
+                }
+
+                FilterPill {
+                    label: "AGGREGATE";
+                    value: ResultsState.matrix-aggregate;
+                    pill-width: 120px;
+                    clicked => { ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate); }
+                }
+
+                FilterPill {
+                    label: "CLASS";
+                    value: ResultsState.matrix-class-filter;
+                    pill-width: 120px;
+                    clicked => { ResultsState.matrix-class-clicked(); }
+                }
 
                 VerticalLayout {
                     spacing: 4px;
                     width: 230px;
 
-                    Text { text: "GROUP BY (REGEX)"; font-size: 9px; letter-spacing: 0.4px; color: Theme.text-mute; }
+                    Text {
+                        text: "GROUP BY (REGEX)";
+                        font-size: 9px;
+                        letter-spacing: 0.4px;
+                        color: Theme.text-mute;
+                    }
 
                     Rectangle {
                         height: 26px;
@@ -170,13 +250,14 @@ export component ResultsMatrixView inherits Rectangle {
                             x: 10px;
                             width: parent.width - 20px;
                             height: parent.height;
-                            text <=> ResultsState2.matrix-group-regex;
+                            text <=> ResultsState.matrix-group-regex;
                             font-size: 11px;
                             color: Theme.text;
                             vertical-alignment: center;
                             single-line: true;
-                            edited => { ResultsState2.matrix-regex-changed(self.text); }
+                            edited => { ResultsState.matrix-regex-changed(self.text); }
                         }
+
                         if regex-input.text == "": Text {
                             x: 10px;
                             width: parent.width - 20px;
@@ -189,19 +270,37 @@ export component ResultsMatrixView inherits Rectangle {
                     }
                 }
 
-                FilterPill { label: "COLOR SCALE"; value: ResultsState2.matrix-color-scale; pill-width: 110px; clicked => { ResultsState2.matrix-color-scale-clicked(); } }
+                FilterPill {
+                    label: "COLOR SCALE";
+                    value: ResultsState.matrix-color-scale;
+                    pill-width: 110px;
+                    clicked => { ResultsState.matrix-color-scale-clicked(); }
+                }
 
-                Rectangle { horizontal-stretch: 1; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
             }
-            Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border-soft; }
+
+            Rectangle {
+                x: 0;
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: Theme.border-soft;
+            }
         }
 
         HorizontalLayout {
             vertical-stretch: 1;
 
-            if ResultsState2.matrix-level == MatrixLevel.plate: PlateGrid { horizontal-stretch: 1; }
-            if ResultsState2.matrix-level == MatrixLevel.well: WellGrid { horizontal-stretch: 1; }
-            if ResultsState2.matrix-level == MatrixLevel.object: Rectangle {
+            if ResultsState.matrix-level == MatrixLevel.plate: PlateGrid {
+                horizontal-stretch: 1;
+            }
+            if ResultsState.matrix-level == MatrixLevel.well: WellGrid {
+                horizontal-stretch: 1;
+            }
+            if ResultsState.matrix-level == MatrixLevel.object: Rectangle {
                 horizontal-stretch: 1;
                 ObjectImage {
                     x: 16px;
@@ -211,17 +310,24 @@ export component ResultsMatrixView inherits Rectangle {
                 }
             }
 
-            if ResultsState2.matrix-level != MatrixLevel.object: Rectangle {
+            if ResultsState.matrix-level != MatrixLevel.object: Rectangle {
                 width: 200px;
-                Rectangle { x: 0; y: 0; width: 1px; height: parent.height; background: Theme.border-soft; }
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: 1px;
+                    height: parent.height;
+                    background: Theme.border-soft;
+                }
+
                 VerticalLayout {
                     padding: 16px;
                     spacing: 16px;
                     alignment: start;
                     LegendBar {
-                        value-label: ResultsState2.matrix-level == MatrixLevel.plate ? ResultsState2.matrix-value-label : "Objects / field";
-                        min-value: ResultsState2.matrix-level == MatrixLevel.plate ? ResultsState2.plate-min : ResultsState2.well-min;
-                        max-value: ResultsState2.matrix-level == MatrixLevel.plate ? ResultsState2.plate-max : ResultsState2.well-max;
+                        value-label: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.matrix-value-label : "Objects / field";
+                        min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : ResultsState.well-min;
+                        max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : ResultsState.well-max;
                     }
                 }
             }

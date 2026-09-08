@@ -6,7 +6,7 @@
 
 import { Theme } from "../style.slint";
 import {
-    ResultsState2,
+    ResultsState,
     ResultsRailMode,
     BreadcrumbItem,
 } from "results_state.slint";
@@ -41,7 +41,8 @@ component RailButton inherits Rectangle {
     Rectangle {
         // active indicator bar
         visible: root.active;
-        x: 0; y: 6px;
+        x: 0;
+        y: 6px;
         width: 3px;
         height: parent.height - 12px;
         border-radius: 1.5px;
@@ -64,6 +65,7 @@ component RailButton inherits Rectangle {
             height: 18px;
             colorize: root.active ? Theme.accent : Theme.text-dim;
         }
+
         Text {
             text: root.label;
             font-size: 9px;
@@ -86,35 +88,40 @@ export component ResultsRail inherits Rectangle {
         RailButton {
             icon: @image-url("../icons/regular-black/list.svg");
             label: "List";
-            active: ResultsState2.rail-mode == ResultsRailMode.list;
-            clicked => { ResultsState2.rail-mode = ResultsRailMode.list; ResultsState2.rail-mode-selected(ResultsRailMode.list); }
+            active: ResultsState.rail-mode == ResultsRailMode.list;
+            clicked => { ResultsState.rail-mode = ResultsRailMode.list; ResultsState.rail-mode-selected(ResultsRailMode.list); }
         }
+
         RailButton {
             icon: @image-url("../icons/regular-black/grid-nine.svg");
             label: "Plate";
-            active: ResultsState2.rail-mode == ResultsRailMode.matrix;
-            clicked => { ResultsState2.rail-mode = ResultsRailMode.matrix; ResultsState2.rail-mode-selected(ResultsRailMode.matrix); }
+            active: ResultsState.rail-mode == ResultsRailMode.matrix;
+            clicked => { ResultsState.rail-mode = ResultsRailMode.matrix; ResultsState.rail-mode-selected(ResultsRailMode.matrix); }
         }
+
         RailButton {
             icon: @image-url("../icons/regular-black/chart-bar.svg");
             label: "Charts";
-            active: ResultsState2.rail-mode == ResultsRailMode.charts;
-            clicked => { ResultsState2.rail-mode = ResultsRailMode.charts; ResultsState2.rail-mode-selected(ResultsRailMode.charts); }
+            active: ResultsState.rail-mode == ResultsRailMode.charts;
+            clicked => { ResultsState.rail-mode = ResultsRailMode.charts; ResultsState.rail-mode-selected(ResultsRailMode.charts); }
         }
+
         RailButton {
             icon: @image-url("../icons/regular-black/intersect-three.svg");
             label: "Coloc";
-            active: ResultsState2.rail-mode == ResultsRailMode.coloc;
-            clicked => { ResultsState2.rail-mode = ResultsRailMode.coloc; ResultsState2.rail-mode-selected(ResultsRailMode.coloc); }
+            active: ResultsState.rail-mode == ResultsRailMode.coloc;
+            clicked => { ResultsState.rail-mode = ResultsRailMode.coloc; ResultsState.rail-mode-selected(ResultsRailMode.coloc); }
         }
 
-        Rectangle { vertical-stretch: 1; }
+        Rectangle {
+            vertical-stretch: 1;
+        }
 
         RailButton {
             icon: @image-url("../icons/regular-black/export.svg");
             label: "Export";
             active: false;
-            clicked => { ResultsState2.export-dialog-open(); }
+            clicked => { ResultsState.export-dialog-open(); }
         }
     }
 }
@@ -148,7 +155,13 @@ component PlaneAxis inherits HorizontalLayout {
         Rectangle {
             border-radius: Theme.radius-sm;
             background: dec-ta.has-hover ? Theme.raised : transparent;
-            Text { text: "‹"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+            Text {
+                text: "‹";
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                font-size: 11px;
+            }
         }
     }
 
@@ -161,7 +174,13 @@ component PlaneAxis inherits HorizontalLayout {
         Rectangle {
             border-radius: Theme.radius-sm;
             background: inc-ta.has-hover ? Theme.raised : transparent;
-            Text { text: "›"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+            Text {
+                text: "›";
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                font-size: 11px;
+            }
         }
     }
 
@@ -178,7 +197,7 @@ component PlaneAxis inherits HorizontalLayout {
 // Docked Z + T control — shown on the right of the breadcrumb bar in every
 // view. Fully hidden (width 0) if neither axis is active for this dataset.
 export component GlobalPlaneStepper inherits Rectangle {
-    visible: ResultsState2.z-stack-active || ResultsState2.t-stack-active;
+    visible: ResultsState.z-stack-active || ResultsState.t-stack-active;
     width: root.visible ? self.preferred-width : 0px;
     height: 26px;
     border-radius: Theme.radius-sm;
@@ -193,20 +212,22 @@ export component GlobalPlaneStepper inherits Rectangle {
         alignment: center;
         cross-axis-alignment: center;
 
-        if ResultsState2.z-stack-active: PlaneAxis {
+        if ResultsState.z-stack-active: PlaneAxis {
             axis-label: "Z";
-            value: ResultsState2.z-stack;
-            max: ResultsState2.z-stack-max;
-            changed(v) => { ResultsState2.z-stack = v; ResultsState2.z-changed(v); }
+            value: ResultsState.z-stack;
+            max: ResultsState.z-stack-max;
+            changed(v) => { ResultsState.z-stack = v; ResultsState.z-changed(v); }
         }
-        if ResultsState2.z-stack-active && ResultsState2.t-stack-active: Rectangle {
-            width: 1px; height: 14px; background: Theme.border-soft;
+        if ResultsState.z-stack-active && ResultsState.t-stack-active: Rectangle {
+            width: 1px;
+            height: 14px;
+            background: Theme.border-soft;
         }
-        if ResultsState2.t-stack-active: PlaneAxis {
+        if ResultsState.t-stack-active: PlaneAxis {
             axis-label: "T";
-            value: ResultsState2.t-stack;
-            max: ResultsState2.t-stack-max;
-            changed(v) => { ResultsState2.t-stack = v; ResultsState2.t-changed(v); }
+            value: ResultsState.t-stack;
+            max: ResultsState.t-stack-max;
+            changed(v) => { ResultsState.t-stack = v; ResultsState.t-changed(v); }
         }
     }
 }
@@ -216,7 +237,13 @@ export component ResultsBreadcrumb inherits Rectangle {
     height: 38px;
     background: Theme.bg;
 
-    Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border-soft; }
+    Rectangle {
+        x: 0;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: Theme.border-soft;
+    }
 
     HorizontalLayout {
         padding-left: 16px;
@@ -224,26 +251,33 @@ export component ResultsBreadcrumb inherits Rectangle {
         spacing: 6px;
         cross-axis-alignment: center;
 
-        for item[i] in ResultsState2.breadcrumb: HorizontalLayout {
+        for item[i] in ResultsState.breadcrumb: HorizontalLayout {
             spacing: 6px;
-            if i > 0: Text { text: "›"; color: Theme.text-faint; font-size: 12px; vertical-alignment: center; }
+            if i > 0: Text {
+                text: "›";
+                color: Theme.text-faint;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
             crumb-ta := TouchArea {
-                enabled: i < ResultsState2.breadcrumb.length - 1;
+                enabled: i < ResultsState.breadcrumb.length - 1;
                 mouse-cursor: crumb-ta.enabled ? pointer : default;
-                clicked => { ResultsState2.breadcrumb-nav(i); }
+                clicked => { ResultsState.breadcrumb-nav(i); }
 
                 Text {
                     text: item.label;
                     font-size: 12.5px;
                     font-family: Theme.font-sans;
-                    font-weight: i == ResultsState2.breadcrumb.length - 1 ? 600 : 400;
-                    color: i == ResultsState2.breadcrumb.length - 1 ? Theme.text : Theme.text-dim;
+                    font-weight: i == ResultsState.breadcrumb.length - 1 ? 600 : 400;
+                    color: i == ResultsState.breadcrumb.length - 1 ? Theme.text : Theme.text-dim;
                     vertical-alignment: center;
                 }
             }
         }
 
-        Rectangle { horizontal-stretch: 1; }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
 
         GlobalPlaneStepper { }
     }
@@ -257,22 +291,70 @@ export component LegendBar inherits VerticalLayout {
 
     spacing: 6px;
 
-    Text { text: root.value-label; font-size: 10.5px; color: Theme.text-mute; letter-spacing: 0.3px; }
+    Text {
+        text: root.value-label;
+        font-size: 10.5px;
+        color: Theme.text-mute;
+        letter-spacing: 0.3px;
+    }
 
     Rectangle {
         height: 10px;
         border-radius: 5px;
-        Rectangle { x: parent.width * 0.0; width: 20%; height: 100%; background: ValueColor.value-color(0.0); }
-        Rectangle { x: parent.width * 0.2; width: 20%; height: 100%; background: ValueColor.value-color(0.25); }
-        Rectangle { x: parent.width * 0.4; width: 20%; height: 100%; background: ValueColor.value-color(0.5); }
-        Rectangle { x: parent.width * 0.6; width: 20%; height: 100%; background: ValueColor.value-color(0.75); }
-        Rectangle { x: parent.width * 0.8; width: 20%; height: 100%; background: ValueColor.value-color(1.0); }
+        Rectangle {
+            x: parent.width * 0.0;
+            width: 20%;
+            height: 100%;
+            background: ValueColor.value-color(0.0);
+        }
+
+        Rectangle {
+            x: parent.width * 0.2;
+            width: 20%;
+            height: 100%;
+            background: ValueColor.value-color(0.25);
+        }
+
+        Rectangle {
+            x: parent.width * 0.4;
+            width: 20%;
+            height: 100%;
+            background: ValueColor.value-color(0.5);
+        }
+
+        Rectangle {
+            x: parent.width * 0.6;
+            width: 20%;
+            height: 100%;
+            background: ValueColor.value-color(0.75);
+        }
+
+        Rectangle {
+            x: parent.width * 0.8;
+            width: 20%;
+            height: 100%;
+            background: ValueColor.value-color(1.0);
+        }
     }
 
     HorizontalLayout {
-        Text { text: Math.round(root.min-value); font-size: 10px; font-family: Theme.font-mono; color: Theme.text-mute; }
-        Rectangle { horizontal-stretch: 1; }
-        Text { text: Math.round(root.max-value); font-size: 10px; font-family: Theme.font-mono; color: Theme.text-mute; }
+        Text {
+            text: Math.round(root.min-value);
+            font-size: 10px;
+            font-family: Theme.font-mono;
+            color: Theme.text-mute;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: Math.round(root.max-value);
+            font-size: 10px;
+            font-family: Theme.font-mono;
+            color: Theme.text-mute;
+        }
     }
 }
 
@@ -301,10 +383,29 @@ export component FilterPill inherits Rectangle {
         padding-bottom: 5px;
         spacing: 2px;
 
-        Text { text: root.label; font-size: 9px; letter-spacing: 0.4px; color: Theme.text-mute; }
+        Text {
+            text: root.label;
+            font-size: 9px;
+            letter-spacing: 0.4px;
+            color: Theme.text-mute;
+        }
+
         HorizontalLayout {
-            Text { text: root.value; font-size: 12px; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-            Text { text: "▾"; font-size: 9px; color: Theme.text-mute; vertical-alignment: center; }
+            Text {
+                text: root.value;
+                font-size: 12px;
+                color: Theme.text;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            Text {
+                text: "▾";
+                font-size: 9px;
+                color: Theme.text-mute;
+                vertical-alignment: center;
+            }
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::AppWindow;
-use crate::editor::results_table_controller::ResultsTableController;
+use crate::editor::results_state_controller::ResultsStateController;
 use crate::{ResultItemData, ResultsListState, UiState};
 use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
 use log::warn;
@@ -10,19 +10,19 @@ use std::sync::Arc;
 pub struct ResultsListController {
     pub(crate) ui: slint::Weak<AppWindow>,
     pub(crate) app_state: Arc<UiState>,
-    pub(crate) results_table_controller: Arc<ResultsTableController>,
+    pub(crate) results_state_controller: Arc<ResultsStateController>,
 }
 
 impl ResultsListController {
     pub fn new(
         ui: slint::Weak<AppWindow>,
         app_state: Arc<UiState>,
-        results_table_controller: Arc<ResultsTableController>,
+        results_state_controller: Arc<ResultsStateController>,
     ) -> Self {
         Self {
             ui,
             app_state: app_state.clone(),
-            results_table_controller,
+            results_state_controller,
         }
     }
 
@@ -34,7 +34,7 @@ impl ResultsListController {
                 manager.sync_results_files_to_slint();
             });
 
-            let table = self.results_table_controller.clone();
+            let table = self.results_state_controller.clone();
             ui.global::<ResultsListState>()
                 .on_result_selected(move |path| {
                     table.load_from_file(PathBuf::from(path.as_str()));

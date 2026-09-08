@@ -1,6 +1,5 @@
 //! Minimal ASCII table printer for the `view` command - no extra dependency
 //! for what is just a quick terminal preview (full data goes through `export`).
-use evanalyzer_app::result::{ColumnSpec, ObjectRow, to_display_row};
 use std::io::Write;
 
 const MAX_COL_WIDTH: usize = 28;

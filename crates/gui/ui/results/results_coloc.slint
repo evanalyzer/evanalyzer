@@ -4,7 +4,7 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
-import { ResultsState2 } from "results_state.slint";
+import { ResultsState } from "results_state.slint";
 
 component PropertyChip inherits Rectangle {
     in property <string> label;
@@ -17,7 +17,10 @@ component PropertyChip inherits Rectangle {
     border-width: 1px;
     border-color: root.on ? Theme.accent : Theme.border;
 
-    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 
     Text {
         text: root.label;
@@ -40,23 +43,37 @@ export component ResultsColocView inherits Rectangle {
         Rectangle {
             horizontal-stretch: 45;
             preferred-width: 0px;
-            Rectangle { x: parent.width - 1px; y: 0; width: 1px; height: parent.height; background: Theme.border-soft; }
+            Rectangle {
+                x: parent.width - 1px;
+                y: 0;
+                width: 1px;
+                height: parent.height;
+                background: Theme.border-soft;
+            }
 
             VerticalLayout {
                 spacing: 0px;
                 Rectangle {
                     height: 32px;
-                    Text { x: 16px; text: "OBJECTS"; font-size: 10px; letter-spacing: 0.5px; color: Theme.text-mute; vertical-alignment: center; }
+                    Text {
+                        x: 16px;
+                        text: "OBJECTS";
+                        font-size: 10px;
+                        letter-spacing: 0.5px;
+                        color: Theme.text-mute;
+                        vertical-alignment: center;
+                    }
                 }
+
                 ScrollView {
                     vertical-stretch: 1;
                     VerticalLayout {
                         padding: 8px;
                         alignment: start;
-                        for id in ResultsState2.coloc-object-ids: obj-ta := TouchArea {
+                        for id in ResultsState.coloc-object-ids: obj-ta := TouchArea {
                             height: 34px;
                             mouse-cursor: pointer;
-                            clicked => { ResultsState2.coloc-object-selected(id.to-float()); }
+                            clicked => { ResultsState.coloc-object-selected(id.to-float()); }
                             Rectangle {
                                 border-radius: Theme.radius-sm;
                                 background: obj-ta.has-hover ? Theme.raised : transparent;
@@ -64,7 +81,13 @@ export component ResultsColocView inherits Rectangle {
                                     padding-left: 10px;
                                     padding-right: 10px;
                                     spacing: 8px;
-                                    Text { text: "#" + id; font-size: 12.5px; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Text {
+                                        text: "#" + id;
+                                        font-size: 12.5px;
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
                                 }
                             }
                         }
@@ -88,20 +111,31 @@ export component ResultsColocView inherits Rectangle {
                     alignment: center;
 
                     Text {
-                        text: "Colocalizing with #" + ResultsState2.coloc-selected-id;
+                        text: "Colocalizing with #" + ResultsState.coloc-selected-id;
                         font-size: 10px;
                         letter-spacing: 0.5px;
                         color: Theme.text-mute;
                         vertical-alignment: center;
                     }
-                    Rectangle { horizontal-stretch: 1; }
-                    for prop in ResultsState2.coloc-properties: PropertyChip {
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    for prop in ResultsState.coloc-properties: PropertyChip {
                         label: prop;
-                        on: ResultsState2.coloc-active-properties.length > 0;
-                        clicked => { ResultsState2.coloc-property-toggled(prop); }
+                        on: ResultsState.coloc-active-properties.length > 0;
+                        clicked => { ResultsState.coloc-property-toggled(prop); }
                     }
                 }
-                Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border-soft; }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
             }
 
             ScrollView {
@@ -112,9 +146,23 @@ export component ResultsColocView inherits Rectangle {
 
                     HorizontalLayout {
                         height: 26px;
-                        Text { text: "OBJECT"; width: 90px; font-size: 10px; color: Theme.text-mute; vertical-alignment: center; }
-                        Text { text: "OVERLAP"; width: 80px; font-size: 10px; color: Theme.text-mute; vertical-alignment: center; }
-                        for prop in ResultsState2.coloc-active-properties: Text {
+                        Text {
+                            text: "OBJECT";
+                            width: 90px;
+                            font-size: 10px;
+                            color: Theme.text-mute;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "OVERLAP";
+                            width: 80px;
+                            font-size: 10px;
+                            color: Theme.text-mute;
+                            vertical-alignment: center;
+                        }
+
+                        for prop in ResultsState.coloc-active-properties: Text {
                             text: prop;
                             horizontal-stretch: 1;
                             font-size: 10px;
@@ -123,20 +171,36 @@ export component ResultsColocView inherits Rectangle {
                         }
                     }
 
-                    for partner in ResultsState2.coloc-partners: HorizontalLayout {
+                    for partner in ResultsState.coloc-partners: HorizontalLayout {
                         height: 30px;
                         cross-axis-alignment: center;
                         Rectangle {
-                            width: 8px; height: 8px;
+                            width: 8px;
+                            height: 8px;
                             border-radius: 2px;
                             background: partner.class-color;
                         }
-                        Text { text: "#" + partner.id; width: 82px; font-size: 12px; color: Theme.text; vertical-alignment: center; }
-                        Text { text: partner.overlap-pct + "%"; width: 80px; font-size: 12px; font-family: Theme.font-mono; color: Theme.text; vertical-alignment: center; }
+
+                        Text {
+                            text: "#" + partner.id;
+                            width: 82px;
+                            font-size: 12px;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: partner.overlap-pct + "%";
+                            width: 80px;
+                            font-size: 12px;
+                            font-family: Theme.font-mono;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
                         // Actual per-property values come from Rust-side row
                         // data keyed by the toggled properties — plug in your
                         // existing per-object value lookup here.
-                        for prop in ResultsState2.coloc-active-properties: Text {
+                        for prop in ResultsState.coloc-active-properties: Text {
                             text: "—";
                             horizontal-stretch: 1;
                             font-size: 12px;

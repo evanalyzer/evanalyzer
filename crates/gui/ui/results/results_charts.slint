@@ -6,7 +6,7 @@
 // ResultsMatrixView versus their row/cell rendering.
 
 import { Theme } from "../style.slint";
-import { ResultsState2, ResultsChartKind2 } from "results_state.slint";
+import { ResultsState, ResultsChartKind2 } from "results_state.slint";
 import { FilterPill } from "results_common.slint";
 
 component ChartTab inherits Rectangle {
@@ -38,6 +38,7 @@ component ChartTab inherits Rectangle {
             height: 14px;
             colorize: root.active ? white : Theme.text-dim;
         }
+
         Text {
             text: root.label;
             font-size: 12.5px;
@@ -65,32 +66,49 @@ export component ResultsChartsView inherits Rectangle {
                 ChartTab {
                     icon: @image-url("../icons/regular-black/chart-bar.svg");
                     label: "Histogram";
-                    active: ResultsState2.chart-kind == ResultsChartKind2.histogram;
-                    clicked => { ResultsState2.chart-kind = ResultsChartKind2.histogram; ResultsState2.chart-kind-selected(ResultsChartKind2.histogram); }
+                    active: ResultsState.chart-kind == ResultsChartKind2.histogram;
+                    clicked => { ResultsState.chart-kind = ResultsChartKind2.histogram; ResultsState.chart-kind-selected(ResultsChartKind2.histogram); }
                 }
+
                 ChartTab {
                     icon: @image-url("../icons/regular-black/chart-scatter.svg");
                     label: "Scatter";
-                    active: ResultsState2.chart-kind == ResultsChartKind2.scatter;
-                    clicked => { ResultsState2.chart-kind = ResultsChartKind2.scatter; ResultsState2.chart-kind-selected(ResultsChartKind2.scatter); }
+                    active: ResultsState.chart-kind == ResultsChartKind2.scatter;
+                    clicked => { ResultsState.chart-kind = ResultsChartKind2.scatter; ResultsState.chart-kind-selected(ResultsChartKind2.scatter); }
                 }
+
                 ChartTab {
                     icon: @image-url("../icons/regular-black/grid-four.svg");
                     label: "Heatmap";
-                    active: ResultsState2.chart-kind == ResultsChartKind2.heatmap;
-                    clicked => { ResultsState2.chart-kind = ResultsChartKind2.heatmap; ResultsState2.chart-kind-selected(ResultsChartKind2.heatmap); }
+                    active: ResultsState.chart-kind == ResultsChartKind2.heatmap;
+                    clicked => { ResultsState.chart-kind = ResultsChartKind2.heatmap; ResultsState.chart-kind-selected(ResultsChartKind2.heatmap); }
                 }
 
-                Rectangle { horizontal-stretch: 1; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
 
-                FilterPill { label: "PROPERTY"; value: ResultsState2.chart-property; pill-width: 130px; clicked => { ResultsState2.chart-property-clicked(); } }
-                FilterPill { label: "CLASS"; value: ResultsState2.chart-class-filter; pill-width: 120px; clicked => { ResultsState2.chart-class-filter-clicked(); } }
+                FilterPill {
+                    label: "PROPERTY";
+                    value: ResultsState.chart-property;
+                    pill-width: 130px;
+                    clicked => { ResultsState.chart-property-clicked(); }
+                }
+
+                FilterPill {
+                    label: "CLASS";
+                    value: ResultsState.chart-class-filter;
+                    pill-width: 120px;
+                    clicked => { ResultsState.chart-class-filter-clicked(); }
+                }
             }
         }
 
         // Wire your existing ResultsChart (histogram/scatter/heatmap
-        // rendering) in here, switched on ResultsState2.chart-kind:
-        //   ResultsChart { vertical-stretch: 1; kind: ResultsState2.chart-kind; }
-        Rectangle { vertical-stretch: 1; }
+        // rendering) in here, switched on ResultsState.chart-kind:
+        //   ResultsChart { vertical-stretch: 1; kind: ResultsState.chart-kind; }
+        Rectangle {
+            vertical-stretch: 1;
+        }
     }
 }

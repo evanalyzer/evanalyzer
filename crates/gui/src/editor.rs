@@ -8,8 +8,7 @@ use crate::{
         pipeline_worker::PipelineWorker, pipelines_controller::PipelinesController,
         project_settings_controller::ProjectSettingsController,
         results_list_controller::ResultsListController,
-        results_matrix_controller::ResultsMatrixController,
-        results_table_controller::ResultsTableController, template_controller::TemplateController,
+        results_state_controller::ResultsStateController, template_controller::TemplateController,
         undo_redo_controller::UndoRedoController, viewport_controller::ViewportController,
         viewport_image_controller::ViewportImageController,
         viewport_object_controller::ViewPortObjectController,
@@ -29,8 +28,7 @@ pub mod pipelines_controller;
 pub mod project_controller;
 pub mod project_settings_controller;
 pub mod results_list_controller;
-pub mod results_matrix_controller;
-pub mod results_table_controller;
+pub mod results_state_controller;
 pub mod template_controller;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -56,11 +54,10 @@ pub struct Editor {
     object_list_controller: Arc<ObjectListController>,
     pipelines_controller: Arc<PipelinesController>,
     pipeline_worker: Arc<PipelineWorker>,
-    results_table_controller: Arc<ResultsTableController>,
-    results_matrix_controller: Arc<ResultsMatrixController>,
     results_list_controller: Arc<ResultsListController>,
     template_controller: Arc<TemplateController>,
     undo_redo_controller: Arc<UndoRedoController>,
+    results_state_controller: Arc<ResultsStateController>,
 }
 
 impl Editor {
@@ -115,22 +112,14 @@ impl Editor {
             object_list_controller.clone(),
         ));
 
-        let results_table_controller = Arc::new(ResultsTableController::new(
+        let results_state_controller = Arc::new(ResultsStateController::new(
             results_ui.clone(),
             app_state.clone(),
-            image_list_controller.clone(),
-            project_settings_controller.clone(),
         ));
         let results_list_controller = Arc::new(ResultsListController::new(
             ui.clone(),
             app_state.clone(),
-            results_table_controller.clone(),
-        ));
-        let results_matrix_controller = Arc::new(ResultsMatrixController::new(
-            results_ui.clone(),
-            app_state.clone(),
-            results_table_controller.clone(),
-            project_settings_controller.clone(),
+            results_state_controller.clone(),
         ));
 
         let viewport_object_controller = Arc::new(ViewPortObjectController::new(
@@ -213,11 +202,10 @@ impl Editor {
             object_list_controller,
             pipelines_controller,
             pipeline_worker,
-            results_table_controller,
-            results_matrix_controller,
             results_list_controller,
             template_controller,
             undo_redo_controller,
+            results_state_controller,
         }
     }
 
@@ -233,11 +221,10 @@ impl Editor {
         self.viewport_object_controller.attach_callbacks();
         self.object_list_controller.attach_callbacks();
         self.pipelines_controller.attach_callbacks();
-        self.results_table_controller.attach_callbacks();
-        self.results_matrix_controller.attach_callbacks();
         self.results_list_controller.attach_callbacks();
         self.template_controller.attach_callbacks();
         self.undo_redo_controller.attach_callbacks();
+        self.results_state_controller.attach_callbacks();
 
         self.viewport_worker.start_worker();
         self.pipeline_worker.start_worker();
