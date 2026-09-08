@@ -18,7 +18,7 @@ import { ResultsRail, ResultsBreadcrumb } from "results_common.slint";
 import { ResultsListView } from "results_list.slint";
 import { ResultsMatrixView } from "results_matrix.slint";
 import { ResultsColocView } from "results_coloc.slint";
-// import { ResultsChart } from "results_chart.slint";      // existing, unmodified
+import { ResultsChartsView } from "results_charts.slint";
 // import { ExportDialog } from "../export_dialog.slint";   // existing, unmodified
 
 export component ResultsWindow inherits Window {
@@ -49,7 +49,9 @@ export component ResultsWindow inherits Window {
             if ResultsState2.rail-mode == ResultsRailMode.coloc: ResultsColocView {
                 vertical-stretch: 1;
             }
-            // if ResultsState2.rail-mode == ResultsRailMode.charts: ResultsChart { vertical-stretch: 1; }
+            if ResultsState2.rail-mode == ResultsRailMode.charts: ResultsChartsView {
+                vertical-stretch: 1;
+            }
         }
     }
 

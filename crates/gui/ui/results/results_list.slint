@@ -42,7 +42,7 @@ export component ColumnsPopup inherits Rectangle {
     callback search-changed(string);
 
     width: 130px;
-    height: 40px;
+    height: 30px;
     border-radius: Theme.radius-sm;
     background: Theme.raised;
     border-width: 1px;
@@ -58,6 +58,7 @@ export component ColumnsPopup inherits Rectangle {
         padding-right: 8px;
         spacing: 6px;
         alignment: center;
+        cross-axis-alignment: center;
 
         Image { source: @image-url("../icons/regular-black/funnel.svg"); width: 13px; height: 13px; colorize: Theme.text-dim; }
         Text { text: "Columns"; font-size: 12px; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
@@ -66,7 +67,7 @@ export component ColumnsPopup inherits Rectangle {
 
     popup := PopupWindow {
         x: 0px;
-        y: 44px;
+        y: 34px;
 
         Rectangle {
             width: 280px;
@@ -187,7 +188,7 @@ export component ResultsListView inherits Rectangle {
                 padding-left: 16px;
                 padding-right: 16px;
                 spacing: 10px;
-                alignment: center;
+                cross-axis-alignment: center;
 
                 Rectangle {
                     width: 220px;
@@ -195,18 +196,33 @@ export component ResultsListView inherits Rectangle {
                     border-radius: Theme.radius-sm;
                     background: Theme.raised;
                     border-width: 1px;
-                    border-color: Theme.border-soft;
+                    border-color: search-input.has-focus ? Theme.accent : Theme.border-soft;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
                         spacing: 6px;
+                        cross-axis-alignment: center;
                         Image { source: @image-url("../icons/regular-black/magnifying-glass.svg"); width: 12px; height: 12px; colorize: Theme.text-mute; }
-                        LineEdit {
+                        Rectangle {
                             horizontal-stretch: 1;
-                            placeholder-text: "Filter by image name…";
-                            text <=> ResultsState2.list-image-filter;
-                            font-size: 11.5px;
-                            edited(t) => { ResultsState2.list-image-filter-changed(t); }
+                            search-input := TextInput {
+                                width: 100%;
+                                height: 100%;
+                                text <=> ResultsState2.list-image-filter;
+                                font-size: 11.5px;
+                                color: Theme.text;
+                                vertical-alignment: center;
+                                single-line: true;
+                                edited => { ResultsState2.list-image-filter-changed(self.text); }
+                            }
+                            if search-input.text == "": Text {
+                                width: 100%;
+                                height: 100%;
+                                text: "Filter by image name…";
+                                font-size: 11.5px;
+                                color: Theme.text-faint;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }

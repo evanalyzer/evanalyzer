@@ -1,0 +1,96 @@
+// results_charts.slint — Charts view toolbar shell: chart-kind tabs
+// (Histogram/Scatter/Heatmap) + Property/Class filter pills, matching the
+// reference design's ChartsView header. The actual chart rendering (your
+// existing ResultsChart component) plugs into the stretch area below —
+// this file only owns the toolbar, same split as ResultsListView/
+// ResultsMatrixView versus their row/cell rendering.
+
+import { Theme } from "../style.slint";
+import { ResultsState2, ResultsChartKind2 } from "results_state.slint";
+import { FilterPill } from "results_common.slint";
+
+component ChartTab inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active;
+    callback clicked;
+
+    border-radius: Theme.radius-sm;
+    background: root.active ? Theme.accent : (ta.has-hover ? Theme.raised : transparent);
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 7px;
+        padding-bottom: 7px;
+        spacing: 6px;
+        cross-axis-alignment: center;
+
+        Image {
+            source: root.icon;
+            width: 14px;
+            height: 14px;
+            colorize: root.active ? white : Theme.text-dim;
+        }
+        Text {
+            text: root.label;
+            font-size: 12.5px;
+            font-family: Theme.font-sans;
+            color: root.active ? white : Theme.text-dim;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component ResultsChartsView inherits Rectangle {
+    background: Theme.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 54px;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                ChartTab {
+                    icon: @image-url("../icons/regular-black/chart-bar.svg");
+                    label: "Histogram";
+                    active: ResultsState2.chart-kind == ResultsChartKind2.histogram;
+                    clicked => { ResultsState2.chart-kind = ResultsChartKind2.histogram; ResultsState2.chart-kind-selected(ResultsChartKind2.histogram); }
+                }
+                ChartTab {
+                    icon: @image-url("../icons/regular-black/chart-scatter.svg");
+                    label: "Scatter";
+                    active: ResultsState2.chart-kind == ResultsChartKind2.scatter;
+                    clicked => { ResultsState2.chart-kind = ResultsChartKind2.scatter; ResultsState2.chart-kind-selected(ResultsChartKind2.scatter); }
+                }
+                ChartTab {
+                    icon: @image-url("../icons/regular-black/grid-four.svg");
+                    label: "Heatmap";
+                    active: ResultsState2.chart-kind == ResultsChartKind2.heatmap;
+                    clicked => { ResultsState2.chart-kind = ResultsChartKind2.heatmap; ResultsState2.chart-kind-selected(ResultsChartKind2.heatmap); }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                FilterPill { label: "PROPERTY"; value: ResultsState2.chart-property; pill-width: 130px; clicked => { ResultsState2.chart-property-clicked(); } }
+                FilterPill { label: "CLASS"; value: ResultsState2.chart-class-filter; pill-width: 120px; clicked => { ResultsState2.chart-class-filter-clicked(); } }
+            }
+        }
+
+        // Wire your existing ResultsChart (histogram/scatter/heatmap
+        // rendering) in here, switched on ResultsState2.chart-kind:
+        //   ResultsChart { vertical-stretch: 1; kind: ResultsState2.chart-kind; }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

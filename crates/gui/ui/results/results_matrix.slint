@@ -3,7 +3,7 @@
 // by ResultsState2.matrix-level so the breadcrumb + this one view swap in
 // place rather than opening new windows.
 
-import { ScrollView, LineEdit } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ResultsState2, MatrixLevel, MatrixCell, ObjectMarker } from "results_state.slint";
 import { FilterPill, LegendBar, ValueColor } from "results_common.slint";
@@ -147,33 +147,49 @@ export component ResultsMatrixView inherits Rectangle {
                 padding-left: 16px;
                 padding-right: 16px;
                 spacing: 10px;
-                alignment: center;
+                cross-axis-alignment: center;
 
                 FilterPill { label: "VALUE"; value: ResultsState2.matrix-value-label; pill-width: 160px; clicked => { ResultsState2.matrix-value-clicked(); } }
                 FilterPill { label: "AGGREGATE"; value: ResultsState2.matrix-aggregate; pill-width: 120px; clicked => { ResultsState2.matrix-aggregate-selected(ResultsState2.matrix-aggregate); } }
                 FilterPill { label: "CLASS"; value: ResultsState2.matrix-class-filter; pill-width: 120px; clicked => { ResultsState2.matrix-class-clicked(); } }
 
-                Rectangle {
+                VerticalLayout {
+                    spacing: 4px;
                     width: 230px;
-                    height: 40px;
-                    border-radius: Theme.radius-sm;
-                    background: Theme.raised;
-                    border-width: 1px;
-                    border-color: Theme.border-soft;
-                    VerticalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
-                        padding-top: 4px;
-                        padding-bottom: 5px;
-                        spacing: 2px;
-                        Text { text: "GROUP BY (REGEX)"; font-size: 9px; letter-spacing: 0.4px; color: Theme.text-mute; }
-                        LineEdit {
+
+                    Text { text: "GROUP BY (REGEX)"; font-size: 9px; letter-spacing: 0.4px; color: Theme.text-mute; }
+
+                    Rectangle {
+                        height: 26px;
+                        border-radius: Theme.radius-sm;
+                        background: Theme.raised;
+                        border-width: 1px;
+                        border-color: regex-input.has-focus ? Theme.accent : Theme.border-soft;
+
+                        regex-input := TextInput {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            height: parent.height;
                             text <=> ResultsState2.matrix-group-regex;
                             font-size: 11px;
-                            edited(t) => { ResultsState2.matrix-regex-changed(t); }
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            single-line: true;
+                            edited => { ResultsState2.matrix-regex-changed(self.text); }
+                        }
+                        if regex-input.text == "": Text {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            height: parent.height;
+                            text: "([A-Za-z]{1,2})([0-9]{1,3})";
+                            font-size: 11px;
+                            color: Theme.text-faint;
+                            vertical-alignment: center;
                         }
                     }
                 }
+
+                FilterPill { label: "COLOR SCALE"; value: ResultsState2.matrix-color-scale; pill-width: 110px; clicked => { ResultsState2.matrix-color-scale-clicked(); } }
 
                 Rectangle { horizontal-stretch: 1; }
             }

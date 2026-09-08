@@ -61,12 +61,16 @@ export global ResultsState2 {
     callback breadcrumb-nav(int);
 
     // -------- Global Z/T plane filter (applies to every view) --------
+    // TEMPORARY: -active defaults flipped to true and -max given non-zero
+    // previews so GlobalPlaneStepper is visible for design review before
+    // Rust wires these up (see "Rust wiring notes" below). Reset both to
+    // `false` once results_table_controller.rs drives ResultsState2.
     in-out property <int> z-stack: 0;
-    in-out property <int> z-stack-max: 0;
+    in-out property <int> z-stack-max: 6;
     in-out property <int> t-stack: 0;
-    in-out property <int> t-stack-max: 0;
-    in-out property <bool> z-stack-active: false;
-    in-out property <bool> t-stack-active: false;
+    in-out property <int> t-stack-max: 3;
+    in-out property <bool> z-stack-active: true;
+    in-out property <bool> t-stack-active: true;
     callback z-changed(int);
     callback t-changed(int);
 
@@ -87,6 +91,7 @@ export global ResultsState2 {
     in-out property <string> matrix-aggregate: "Average";
     in-out property <string> matrix-class-filter: "All classes";
     in-out property <string> matrix-group-regex: "";
+    in-out property <string> matrix-color-scale: "Viridis";
     in-out property <[string]> matrix-aggregate-options: ["Average", "Median", "Sum", "Max", "Min"];
     in-out property <[MatrixCell]> plate-cells: [];
     in-out property <int> plate-rows: 8;
@@ -104,6 +109,7 @@ export global ResultsState2 {
     callback matrix-aggregate-selected(string);
     callback matrix-class-clicked();
     callback matrix-regex-changed(string);
+    callback matrix-color-scale-clicked();
     callback plate-cell-clicked(string);
     callback well-field-clicked(string);
     callback object-marker-clicked(int);
@@ -116,6 +122,7 @@ export global ResultsState2 {
     in-out property <string> chart-class-filter: "All classes";
     callback chart-kind-selected(ResultsChartKind2);
     callback chart-property-clicked();
+    callback chart-class-filter-clicked();
 
     // -------- Colocalization --------
     in-out property <[string]> coloc-object-ids: [];

@@ -55,6 +55,7 @@ component RailButton inherits Rectangle {
 
     VerticalLayout {
         alignment: center;
+        cross-axis-alignment: center;
         spacing: 4px;
 
         Image {
@@ -62,7 +63,6 @@ component RailButton inherits Rectangle {
             width: 18px;
             height: 18px;
             colorize: root.active ? Theme.accent : Theme.text-dim;
-            horizontal-alignment: center;
         }
         Text {
             text: root.label;
@@ -119,54 +119,9 @@ export component ResultsRail inherits Rectangle {
     }
 }
 
-// Minimal track-and-handle slider (avoids depending on std-widgets' Slider
-// styling so it matches the compact plane-stepper look 1:1).
-component Slider2 inherits Rectangle {
-    in property <float> minimum: 0;
-    in property <float> maximum: 100;
-    in property <float> value: 0;
-    callback changed(float);
-
-    height: 16px;
-
-    Rectangle {
-        y: (parent.height - self.height) / 2;
-        height: 3px;
-        border-radius: 1.5px;
-        background: Theme.border;
-    }
-    Rectangle {
-        y: (parent.height - self.height) / 2;
-        height: 3px;
-        border-radius: 1.5px;
-        width: parent.width * ((root.value - root.minimum) / Math.max(0.0001, root.maximum - root.minimum));
-        background: Theme.accent;
-    }
-    handle := Rectangle {
-        width: 10px;
-        height: 10px;
-        border-radius: 5px;
-        background: Theme.text;
-        y: (parent.height - self.height) / 2;
-        x: parent.width * ((root.value - root.minimum) / Math.max(0.0001, root.maximum - root.minimum)) - self.width / 2;
-    }
-    TouchArea {
-        moved => {
-            if (self.pressed) {
-                let rel = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
-                root.changed(root.minimum + rel * (root.maximum - root.minimum));
-            }
-        }
-        pointer-event(event) => {
-            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
-                let rel = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
-                root.changed(root.minimum + rel * (root.maximum - root.minimum));
-            }
-        }
-    }
-}
-
-// -- Single Z or T axis stepper: ‹ slider › + "n/N" readout ------------------
+// -- Single Z or T axis stepper: ‹ n/N › — arrows only, no slider track,
+// matching the reference design's compact PlaneSelector (no <input
+// type="range"> in its `compact` mode).
 component PlaneAxis inherits HorizontalLayout {
     in property <string> axis-label;
     in property <int> value;
@@ -174,6 +129,7 @@ component PlaneAxis inherits HorizontalLayout {
     callback changed(int);
 
     spacing: 6px;
+    cross-axis-alignment: center;
 
     Text {
         text: root.axis-label;
@@ -194,14 +150,6 @@ component PlaneAxis inherits HorizontalLayout {
             background: dec-ta.has-hover ? Theme.raised : transparent;
             Text { text: "‹"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
         }
-    }
-
-    Slider2 {
-        width: 72px;
-        minimum: 0;
-        maximum: root.max;
-        value: root.value;
-        changed(v) => { root.changed(Math.round(v)); }
     }
 
     inc-ta := TouchArea {
@@ -243,6 +191,7 @@ export component GlobalPlaneStepper inherits Rectangle {
         padding-right: 8px;
         spacing: 12px;
         alignment: center;
+        cross-axis-alignment: center;
 
         if ResultsState2.z-stack-active: PlaneAxis {
             axis-label: "Z";
@@ -273,6 +222,7 @@ export component ResultsBreadcrumb inherits Rectangle {
         padding-left: 16px;
         padding-right: 12px;
         spacing: 6px;
+        cross-axis-alignment: center;
 
         for item[i] in ResultsState2.breadcrumb: HorizontalLayout {
             spacing: 6px;
@@ -334,7 +284,6 @@ export component FilterPill inherits Rectangle {
     callback clicked;
 
     width: root.pill-width;
-    height: 40px;
     border-radius: Theme.radius-sm;
     background: Theme.raised;
     border-width: 1px;
@@ -348,7 +297,7 @@ export component FilterPill inherits Rectangle {
     VerticalLayout {
         padding-left: 10px;
         padding-right: 10px;
-        padding-top: 4px;
+        padding-top: 5px;
         padding-bottom: 5px;
         spacing: 2px;
 
