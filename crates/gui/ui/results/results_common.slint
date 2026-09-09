@@ -4,8 +4,9 @@
 // legend bar, and small pill/chip primitives reused across List/Matrix/
 // Charts/Coloc.
 
-import { ScrollView } from "std-widgets.slint";
+import { VerticalBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
+import { NavIconLeft } from "../components/navicon_left.slint";
 import {
     ResultsState,
     ResultsRailMode,
@@ -29,85 +30,43 @@ export global ValueColor {
     }
 }
 
-component RailButton inherits Rectangle {
-    in property <image> icon;
-    in property <string> label;
-    in property <bool> active;
-    callback clicked;
-
-    height: 58px;
-    background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.raised : transparent);
-    animate background { duration: 80ms; }
-
-    Rectangle {
-        // active indicator bar
-        visible: root.active;
-        x: 0;
-        y: 6px;
-        width: 3px;
-        height: parent.height - 12px;
-        border-radius: 1.5px;
-        background: Theme.accent;
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-
-    VerticalLayout {
-        alignment: center;
-        cross-axis-alignment: center;
-        spacing: 4px;
-
-        Image {
-            source: root.icon;
-            width: 18px;
-            height: 18px;
-            colorize: root.active ? Theme.accent : Theme.text-dim;
-        }
-
-        Text {
-            text: root.label;
-            font-size: 9px;
-            font-family: Theme.font-sans;
-            color: root.active ? Theme.accent : Theme.text-mute;
-            horizontal-alignment: center;
-        }
-    }
-}
-
-// -- Left icon rail: List / Matrix / Charts / Coloc + Export at the bottom --
+// -- Left icon rail: List / Matrix / Charts / Coloc + Export at the bottom.
+// Reuses the same NavIconLeft button + panel styling as the main window's
+// SidebarLeft (components/navicon_left.slint) instead of a bespoke button.
 export component ResultsRail inherits Rectangle {
     width: 64px;
-    background: Theme.rail;
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
 
-    VerticalLayout {
-        padding-top: 8px;
-        spacing: 2px;
+    VerticalBox {
+        width: 64px;
+        padding: 4px;
+        alignment: start;
+        spacing: 8px;
 
-        RailButton {
+        NavIconLeft {
             icon: @image-url("../icons/regular-black/list.svg");
             label: "List";
             active: ResultsState.rail-mode == ResultsRailMode.list;
             clicked => { ResultsState.rail-mode = ResultsRailMode.list; ResultsState.rail-mode-selected(ResultsRailMode.list); }
         }
 
-        RailButton {
+        NavIconLeft {
             icon: @image-url("../icons/regular-black/grid-nine.svg");
             label: "Plate";
             active: ResultsState.rail-mode == ResultsRailMode.matrix;
             clicked => { ResultsState.rail-mode = ResultsRailMode.matrix; ResultsState.rail-mode-selected(ResultsRailMode.matrix); }
         }
 
-        RailButton {
+        NavIconLeft {
             icon: @image-url("../icons/regular-black/chart-bar.svg");
             label: "Charts";
             active: ResultsState.rail-mode == ResultsRailMode.charts;
             clicked => { ResultsState.rail-mode = ResultsRailMode.charts; ResultsState.rail-mode-selected(ResultsRailMode.charts); }
         }
 
-        RailButton {
+        NavIconLeft {
             icon: @image-url("../icons/regular-black/intersect-three.svg");
             label: "Coloc";
             active: ResultsState.rail-mode == ResultsRailMode.coloc;
@@ -118,7 +77,7 @@ export component ResultsRail inherits Rectangle {
             vertical-stretch: 1;
         }
 
-        RailButton {
+        NavIconLeft {
             icon: @image-url("../icons/regular-black/export.svg");
             label: "Export";
             active: false;
@@ -406,72 +365,6 @@ export component FilterPill inherits Rectangle {
                 font-size: 9px;
                 color: Theme.text-mute;
                 vertical-alignment: center;
-            }
-        }
-    }
-}
-
-// -- FilterPill + attached single-select popup, used for the object-class
-// filter dropdowns in the list/matrix/chart views. `options` is the full
-// selectable set (e.g. ["All classes", "Nucleus", "Cell", ...]); `value` is
-// the currently selected entry. Selecting an item updates `value` locally
-// (so the pill repaints immediately) and fires `selected` for Rust to react
-// to (e.g. re-querying the results with the new class filter).
-export component ClassFilterField inherits Rectangle {
-    in property <string> label: "CLASS";
-    in-out property <string> value: "All classes";
-    in property <[string]> options: ["All classes"];
-    in property <length> pill-width: 150px;
-    callback selected(string);
-
-    pill := FilterPill {
-        label: root.label;
-        value: root.value;
-        pill-width: root.pill-width;
-        clicked => { popup.show(); }
-    }
-
-    popup := PopupWindow {
-        x: 0;
-        y: pill.height + 4px;
-        width: root.pill-width;
-        height: Math.min(200px, root.options.length * 28px);
-
-        Rectangle {
-            background: Theme.raised;
-            border-color: Theme.border-soft;
-            border-width: 1px;
-            border-radius: Theme.radius-sm;
-
-            ScrollView {
-                VerticalLayout {
-                    padding: 4px;
-                    spacing: 2px;
-
-                    for opt in root.options: item-ta := TouchArea {
-                        height: 24px;
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.value = opt;
-                            root.selected(opt);
-                            popup.close();
-                        }
-
-                        Rectangle {
-                            background: item-ta.has-hover ? Theme.hover : transparent;
-                            border-radius: 4px;
-
-                            Text {
-                                text: opt;
-                                font-size: 12px;
-                                color: opt == root.value ? Theme.accent : Theme.text;
-                                vertical-alignment: center;
-                                x: 8px;
-                                overflow: elide;
-                            }
-                        }
-                    }
-                }
             }
         }
     }

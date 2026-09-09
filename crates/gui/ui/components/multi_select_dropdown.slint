@@ -1,0 +1,294 @@
+// multi_select_dropdown.slint — generic single/multi-select dropdown field.
+// Replaces the various one-off pill+popup pickers scattered through the
+// Results window (class filter, column visibility, ...) with one reusable
+// component.
+//
+// Self-containment: the state that matters (which items are selected) lives
+// entirely on `items` (each entry carries its own `selected` flag) and is
+// mutated in place via index assignment when a row is clicked — no Rust
+// round-trip needed to pick or unpick something. The one thing Slint's
+// expression language genuinely cannot do on its own is touch an unbounded
+// number of items at once (it has no loops/array push in expressions), so
+// `select-all`/`select-none` still fire a callback for Rust to rebuild and
+// hand back `items`.
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+export struct MultiSelectItem {
+    key: string,
+    value: string,
+    // Leave at its default (transparent) to render no swatch.
+    color: color,
+    // "" = ungrouped. Only rendered as a section when the group's name also
+    // appears in the dropdown's `groups` list.
+    group: string,
+    selected: bool,
+}
+
+component MultiSelectCheckMark inherits Rectangle {
+    in property <bool> checked;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border-width: 1.5px;
+    border-color: root.checked ? Theme.accent : Theme.border;
+    background: root.checked ? Theme.accent : transparent;
+    if root.checked: Image {
+        source: @image-url("../icons/regular-black/check.svg");
+        width: 9px;
+        height: 9px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: white;
+    }
+}
+
+component MultiSelectRow inherits Rectangle {
+    in property <MultiSelectItem> item;
+    in property <bool> show-checkbox: true;
+    callback activated();
+
+    height: 26px;
+    border-radius: 4px;
+    background: row-ta.has-hover ? Theme.raised : transparent;
+
+    row-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.activated(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 7px;
+        cross-axis-alignment: center;
+
+        if root.show-checkbox: MultiSelectCheckMark {
+            checked: root.item.selected;
+        }
+
+        if root.item.color.alpha > 0: Rectangle {
+            width: 10px;
+            height: 10px;
+            border-radius: 5px;
+            background: root.item.color;
+        }
+
+        Text {
+            text: root.item.value;
+            font-size: 12px;
+            color: (!root.show-checkbox && root.item.selected) ? Theme.accent : Theme.text;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+    }
+}
+
+export component MultiSelectDropdown inherits Rectangle {
+    // -------- Data --------
+    // The selectable elements; each also carries whether it's currently
+    // selected. Mutated in place by this component - treat it as owned by
+    // whoever holds the two-way binding, not something to rebuild on every
+    // click.
+    in-out property <[MultiSelectItem]> items: [];
+    // Optional ordered group names to render as sections. Leave empty for a
+    // flat list (in which case every item's `group` field is ignored).
+    in property <[string]> groups: [];
+    in property <bool> multi-select: true;
+    in property <bool> show-select-all: false;
+
+    // -------- Formatting --------
+    in property <string> label: "";
+    // Caller-supplied trigger text (e.g. "All classes", "3/12 columns",
+    // "Nucleus, Cell"). Kept as plain input rather than derived internally
+    // since summarizing an arbitrary selection (counts, joined labels)
+    // needs iteration that Slint's expression language doesn't support.
+    in property <string> summary-text: "";
+    in property <length> pill-width: 150px;
+
+    // key, new selected state - fires for every click-driven change.
+    callback item-selected(string, bool);
+    callback select-all();
+    callback select-none();
+
+    property <int> single-selected-index: -1;
+
+    function toggle(idx: int) {
+        if root.multi-select {
+            root.items[idx].selected = !root.items[idx].selected;
+        } else {
+            if root.single-selected-index >= 0 && root.single-selected-index != idx {
+                root.items[root.single-selected-index].selected = false;
+            }
+            root.items[idx].selected = true;
+            root.single-selected-index = idx;
+            popup.close();
+        }
+        root.item-selected(root.items[idx].key, root.items[idx].selected);
+    }
+
+    pill := Rectangle {
+        width: root.pill-width;
+        border-radius: Theme.radius-sm;
+        background: Theme.raised;
+        border-width: 1px;
+        border-color: Theme.border-soft;
+
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { popup.show(); }
+        }
+
+        VerticalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-top: 5px;
+            padding-bottom: 5px;
+            spacing: 2px;
+
+            if root.label != "": Text {
+                text: root.label;
+                font-size: 9px;
+                letter-spacing: 0.4px;
+                color: Theme.text-mute;
+            }
+
+            HorizontalLayout {
+                Text {
+                    text: root.summary-text;
+                    font-size: 12px;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: "▾";
+                    font-size: 9px;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: pill.height + 4px;
+        width: max(root.pill-width, 220px);
+
+        Rectangle {
+            width: max(root.pill-width, 220px);
+            height: 300px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            drop-shadow-color: Theme.shadow;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            clip: true;
+
+            VerticalLayout {
+                spacing: 0px;
+
+                if root.show-select-all: Rectangle {
+                    height: 32px;
+
+                    HorizontalLayout {
+                        padding: 8px;
+                        spacing: 10px;
+
+                        all-ta := TouchArea {
+                            width: 24px;
+                            mouse-cursor: pointer;
+                            clicked => { root.select-all(); }
+                            Text {
+                                text: "All";
+                                font-size: 10.5px;
+                                color: Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        none-ta := TouchArea {
+                            width: 34px;
+                            mouse-cursor: pointer;
+                            clicked => { root.select-none(); }
+                            Text {
+                                text: "None";
+                                font-size: 10.5px;
+                                color: Theme.text-mute;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+
+                    Rectangle {
+                        x: 0;
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.border-soft;
+                    }
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 4px;
+                        spacing: 2px;
+
+                        if root.groups.length == 0: VerticalLayout {
+                            spacing: 2px;
+                            for it[idx] in root.items: MultiSelectRow {
+                                item: it;
+                                show-checkbox: root.multi-select;
+                                activated => { root.toggle(idx); }
+                            }
+                        }
+
+                        if root.groups.length > 0: VerticalLayout {
+                            spacing: 2px;
+
+                            for it[idx] in root.items: Rectangle {
+                                if it.group == "": MultiSelectRow {
+                                    item: it;
+                                    show-checkbox: root.multi-select;
+                                    activated => { root.toggle(idx); }
+                                }
+                            }
+
+                            for g in root.groups: VerticalLayout {
+                                spacing: 0px;
+
+                                Text {
+                                    text: g;
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    letter-spacing: 0.5px;
+                                    color: Theme.text-mute;
+                                    height: 22px;
+                                    vertical-alignment: center;
+                                }
+
+                                for it[idx] in root.items: Rectangle {
+                                    if it.group == g: MultiSelectRow {
+                                        item: it;
+                                        show-checkbox: root.multi-select;
+                                        activated => { root.toggle(idx); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

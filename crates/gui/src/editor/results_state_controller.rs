@@ -1,12 +1,32 @@
-use crate::{ResultsListState, ResultsState, UiState};
+use crate::{MultiSelectItem, ResultsListState, ResultsState, UiState};
 use evanalyzer_app::result::{self, ResultsGenerator};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_gui_slint::ResultsWindow;
 use log::{error, info, warn};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{Color, ComponentHandle, ModelRc, VecModel};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+
+// "All classes" (selected by default) followed by one entry per class from
+// the open database's classification settings.
+fn class_filter_items(object_classes: &[Class]) -> Vec<MultiSelectItem> {
+    let mut items = vec![MultiSelectItem {
+        key: "All classes".into(),
+        value: "All classes".into(),
+        color: Color::default(),
+        group: "".into(),
+        selected: true,
+    }];
+    items.extend(object_classes.iter().map(|class| MultiSelectItem {
+        key: class.name.as_str().into(),
+        value: class.name.as_str().into(),
+        color: Color::default(),
+        group: "".into(),
+        selected: false,
+    }));
+    items
+}
 
 pub struct ResultsStateController {
     pub(crate) ui: slint::Weak<ResultsWindow>,
@@ -51,11 +71,9 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_list_image_filter_changed(move |_filter| {});
             ui.global::<ResultsState>()
-                .on_list_class_filter_selected(move |_class_name| {});
+                .on_list_class_selected(move |_key, _selected| {});
             ui.global::<ResultsState>()
-                .on_list_column_toggled(move |_label| {});
-            ui.global::<ResultsState>()
-                .on_list_column_group_toggled(move |_group| {});
+                .on_list_columns_item_selected(move |_key, _selected| {});
             ui.global::<ResultsState>()
                 .on_list_columns_select_all(move || {});
             ui.global::<ResultsState>()
@@ -67,7 +85,7 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_matrix_aggregate_selected(move |_aggregate| {});
             ui.global::<ResultsState>()
-                .on_matrix_class_filter_selected(move |_class_name| {});
+                .on_matrix_class_selected(move |_key, _selected| {});
             ui.global::<ResultsState>()
                 .on_matrix_regex_changed(move |_regex| {});
             ui.global::<ResultsState>()
@@ -89,7 +107,7 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_chart_property_clicked(move || {});
             ui.global::<ResultsState>()
-                .on_chart_class_filter_clicked(move || {});
+                .on_chart_class_selected(move |_key, _selected| {});
 
             // -- Colocalization --
             ui.global::<ResultsState>()
@@ -139,17 +157,14 @@ impl ResultsStateController {
 
     pub fn set_object_classes_in_slint(&self, object_classes: &Vec<Class>) {
         let ui_weak = self.ui.clone();
-        let mut options: Vec<SharedString> = vec!["All classes".into()];
-        options.extend(
-            object_classes
-                .iter()
-                .map(|class| SharedString::from(class.name.as_str())),
-        );
+        let items = class_filter_items(object_classes);
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
-                ui_ready
-                    .global::<ResultsState>()
-                    .set_class_filter_options(ModelRc::from(Rc::new(VecModel::from(options))));
+                let state = ui_ready.global::<ResultsState>();
+                state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
+                state
+                    .set_matrix_class_items(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
+                state.set_chart_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_object_classes_in_slint, cannot update class filter options!"

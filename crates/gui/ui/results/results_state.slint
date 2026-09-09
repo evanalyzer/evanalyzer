@@ -9,6 +9,8 @@
 // pass) so nothing you already have wired up is touched. Fold these fields
 // into your existing ResultsState when integrating.
 
+import { MultiSelectItem } from "../components/multi_select_dropdown.slint";
+
 export enum ResultsRailMode { list, matrix, charts, coloc }
 // Matrix drill depth: plate (grouped grid) -> well (fields of one well) ->
 // object (single image + detected objects).
@@ -17,16 +19,6 @@ export enum ResultsChartKind2 { histogram, scatter, heatmap }
 
 export struct BreadcrumbItem {
     label: string,
-}
-
-export struct ColumnItem {
-    label: string,
-    checked: bool,
-    // "" for ungrouped identifier/geometry columns; else e.g. "Intensity"
-    // or a per-Coloc-class name — same shape as export_dialog's FilterItem.
-    group: string,
-    group-header: bool,
-    group-all-checked: bool,
 }
 
 export struct MatrixCell {
@@ -74,28 +66,39 @@ export global ResultsState {
     callback z-changed(int);
     callback t-changed(int);
 
-    // -------- Object classes (shared) --------
-    // Populated from the open database's classification settings; "All
-    // classes" is always the first entry. Backs the class-filter dropdowns
-    // in the list, matrix, and chart views.
-    in-out property <[string]> class-filter-options: ["All classes", "Background", "Test", "Test2"];
-
     // -------- List view --------
     in-out property <string> list-image-filter: "";
-    in-out property <string> list-class-filter: "All classes";
-    in-out property <[ColumnItem]> list-columns: [];
+    // Each MultiSelectDropdown instance owns its own class candidates +
+    // selection (e.g. "All classes" plus every class from the open
+    // database's classification settings) - list/matrix/chart views can
+    // each have a different class picked.
+    // TEMPORARY: preview data so MultiSelectDropdown has something to show
+    // before Rust populates this from the open database's classification
+    // settings - replace with [] once results_state_controller.rs wires it up.
+    in-out property <[MultiSelectItem]> list-class-items: [
+        { key: "nucleus", value: "Nucleus", color: #4d8dff, group: "", selected: true },
+        { key: "cell", value: "Cell", color: #34c759, group: "", selected: true },
+        { key: "mitochondria", value: "Mitochondria", color: #ff9f0a, group: "", selected: false },
+        { key: "debris", value: "Debris", color: #8e8e93, group: "", selected: false },
+    ];
+    in-out property <string> list-class-summary: "All classes";
+    in-out property <[MultiSelectItem]> list-columns: [];
+    // Distinct, ordered group names present in list-columns (e.g.
+    // "Intensity", per-Coloc-class names) - [] renders a flat list.
+    in-out property <[string]> list-columns-groups: [];
+    in-out property <string> list-columns-summary: "Columns";
     in-out property <int> list-row-count: 0;
     callback list-image-filter-changed(string);
-    callback list-class-filter-selected(string);
-    callback list-column-toggled(string);
-    callback list-column-group-toggled(string);
+    callback list-class-selected(string, bool);
+    callback list-columns-item-selected(string, bool);
     callback list-columns-select-all();
     callback list-columns-select-none();
 
     // -------- Matrix / plate / well / object --------
     in-out property <string> matrix-value-label: "Number of objects";
     in-out property <string> matrix-aggregate: "Average";
-    in-out property <string> matrix-class-filter: "All classes";
+    in-out property <[MultiSelectItem]> matrix-class-items: [];
+    in-out property <string> matrix-class-summary: "All classes";
     in-out property <string> matrix-group-regex: "";
     in-out property <string> matrix-color-scale: "Viridis";
     in-out property <[string]> matrix-aggregate-options: ["Average", "Median", "Sum", "Max", "Min"];
@@ -113,7 +116,7 @@ export global ResultsState {
     in-out property <string> active-image-name: "";
     callback matrix-value-clicked();
     callback matrix-aggregate-selected(string);
-    callback matrix-class-filter-selected(string);
+    callback matrix-class-selected(string, bool);
     callback matrix-regex-changed(string);
     callback matrix-color-scale-clicked();
     callback plate-cell-clicked(string);
@@ -125,10 +128,11 @@ export global ResultsState {
     // -------- Charts --------
     in-out property <ResultsChartKind2> chart-kind: ResultsChartKind2.histogram;
     in-out property <string> chart-property: "Area (µm²)";
-    in-out property <string> chart-class-filter: "All classes";
+    in-out property <[MultiSelectItem]> chart-class-items: [];
+    in-out property <string> chart-class-summary: "All classes";
     callback chart-kind-selected(ResultsChartKind2);
     callback chart-property-clicked();
-    callback chart-class-filter-clicked();
+    callback chart-class-selected(string, bool);
 
     // -------- Colocalization --------
     in-out property <[string]> coloc-object-ids: [];

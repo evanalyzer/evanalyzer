@@ -8,6 +8,7 @@
 import { Theme } from "../style.slint";
 import { ResultsState, ResultsChartKind2 } from "results_state.slint";
 import { FilterPill } from "results_common.slint";
+import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
 
 component ChartTab inherits Rectangle {
     in property <image> icon;
@@ -95,11 +96,13 @@ export component ResultsChartsView inherits Rectangle {
                     clicked => { ResultsState.chart-property-clicked(); }
                 }
 
-                FilterPill {
+                MultiSelectDropdown {
                     label: "CLASS";
-                    value: ResultsState.chart-class-filter;
+                    summary-text: ResultsState.chart-class-summary;
+                    items <=> ResultsState.chart-class-items;
+                    multi-select: false;
                     pill-width: 120px;
-                    clicked => { ResultsState.chart-class-filter-clicked(); }
+                    item-selected(key, selected) => { ResultsState.chart-class-selected(key, selected); }
                 }
             }
         }

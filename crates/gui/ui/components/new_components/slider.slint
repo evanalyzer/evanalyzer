@@ -1,0 +1,117 @@
+// components/slider.slint — compact track-and-handle slider. Used instead
+// of std-widgets' Slider where a slimmer, precisely-styled control is
+// needed (plane steppers, numeric range pickers).
+
+import { Theme } from "../style.slint";
+
+export component Slider inherits Rectangle {
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in property <float> value: 0;
+    in property <length> track-height: 3px;
+    in property <length> handle-size: 10px;
+    callback changed(float);
+
+    height: 16px;
+
+    function ratio() -> float {
+        return (root.value - root.minimum) / Math.max(0.0001, root.maximum - root.minimum);
+    }
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: root.track-height;
+        border-radius: root.track-height / 2;
+        background: Theme.border;
+    }
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: root.track-height;
+        border-radius: root.track-height / 2;
+        width: parent.width * root.ratio();
+        background: Theme.accent;
+    }
+    Rectangle {
+        width: root.handle-size;
+        height: root.handle-size;
+        border-radius: root.handle-size / 2;
+        background: Theme.text;
+        y: (parent.height - self.height) / 2;
+        x: parent.width * root.ratio() - self.width / 2;
+    }
+
+    TouchArea {
+        moved => {
+            if (self.pressed) {
+                let rel = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                root.changed(root.minimum + rel * (root.maximum - root.minimum));
+            }
+        }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                let rel = Math.clamp(self.mouse-x / self.width, 0.0, 1.0);
+                root.changed(root.minimum + rel * (root.maximum - root.minimum));
+            }
+        }
+    }
+}
+
+// Labeled ‹ slider › + "n/N" readout — the plane (Z/T) stepper shape, but
+// generic enough for any bounded integer with the same widget.
+export component SteppedAxis inherits HorizontalLayout {
+    in property <string> axis-label;
+    in property <int> value;
+    in property <int> max;
+    callback changed(int);
+
+    spacing: 6px;
+
+    Text {
+        text: root.axis-label;
+        font-size: 10.5px;
+        font-family: Theme.font-mono;
+        color: Theme.text-mute;
+        vertical-alignment: center;
+    }
+
+    dec-ta := TouchArea {
+        width: 16px;
+        height: 16px;
+        mouse-cursor: pointer;
+        clicked => { root.changed(Math.max(0, root.value - 1)); }
+        Rectangle {
+            border-radius: Theme.radius-sm;
+            background: dec-ta.has-hover ? Theme.raised : transparent;
+            Text { text: "‹"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+        }
+    }
+
+    Slider {
+        width: 72px;
+        minimum: 0;
+        maximum: root.max;
+        value: root.value;
+        changed(v) => { root.changed(Math.round(v)); }
+    }
+
+    inc-ta := TouchArea {
+        width: 16px;
+        height: 16px;
+        mouse-cursor: pointer;
+        clicked => { root.changed(Math.min(root.max, root.value + 1)); }
+        Rectangle {
+            border-radius: Theme.radius-sm;
+            background: inc-ta.has-hover ? Theme.raised : transparent;
+            Text { text: "›"; color: Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+        }
+    }
+
+    Text {
+        text: (root.value + 1) + "/" + (root.max + 1);
+        font-size: 10.5px;
+        font-family: Theme.font-mono;
+        color: Theme.text;
+        vertical-alignment: center;
+        min-width: 30px;
+    }
+}

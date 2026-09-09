@@ -11,7 +11,8 @@ import {
     MatrixCell,
     ObjectMarker,
 } from "results_state.slint";
-import { ClassFilterField, FilterPill, LegendBar, ValueColor } from "results_common.slint";
+import { FilterPill, LegendBar, ValueColor } from "results_common.slint";
+import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
 
 component MatrixCellView inherits Rectangle {
     in property <MatrixCell> cell;
@@ -221,12 +222,13 @@ export component ResultsMatrixView inherits Rectangle {
                     clicked => { ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate); }
                 }
 
-                ClassFilterField {
+                MultiSelectDropdown {
                     label: "CLASS";
-                    value <=> ResultsState.matrix-class-filter;
-                    options: ResultsState.class-filter-options;
+                    summary-text: ResultsState.matrix-class-summary;
+                    items <=> ResultsState.matrix-class-items;
+                    multi-select: false;
                     pill-width: 120px;
-                    selected(name) => { ResultsState.matrix-class-filter-selected(name); }
+                    item-selected(key, selected) => { ResultsState.matrix-class-selected(key, selected); }
                 }
 
                 VerticalLayout {

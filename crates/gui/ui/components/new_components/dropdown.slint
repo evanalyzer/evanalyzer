@@ -1,0 +1,111 @@
+// components/dropdown.slint — single-select field: a labeled trigger
+// ("VALUE  Number of objects ▾") that opens a searchable popup list.
+// Replaces one-off `FilterPill`-style rectangles that only ever showed the
+// current value with no way to pick another one from Slint markup alone
+// (the picking always had to happen in Rust before).
+
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+export component DropdownField inherits Rectangle {
+    in property <string> field-label;
+    in property <string> value;
+    in property <[string]> options: [];
+    in property <length> field-width: 150px;
+    in property <bool> searchable: false;
+    in-out property <bool> open: false;
+    callback option-selected(string);
+
+    width: root.field-width;
+    height: root.field-label == "" ? 34px : 40px;
+    border-radius: Theme.radius-sm;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: root.open ? Theme.accent : Theme.border-soft;
+    animate border-color { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open = !root.open; if (root.open) { popup.show(); } }
+    }
+
+    if root.field-label != "": VerticalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 4px;
+        padding-bottom: 5px;
+        spacing: 2px;
+        Text { text: root.field-label; font-size: 9px; letter-spacing: 0.4px; color: Theme.text-mute; }
+        HorizontalLayout {
+            Text { text: root.value; font-size: 12px; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            Text { text: "▾"; font-size: 9px; color: Theme.text-mute; vertical-alignment: center; }
+        }
+    }
+    if root.field-label == "": HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        Text { text: root.value; font-size: 12px; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Text { text: "▾"; font-size: 9px; color: Theme.text-mute; vertical-alignment: center; }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 4px;
+
+        Rectangle {
+            width: Math.max(root.field-width, 180px);
+            height: Math.min(root.options.length * 30px + (root.searchable ? 40px : 8px), 320px);
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            drop-shadow-color: Theme.shadow;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            clip: true;
+
+            VerticalLayout {
+                spacing: 0px;
+
+                if root.searchable: Rectangle {
+                    height: 36px;
+                    HorizontalLayout {
+                        padding: 8px;
+                        LineEdit { placeholder-text: "Search…"; font-size: 11.5px; }
+                    }
+                    Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border-soft; }
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 4px;
+                        alignment: start;
+
+                        for opt in root.options: opt-ta := TouchArea {
+                            height: 30px;
+                            mouse-cursor: pointer;
+                            clicked => { root.option-selected(opt); root.open = false; popup.close(); }
+
+                            Rectangle {
+                                border-radius: Theme.radius-sm;
+                                background: opt == root.value ? Theme.accent-dim : (opt-ta.has-hover ? Theme.raised : transparent);
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    Text {
+                                        text: opt;
+                                        font-size: 12px;
+                                        color: opt == root.value ? Theme.text : Theme.text-dim;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
