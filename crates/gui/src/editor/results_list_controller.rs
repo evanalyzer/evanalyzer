@@ -37,7 +37,7 @@ impl ResultsListController {
             let table = self.results_state_controller.clone();
             ui.global::<ResultsListState>()
                 .on_result_selected(move |path| {
-                    table.load_from_file(PathBuf::from(path.as_str()));
+                    table.open_database(PathBuf::from(path.as_str()));
                 });
 
             let manager = self.clone();

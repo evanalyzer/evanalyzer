@@ -1,9 +1,13 @@
 use std::path::PathBuf;
 
-use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use duckdb::Connection;
+use evanalyzer_cfg::{
+    core_types::{InternalErrors, ObjectClass},
+    settings::classification_settings::Class,
+};
 
 pub struct ResultsGenerator {
-    database_file: PathBuf,
+    database: Connection,
 }
 
 #[derive(Clone)]
@@ -73,6 +77,12 @@ pub enum Cell {
     Class((String, u32)),
 }
 
+pub struct ImageEntry {
+    pub name: String,
+    pub rel_path: PathBuf,
+    pub disabled: bool,
+}
+
 pub struct DatabaseResult {
     pub column_names: Vec<String>,
     pub row_names: Vec<String>,
@@ -81,7 +91,51 @@ pub struct DatabaseResult {
 }
 
 impl ResultsGenerator {
-    pub fn open_database(&self, database_file: PathBuf) {}
+    pub fn open_database(path: PathBuf) -> Result<Self, InternalErrors> {
+        let to_io_err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let database = Connection::open(path).map_err(to_io_err)?;
+        Ok(Self { database })
+    }
+
+    pub fn get_object_classes(&self) -> Result<Vec<Class>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .database
+            .prepare("SELECT class_id, name, color FROM classes ORDER BY class_id")
+            .map_err(err)?;
+        stmt.query_map([], |row| {
+            let class_id: u32 = row.get(0)?;
+            let color: Option<u32> = row.get(2)?;
+            Ok(Class {
+                id: ObjectClass::Valid(class_id),
+                name: row.get(1)?,
+                color: color.unwrap_or(0),
+                notes: String::new(),
+            })
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)
+    }
+    pub fn get_images(&self) -> Result<Vec<ImageEntry>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .database
+            .prepare("SELECT image_name, image_rel_path, disabled FROM images ORDER BY image_name")
+            .map_err(err)?;
+        let map = stmt
+            .query_map([], |row| {
+                Ok(ImageEntry {
+                    name: row.get(0)?,
+                    rel_path: PathBuf::from(row.get::<_, String>(1)?),
+                    disabled: row.get(2)?,
+                })
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err);
+        map
+    }
 
     pub fn get_list(
         &self,

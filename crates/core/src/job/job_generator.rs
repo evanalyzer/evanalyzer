@@ -77,7 +77,7 @@ pub fn generate_analyze_job_from_project_settings(
             c.id.to_u32().map(|n| {
                 (
                     evanalyzer_cfg::core_types::ObjectClass::Valid(n),
-                    c.name.clone(),
+                    (c.name.clone(), c.color),
                 )
             })
         })

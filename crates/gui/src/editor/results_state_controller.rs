@@ -1,15 +1,16 @@
-use crate::AppWindow;
-use crate::{ResultItemData, ResultsListState, UiState};
-use evanalyzer_cfg::RESULTS_FILE_EXTENSION;
+use crate::{ResultsListState, ResultsState, UiState};
+use evanalyzer_app::result::{self, ResultsGenerator};
+use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_gui_slint::ResultsWindow;
-use log::warn;
+use log::{error, info, warn};
 use slint::ComponentHandle;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 pub struct ResultsStateController {
     pub(crate) ui: slint::Weak<ResultsWindow>,
     pub(crate) app_state: Arc<UiState>,
+    result_generator: Mutex<Option<ResultsGenerator>>,
 }
 
 impl ResultsStateController {
@@ -17,6 +18,7 @@ impl ResultsStateController {
         Self {
             ui,
             app_state: app_state.clone(),
+            result_generator: Mutex::new(None),
         }
     }
 
@@ -30,8 +32,127 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsListState>()
                 .on_open_folder_clicked(move || {});
+
+            // -------- ResultsState (results_state.slint) --------
+            // Prototypes only for now - wire up the real behavior next.
+
+            // -- Navigation --
+            ui.global::<ResultsState>()
+                .on_rail_mode_selected(move |_mode| {});
+            ui.global::<ResultsState>()
+                .on_breadcrumb_nav(move |_index| {});
+
+            // -- Global Z/T plane filter --
+            ui.global::<ResultsState>().on_z_changed(move |_value| {});
+            ui.global::<ResultsState>().on_t_changed(move |_value| {});
+
+            // -- List view --
+            ui.global::<ResultsState>()
+                .on_list_image_filter_changed(move |_filter| {});
+            ui.global::<ResultsState>()
+                .on_list_class_filter_clicked(move || {});
+            ui.global::<ResultsState>()
+                .on_list_column_toggled(move |_label| {});
+            ui.global::<ResultsState>()
+                .on_list_column_group_toggled(move |_group| {});
+            ui.global::<ResultsState>()
+                .on_list_columns_select_all(move || {});
+            ui.global::<ResultsState>()
+                .on_list_columns_select_none(move || {});
+
+            // -- Matrix / plate / well / object --
+            ui.global::<ResultsState>()
+                .on_matrix_value_clicked(move || {});
+            ui.global::<ResultsState>()
+                .on_matrix_aggregate_selected(move |_aggregate| {});
+            ui.global::<ResultsState>()
+                .on_matrix_class_clicked(move || {});
+            ui.global::<ResultsState>()
+                .on_matrix_regex_changed(move |_regex| {});
+            ui.global::<ResultsState>()
+                .on_matrix_color_scale_clicked(move || {});
+            ui.global::<ResultsState>()
+                .on_plate_cell_clicked(move |_key| {});
+            ui.global::<ResultsState>()
+                .on_well_field_clicked(move |_key| {});
+            ui.global::<ResultsState>()
+                .on_object_marker_clicked(move |_id| {});
+            ui.global::<ResultsState>()
+                .on_matrix_back_to_plate(move || {});
+            ui.global::<ResultsState>()
+                .on_matrix_back_to_well(move || {});
+
+            // -- Charts --
+            ui.global::<ResultsState>()
+                .on_chart_kind_selected(move |_kind| {});
+            ui.global::<ResultsState>()
+                .on_chart_property_clicked(move || {});
+            ui.global::<ResultsState>()
+                .on_chart_class_filter_clicked(move || {});
+
+            // -- Colocalization --
+            ui.global::<ResultsState>()
+                .on_coloc_object_selected(move |_id| {});
+            ui.global::<ResultsState>()
+                .on_coloc_property_toggled(move |_property| {});
+
+            // -- Export --
+            ui.global::<ResultsState>()
+                .on_export_dialog_open(move || {});
         }
     }
 
-    pub fn load_from_file(&self, path: PathBuf) {}
+    pub fn open_database(&self, path: PathBuf) {
+        info!("Opening database {:?}", path);
+        let db = result::ResultsGenerator::open_database(path);
+        match db {
+            Ok(results) => {
+                if let Ok(classes) = results.get_object_classes() {
+                    self.show_results_window();
+                    self.set_object_classes_in_slint(&classes);
+                    *self.result_generator.lock().expect("Poisned".into()) = Some(results);
+                }
+            }
+            Err(err) => {
+                error!("{}", err);
+            }
+        }
+    }
+
+    pub fn show_results_window(&self) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                if let Err(e) = ui_ready.show() {
+                    error!("Failed to show results window: {e}");
+                }
+            } else {
+                warn!("Failed to upgrade UI handle in open_database, cannot show results window!");
+            }
+        })
+        .ok();
+    }
+
+    pub fn set_object_classes_in_slint(&self, object_classes: &Vec<Class>) {
+        let ui_weak = self.ui.clone();
+        let label = if object_classes.is_empty() {
+            "All classes".to_string()
+        } else {
+            object_classes
+                .iter()
+                .map(|class| class.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready
+                    .global::<ResultsState>()
+                    .set_list_class_filter(label.into());
+             }else{
+                    warn!("Failed to upgrade UI handle in sync_image_list_to_slint, cannot update image list!");
+                }
+            })
+            .ok();
+    }
 }

@@ -26,6 +26,7 @@ rust_xlsxwriter = { version = "0.97.1", features = ["constant_memory"] }
 dirs = "6"
 plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "point_series", "ab_glyph"] }
 image = { workspace = true }
+duckdb = { workspace = true }
 
 
 [dev-dependencies]

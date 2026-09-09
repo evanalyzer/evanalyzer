@@ -89,14 +89,14 @@ pub struct DuckDbExporter {
     // satisfy the `PipelineResultExporter: Send + Sync` bound.
     conn: Mutex<Connection>,
     /// Maps ObjectClass → human-readable name from project classification settings.
-    pub class_names: HashMap<ObjectClass, String>,
+    pub class_names: HashMap<ObjectClass, (String, u32)>,
 }
 
 impl DuckDbExporter {
     /// Opens (or creates) the output file, runs DDL once, and returns a ready exporter.
     pub fn new(
         output_path: impl Into<PathBuf>,
-        class_names: HashMap<ObjectClass, String>,
+        class_names: HashMap<ObjectClass, (String, u32)>,
     ) -> Result<Self, InternalErrors> {
         let path: PathBuf = output_path.into();
         // These two log lines bracket the DuckDB DDL.  On the Windows (MinGW /
@@ -123,9 +123,9 @@ impl DuckDbExporter {
             let mut app = conn
                 .appender("classes")
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            for (class, name) in &class_names {
+            for (class, (name, color)) in &class_names {
                 if let ObjectClass::Valid(n) = class {
-                    app.append_row(params![*n, name])
+                    app.append_row(params![*n, name, color])
                         .map_err(|e| InternalErrors::Io(e.to_string()))?;
                 }
             }
@@ -160,7 +160,7 @@ impl DuckDbExporter {
         match class {
             ObjectClass::Unset => "unset".to_string(),
             ObjectClass::Valid(n) => match self.class_names.get(class) {
-                Some(name) => format!("{} ({})", name, n),
+                Some((name, _color)) => format!("{} ({})", name, n),
                 None => format!("class_{}", n),
             },
         }
@@ -235,31 +235,6 @@ CREATE TABLE IF NOT EXISTS coloc_stats (
     total_source_objects   UBIGINT
 );
 
--- One row per processed image, written once all of its tiles/planes are
--- done (see DuckDbExporter::finalize_image) — independent of how many
--- objects (if any) it produced, so an image with zero detections still
--- shows up in the file instead of leaving no trace at all. Deliberately
--- just identity, no object/coloc counts: any real count only means
--- something scoped to a class or a coloc partner (\"how many ClassA
--- objects\", \"how many colocalize with ClassB\"), which this table can't
--- express and callers should instead derive live from `objects`.
---
--- `successful`/`error_message`: an image is always finalized here even when
--- a tile or plane failed to export (so it still shows up rather than
--- vanishing), but that means `successful` is the only way to tell a
--- genuinely complete image from one that has silently incomplete/missing
--- object data. Was `status VARCHAR` ('ok'/'error') until this rename - only
--- ever those two values in practice, driven straight off `Option<&str>` in
--- `finalize_image`, so a bool is both smaller and matches how it's actually
--- used; a `.evadb` written before the rename gets migrated on first
--- read/write (see `ensure_successful_column`).
---
--- `disabled`: user-driven, set well after analysis (see
--- `DuckDbReader::set_image_disabled`), not written by the pipeline itself -
--- distinct from `successful`, which the pipeline sets once and never
--- revisits. A `.evadb` written before this column existed gets it added
--- lazily on first read/write (see `ensure_disabled_column`), so this
--- default only matters for files created from this DDL directly.
 CREATE TABLE IF NOT EXISTS images (
     image_name      VARCHAR NOT NULL,
     image_rel_path  VARCHAR NOT NULL PRIMARY KEY,
@@ -268,15 +243,10 @@ CREATE TABLE IF NOT EXISTS images (
     disabled        BOOLEAN NOT NULL DEFAULT false
 );
 
--- Snapshot of the project's object-classification registry at the moment
--- this file was written (see DuckDbExporter::new) — one row per registered
--- class, regardless of whether any object was actually assigned it. The
--- authoritative source for the results view's class names/filter, instead
--- of the live project (which can change after the fact) or re-deriving
--- names from `objects.object_class_name`.
 CREATE TABLE IF NOT EXISTS classes (
     class_id  INTEGER NOT NULL PRIMARY KEY,
-    name      VARCHAR NOT NULL
+    name      VARCHAR NOT NULL,
+    color     UINTEGER
 );
 ";
 
@@ -2178,10 +2148,9 @@ mod tests {
         let path = dir.path().join("results.duckdb");
 
         let mut class_names = HashMap::new();
-        class_names.insert(ObjectClass::Valid(1), "Positive".to_string());
-        class_names.insert(ObjectClass::Valid(2), "Negative".to_string());
-        // Class 5 is registered but never actually assigned to any object.
-        class_names.insert(ObjectClass::Valid(5), "Unused".to_string());
+        class_names.insert(ObjectClass::Valid(1), ("Positive".to_string(), 0x000000));
+        class_names.insert(ObjectClass::Valid(2), ("Negative".to_string(), 0x000000));
+        class_names.insert(ObjectClass::Valid(5), ("Unused".to_string(), 0x000000));
 
         let exporter = DuckDbExporter::new(&path, class_names).expect("exporter init failed");
         let mut cache = GlobalPipelineCache {
@@ -2224,7 +2193,7 @@ mod tests {
         let path = dir.path().join("results.duckdb");
 
         let mut class_names = HashMap::new();
-        class_names.insert(ObjectClass::Valid(1), "Positive".to_string());
+        class_names.insert(ObjectClass::Valid(1), ("Positive".to_string(), 0x000000));
 
         let exporter = DuckDbExporter::new(&path, class_names).expect("exporter init failed");
         let mut cache = GlobalPipelineCache {

@@ -9,12 +9,12 @@ pub enum CliCommand {
     ProjectInfo(ProjectInfoArgs),
     /// Check that every image referenced by a project can be found on disk
     Validate(ValidateArgs),
-    /// Export a results database to CSV, XLSX, or a chart image
-    Export(ExportArgs),
-    /// Print a quick summary and a page of rows from a results database
-    View(ViewArgs),
-    /// List the column ids available for --group-by / chart axes in a results database
-    Columns(ColumnsArgs),
+    // /// Export a results database to CSV, XLSX, or a chart image
+    // Export(ExportArgs), // commented out for now, will fix later
+    // /// Print a quick summary and a page of rows from a results database
+    // View(ViewArgs), // commented out for now, will fix later
+    // /// List the column ids available for --group-by / chart axes in a results database
+    // Columns(ColumnsArgs), // commented out for now, will fix later
     /// Train a pixel or object classifier from a project's labeled objects and save it under models/
     TrainClassifier(TrainClassifierArgs),
 }
