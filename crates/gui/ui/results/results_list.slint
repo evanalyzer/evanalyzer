@@ -74,6 +74,7 @@ export component ResultsListView inherits Rectangle {
                     summary-text: ResultsState.list-class-summary;
                     items <=> ResultsState.list-class-items;
                     multi-select: true;
+                    show-select-all: true;
                     pill-width: 150px;
                     item-selected(key, selected) => { ResultsState.list-class-selected(key, selected); }
                 }

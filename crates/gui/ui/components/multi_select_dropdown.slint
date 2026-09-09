@@ -128,8 +128,20 @@ export component MultiSelectDropdown inherits Rectangle {
         root.item-selected(root.items[idx].key, root.items[idx].selected);
     }
 
+    width: root.pill-width;
+    height: pill-content.preferred-height;
+
     pill := Rectangle {
+        x: 0;
+        y: 0;
         width: root.pill-width;
+        // A plain Rectangle never hugs its children's size the way a layout
+        // does, so without this `pill` (now a direct, non-layout child of
+        // `root` - see the popup-anchoring note above) would resolve to
+        // height 0. Bind it to the inner layout's own computed preferred
+        // height instead of hand-picking a pixel value, so it keeps working
+        // whether or not `label` is set.
+        height: pill-content.preferred-height;
         border-radius: Theme.radius-sm;
         background: Theme.raised;
         border-width: 1px;
@@ -140,7 +152,7 @@ export component MultiSelectDropdown inherits Rectangle {
             clicked => { popup.show(); }
         }
 
-        VerticalLayout {
+        pill-content := VerticalLayout {
             padding-left: 10px;
             padding-right: 10px;
             padding-top: 5px;
@@ -177,111 +189,132 @@ export component MultiSelectDropdown inherits Rectangle {
     popup := PopupWindow {
         x: 0;
         y: pill.height + 4px;
-        width: max(root.pill-width, 220px);
+        width: max(root.pill-width, 320px);
+        // Default close-policy is close-on-click, i.e. clicking *any* row
+        // would immediately close the popup after toggling it - unusable
+        // for multi-select, where picking several items needs the popup to
+        // stay open. `toggle()` above already calls `popup.close()` itself
+        // for the single-select case, so close-on-click-outside (rather
+        // than no-auto-close) is right for both modes.
+        close-policy: close-on-click-outside;
+        // PopupWindow's own `height` must be set explicitly, matching its
+        // content below - leaving it to be inferred from the content
+        // Rectangle's height (as it was) throws off the popup's *position*
+        // (not just its size): verified by isolating this exact PopupWindow
+        // shape (trigger + PopupWindow, no other content) down to a
+        // standalone example and screenshotting a real window - with an
+        // explicit height here the popup lands exactly at `pill.height`
+        // below the pill; without it, it renders tens to well over a
+        // hundred pixels too high, which is what made the top rows look
+        // unclickable (they were being drawn - and hit-tested - outside
+        // where they visually appeared to be).
+        height: 300px;
 
-        Rectangle {
-            width: max(root.pill-width, 220px);
-            height: 300px;
-            background: Theme.panel;
-            border-width: 1px;
-            border-color: Theme.border;
-            border-radius: Theme.radius-md;
-            drop-shadow-color: Theme.shadow;
-            drop-shadow-blur: 24px;
-            drop-shadow-offset-y: 8px;
-            clip: true;
+            Rectangle {
+                width: max(root.pill-width, 320px);
+                height: 300px;
+                background: Theme.panel;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: Theme.radius-md;
+                drop-shadow-color: Theme.shadow;
+                drop-shadow-blur: 24px;
+                drop-shadow-offset-y: 8px;
+                clip: true;
 
-            VerticalLayout {
-                spacing: 0px;
+                VerticalLayout {
+                    spacing: 0px;
+                    if root.show-select-all: Rectangle {
+                        height: 32px;
 
-                if root.show-select-all: Rectangle {
-                    height: 32px;
+                        HorizontalLayout {
+                            padding: 8px;
+                            spacing: 10px;
 
-                    HorizontalLayout {
-                        padding: 8px;
-                        spacing: 10px;
+                            all-ta := TouchArea {
+                                width: 24px;
+                                mouse-cursor: pointer;
+                                clicked => { root.select-all(); }
+                                Text {
+                                    text: "All";
+                                    font-size: 10.5px;
+                                    color: Theme.accent;
+                                    vertical-alignment: center;
+                                }
+                            }
 
-                        all-ta := TouchArea {
-                            width: 24px;
-                            mouse-cursor: pointer;
-                            clicked => { root.select-all(); }
-                            Text {
-                                text: "All";
-                                font-size: 10.5px;
-                                color: Theme.accent;
-                                vertical-alignment: center;
+                            none-ta := TouchArea {
+                                width: 34px;
+                                mouse-cursor: pointer;
+                                clicked => { root.select-none(); }
+                                Text {
+                                    text: "None";
+                                    font-size: 10.5px;
+                                    color: Theme.text-mute;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
                             }
                         }
 
-                        none-ta := TouchArea {
-                            width: 34px;
-                            mouse-cursor: pointer;
-                            clicked => { root.select-none(); }
-                            Text {
-                                text: "None";
-                                font-size: 10.5px;
-                                color: Theme.text-mute;
-                                vertical-alignment: center;
-                            }
+                        Rectangle {
+                            x: 0;
+                            y: parent.height - 1px;
+                            width: parent.width;
+                            height: 1px;
+                            background: Theme.border-soft;
                         }
-
-                        Rectangle { horizontal-stretch: 1; }
                     }
 
-                    Rectangle {
-                        x: 0;
-                        y: parent.height - 1px;
-                        width: parent.width;
-                        height: 1px;
-                        background: Theme.border-soft;
-                    }
-                }
+                    ScrollView {
+                        vertical-stretch: 1;
 
-                ScrollView {
-                    vertical-stretch: 1;
-
-                    VerticalLayout {
-                        padding: 4px;
-                        spacing: 2px;
-
-                        if root.groups.length == 0: VerticalLayout {
-                            spacing: 2px;
-                            for it[idx] in root.items: MultiSelectRow {
-                                item: it;
-                                show-checkbox: root.multi-select;
-                                activated => { root.toggle(idx); }
-                            }
-                        }
-
-                        if root.groups.length > 0: VerticalLayout {
+                        VerticalLayout {
+                            padding: 4px;
                             spacing: 2px;
 
-                            for it[idx] in root.items: Rectangle {
-                                if it.group == "": MultiSelectRow {
+                            if root.groups.length == 0: VerticalLayout {
+                                spacing: 2px;
+                                for it[idx] in root.items: MultiSelectRow {
                                     item: it;
                                     show-checkbox: root.multi-select;
                                     activated => { root.toggle(idx); }
                                 }
                             }
 
-                            for g in root.groups: VerticalLayout {
-                                spacing: 0px;
-
-                                Text {
-                                    text: g;
-                                    font-size: 10px;
-                                    font-weight: 700;
-                                    letter-spacing: 0.5px;
-                                    color: Theme.text-mute;
-                                    height: 22px;
-                                    vertical-alignment: center;
-                                }
+                            if root.groups.length > 0: VerticalLayout {
+                                spacing: 2px;
 
                                 for it[idx] in root.items: Rectangle {
-                                    if it.group == g: MultiSelectRow {
+                                    if it.group == "": MultiSelectRow {
                                         item: it;
                                         show-checkbox: root.multi-select;
                                         activated => { root.toggle(idx); }
+                                    }
+                                }
+
+                                for g in root.groups: VerticalLayout {
+                                    spacing: 0px;
+
+                                    Text {
+                                        text: g;
+                                        font-size: 10px;
+                                        font-weight: 700;
+                                        letter-spacing: 0.5px;
+                                        color: Theme.text-mute;
+                                        height: 22px;
+                                        vertical-alignment: center;
+                                    }
+
+                                    for it[idx] in root.items: Rectangle {
+                                        if it.group == g: MultiSelectRow {
+                                            item: it;
+                                            show-checkbox: root.multi-select;
+                                            activated => { root.toggle(idx); }
+                                        }
                                     }
                                 }
                             }
@@ -291,4 +324,4 @@ export component MultiSelectDropdown inherits Rectangle {
             }
         }
     }
-}
+
