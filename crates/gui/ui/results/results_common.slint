@@ -4,6 +4,7 @@
 // legend bar, and small pill/chip primitives reused across List/Matrix/
 // Charts/Coloc.
 
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import {
     ResultsState,
@@ -405,6 +406,72 @@ export component FilterPill inherits Rectangle {
                 font-size: 9px;
                 color: Theme.text-mute;
                 vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// -- FilterPill + attached single-select popup, used for the object-class
+// filter dropdowns in the list/matrix/chart views. `options` is the full
+// selectable set (e.g. ["All classes", "Nucleus", "Cell", ...]); `value` is
+// the currently selected entry. Selecting an item updates `value` locally
+// (so the pill repaints immediately) and fires `selected` for Rust to react
+// to (e.g. re-querying the results with the new class filter).
+export component ClassFilterField inherits Rectangle {
+    in property <string> label: "CLASS";
+    in-out property <string> value: "All classes";
+    in property <[string]> options: ["All classes"];
+    in property <length> pill-width: 150px;
+    callback selected(string);
+
+    pill := FilterPill {
+        label: root.label;
+        value: root.value;
+        pill-width: root.pill-width;
+        clicked => { popup.show(); }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: pill.height + 4px;
+        width: root.pill-width;
+        height: Math.min(200px, root.options.length * 28px);
+
+        Rectangle {
+            background: Theme.raised;
+            border-color: Theme.border-soft;
+            border-width: 1px;
+            border-radius: Theme.radius-sm;
+
+            ScrollView {
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+
+                    for opt in root.options: item-ta := TouchArea {
+                        height: 24px;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.value = opt;
+                            root.selected(opt);
+                            popup.close();
+                        }
+
+                        Rectangle {
+                            background: item-ta.has-hover ? Theme.hover : transparent;
+                            border-radius: 4px;
+
+                            Text {
+                                text: opt;
+                                font-size: 12px;
+                                color: opt == root.value ? Theme.accent : Theme.text;
+                                vertical-alignment: center;
+                                x: 8px;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
             }
         }
     }

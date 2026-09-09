@@ -11,7 +11,7 @@ import {
     MatrixCell,
     ObjectMarker,
 } from "results_state.slint";
-import { FilterPill, LegendBar, ValueColor } from "results_common.slint";
+import { ClassFilterField, FilterPill, LegendBar, ValueColor } from "results_common.slint";
 
 component MatrixCellView inherits Rectangle {
     in property <MatrixCell> cell;
@@ -221,11 +221,12 @@ export component ResultsMatrixView inherits Rectangle {
                     clicked => { ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate); }
                 }
 
-                FilterPill {
+                ClassFilterField {
                     label: "CLASS";
-                    value: ResultsState.matrix-class-filter;
+                    value <=> ResultsState.matrix-class-filter;
+                    options: ResultsState.class-filter-options;
                     pill-width: 120px;
-                    clicked => { ResultsState.matrix-class-clicked(); }
+                    selected(name) => { ResultsState.matrix-class-filter-selected(name); }
                 }
 
                 VerticalLayout {

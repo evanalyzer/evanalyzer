@@ -74,13 +74,19 @@ export global ResultsState {
     callback z-changed(int);
     callback t-changed(int);
 
+    // -------- Object classes (shared) --------
+    // Populated from the open database's classification settings; "All
+    // classes" is always the first entry. Backs the class-filter dropdowns
+    // in the list, matrix, and chart views.
+    in-out property <[string]> class-filter-options: ["All classes", "Background", "Test", "Test2"];
+
     // -------- List view --------
     in-out property <string> list-image-filter: "";
     in-out property <string> list-class-filter: "All classes";
     in-out property <[ColumnItem]> list-columns: [];
     in-out property <int> list-row-count: 0;
     callback list-image-filter-changed(string);
-    callback list-class-filter-clicked();
+    callback list-class-filter-selected(string);
     callback list-column-toggled(string);
     callback list-column-group-toggled(string);
     callback list-columns-select-all();
@@ -107,7 +113,7 @@ export global ResultsState {
     in-out property <string> active-image-name: "";
     callback matrix-value-clicked();
     callback matrix-aggregate-selected(string);
-    callback matrix-class-clicked();
+    callback matrix-class-filter-selected(string);
     callback matrix-regex-changed(string);
     callback matrix-color-scale-clicked();
     callback plate-cell-clicked(string);

@@ -3,8 +3,9 @@ use evanalyzer_app::result::{self, ResultsGenerator};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_gui_slint::ResultsWindow;
 use log::{error, info, warn};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 pub struct ResultsStateController {
@@ -50,7 +51,7 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_list_image_filter_changed(move |_filter| {});
             ui.global::<ResultsState>()
-                .on_list_class_filter_clicked(move || {});
+                .on_list_class_filter_selected(move |_class_name| {});
             ui.global::<ResultsState>()
                 .on_list_column_toggled(move |_label| {});
             ui.global::<ResultsState>()
@@ -66,7 +67,7 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_matrix_aggregate_selected(move |_aggregate| {});
             ui.global::<ResultsState>()
-                .on_matrix_class_clicked(move || {});
+                .on_matrix_class_filter_selected(move |_class_name| {});
             ui.global::<ResultsState>()
                 .on_matrix_regex_changed(move |_regex| {});
             ui.global::<ResultsState>()
@@ -106,13 +107,16 @@ impl ResultsStateController {
         info!("Opening database {:?}", path);
         let db = result::ResultsGenerator::open_database(path);
         match db {
-            Ok(results) => {
-                if let Ok(classes) = results.get_object_classes() {
+            Ok(results) => match results.get_object_classes() {
+                Ok(classes) => {
                     self.show_results_window();
                     self.set_object_classes_in_slint(&classes);
                     *self.result_generator.lock().expect("Poisned".into()) = Some(results);
                 }
-            }
+                Err(err) => {
+                    error!("{}", err);
+                }
+            },
             Err(err) => {
                 error!("{}", err);
             }
@@ -135,24 +139,23 @@ impl ResultsStateController {
 
     pub fn set_object_classes_in_slint(&self, object_classes: &Vec<Class>) {
         let ui_weak = self.ui.clone();
-        let label = if object_classes.is_empty() {
-            "All classes".to_string()
-        } else {
+        let mut options: Vec<SharedString> = vec!["All classes".into()];
+        options.extend(
             object_classes
                 .iter()
-                .map(|class| class.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+                .map(|class| SharedString::from(class.name.as_str())),
+        );
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 ui_ready
                     .global::<ResultsState>()
-                    .set_list_class_filter(label.into());
-             }else{
-                    warn!("Failed to upgrade UI handle in sync_image_list_to_slint, cannot update image list!");
-                }
-            })
-            .ok();
+                    .set_class_filter_options(ModelRc::from(Rc::new(VecModel::from(options))));
+            } else {
+                warn!(
+                    "Failed to upgrade UI handle in set_object_classes_in_slint, cannot update class filter options!"
+                );
+            }
+        })
+        .ok();
     }
 }

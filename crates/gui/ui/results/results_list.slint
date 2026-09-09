@@ -6,7 +6,7 @@
 import { ScrollView, LineEdit } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ResultsState, ColumnItem } from "results_state.slint";
-import { FilterPill } from "results_common.slint";
+import { ClassFilterField } from "results_common.slint";
 
 component ColumnCheckMark inherits Rectangle {
     in property <bool> checked;
@@ -285,11 +285,16 @@ export component ResultsListView inherits Rectangle {
                     }
                 }
 
-                FilterPill {
+                Rectangle {
+                    width: 20px;
+                }
+
+                ClassFilterField {
                     label: "OBJECT CLASS";
-                    value: ResultsState.list-class-filter;
+                    value <=> ResultsState.list-class-filter;
+                    options: ResultsState.class-filter-options;
                     pill-width: 150px;
-                    clicked => { ResultsState.list-class-filter-clicked(); }
+                    selected(name) => { ResultsState.list-class-filter-selected(name); }
                 }
 
                 Rectangle {
