@@ -21,52 +21,14 @@ export component ResultsListView inherits Rectangle {
                 spacing: 10px;
                 cross-axis-alignment: center;
 
-                Rectangle {
-                    width: 220px;
-                    height: 30px;
-                    border-radius: Theme.radius-sm;
-                    background: Theme.raised;
-                    border-width: 1px;
-                    border-color: search-input.has-focus ? Theme.accent : Theme.border-soft;
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 6px;
-                        cross-axis-alignment: center;
-                        Image {
-                            source: @image-url("../icons/regular-black/magnifying-glass.svg");
-                            width: 12px;
-                            height: 12px;
-                            colorize: Theme.text-mute;
-                        }
-
-                        Rectangle {
-                            horizontal-stretch: 1;
-                            search-input := TextInput {
-                                width: 100%;
-                                height: 100%;
-                                text <=> ResultsState.list-image-filter;
-                                font-size: 11.5px;
-                                color: Theme.text;
-                                vertical-alignment: center;
-                                single-line: true;
-                                edited => { ResultsState.list-image-filter-changed(self.text); }
-                            }
-
-                            if search-input.text == "": Text {
-                                width: 100%;
-                                height: 100%;
-                                text: "Filter by image name…";
-                                font-size: 11.5px;
-                                color: Theme.text-faint;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 20px;
+                MultiSelectDropdown {
+                    label: "IMAGES";
+                    summary-text: ResultsState.list-image-summary;
+                    items <=> ResultsState.list-image-items;
+                    multi-select: true;
+                    show-select-all: true;
+                    pill-width: 150px;
+                    item-selected(key, value, selected) => { ResultsState.list-image-selected(key, selected); }
                 }
 
                 MultiSelectDropdown {

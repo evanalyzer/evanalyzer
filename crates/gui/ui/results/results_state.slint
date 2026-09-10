@@ -74,14 +74,10 @@ export global ResultsState {
     ];
 
     // -------- List view --------
-    in-out property <string> list-image-filter: "";
-    // Each MultiSelectDropdown instance owns its own class candidates +
-    // selection (e.g. "All classes" plus every class from the open
-    // database's classification settings) - list/matrix/chart views can
-    // each have a different class picked.
-    // TEMPORARY: preview data so MultiSelectDropdown has something to show
-    // before Rust populates this from the open database's classification
-    // settings - replace with [] once results_state_controller.rs wires it up.
+    in-out property <[MultiSelectItem]> list-image-items: [];
+    in-out property <string> list-image-summary: "All images";
+
+    // Class selector
     in-out property <[MultiSelectItem]> list-class-items: [
         { key: "nucleus", value: "Nucleus", color: #4d8dff, group: "", selected: true },
         { key: "cell", value: "Cell", color: #34c759, group: "", selected: true },
@@ -89,22 +85,21 @@ export global ResultsState {
         { key: "debris", value: "Debris", color: #8e8e93, group: "", selected: false },
     ];
     in-out property <string> list-class-summary: "All classes";
-    // TEMPORARY: preview data so the columns dropdown has something to show
-    // before Rust populates this from the open database's available columns
-    // - replace with [] once results_state_controller.rs wires it up.
+
+    // Column selector
     in-out property <[MultiSelectItem]> list-columns: [
         { key: "object_id", value: "Object ID", group: "General", selected: true },
         { key: "object_class_name", value: "Class", group: "General", selected: true },
         { key: "area_px", value: "Area [px]", group: "Geometry", selected: true },
         { key: "area_nm2", value: "Area [nm²]", group: "Geometry", selected: false },
     ];
-    // Distinct, ordered group names present in list-columns (e.g.
-    // "Intensity", per-Coloc-class names) - [] renders a flat list.
     in-out property <[string]> list-columns-groups: ["General", "Geometry"];
     in-out property <string> list-columns-summary: "3 of 4 columns";
+
     in-out property <int> list-row-count: 0;
     callback list-image-filter-changed(string);
     callback list-class-selected(string, bool);
+    callback list-image-selected(string, bool);
     callback list-columns-item-selected(string, bool);
     callback list-columns-select-all();
     callback list-columns-select-none();
