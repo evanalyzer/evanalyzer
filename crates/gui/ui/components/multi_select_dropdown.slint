@@ -306,6 +306,12 @@ export component MultiSelectDropdown inherits Rectangle {
                             spacing: 2px;
 
                             for it[idx] in root.items: Rectangle {
+                                // Explicit (if conditional) height so this wrapper never
+                                // picks up the layout's default stretch factor - without
+                                // it, every row that doesn't match its group would have no
+                                // fixed size and would expand to fill the popup's leftover
+                                // space instead of collapsing to nothing.
+                                height: it.group == "" ? 26px : 0px;
                                 if it.group == "": MultiSelectRow {
                                     item: it;
                                     show-checkbox: root.multi-select;
@@ -328,6 +334,7 @@ export component MultiSelectDropdown inherits Rectangle {
                                 }
 
                                 for it[idx] in root.items: Rectangle {
+                                    height: it.group == g ? 26px : 0px;
                                     if it.group == g: MultiSelectRow {
                                         item: it;
                                         show-checkbox: root.multi-select;
