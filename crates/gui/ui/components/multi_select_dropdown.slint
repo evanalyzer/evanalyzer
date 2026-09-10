@@ -112,6 +112,12 @@ export component MultiSelectDropdown inherits Rectangle {
     callback select-all();
     callback select-none();
 
+    // Tracks which row is selected when multi-select is off, so toggle()
+    // can clear the previous one. Slint's imperative functions have no
+    // loops (see the file header note), so the "deselect everything else"
+    // step can't scan `items` directly - instead each row seeds this via
+    // its own `init` below (fired once per row when `items` is populated),
+    // and toggle() keeps it up to date from then on.
     property <int> single-selected-index: -1;
 
     function toggle(idx: int) {
@@ -126,6 +132,16 @@ export component MultiSelectDropdown inherits Rectangle {
             popup.close();
         }
         root.item-selected(root.items[idx].key,root.items[idx].value, root.items[idx].selected);
+    }
+
+    // Seeds single-selected-index from whichever row starts out selected,
+    // so the first click in single-select mode also clears it (otherwise a
+    // caller-supplied default selection would linger forever alongside
+    // whatever the user picks).
+    function note-initial-selection(idx: int, selected: bool) {
+        if !root.multi-select && selected {
+            root.single-selected-index = idx;
+        }
     }
 
     width: root.pill-width;
@@ -282,6 +298,7 @@ export component MultiSelectDropdown inherits Rectangle {
                                 item: it;
                                 show-checkbox: root.multi-select;
                                 activated => { root.toggle(idx); }
+                                init => { root.note-initial-selection(idx, it.selected); }
                             }
                         }
 
@@ -293,6 +310,7 @@ export component MultiSelectDropdown inherits Rectangle {
                                     item: it;
                                     show-checkbox: root.multi-select;
                                     activated => { root.toggle(idx); }
+                                    init => { root.note-initial-selection(idx, it.selected); }
                                 }
                             }
 
@@ -314,6 +332,7 @@ export component MultiSelectDropdown inherits Rectangle {
                                         item: it;
                                         show-checkbox: root.multi-select;
                                         activated => { root.toggle(idx); }
+                                        init => { root.note-initial-selection(idx, it.selected); }
                                     }
                                 }
                             }

@@ -67,10 +67,10 @@ export global ResultsState {
     callback t-changed(int);
 
     in-out property <[MultiSelectItem]> matrix-aggregation-items: [
-        { key: "avg", value: "Average", color: #000, group: "", selected: true },
-        { key: "sum", value: "Sum", color: #000, group: "", selected: false },
-        { key: "min", value: "Minimum", color: #000, group: "", selected: false },
-        { key: "max", value: "Maximum", color: #000, group: "", selected: false },
+        { key: "avg", value: "Average", group: "", selected: true },
+        { key: "sum", value: "Sum", group: "", selected: false },
+        { key: "min", value: "Minimum", group: "", selected: false },
+        { key: "max", value: "Maximum", group: "", selected: false },
     ];
 
     // -------- List view --------
