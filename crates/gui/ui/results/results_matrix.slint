@@ -208,11 +208,16 @@ export component ResultsMatrixView inherits Rectangle {
                 spacing: 10px;
                 cross-axis-alignment: center;
 
-                FilterPill {
+                MultiSelectDropdown {
                     label: "VALUE";
-                    value: ResultsState.matrix-value-label;
+                    summary-text: ResultsState.matrix-column-summary;
+                    items <=> ResultsState.matrix-column-items;
+                    groups: ResultsState.list-columns-groups;
                     pill-width: 160px;
-                    clicked => { ResultsState.matrix-value-clicked(); }
+                    item-selected(key, value, selected) => {
+                        ResultsState.matrix-column-summary = value;
+                        ResultsState.matrix-value-clicked();
+                    }
                 }
 
                 MultiSelectDropdown {
@@ -333,7 +338,7 @@ export component ResultsMatrixView inherits Rectangle {
                     spacing: 16px;
                     alignment: start;
                     LegendBar {
-                        value-label: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.matrix-value-label : "Objects / field";
+                        value-label: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.matrix-column-summary : "Objects / field";
                         min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : ResultsState.well-min;
                         max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : ResultsState.well-max;
                     }

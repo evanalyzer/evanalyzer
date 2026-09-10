@@ -77,6 +77,12 @@ pub enum Cell {
     Class((String, u32)),
 }
 
+pub struct ColumnEntry {
+    pub display_name: String,
+    pub name: String,
+    pub group: String,
+}
+
 pub struct ImageEntry {
     pub name: String,
     pub rel_path: PathBuf,
@@ -117,6 +123,84 @@ impl ResultsGenerator {
         .collect::<Result<Vec<_>, _>>()
         .map_err(err)
     }
+
+    pub fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors> {
+        let ret = vec![
+            ColumnEntry {
+                display_name: "Object ID".into(),
+                name: "object_id".into(),
+                group: "General".into(),
+            },
+            ColumnEntry {
+                display_name: "Class".into(),
+                name: "object_class_name".into(),
+                group: "General".into(),
+            },
+            ColumnEntry {
+                display_name: "Area [px]".into(),
+                name: "area_px".into(),
+                group: "Geometry".into(),
+            },
+            ColumnEntry {
+                display_name: "Area [nm²]".into(),
+                name: "area_nm2".into(),
+                group: "Geometry".into(),
+            },
+            ColumnEntry {
+                display_name: "Perimeter [px]".into(),
+                name: "perimeter_px".into(),
+                group: "Geometry".into(),
+            },
+            ColumnEntry {
+                display_name: "Perimeter [nm]".into(),
+                name: "perimeter_nm".into(),
+                group: "Geometry".into(),
+            },
+            ColumnEntry {
+                display_name: "Circularity".into(),
+                name: "circularity".into(),
+                group: "Shape".into(),
+            },
+            ColumnEntry {
+                display_name: "Solidity".into(),
+                name: "solidity".into(),
+                group: "Shape".into(),
+            },
+            ColumnEntry {
+                display_name: "Eccentricity".into(),
+                name: "eccentricity".into(),
+                group: "Shape".into(),
+            },
+            ColumnEntry {
+                display_name: "Coloc count".into(),
+                name: "n_colocalized".into(),
+                group: "Coloc".into(),
+            },
+            ColumnEntry {
+                display_name: "Avg Intensity".into(),
+                name: "mean_raw".into(),
+                group: "intensity".into(),
+            },
+            ColumnEntry {
+                display_name: "Sum Intensity".into(),
+                name: "sum_raw".into(),
+                group: "intensity".into(),
+            },
+            ColumnEntry {
+                display_name: "Min Intensity".into(),
+                name: "min_raw".into(),
+                group: "intensity".into(),
+            },
+            ColumnEntry {
+                display_name: "Max Intensity".into(),
+                name: "max_raw".into(),
+                group: "intensity".into(),
+            },
+        ];
+
+        Ok(ret)
+    }
+
     pub fn get_images(&self) -> Result<Vec<ImageEntry>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let mut stmt = self

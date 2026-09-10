@@ -89,11 +89,19 @@ export global ResultsState {
         { key: "debris", value: "Debris", color: #8e8e93, group: "", selected: false },
     ];
     in-out property <string> list-class-summary: "All classes";
-    in-out property <[MultiSelectItem]> list-columns: [];
+    // TEMPORARY: preview data so the columns dropdown has something to show
+    // before Rust populates this from the open database's available columns
+    // - replace with [] once results_state_controller.rs wires it up.
+    in-out property <[MultiSelectItem]> list-columns: [
+        { key: "object_id", value: "Object ID", group: "General", selected: true },
+        { key: "object_class_name", value: "Class", group: "General", selected: true },
+        { key: "area_px", value: "Area [px]", group: "Geometry", selected: true },
+        { key: "area_nm2", value: "Area [nm²]", group: "Geometry", selected: false },
+    ];
     // Distinct, ordered group names present in list-columns (e.g.
     // "Intensity", per-Coloc-class names) - [] renders a flat list.
-    in-out property <[string]> list-columns-groups: [];
-    in-out property <string> list-columns-summary: "Columns";
+    in-out property <[string]> list-columns-groups: ["General", "Geometry"];
+    in-out property <string> list-columns-summary: "3 of 4 columns";
     in-out property <int> list-row-count: 0;
     callback list-image-filter-changed(string);
     callback list-class-selected(string, bool);
@@ -102,7 +110,8 @@ export global ResultsState {
     callback list-columns-select-none();
 
     // -------- Matrix / plate / well / object --------
-    in-out property <string> matrix-value-label: "Number of objects";
+    in-out property <[MultiSelectItem]> matrix-column-items: [];
+    in-out property <string> matrix-column-summary: "Number of objects";
     in-out property <string> matrix-aggregate: "Average";
     in-out property <[MultiSelectItem]> matrix-class-items: [];
     in-out property <string> matrix-class-summary: "All classes";
