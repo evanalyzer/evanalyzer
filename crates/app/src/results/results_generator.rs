@@ -25,18 +25,67 @@ pub enum Aggregation {
     Count,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Column {
     ObjectId,
     ObjectClass,
     AreaSizePx,
     AreaSizeNm,
-    Intensity(i32),
     PerimeterPx,
     PerimeterNm,
     Circularity,
     Solidity,
     Eccentricity,
+    ColocCount,
+    IntensityAvg,
+    IntensitySum,
+    IntensityMin,
+    IntensityMax,
+}
+
+impl Column {
+    /// Stable string key (matches the underlying database column name) used
+    /// to store this variant in UI widgets that only accept strings, e.g. the
+    /// slint columns dropdown.
+    pub fn as_key(&self) -> &'static str {
+        match self {
+            Column::ObjectId => "object_id",
+            Column::ObjectClass => "object_class_name",
+            Column::AreaSizePx => "area_px",
+            Column::AreaSizeNm => "area_nm2",
+            Column::PerimeterPx => "perimeter_px",
+            Column::PerimeterNm => "perimeter_nm",
+            Column::Circularity => "circularity",
+            Column::Solidity => "solidity",
+            Column::Eccentricity => "eccentricity",
+            Column::ColocCount => "n_colocalized",
+            Column::IntensityAvg => "mean_raw",
+            Column::IntensitySum => "sum_raw",
+            Column::IntensityMin => "min_raw",
+            Column::IntensityMax => "max_raw",
+        }
+    }
+
+    /// Inverse of [`Column::as_key`].
+    pub fn from_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "object_id" => Column::ObjectId,
+            "object_class_name" => Column::ObjectClass,
+            "area_px" => Column::AreaSizePx,
+            "area_nm2" => Column::AreaSizeNm,
+            "perimeter_px" => Column::PerimeterPx,
+            "perimeter_nm" => Column::PerimeterNm,
+            "circularity" => Column::Circularity,
+            "solidity" => Column::Solidity,
+            "eccentricity" => Column::Eccentricity,
+            "n_colocalized" => Column::ColocCount,
+            "mean_raw" => Column::IntensityAvg,
+            "sum_raw" => Column::IntensitySum,
+            "min_raw" => Column::IntensityMin,
+            "max_raw" => Column::IntensityMax,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -79,7 +128,7 @@ pub enum Cell {
 
 pub struct ColumnEntry {
     pub display_name: String,
-    pub name: String,
+    pub key: Column,
     pub group: String,
 }
 
@@ -128,72 +177,72 @@ impl ResultsGenerator {
         let ret = vec![
             ColumnEntry {
                 display_name: "Object ID".into(),
-                name: "object_id".into(),
+                key: Column::ObjectId,
                 group: "General".into(),
             },
             ColumnEntry {
                 display_name: "Class".into(),
-                name: "object_class_name".into(),
+                key: Column::ObjectClass,
                 group: "General".into(),
             },
             ColumnEntry {
                 display_name: "Area [px]".into(),
-                name: "area_px".into(),
+                key: Column::AreaSizePx,
                 group: "Geometry".into(),
             },
             ColumnEntry {
                 display_name: "Area [nm²]".into(),
-                name: "area_nm2".into(),
+                key: Column::AreaSizeNm,
                 group: "Geometry".into(),
             },
             ColumnEntry {
                 display_name: "Perimeter [px]".into(),
-                name: "perimeter_px".into(),
+                key: Column::PerimeterPx,
                 group: "Geometry".into(),
             },
             ColumnEntry {
                 display_name: "Perimeter [nm]".into(),
-                name: "perimeter_nm".into(),
+                key: Column::PerimeterNm,
                 group: "Geometry".into(),
             },
             ColumnEntry {
                 display_name: "Circularity".into(),
-                name: "circularity".into(),
+                key: Column::Circularity,
                 group: "Shape".into(),
             },
             ColumnEntry {
                 display_name: "Solidity".into(),
-                name: "solidity".into(),
+                key: Column::Solidity,
                 group: "Shape".into(),
             },
             ColumnEntry {
                 display_name: "Eccentricity".into(),
-                name: "eccentricity".into(),
+                key: Column::Eccentricity,
                 group: "Shape".into(),
             },
             ColumnEntry {
                 display_name: "Coloc count".into(),
-                name: "n_colocalized".into(),
+                key: Column::ColocCount,
                 group: "Coloc".into(),
             },
             ColumnEntry {
                 display_name: "Avg Intensity".into(),
-                name: "mean_raw".into(),
+                key: Column::IntensityAvg,
                 group: "intensity".into(),
             },
             ColumnEntry {
                 display_name: "Sum Intensity".into(),
-                name: "sum_raw".into(),
+                key: Column::IntensitySum,
                 group: "intensity".into(),
             },
             ColumnEntry {
                 display_name: "Min Intensity".into(),
-                name: "min_raw".into(),
+                key: Column::IntensityMin,
                 group: "intensity".into(),
             },
             ColumnEntry {
                 display_name: "Max Intensity".into(),
-                name: "max_raw".into(),
+                key: Column::IntensityMax,
                 group: "intensity".into(),
             },
         ];

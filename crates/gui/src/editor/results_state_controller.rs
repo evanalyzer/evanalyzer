@@ -212,7 +212,7 @@ fn column_items(columns: &[ColumnEntry]) -> Vec<MultiSelectItem> {
     columns
         .iter()
         .map(|column| MultiSelectItem {
-            key: column.name.as_str().into(),
+            key: column.key.as_key().into(),
             value: column.display_name.as_str().into(),
             color: Color::default(),
             group: column.group.as_str().into(),
