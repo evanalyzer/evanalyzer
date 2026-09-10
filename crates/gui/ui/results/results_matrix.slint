@@ -212,6 +212,7 @@ export component ResultsMatrixView inherits Rectangle {
                     label: "VALUE";
                     summary-text: ResultsState.matrix-column-summary;
                     items <=> ResultsState.matrix-column-items;
+                    multi-select: false;
                     groups: ResultsState.list-columns-groups;
                     pill-width: 160px;
                     item-selected(key, value, selected) => {

@@ -173,7 +173,8 @@ impl ResultsStateController {
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
-                state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
+                state.set_matrix_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
                 state.set_list_columns_groups(ModelRc::from(Rc::new(VecModel::from(groups))));
             } else {
                 warn!(
