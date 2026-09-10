@@ -215,11 +215,16 @@ export component ResultsMatrixView inherits Rectangle {
                     clicked => { ResultsState.matrix-value-clicked(); }
                 }
 
-                FilterPill {
+                MultiSelectDropdown {
                     label: "AGGREGATE";
-                    value: ResultsState.matrix-aggregate;
+                    summary-text: ResultsState.matrix-aggregate;
+                    items <=> ResultsState.matrix-aggregation-items;
+                    multi-select: false;
                     pill-width: 120px;
-                    clicked => { ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate); }
+                    item-selected(key, value, selected) => {
+                        ResultsState.matrix-aggregate = value;
+                        ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate);
+                    }
                 }
 
                 MultiSelectDropdown {
@@ -228,7 +233,7 @@ export component ResultsMatrixView inherits Rectangle {
                     items <=> ResultsState.matrix-class-items;
                     multi-select: false;
                     pill-width: 120px;
-                    item-selected(key, selected) => { ResultsState.matrix-class-selected(key, selected); }
+                    item-selected(key, value, selected) => { ResultsState.matrix-class-selected(key, selected); }
                 }
 
                 VerticalLayout {

@@ -102,7 +102,7 @@ export component ResultsChartsView inherits Rectangle {
                     items <=> ResultsState.chart-class-items;
                     multi-select: false;
                     pill-width: 120px;
-                    item-selected(key, selected) => { ResultsState.chart-class-selected(key, selected); }
+                    item-selected(key, value, selected) => { ResultsState.chart-class-selected(key, selected); }
                 }
             }
         }
