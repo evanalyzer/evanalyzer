@@ -555,6 +555,10 @@ impl ResultsStateController {
             column: matrix_filter.column.clone(),
             color_schema: matrix_filter.color_schema.clone(),
             color_scale: matrix_filter.color_scale.clone(),
+            // No UI to pick a fixed plate size yet — `None` has
+            // `get_group_by_plate` auto-select the smallest standard
+            // dimensions that fit the data.
+            matrix_dimension: None,
         };
         drop(matrix_filter);
 
@@ -1037,6 +1041,7 @@ fn bg_color_to_slint(bg_color: u32) -> Color {
 
 fn cell_to_string(cell: &Cell) -> slint::SharedString {
     match &cell.value {
+        CellValue::Empty => "".into(),
         CellValue::String(value) => value.as_str().into(),
         CellValue::Float(value) => format!("{value:.3}").into(),
         CellValue::Integer(value) => value.to_string().into(),

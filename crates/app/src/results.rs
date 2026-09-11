@@ -11,6 +11,7 @@ pub use results_generator::DatabaseResult;
 pub use results_generator::GroupFilter;
 pub use results_generator::ImageEntry;
 pub use results_generator::ListFilter;
+pub use results_generator::MatrixDimensions;
 pub use results_generator::Pagination;
 pub use results_generator::PlaneFilter;
 pub use results_generator::ResultsGenerator;

@@ -21,6 +21,32 @@ pub enum View {
     Heatmap,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatrixDimensions {
+    Well6,
+    Well12,
+    Well24,
+    Well48,
+    Well96,
+    Well384,
+    Well1536,
+}
+
+impl MatrixDimensions {
+    /// Returns the matrix dimensions as a `(rows, columns)` tuple.
+    pub const fn dimensions(&self) -> (usize, usize) {
+        match self {
+            Self::Well6 => (2, 3),
+            Self::Well12 => (3, 4),
+            Self::Well24 => (4, 6),
+            Self::Well48 => (6, 8),
+            Self::Well96 => (8, 12),
+            Self::Well384 => (16, 24),
+            Self::Well1536 => (32, 48),
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 pub enum Aggregation {
     #[default]
@@ -143,6 +169,7 @@ pub struct GroupFilter {
     pub column: Column,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
+    pub matrix_dimension: Option<MatrixDimensions>,
 }
 
 #[derive(Clone)]
@@ -155,6 +182,7 @@ pub struct ListFilter {
 }
 
 pub enum CellValue {
+    Empty,
     String(String),
     Float(f32),
     Integer(i32),
@@ -429,24 +457,37 @@ impl ResultsGenerator {
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(err)?;
 
-                let mut row_keys: Vec<String> =
-                    cells.iter().map(|(row, _, _)| row.clone()).collect();
-                row_keys.sort();
-                row_keys.dedup();
-
-                // Numeric, not lexicographic, sort — "10" must sort after
-                // "2", not before it.
-                let mut col_keys: Vec<String> =
-                    cells.iter().map(|(_, col, _)| col.clone()).collect();
-                col_keys.sort_by_key(|col| col.parse::<i64>().unwrap_or(i64::MAX));
-                col_keys.dedup();
-
-                let mut values: HashMap<(String, String), f64> = HashMap::new();
-                for (row, col, value) in cells {
+                // Real 0-based (row, col) well coordinates ("A" -> 0, "1" ->
+                // 0, ...), not just distinct-and-sorted keys — needed so the
+                // grid always lines up with a real plate's row/column
+                // numbering (see `matrix_dimension` below) instead of
+                // silently compressing when a row or column has no objects
+                // at all.
+                let mut values: HashMap<(usize, usize), f64> = HashMap::new();
+                let mut max_row = None;
+                let mut max_col = None;
+                for (row, col, value) in &cells {
+                    let (Some(row), Some(col)) =
+                        (row_letter_to_index(row), col_number_to_index(col))
+                    else {
+                        continue;
+                    };
+                    max_row = Some(max_row.map_or(row, |m: usize| m.max(row)));
+                    max_col = Some(max_col.map_or(col, |m: usize| m.max(col)));
                     if let Some(value) = value {
-                        values.insert((row, col), value);
+                        values.insert((row, col), *value);
                     }
                 }
+
+                // Given: use it exactly, so the caller can request e.g. a
+                // 384-well layout even if this particular plate only has
+                // objects in a handful of wells. Not given: the smallest
+                // standard plate size that still fits every well this query
+                // actually found.
+                let dimensions = filter
+                    .matrix_dimension
+                    .unwrap_or_else(|| best_matching_dimensions(max_row, max_col));
+                let (rows, cols) = dimensions.dimensions();
 
                 let (range_min, range_max) = match filter.color_scale {
                     ColorScale::Manual(min, max) => (min as f64, max as f64),
@@ -465,39 +506,35 @@ impl ResultsGenerator {
                     }
                 };
 
-                let rows = row_keys
-                    .iter()
-                    .map(|row_key| {
-                        col_keys
-                            .iter()
-                            .map(|col_key| {
-                                match values.get(&(row_key.clone(), col_key.clone())) {
-                                    Some(value) => Cell {
-                                        value: CellValue::Float(*value as f32),
-                                        bg_color: value_to_color(
-                                            *value,
-                                            range_min,
-                                            range_max,
-                                            &filter.color_schema,
-                                        ),
-                                    },
-                                    // No object matched this well at all —
-                                    // leave it blank rather than showing a
-                                    // misleading 0.
-                                    None => Cell {
-                                        value: CellValue::String(String::new()),
-                                        bg_color: 0,
-                                    },
-                                }
+                let grid_rows = (0..rows)
+                    .map(|row| {
+                        (0..cols)
+                            .map(|col| match values.get(&(row, col)) {
+                                Some(value) => Cell {
+                                    value: CellValue::Float(*value as f32),
+                                    bg_color: value_to_color(
+                                        *value,
+                                        range_min,
+                                        range_max,
+                                        &filter.color_schema,
+                                    ),
+                                },
+                                // No object matched this well at all — leave
+                                // it empty rather than showing a misleading 0
+                                // or a value from some other well.
+                                None => Cell {
+                                    value: CellValue::Empty,
+                                    bg_color: 0,
+                                },
                             })
                             .collect()
                     })
                     .collect();
 
                 Ok(DatabaseResult {
-                    column_names: col_keys,
-                    row_names: row_keys,
-                    rows,
+                    column_names: (1..=cols).map(|col| col.to_string()).collect(),
+                    row_names: (0..rows).map(row_index_to_letter).collect(),
+                    rows: grid_rows,
                 })
             }
         }
@@ -922,6 +959,69 @@ const EXCEL_STOPS: [(f32, (u8, u8, u8)); 3] = [
     (0.5, (0xff, 0xeb, 0x84)),
     (1.0, (0x63, 0xbe, 0x7b)),
 ];
+
+/// Every standard plate size, smallest first — `best_matching_dimensions`
+/// relies on this order to find the smallest one that fits.
+const ALL_MATRIX_DIMENSIONS: [MatrixDimensions; 7] = [
+    MatrixDimensions::Well6,
+    MatrixDimensions::Well12,
+    MatrixDimensions::Well24,
+    MatrixDimensions::Well48,
+    MatrixDimensions::Well96,
+    MatrixDimensions::Well384,
+    MatrixDimensions::Well1536,
+];
+
+/// The smallest standard plate size whose row/column count covers every well
+/// this query actually found (`max_row`/`max_col`, both 0-based). Falls back
+/// to the largest known size if even that doesn't fit (a plate bigger than
+/// any standard format, or a `grouping_regex` extracting something that
+/// isn't really a well id).
+fn best_matching_dimensions(max_row: Option<usize>, max_col: Option<usize>) -> MatrixDimensions {
+    let needed_rows = max_row.map_or(1, |row| row + 1);
+    let needed_cols = max_col.map_or(1, |col| col + 1);
+    ALL_MATRIX_DIMENSIONS
+        .into_iter()
+        .find(|dimensions| {
+            let (rows, cols) = dimensions.dimensions();
+            rows >= needed_rows && cols >= needed_cols
+        })
+        .unwrap_or(MatrixDimensions::Well1536)
+}
+
+/// Parses a well's row letters ("A", "B", ..., "Z", "AA", "AB", ...) into a
+/// 0-based row index, using the same bijective base-26 scheme spreadsheet
+/// column letters use. `None` if `letters` isn't purely alphabetic (e.g. the
+/// `grouping_regex` didn't actually match a well id).
+fn row_letter_to_index(letters: &str) -> Option<usize> {
+    if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let mut index: usize = 0;
+    for c in letters.chars() {
+        let digit = (c.to_ascii_uppercase() as u8 - b'A') as usize + 1;
+        index = index * 26 + digit;
+    }
+    Some(index - 1)
+}
+
+/// Inverse of [`row_letter_to_index`].
+fn row_index_to_letter(index: usize) -> String {
+    let mut n = index + 1;
+    let mut letters = Vec::new();
+    while n > 0 {
+        let rem = (n - 1) % 26;
+        letters.push((b'A' + rem as u8) as char);
+        n = (n - 1) / 26;
+    }
+    letters.iter().rev().collect()
+}
+
+/// Parses a well's column number ("1", "2", ...) into a 0-based column
+/// index. `None` if `digits` isn't a positive integer.
+fn col_number_to_index(digits: &str) -> Option<usize> {
+    digits.parse::<usize>().ok()?.checked_sub(1)
+}
 
 /// Maps `value` (within `[min, max]`) to a `0xRRGGBB` color under the
 /// selected `ColorSchema` — the same packing `evanalyzer_cfg`'s `Class.color`
