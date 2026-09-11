@@ -296,4 +296,11 @@ impl ResultsGenerator {
     pub fn get_histogram(&self) {}
     pub fn get_scatter(&self) {}
     pub fn get_heatmap(&self) {}
+
+    pub fn get_nr_of_z_stacks(&self) -> u32 {
+        1
+    }
+    pub fn get_nr_of_t_stacks(&self) -> u32 {
+        1
+    }
 }

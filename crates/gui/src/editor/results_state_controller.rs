@@ -12,6 +12,12 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
+struct PlaneFilter {
+    pub selected_z_stack: u32,
+    pub selected_t_stack: u32,
+}
+
+#[derive(Default)]
 struct ListFilter {
     pub image_rel_path: Vec<PathBuf>,
     pub object_classes: Vec<ObjectClass>,
@@ -23,6 +29,7 @@ pub struct ResultsStateController {
     pub(crate) app_state: Arc<UiState>,
     result_generator: Mutex<Option<ResultsGenerator>>,
     list_filter: Mutex<ListFilter>,
+    plane_filter: Mutex<PlaneFilter>,
     classes: Mutex<Vec<Class>>,
 }
 
@@ -33,6 +40,7 @@ impl ResultsStateController {
             app_state: app_state.clone(),
             result_generator: Mutex::new(None),
             list_filter: Mutex::new(ListFilter::default()),
+            plane_filter: Mutex::new(PlaneFilter::default()),
             classes: Mutex::new(Vec::new()),
         }
     }
@@ -58,8 +66,22 @@ impl ResultsStateController {
                 .on_breadcrumb_nav(move |_index| {});
 
             // -- Global Z/T plane filter --
-            ui.global::<ResultsState>().on_z_changed(move |_value| {});
-            ui.global::<ResultsState>().on_t_changed(move |_value| {});
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_z_changed(move |value| {
+                manager
+                    .plane_filter
+                    .lock()
+                    .expect("Poisned")
+                    .selected_z_stack = value as u32;
+            });
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_t_changed(move |value| {
+                manager
+                    .plane_filter
+                    .lock()
+                    .expect("Poisned")
+                    .selected_t_stack = value as u32;
+            });
 
             // -- List view --
             let manager = self.clone();
@@ -195,6 +217,13 @@ impl ResultsStateController {
                         error!("{}", err);
                     }
                 };
+
+                *self.plane_filter.lock().expect("Poisned") = PlaneFilter::default();
+                self.set_max_z_and_t_stack_in_slint(
+                    results.get_nr_of_t_stacks(),
+                    results.get_nr_of_z_stacks(),
+                );
+
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
             }
@@ -251,6 +280,26 @@ impl ResultsStateController {
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_object_classes_in_slint, cannot update class filter options!"
+                );
+            }
+        })
+        .ok();
+    }
+
+    pub fn set_max_z_and_t_stack_in_slint(&self, t_stack_max: u32, z_stack_max: u32) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_z_stack_max(z_stack_max.saturating_sub(1) as i32);
+                state.set_t_stack_max(t_stack_max.saturating_sub(1) as i32);
+                state.set_z_stack_active(z_stack_max > 1);
+                state.set_t_stack_active(t_stack_max > 1);
+                state.set_z_stack(0);
+                state.set_t_stack(0);
+            } else {
+                warn!(
+                    "Failed to upgrade UI handle in set_max_z_and_t_stack_in_slint, cannot update plane filter range!"
                 );
             }
         })
