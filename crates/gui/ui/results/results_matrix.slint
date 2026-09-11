@@ -13,6 +13,7 @@ import {
 } from "results_state.slint";
 import { FilterPill, LegendBar } from "results_common.slint";
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
+import { AppButton } from "../components/app_button.slint";
 
 component MatrixCellView inherits Rectangle {
     in property <MatrixCell> cell;
@@ -354,6 +355,59 @@ export component ResultsMatrixView inherits Rectangle {
                         value-label: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.matrix-column-summary : "Objects / field";
                         min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : ResultsState.well-min;
                         max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : ResultsState.well-max;
+                    }
+
+                    // Selected-well detail card — filled in by
+                    // `on_plate_cell_clicked` (results_state_controller.rs)
+                    // when a plate cell is clicked; hidden until then.
+                    if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well != "": Rectangle {
+                        border-radius: Theme.radius-md;
+                        background: Theme.raised;
+                        border-width: 1px;
+                        border-color: Theme.border-soft;
+
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 6px;
+                            alignment: start;
+
+                            Text {
+                                text: "WELL " + ResultsState.active-well;
+                                font-size: 9px;
+                                letter-spacing: 0.4px;
+                                color: Theme.text-mute;
+                            }
+
+                            Text {
+                                text: ResultsState.active-well-has-value ? ResultsState.active-well-value : "—";
+                                font-size: 22px;
+                                font-weight: 700;
+                                font-family: Theme.font-mono;
+                                color: Theme.text;
+                            }
+
+                            Text {
+                                text: ResultsState.active-well-caption;
+                                font-size: 10.5px;
+                                color: Theme.text-mute;
+                                overflow: elide;
+                            }
+
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border-soft;
+                            }
+
+                            AppButton {
+                                text: "Open well ›";
+                                height: 30px;
+                                enabled: ResultsState.active-well-has-value;
+                                clicked => {
+                                    ResultsState.matrix-level = MatrixLevel.well;
+                                    ResultsState.open-well-clicked(ResultsState.active-well);
+                                }
+                            }
+                        }
                     }
                 }
             }

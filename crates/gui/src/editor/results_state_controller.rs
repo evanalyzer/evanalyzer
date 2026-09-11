@@ -8,6 +8,7 @@ use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_gui_slint::ResultsWindow;
 use log::{error, info, warn};
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -49,12 +50,16 @@ pub struct ResultsStateController {
     pub(crate) app_state: Arc<UiState>,
     result_generator: Mutex<Option<ResultsGenerator>>,
     list_filter: Mutex<ListFilter>,
-    matrix_filter: Mutex<MatrixFilter>,
+    matrix_filter: Mutex<Option<MatrixFilter>>,
     plane_filter: Mutex<PlaneFilter>,
     list_page: Mutex<i32>,
     classes: Mutex<Vec<Class>>,
     images: Mutex<Vec<ImageEntry>>,
     available_columns: Mutex<Vec<ColumnEntry>>,
+    // Last-rendered plate cells, by well key (e.g. "C12") — so
+    // `on_plate_cell_clicked` can look up what to show in the sidebar
+    // without re-querying the database.
+    matrix_cells: Mutex<HashMap<String, MatrixCell>>,
 }
 
 impl ResultsStateController {
@@ -64,12 +69,13 @@ impl ResultsStateController {
             app_state: app_state.clone(),
             result_generator: Mutex::new(None),
             list_filter: Mutex::new(ListFilter::default()),
-            matrix_filter: Mutex::new(MatrixFilter::default()),
+            matrix_filter: Mutex::new(None),
             plane_filter: Mutex::new(PlaneFilter::default()),
             list_page: Mutex::new(0),
             classes: Mutex::new(Vec::new()),
             images: Mutex::new(Vec::new()),
             available_columns: Mutex::new(Vec::new()),
+            matrix_cells: Mutex::new(HashMap::new()),
         }
     }
 
@@ -233,7 +239,7 @@ impl ResultsStateController {
                         warn!("Unknown matrix column key selected: {}", item.key);
                         return;
                     };
-                    manager.matrix_filter.lock().expect("Poisned").column = column;
+                    manager.update_matrix_filter(|filter| filter.column = column);
                     manager.update_matrix_view();
                 });
 
@@ -251,7 +257,7 @@ impl ResultsStateController {
                             return;
                         }
                     };
-                    manager.matrix_filter.lock().expect("Poisned").aggregation = aggregation;
+                    manager.update_matrix_filter(|filter| filter.aggregation = aggregation);
                     manager.update_matrix_view();
                 });
 
@@ -276,7 +282,7 @@ impl ResultsStateController {
                         warn!("Unknown class selected: {class_name}");
                         return;
                     };
-                    manager.matrix_filter.lock().expect("Poisned").object_classe = object_class;
+                    manager.update_matrix_filter(|filter| filter.object_classe = object_class);
                     manager.update_matrix_view();
                 });
 
@@ -284,10 +290,7 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_matrix_regex_changed(move |regex| {
                     manager
-                        .matrix_filter
-                        .lock()
-                        .expect("Poisned")
-                        .group_by_regex = regex.to_string();
+                        .update_matrix_filter(|filter| filter.group_by_regex = regex.to_string());
                     manager.update_matrix_view();
                 });
 
@@ -301,11 +304,35 @@ impl ResultsStateController {
                         warn!("Unknown color schema selected: {key}");
                         return;
                     };
-                    manager.matrix_filter.lock().expect("Poisned").color_schema = schema;
+                    manager.update_matrix_filter(|filter| filter.color_schema = schema);
                     manager.update_matrix_view();
                 });
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
-                .on_plate_cell_clicked(move |_key| {});
+                .on_plate_cell_clicked(move |key| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_plate_cell_clicked");
+                        return;
+                    };
+                    let cells = manager.matrix_cells.lock().expect("Poisned");
+                    let Some(cell) = cells.get(key.as_str()) else {
+                        warn!("Unknown well clicked: {key}");
+                        return;
+                    };
+                    let state = ui_ready.global::<ResultsState>();
+                    state.set_active_well(key);
+                    state.set_active_well_has_value(cell.has_value);
+                    state.set_active_well_value(cell.label.clone());
+                });
+
+            ui.global::<ResultsState>()
+                .on_open_well_clicked(move |well| {
+                    // `get_group_by_well` isn't implemented yet, so there's no
+                    // well-level data to load — the level switch itself already
+                    // happens in results_matrix.slint's `clicked` handler.
+                    info!("Open well {well} requested, but well-level data isn't wired up yet");
+                });
             ui.global::<ResultsState>()
                 .on_well_field_clicked(move |_key| {});
             ui.global::<ResultsState>()
@@ -378,7 +405,7 @@ impl ResultsStateController {
                 );
 
                 self.set_color_schemas_in_slint();
-                *self.matrix_filter.lock().expect("Poisned") = MatrixFilter::default();
+                *self.matrix_filter.lock().expect("Poisned") = None;
 
                 *self.list_filter.lock().expect("Poisened") = ListFilter {
                     image_rel_path: Vec::new(),
@@ -417,6 +444,15 @@ impl ResultsStateController {
     fn refresh_list(&self) {
         *self.list_page.lock().expect("Poisned") = 0;
         self.update_list_view();
+    }
+
+    // Every Matrix-view callback goes through this: `matrix_filter` starts
+    // `None` (see `open_database`) and is lazily created here on whichever
+    // control the user touches first, rather than springing into existence
+    // fully-formed the moment a database opens.
+    fn update_matrix_filter(&self, apply: impl FnOnce(&mut MatrixFilter)) {
+        let mut matrix_filter = self.matrix_filter.lock().expect("Poisned");
+        apply(matrix_filter.get_or_insert_with(MatrixFilter::default));
     }
 
     // Called by the Next/Prev page callbacks. Negative results are clamped
@@ -546,7 +582,30 @@ impl ResultsStateController {
         };
         drop(plane_filter);
 
-        let matrix_filter = self.matrix_filter.lock().expect("Poisned");
+        let matrix_filter_guard = self.matrix_filter.lock().expect("Poisned");
+        // Nothing to aggregate on yet (the user hasn't touched the Matrix
+        // view since the database was opened) — skip the query rather than
+        // running one against `MatrixFilter::default()`'s arbitrary values.
+        let Some(matrix_filter) = matrix_filter_guard.as_ref() else {
+            return;
+        };
+        // What the plate's values actually are, e.g. "Average Area [px]" —
+        // shown in the sidebar for whichever well gets clicked, since they
+        // all share this one aggregation/column.
+        let column_display_name = self
+            .available_columns
+            .lock()
+            .expect("Poisned")
+            .iter()
+            .find(|entry| entry.key == matrix_filter.column)
+            .map(|entry| entry.display_name.clone())
+            .unwrap_or_else(|| matrix_filter.column.as_key());
+        let value_caption = format!(
+            "{} {}",
+            aggregation_display_name(&matrix_filter.aggregation),
+            column_display_name
+        );
+
         let group_filter = result::GroupFilter {
             plane,
             grouping_regex: matrix_filter.group_by_regex.clone(),
@@ -560,13 +619,13 @@ impl ResultsStateController {
             // dimensions that fit the data.
             matrix_dimension: None,
         };
-        drop(matrix_filter);
+        drop(matrix_filter_guard);
 
         let Ok(result) = db.get_group_by_plate(&group_filter, &result::View::Heatmap) else {
             warn!("Could not load matrix results!");
             return;
         };
-        self.set_matrix_in_slint(&result);
+        self.set_matrix_in_slint(&result, value_caption);
     }
 
     // `result` is the plate/well grid `get_group_by_plate(.., View::Heatmap)`
@@ -578,25 +637,15 @@ impl ResultsStateController {
     // hardcoded A/B/C.../1/2/3... labels, since those come from index
     // position, not from `row_names`/`column_names` themselves — an accepted
     // limitation of this first pass, not something fixed here.
-    pub fn set_matrix_in_slint(&self, result: &DatabaseResult) {
+    pub fn set_matrix_in_slint(&self, result: &DatabaseResult, value_caption: String) {
         let ui_weak = self.ui.clone();
         let rows = result.row_names.len() as i32;
         let cols = result.column_names.len() as i32;
-
-        let mut range_min = f32::INFINITY;
-        let mut range_max = f32::NEG_INFINITY;
-        for row in &result.rows {
-            for cell in row {
-                if let CellValue::Float(value) = cell.value {
-                    range_min = range_min.min(value);
-                    range_max = range_max.max(value);
-                }
-            }
-        }
-        if !range_min.is_finite() || !range_max.is_finite() {
-            range_min = 0.0;
-            range_max = 0.0;
-        }
+        // `get_group_by_plate` already computed this range to color the
+        // cells against — reuse it rather than re-deriving (and risking
+        // disagreeing with) it from the cells themselves.
+        let range_min = result.min;
+        let range_max = result.max;
 
         let cells: Vec<MatrixCell> = result
             .row_names
@@ -623,9 +672,23 @@ impl ResultsStateController {
             })
             .collect();
 
+        // Cache by key for `on_plate_cell_clicked` to look up without
+        // re-querying — this replaces whatever the previous matrix refresh
+        // cached, so a click after a filter change can't show a stale value.
+        *self.matrix_cells.lock().expect("Poisned") = cells
+            .iter()
+            .map(|cell| (cell.key.to_string(), cell.clone()))
+            .collect();
+
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
+                // The previously selected well (if any) belonged to the old
+                // data — hide its card until the user clicks a new one.
+                state.set_active_well("".into());
+                state.set_active_well_has_value(false);
+                state.set_active_well_value("".into());
+                state.set_active_well_caption(value_caption.into());
                 state.set_plate_rows(rows);
                 state.set_plate_cols(cols);
                 state.set_plate_min(range_min);
@@ -986,6 +1049,18 @@ fn column_groups(columns: &[ColumnEntry]) -> Vec<slint::SharedString> {
         }
     }
     groups
+}
+
+// Mirrors the strings `on_matrix_aggregate_selected` maps back from — kept
+// as the single source of truth for that display text.
+fn aggregation_display_name(aggregation: &Aggregation) -> &'static str {
+    match aggregation {
+        Aggregation::Avg => "Average",
+        Aggregation::Min => "Minimum",
+        Aggregation::Max => "Maximum",
+        Aggregation::Stddev => "Std Dev",
+        Aggregation::Sum => "Sum",
+    }
 }
 
 fn color_schemas() -> [(&'static str, ColorSchema); 2] {

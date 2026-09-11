@@ -196,6 +196,9 @@ export global ResultsState {
     in-out property <float> plate-min: 0;
     in-out property <float> plate-max: 0;
     in-out property <string> active-well: "";
+    in-out property <bool> active-well-has-value: false;
+    in-out property <string> active-well-value: "";
+    in-out property <string> active-well-caption: "";
     in-out property <[MatrixCell]> well-fields: [];
     in-out property <float> well-min: 0;
     in-out property <float> well-max: 0;
@@ -208,6 +211,7 @@ export global ResultsState {
     callback matrix-regex-changed(string);
     callback matrix-color-schema-selected(string, bool);
     callback plate-cell-clicked(string);
+    callback open-well-clicked(string);
     callback well-field-clicked(string);
     callback object-marker-clicked(int);
     callback matrix-back-to-plate();

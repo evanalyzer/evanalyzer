@@ -213,6 +213,8 @@ pub struct DatabaseResult {
     pub row_names: Vec<String>,
     /// One row with its colums
     pub rows: Vec<Vec<Cell>>,
+    pub min: f32,
+    pub max: f32,
 }
 
 impl ResultsGenerator {
@@ -241,6 +243,8 @@ impl ResultsGenerator {
             column_names,
             row_names: vec![],
             rows: vec![],
+            min: 0.0,
+            max: 0.0,
         };
 
         // `ListFilter.images` carries the rel-paths the GUI's image picker
@@ -357,10 +361,16 @@ impl ResultsGenerator {
             })
             .collect();
 
+        // Not really meaningful across `ordered_columns` (area/circularity/
+        // eccentricity/... are different units mixed in one row), unlike the
+        // single-column plate view below — left at 0 rather than guessing at
+        // a cross-column range.
         Ok(DatabaseResult {
             column_names,
             row_names,
             rows,
+            min: 0.0,
+            max: 0.0,
         })
     }
 
@@ -423,6 +433,19 @@ impl ResultsGenerator {
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(err)?;
 
+                let mut min = f64::INFINITY;
+                let mut max = f64::NEG_INFINITY;
+                for (_, value) in &groups {
+                    if let Some(value) = value {
+                        min = min.min(*value);
+                        max = max.max(*value);
+                    }
+                }
+                if !min.is_finite() || !max.is_finite() {
+                    min = 0.0;
+                    max = 0.0;
+                }
+
                 let column_names = vec!["group".to_string(), filter.column.as_key()];
                 let row_names = groups.iter().map(|(key, _)| key.clone()).collect();
                 let rows = groups
@@ -444,6 +467,8 @@ impl ResultsGenerator {
                     column_names,
                     row_names,
                     rows,
+                    min: min as f32,
+                    max: max as f32,
                 })
             }
             View::Heatmap => {
@@ -535,6 +560,12 @@ impl ResultsGenerator {
                     column_names: (1..=cols).map(|col| col.to_string()).collect(),
                     row_names: (0..rows).map(row_index_to_letter).collect(),
                     rows: grid_rows,
+                    // Same range the cells were colored against above, so the
+                    // GUI's color bar always matches what's actually painted
+                    // rather than recomputing (and potentially disagreeing
+                    // with) it from the returned cells.
+                    min: range_min as f32,
+                    max: range_max as f32,
                 })
             }
         }
