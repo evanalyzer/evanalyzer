@@ -73,6 +73,7 @@ impl ResultsStateController {
                     .lock()
                     .expect("Poisned")
                     .selected_z_stack = value as u32;
+                manager.update_list_view();
             });
             let manager = self.clone();
             ui.global::<ResultsState>().on_t_changed(move |value| {
@@ -81,6 +82,7 @@ impl ResultsStateController {
                     .lock()
                     .expect("Poisned")
                     .selected_t_stack = value as u32;
+                manager.update_list_view();
             });
 
             // -- List view --
@@ -96,6 +98,8 @@ impl ResultsStateController {
                     } else {
                         list_filter.image_rel_path.retain(|p| p != &rel_path);
                     }
+                    drop(list_filter);
+                    manager.update_list_view();
                 });
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -120,6 +124,8 @@ impl ResultsStateController {
                     } else {
                         list_filter.object_classes.retain(|c| c != &object_class);
                     }
+                    drop(list_filter);
+                    manager.update_list_view();
                 });
 
             let manager = self.clone();
@@ -137,6 +143,8 @@ impl ResultsStateController {
                     } else {
                         list_filter.columns.retain(|c| c != &column);
                     }
+                    drop(list_filter);
+                    manager.update_list_view();
                 });
 
             ui.global::<ResultsState>()
@@ -226,6 +234,7 @@ impl ResultsStateController {
 
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
+                self.update_list_view();
             }
             Err(err) => {
                 error!("{}", err);
@@ -253,15 +262,43 @@ impl ResultsStateController {
             return;
         };
 
-        let filter = &*self.list_filter.lock().expect("Poisened".into());
+        let plane_filter = self.plane_filter.lock().expect("Poisned");
+        let plane = result::PlaneFilter {
+            z_stack: plane_filter.selected_z_stack,
+            t_stack: plane_filter.selected_t_stack,
+        };
+        drop(plane_filter);
+
+        let list_filter = self.list_filter.lock().expect("Poisened".into());
+        let images = if list_filter.image_rel_path.is_empty() {
+            None
+        } else {
+            Some(
+                list_filter
+                    .image_rel_path
+                    .iter()
+                    .filter_map(|p| p.to_str().map(str::to_string))
+                    .collect(),
+            )
+        };
+        let object_classes = if list_filter.object_classes.is_empty() {
+            None
+        } else {
+            Some(list_filter.object_classes.clone())
+        };
+        let columns = list_filter.columns.clone();
+        drop(list_filter);
 
         let Ok(result) = db.get_list(
             &evanalyzer_app::result::ListFilter {
-                plane: todo!(),
-                images: todo!(),
-                object_classes: todo!(),
-                columns: todo!(),
-                page: todo!(),
+                plane,
+                images,
+                object_classes,
+                columns,
+                page: result::Pagination {
+                    limit: -1,
+                    offset: 0,
+                },
             },
             &result::View::List,
         ) else {
