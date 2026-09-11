@@ -1,7 +1,7 @@
 use crate::{MultiSelectItem, ResultRow, ResultsListState, ResultsState, UiState};
 use evanalyzer_app::result::{
-    self, Aggregation, Cell, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
-    ImageEntry, ResultsGenerator,
+    self, Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry,
+    DatabaseResult, ImageEntry, ResultsGenerator,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -916,10 +916,10 @@ fn image_items(images: &[ImageEntry], selected: bool) -> Vec<MultiSelectItem> {
 }
 
 fn cell_to_string(cell: &Cell) -> slint::SharedString {
-    match cell {
-        Cell::String(value) => value.as_str().into(),
-        Cell::Float(value) => format!("{value:.3}").into(),
-        Cell::Integer(value) => value.to_string().into(),
-        Cell::Class((name, _color)) => name.as_str().into(),
+    match &cell.value {
+        CellValue::String(value) => value.as_str().into(),
+        CellValue::Float(value) => format!("{value:.3}").into(),
+        CellValue::Integer(value) => value.to_string().into(),
+        CellValue::Class((name, _color)) => name.as_str().into(),
     }
 }

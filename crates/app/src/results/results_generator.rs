@@ -139,6 +139,8 @@ pub struct GroupFilter {
     pub aggregation: Aggregation,
     pub object_class: ObjectClass,
     pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
 }
 
 #[derive(Clone)]
@@ -150,12 +152,18 @@ pub struct ListFilter {
     pub page: Pagination,
 }
 
-pub enum Cell {
+pub enum CellValue {
     String(String),
     Float(f32),
     Integer(i32),
     /// Object class with color
     Class((String, u32)),
+}
+
+pub struct Cell {
+    pub value: CellValue,
+    /// Cell background color
+    pub bg_color: u32,
 }
 
 pub struct ColumnEntry {
@@ -325,13 +333,7 @@ impl ResultsGenerator {
             rows,
         })
     }
-    pub fn get_group_by_well(
-        &self,
-        filter: &GroupFilter,
-        view: &View,
-    ) -> Result<DatabaseResult, InternalErrors> {
-        Err(("not implemented").into())
-    }
+
     pub fn get_group_by_plate(
         &self,
         filter: &GroupFilter,
@@ -339,6 +341,15 @@ impl ResultsGenerator {
     ) -> Result<DatabaseResult, InternalErrors> {
         Err(("not implemented").into())
     }
+
+    pub fn get_group_by_well(
+        &self,
+        filter: &GroupFilter,
+        view: &View,
+    ) -> Result<DatabaseResult, InternalErrors> {
+        Err(("not implemented").into())
+    }
+
     pub fn get_coloc_objects(&self) {}
 
     pub fn get_histogram(&self) {}
@@ -568,9 +579,21 @@ fn extract_string_list(value: Value) -> Vec<String> {
 }
 
 fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Cell {
+    // Only the class badge carries a background color today; every other
+    // column renders on the table's normal row background.
+    let no_bg = Cell {
+        value: CellValue::String(String::new()),
+        bg_color: 0,
+    };
     match column {
-        Column::ObjectId => Cell::String(object.object_id.clone()),
-        Column::ImageName => Cell::String(object.image_name.clone()),
+        Column::ObjectId => Cell {
+            value: CellValue::String(object.object_id.clone()),
+            ..no_bg
+        },
+        Column::ImageName => Cell {
+            value: CellValue::String(object.image_name.clone()),
+            ..no_bg
+        },
         Column::ObjectClass => {
             let label = if object.object_class_name.is_empty() {
                 object.seg_class_name.clone().unwrap_or_default()
@@ -583,36 +606,75 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
                 .and_then(|name| classes.iter().find(|class| &class.name == name))
                 .map(|class| class.color)
                 .unwrap_or(0);
-            Cell::Class((label, color))
+            Cell {
+                value: CellValue::Class((label, color)),
+                bg_color: color,
+            }
         }
-        Column::AreaSizePx => Cell::Integer(object.area_px as i32),
-        Column::AreaSizeNm => Cell::Float(object.area_nm2 as f32),
-        Column::PerimeterPx => Cell::Float(object.perimeter_px as f32),
-        Column::PerimeterNm => Cell::Float(object.perimeter_nm as f32),
-        Column::Circularity => Cell::Float(object.circularity as f32),
-        Column::Solidity => Cell::Float(object.solidity as f32),
-        Column::Eccentricity => Cell::Float(object.eccentricity as f32),
-        Column::ColocCount => Cell::Integer(coloc_count(&object.coloc_json)),
-        Column::IntensityAvg(channel) => Cell::Float(intensity_stat(
-            &object.intensities_json,
-            *channel,
-            "mean_raw",
-        )),
-        Column::IntensitySum(channel) => Cell::Float(intensity_stat(
-            &object.intensities_json,
-            *channel,
-            "sum_raw",
-        )),
-        Column::IntensityMin(channel) => Cell::Float(intensity_stat(
-            &object.intensities_json,
-            *channel,
-            "min_raw",
-        )),
-        Column::IntensityMax(channel) => Cell::Float(intensity_stat(
-            &object.intensities_json,
-            *channel,
-            "max_raw",
-        )),
+        Column::AreaSizePx => Cell {
+            value: CellValue::Integer(object.area_px as i32),
+            ..no_bg
+        },
+        Column::AreaSizeNm => Cell {
+            value: CellValue::Float(object.area_nm2 as f32),
+            ..no_bg
+        },
+        Column::PerimeterPx => Cell {
+            value: CellValue::Float(object.perimeter_px as f32),
+            ..no_bg
+        },
+        Column::PerimeterNm => Cell {
+            value: CellValue::Float(object.perimeter_nm as f32),
+            ..no_bg
+        },
+        Column::Circularity => Cell {
+            value: CellValue::Float(object.circularity as f32),
+            ..no_bg
+        },
+        Column::Solidity => Cell {
+            value: CellValue::Float(object.solidity as f32),
+            ..no_bg
+        },
+        Column::Eccentricity => Cell {
+            value: CellValue::Float(object.eccentricity as f32),
+            ..no_bg
+        },
+        Column::ColocCount => Cell {
+            value: CellValue::Integer(coloc_count(&object.coloc_json)),
+            ..no_bg
+        },
+        Column::IntensityAvg(channel) => Cell {
+            value: CellValue::Float(intensity_stat(
+                &object.intensities_json,
+                *channel,
+                "mean_raw",
+            )),
+            ..no_bg
+        },
+        Column::IntensitySum(channel) => Cell {
+            value: CellValue::Float(intensity_stat(
+                &object.intensities_json,
+                *channel,
+                "sum_raw",
+            )),
+            ..no_bg
+        },
+        Column::IntensityMin(channel) => Cell {
+            value: CellValue::Float(intensity_stat(
+                &object.intensities_json,
+                *channel,
+                "min_raw",
+            )),
+            ..no_bg
+        },
+        Column::IntensityMax(channel) => Cell {
+            value: CellValue::Float(intensity_stat(
+                &object.intensities_json,
+                *channel,
+                "max_raw",
+            )),
+            ..no_bg
+        },
     }
 }
 
