@@ -6,6 +6,7 @@ import { ListView } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ResultsState } from "results_state.slint";
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
+import { AppButton } from "../components/app_button.slint";
 
 export component ResultsListView inherits Rectangle {
     background: Theme.bg;
@@ -149,6 +150,55 @@ export component ResultsListView inherits Rectangle {
                     color: Theme.text-mute;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                }
+            }
+        }
+
+        // -- Pagination footer --
+        // Next/previous rather than infinite scroll: each page is a fresh,
+        // bounded query (see LIST_PAGE_SIZE in results_state_controller.rs),
+        // so paging never has to accumulate rows or track scroll position.
+        Rectangle {
+            height: 44px;
+            background: Theme.bg;
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: 1px;
+                background: Theme.border-soft;
+            }
+
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 10px;
+                alignment: end;
+                cross-axis-alignment: center;
+
+                AppButton {
+                    text: "‹ Prev";
+                    height: 28px;
+                    min-width: 72px;
+                    enabled: ResultsState.list-page-number > 1;
+                    clicked => { ResultsState.list-prev-page(); }
+                }
+
+                Text {
+                    text: "Page " + ResultsState.list-page-number;
+                    font-size: 11.5px;
+                    font-family: Theme.font-mono;
+                    color: Theme.text-mute;
+                    vertical-alignment: center;
+                }
+
+                AppButton {
+                    text: "Next ›";
+                    height: 28px;
+                    min-width: 72px;
+                    enabled: ResultsState.list-has-next-page;
+                    clicked => { ResultsState.list-next-page(); }
                 }
             }
         }

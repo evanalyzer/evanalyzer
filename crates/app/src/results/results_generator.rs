@@ -297,10 +297,27 @@ impl ResultsGenerator {
     pub fn get_scatter(&self) {}
     pub fn get_heatmap(&self) {}
 
-    pub fn get_nr_of_z_stacks(&self) -> u32 {
-        1
+    pub fn get_nr_of_c_stacks(&self) -> u32 {
+        let max_stack: u32 = self
+            .database
+            .query_row("SELECT MAX(c_stack) FROM objects;", [], |row| row.get(0))
+            .unwrap_or(1);
+        max_stack
     }
+
+    pub fn get_nr_of_z_stacks(&self) -> u32 {
+        let max_stack: u32 = self
+            .database
+            .query_row("SELECT MAX(z_stack) FROM objects;", [], |row| row.get(0))
+            .unwrap_or(1);
+        max_stack
+    }
+
     pub fn get_nr_of_t_stacks(&self) -> u32 {
-        1
+        let max_stack: u32 = self
+            .database
+            .query_row("SELECT MAX(t_stack) FROM objects;", [], |row| row.get(0))
+            .unwrap_or(1);
+        max_stack
     }
 }

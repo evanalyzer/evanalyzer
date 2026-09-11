@@ -32,6 +32,7 @@ pub struct ResultsStateController {
     result_generator: Mutex<Option<ResultsGenerator>>,
     list_filter: Mutex<ListFilter>,
     plane_filter: Mutex<PlaneFilter>,
+    list_page: Mutex<i32>,
     classes: Mutex<Vec<Class>>,
 }
 
@@ -43,6 +44,7 @@ impl ResultsStateController {
             result_generator: Mutex::new(None),
             list_filter: Mutex::new(ListFilter::default()),
             plane_filter: Mutex::new(PlaneFilter::default()),
+            list_page: Mutex::new(0),
             classes: Mutex::new(Vec::new()),
         }
     }
@@ -75,7 +77,7 @@ impl ResultsStateController {
                     .lock()
                     .expect("Poisned")
                     .selected_z_stack = value as u32;
-                manager.update_list_view();
+                manager.refresh_list();
             });
             let manager = self.clone();
             ui.global::<ResultsState>().on_t_changed(move |value| {
@@ -84,7 +86,7 @@ impl ResultsStateController {
                     .lock()
                     .expect("Poisned")
                     .selected_t_stack = value as u32;
-                manager.update_list_view();
+                manager.refresh_list();
             });
 
             // -- List view --
@@ -101,7 +103,7 @@ impl ResultsStateController {
                         list_filter.image_rel_path.retain(|p| p != &rel_path);
                     }
                     drop(list_filter);
-                    manager.update_list_view();
+                    manager.refresh_list();
                 });
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -127,7 +129,7 @@ impl ResultsStateController {
                         list_filter.object_classes.retain(|c| c != &object_class);
                     }
                     drop(list_filter);
-                    manager.update_list_view();
+                    manager.refresh_list();
                 });
 
             let manager = self.clone();
@@ -146,13 +148,22 @@ impl ResultsStateController {
                         list_filter.columns.retain(|c| c != &column);
                     }
                     drop(list_filter);
-                    manager.update_list_view();
+                    manager.refresh_list();
                 });
 
             ui.global::<ResultsState>()
                 .on_list_columns_select_all(move || {});
             ui.global::<ResultsState>()
                 .on_list_columns_select_none(move || {});
+
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_list_next_page(move || {
+                manager.change_list_page(1);
+            });
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_list_prev_page(move || {
+                manager.change_list_page(-1);
+            });
 
             // -- Matrix / plate / well / object --
             ui.global::<ResultsState>()
@@ -236,7 +247,7 @@ impl ResultsStateController {
 
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
-                self.update_list_view();
+                self.refresh_list();
             }
             Err(err) => {
                 error!("{}", err);
@@ -256,6 +267,26 @@ impl ResultsStateController {
             }
         })
         .ok();
+    }
+
+    // Called whenever a filter (plane, image, class or column selection)
+    // changes: the previous page number no longer means anything for the new
+    // filter, so jump back to page 1.
+    fn refresh_list(&self) {
+        *self.list_page.lock().expect("Poisned") = 0;
+        self.update_list_view();
+    }
+
+    // Called by the Next/Prev page callbacks. Negative results are clamped
+    // to page 1; going past the last page is harmless (the query just comes
+    // back empty), but the Next button is disabled once that would happen
+    // (see `set_objects_list_in_slint`) so it shouldn't occur in practice.
+    fn change_list_page(&self, delta: i32) {
+        {
+            let mut page = self.list_page.lock().expect("Poisned");
+            *page = (*page + delta).max(0);
+        }
+        self.update_list_view();
     }
 
     pub fn update_list_view(&self) {
@@ -291,6 +322,8 @@ impl ResultsStateController {
         let columns = list_filter.columns.clone();
         drop(list_filter);
 
+        let page = *self.list_page.lock().expect("Poisned");
+
         let Ok(result) = db.get_list(
             &evanalyzer_app::result::ListFilter {
                 plane,
@@ -299,7 +332,7 @@ impl ResultsStateController {
                 columns,
                 page: result::Pagination {
                     limit: LIST_PAGE_SIZE,
-                    offset: 0,
+                    offset: page * LIST_PAGE_SIZE,
                 },
             },
             &result::View::List,
@@ -321,6 +354,11 @@ impl ResultsStateController {
             .map(|name| name.as_str().into())
             .collect();
         let row_count = result.rows.len() as i32;
+        let page_number = *self.list_page.lock().expect("Poisned") + 1;
+        // A full page doesn't prove another page exists, but it's the only
+        // signal we have without a separate COUNT(*) query — good enough to
+        // gate the Next button until real pagination metadata exists.
+        let has_next_page = row_count == LIST_PAGE_SIZE;
         // Plain, `Send`-safe data only: the `ModelRc`s that `ResultRow` and
         // the table properties need are `Rc`-based and can't cross the
         // `invoke_from_event_loop` closure boundary, so they're built below
@@ -342,6 +380,8 @@ impl ResultsStateController {
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
                 state.set_list_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
                 state.set_list_row_count(row_count);
+                state.set_list_page_number(page_number);
+                state.set_list_has_next_page(has_next_page);
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_objects_list_in_slint, cannot update results table!"

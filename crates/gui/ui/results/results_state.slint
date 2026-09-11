@@ -111,6 +111,16 @@ export global ResultsState {
     in-out property <[string]> list-column-headers: [];
     in-out property <[ResultRow]> list-rows: [];
     in-out property <int> list-row-count: 0;
+
+    // Next/previous pagination (not infinite scroll — see the discussion on
+    // ResultsStateController::update_list_view for why). 1-based for direct
+    // display; page 1 is always reachable, so "has previous" is just
+    // `list-page-number > 1`.
+    in-out property <int> list-page-number: 1;
+    in-out property <bool> list-has-next-page: false;
+    callback list-next-page();
+    callback list-prev-page();
+
     callback list-image-filter-changed(string);
     callback list-class-selected(string, bool);
     callback list-image-selected(string, bool);
