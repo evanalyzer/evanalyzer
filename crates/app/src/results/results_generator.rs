@@ -4,6 +4,7 @@ use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass},
     settings::classification_settings::Class,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::{cell::RefCell, default};
 
@@ -417,7 +418,88 @@ impl ResultsGenerator {
                     rows,
                 })
             }
-            View::Heatmap => todo!(),
+            View::Heatmap => {
+                // `row`/`col` (capture groups 2/3 of the same regex — e.g.
+                // "A"/"1" out of well id "A1") are the grid's two axes here,
+                // unlike `View::List` which only needed the full group key
+                // (capture group 1).
+                let cells: Vec<(String, String, Option<f64>)> = stmt
+                    .query_map([], |row| Ok((row.get(1)?, row.get(2)?, row.get(3)?)))
+                    .map_err(err)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
+
+                let mut row_keys: Vec<String> =
+                    cells.iter().map(|(row, _, _)| row.clone()).collect();
+                row_keys.sort();
+                row_keys.dedup();
+
+                // Numeric, not lexicographic, sort — "10" must sort after
+                // "2", not before it.
+                let mut col_keys: Vec<String> =
+                    cells.iter().map(|(_, col, _)| col.clone()).collect();
+                col_keys.sort_by_key(|col| col.parse::<i64>().unwrap_or(i64::MAX));
+                col_keys.dedup();
+
+                let mut values: HashMap<(String, String), f64> = HashMap::new();
+                for (row, col, value) in cells {
+                    if let Some(value) = value {
+                        values.insert((row, col), value);
+                    }
+                }
+
+                let (range_min, range_max) = match filter.color_scale {
+                    ColorScale::Manual(min, max) => (min as f64, max as f64),
+                    ColorScale::Auto => {
+                        let mut min = f64::INFINITY;
+                        let mut max = f64::NEG_INFINITY;
+                        for value in values.values() {
+                            min = min.min(*value);
+                            max = max.max(*value);
+                        }
+                        if min.is_finite() && max.is_finite() {
+                            (min, max)
+                        } else {
+                            (0.0, 0.0)
+                        }
+                    }
+                };
+
+                let rows = row_keys
+                    .iter()
+                    .map(|row_key| {
+                        col_keys
+                            .iter()
+                            .map(|col_key| {
+                                match values.get(&(row_key.clone(), col_key.clone())) {
+                                    Some(value) => Cell {
+                                        value: CellValue::Float(*value as f32),
+                                        bg_color: value_to_color(
+                                            *value,
+                                            range_min,
+                                            range_max,
+                                            &filter.color_schema,
+                                        ),
+                                    },
+                                    // No object matched this well at all —
+                                    // leave it blank rather than showing a
+                                    // misleading 0.
+                                    None => Cell {
+                                        value: CellValue::String(String::new()),
+                                        bg_color: 0,
+                                    },
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+
+                Ok(DatabaseResult {
+                    column_names: col_keys,
+                    row_names: row_keys,
+                    rows,
+                })
+            }
         }
     }
 
@@ -822,4 +904,64 @@ fn aggregation_sql_fn(aggregation: &Aggregation) -> &'static str {
         Aggregation::Stddev => "STDDEV_SAMP",
         Aggregation::Sum => "SUM",
     }
+}
+
+// Approximate 5-stop reproduction of the matplotlib "viridis" colormap
+// (dark purple -> teal -> yellow).
+const VIRIDIS_STOPS: [(f32, (u8, u8, u8)); 5] = [
+    (0.0, (0x44, 0x01, 0x54)),
+    (0.25, (0x3b, 0x52, 0x8b)),
+    (0.5, (0x21, 0x90, 0x8d)),
+    (0.75, (0x5d, 0xc9, 0x63)),
+    (1.0, (0xfd, 0xe7, 0x25)),
+];
+
+// Excel's built-in "Red - Yellow - Green" 3-Color Scale conditional format.
+const EXCEL_STOPS: [(f32, (u8, u8, u8)); 3] = [
+    (0.0, (0xf8, 0x69, 0x6b)),
+    (0.5, (0xff, 0xeb, 0x84)),
+    (1.0, (0x63, 0xbe, 0x7b)),
+];
+
+/// Maps `value` (within `[min, max]`) to a `0xRRGGBB` color under the
+/// selected `ColorSchema` — the same packing `evanalyzer_cfg`'s `Class.color`
+/// and `crates/gui/src/helper/color_generators.rs` already use, so the GUI
+/// can unpack a heatmap cell's `bg_color` the same way it already does for
+/// class colors.
+fn value_to_color(value: f64, min: f64, max: f64, schema: &ColorSchema) -> u32 {
+    let t = if max > min {
+        ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+    } else {
+        0.5
+    };
+    match schema {
+        ColorSchema::Viridis => lerp_palette(&VIRIDIS_STOPS, t),
+        ColorSchema::Excel => lerp_palette(&EXCEL_STOPS, t),
+    }
+}
+
+fn lerp_palette(stops: &[(f32, (u8, u8, u8))], t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    for pair in stops.windows(2) {
+        let (t0, c0) = pair[0];
+        let (t1, c1) = pair[1];
+        if t >= t0 && t <= t1 {
+            let local_t = (t - t0) / (t1 - t0).max(f32::EPSILON);
+            return pack_rgb(
+                lerp_u8(c0.0, c1.0, local_t),
+                lerp_u8(c0.1, c1.1, local_t),
+                lerp_u8(c0.2, c1.2, local_t),
+            );
+        }
+    }
+    let (_, last) = *stops.last().expect("palette must have at least one stop");
+    pack_rgb(last.0, last.1, last.2)
+}
+
+fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
+    (a as f32 + (b as f32 - a as f32) * t).round() as u8
+}
+
+fn pack_rgb(r: u8, g: u8, b: u8) -> u32 {
+    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }
