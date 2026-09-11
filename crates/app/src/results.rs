@@ -2,6 +2,8 @@ mod results_generator;
 
 pub use results_generator::Aggregation;
 pub use results_generator::Cell;
+pub use results_generator::ColorScale;
+pub use results_generator::ColorSchema;
 pub use results_generator::Column;
 pub use results_generator::ColumnEntry;
 pub use results_generator::DatabaseResult;

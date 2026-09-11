@@ -1,6 +1,7 @@
 use crate::{MultiSelectItem, ResultRow, ResultsListState, ResultsState, UiState};
 use evanalyzer_app::result::{
-    self, Cell, Column, ColumnEntry, DatabaseResult, ImageEntry, ResultsGenerator,
+    self, Aggregation, Cell, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
+    ImageEntry, ResultsGenerator,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -33,11 +34,23 @@ struct ListFilter {
     pub columns: Vec<Column>,
 }
 
+#[derive(Default)]
+struct MatrixFilter {
+    pub object_classe: ObjectClass,
+    pub column: Column,
+    pub selected_c_stack: u32,
+    pub aggregation: Aggregation,
+    pub group_by_regex: String,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+}
+
 pub struct ResultsStateController {
     pub(crate) ui: slint::Weak<ResultsWindow>,
     pub(crate) app_state: Arc<UiState>,
     result_generator: Mutex<Option<ResultsGenerator>>,
     list_filter: Mutex<ListFilter>,
+    matrix_filter: Mutex<MatrixFilter>,
     plane_filter: Mutex<PlaneFilter>,
     list_page: Mutex<i32>,
     classes: Mutex<Vec<Class>>,
@@ -52,6 +65,7 @@ impl ResultsStateController {
             app_state: app_state.clone(),
             result_generator: Mutex::new(None),
             list_filter: Mutex::new(ListFilter::default()),
+            matrix_filter: Mutex::new(MatrixFilter::default()),
             plane_filter: Mutex::new(PlaneFilter::default()),
             list_page: Mutex::new(0),
             classes: Mutex::new(Vec::new()),
@@ -480,7 +494,7 @@ impl ResultsStateController {
 
     pub fn set_columns_in_slint(&self, columns: &Vec<ColumnEntry>) {
         let ui_weak = self.ui.clone();
-        let items = column_items(columns, |key| DEFAULT_LIST_COLUMNS.contains(key));
+        let mut items = column_items(columns, |key| DEFAULT_LIST_COLUMNS.contains(key));
         let groups = column_groups(columns);
         let summary = list_summary(
             items.iter().filter(|item| item.selected).count(),
@@ -491,6 +505,13 @@ impl ResultsStateController {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
+                // The Matrix view's column picker starts with nothing
+                // checked — it's a single-column aggregation target, not a
+                // multi-column display set like the List view's, so it
+                // shouldn't inherit DEFAULT_LIST_COLUMNS' selections.
+                for item in items.iter_mut() {
+                    item.selected = false;
+                }
                 state.set_matrix_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
                 state.set_list_columns_groups(ModelRc::from(Rc::new(VecModel::from(groups))));
                 state.set_list_columns_summary(summary);

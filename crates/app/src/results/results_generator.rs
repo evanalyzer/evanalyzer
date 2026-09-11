@@ -1,5 +1,5 @@
-use std::cell::RefCell;
 use std::path::PathBuf;
+use std::{cell::RefCell, default};
 
 use duckdb::Connection;
 use duckdb::types::Value;
@@ -19,8 +19,9 @@ pub enum View {
     Heatmap,
 }
 
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub enum Aggregation {
+    #[default]
     Avg,
     Min,
     Max,
@@ -28,11 +29,26 @@ pub enum Aggregation {
     Count,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Clone)]
+pub enum ColorSchema {
+    Viridis,
+    #[default]
+    Excel,
+}
+
+#[derive(Default, Clone)]
+pub enum ColorScale {
+    #[default]
+    Auto,
+    Manual(f32, f32),
+}
+
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Column {
     ObjectId,
     ImageName,
     ObjectClass,
+    #[default]
     AreaSizePx,
     AreaSizeNm,
     PerimeterPx,
