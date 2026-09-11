@@ -1,4 +1,4 @@
-use crate::{MultiSelectItem, ResultRow, ResultsListState, ResultsState, UiState};
+use crate::{MatrixCell, MultiSelectItem, ResultRow, ResultsListState, ResultsState, UiState};
 use evanalyzer_app::result::{
     self, Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry,
     DatabaseResult, ImageEntry, ResultsGenerator,
@@ -234,6 +234,7 @@ impl ResultsStateController {
                         return;
                     };
                     manager.matrix_filter.lock().expect("Poisned").column = column;
+                    manager.update_matrix_view();
                 });
 
             let manager = self.clone();
@@ -251,6 +252,7 @@ impl ResultsStateController {
                         }
                     };
                     manager.matrix_filter.lock().expect("Poisned").aggregation = aggregation;
+                    manager.update_matrix_view();
                 });
 
             let manager = self.clone();
@@ -275,6 +277,7 @@ impl ResultsStateController {
                         return;
                     };
                     manager.matrix_filter.lock().expect("Poisned").object_classe = object_class;
+                    manager.update_matrix_view();
                 });
 
             let manager = self.clone();
@@ -285,6 +288,7 @@ impl ResultsStateController {
                         .lock()
                         .expect("Poisned")
                         .group_by_regex = regex.to_string();
+                    manager.update_matrix_view();
                 });
 
             let manager = self.clone();
@@ -298,6 +302,7 @@ impl ResultsStateController {
                         return;
                     };
                     manager.matrix_filter.lock().expect("Poisned").color_schema = schema;
+                    manager.update_matrix_view();
                 });
             ui.global::<ResultsState>()
                 .on_plate_cell_clicked(move |_key| {});
@@ -384,6 +389,7 @@ impl ResultsStateController {
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
                 self.refresh_list();
+                self.update_matrix_view();
             }
             Err(err) => {
                 error!("{}", err);
@@ -521,6 +527,109 @@ impl ResultsStateController {
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_objects_list_in_slint, cannot update results table!"
+                );
+            }
+        })
+        .ok();
+    }
+
+    pub fn update_matrix_view(&self) {
+        let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
+            warn!("No database opened!");
+            return;
+        };
+
+        let plane_filter = self.plane_filter.lock().expect("Poisned");
+        let plane = result::PlaneFilter {
+            z_stack: plane_filter.selected_z_stack,
+            t_stack: plane_filter.selected_t_stack,
+        };
+        drop(plane_filter);
+
+        let matrix_filter = self.matrix_filter.lock().expect("Poisned");
+        let group_filter = result::GroupFilter {
+            plane,
+            grouping_regex: matrix_filter.group_by_regex.clone(),
+            aggregation: matrix_filter.aggregation.clone(),
+            object_class: matrix_filter.object_classe,
+            column: matrix_filter.column.clone(),
+            color_schema: matrix_filter.color_schema.clone(),
+            color_scale: matrix_filter.color_scale.clone(),
+        };
+        drop(matrix_filter);
+
+        let Ok(result) = db.get_group_by_plate(&group_filter, &result::View::Heatmap) else {
+            warn!("Could not load matrix results!");
+            return;
+        };
+        self.set_matrix_in_slint(&result);
+    }
+
+    // `result` is the plate/well grid `get_group_by_plate(.., View::Heatmap)`
+    // returns: `row_names`/`column_names` are the grid's two axes and
+    // `rows[r][c]` the cell at that position — flattened here into the
+    // row-major `plate-cells` array `PlateGrid` (results_matrix.slint)
+    // indexes as `r * plate-cols + c`. Sparse plates (a row or column with no
+    // objects at all) will shift the grid relative to `PlateGrid`'s
+    // hardcoded A/B/C.../1/2/3... labels, since those come from index
+    // position, not from `row_names`/`column_names` themselves — an accepted
+    // limitation of this first pass, not something fixed here.
+    pub fn set_matrix_in_slint(&self, result: &DatabaseResult) {
+        let ui_weak = self.ui.clone();
+        let rows = result.row_names.len() as i32;
+        let cols = result.column_names.len() as i32;
+
+        let mut range_min = f32::INFINITY;
+        let mut range_max = f32::NEG_INFINITY;
+        for row in &result.rows {
+            for cell in row {
+                if let CellValue::Float(value) = cell.value {
+                    range_min = range_min.min(value);
+                    range_max = range_max.max(value);
+                }
+            }
+        }
+        if !range_min.is_finite() || !range_max.is_finite() {
+            range_min = 0.0;
+            range_max = 0.0;
+        }
+
+        let cells: Vec<MatrixCell> = result
+            .row_names
+            .iter()
+            .zip(result.rows.iter())
+            .flat_map(|(row_key, row_cells)| {
+                result
+                    .column_names
+                    .iter()
+                    .zip(row_cells.iter())
+                    .map(move |(col_key, cell)| {
+                        let (has_value, value, label) = match &cell.value {
+                            CellValue::Float(v) => (true, *v, format!("{v:.2}")),
+                            _ => (false, 0.0, String::new()),
+                        };
+                        MatrixCell {
+                            key: format!("{row_key}{col_key}").into(),
+                            value,
+                            has_value,
+                            label: label.into(),
+                            color: bg_color_to_slint(cell.bg_color),
+                        }
+                    })
+            })
+            .collect();
+
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_plate_rows(rows);
+                state.set_plate_cols(cols);
+                state.set_plate_min(range_min);
+                state.set_plate_max(range_max);
+                state.set_plate_cells(ModelRc::from(Rc::new(VecModel::from(cells))));
+            } else {
+                warn!(
+                    "Failed to upgrade UI handle in set_matrix_in_slint, cannot update matrix view!"
                 );
             }
         })
@@ -913,6 +1022,17 @@ fn image_items(images: &[ImageEntry], selected: bool) -> Vec<MultiSelectItem> {
             selected,
         })
         .collect()
+}
+
+// Unpacks a `0xRRGGBB` cell background color (see `value_to_color` in
+// evanalyzer_app, and `Class.color`/color_generators.rs for the same
+// encoding elsewhere in this codebase) into a Slint `color`.
+fn bg_color_to_slint(bg_color: u32) -> Color {
+    Color::from_rgb_u8(
+        ((bg_color >> 16) & 0xFF) as u8,
+        ((bg_color >> 8) & 0xFF) as u8,
+        (bg_color & 0xFF) as u8,
+    )
 }
 
 fn cell_to_string(cell: &Cell) -> slint::SharedString {

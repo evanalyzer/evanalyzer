@@ -11,7 +11,7 @@ import {
     MatrixCell,
     ObjectMarker,
 } from "results_state.slint";
-import { FilterPill, LegendBar, ValueColor } from "results_common.slint";
+import { FilterPill, LegendBar } from "results_common.slint";
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
 
 component MatrixCellView inherits Rectangle {
@@ -22,7 +22,11 @@ component MatrixCellView inherits Rectangle {
     callback clicked;
 
     border-radius: Theme.radius-sm;
-    background: root.cell.has-value ? ValueColor.value-color((root.cell.value - root.range-min) / Math.max(0.0001, root.range-max - root.range-min)) : Theme.border-soft.with-alpha(0.3);
+    // `cell.color` is computed in Rust (`value_to_color` in
+    // results_generator.rs) from the selected color schema/scale, so it
+    // already reflects `range-min`/`range-max` — no need to re-derive a
+    // color from `cell.value` here.
+    background: root.cell.has-value ? root.cell.color : Theme.border-soft.with-alpha(0.3);
     border-width: root.selected ? 2px : 1px;
     border-color: root.selected ? Theme.text : #00000040;
 
