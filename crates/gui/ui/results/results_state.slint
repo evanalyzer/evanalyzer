@@ -108,8 +108,8 @@ export global ResultsState {
     // ResultsStateController::update_list_view) — never the full result set
     // — so it stays cheap to diff/render no matter how large the underlying
     // database is.
-    in-out property <[string]> list-column-headers: [];
-    in-out property <[ResultRow]> list-rows: [];
+    in-out property <[string]> list-column-headers: ["Column 1", "Col 2"];
+    in-out property <[ResultRow]> list-rows: [{ cells: ["long text", "short"] }, { cells: ["short", "short"] }];
     in-out property <int> list-row-count: 0;
 
     // Next/previous pagination (not infinite scroll — see the discussion on

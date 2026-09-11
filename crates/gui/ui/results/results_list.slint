@@ -79,11 +79,6 @@ export component ResultsListView inherits Rectangle {
         }
 
         // -- Table --
-        // Rust only ever hands us one page of rows (see
-        // ResultsStateController::update_list_view) even when the database
-        // holds hundreds of thousands of objects, so a plain `for` here
-        // stays cheap — it never has more than a page's worth of rows to
-        // instantiate.
         Rectangle {
             vertical-stretch: 1;
 
@@ -98,15 +93,28 @@ export component ResultsListView inherits Rectangle {
                         padding-left: 16px;
                         padding-right: 16px;
 
-                        for header in ResultsState.list-column-headers: Text {
-                            text: header;
-                            font-size: 10.5px;
-                            font-family: Theme.font-mono;
-                            font-weight: 600;
-                            color: Theme.text-mute;
-                            overflow: elide;
+                        // `Text` ignores `min-width`/`preferred-width`/
+                        // `horizontal-stretch` set directly on it — its
+                        // layout info is always computed natively from the
+                        // rendered text, never from those properties. A bare
+                        // `Rectangle` wrapper has no such override (its
+                        // layout info defaults to 0 regardless of its
+                        // children), so stretching *that* — matching the
+                        // spacer `Rectangle` above — is what actually
+                        // produces equal, full-width columns.
+                        for header in ResultsState.list-column-headers: Rectangle {
                             horizontal-stretch: 1;
-                            vertical-alignment: center;
+                            clip: true;
+                            Text {
+                                text: header;
+                                width: 100%;
+                                font-size: 10.5px;
+                                font-family: Theme.font-mono;
+                                font-weight: 600;
+                                color: Theme.text-mute;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
                         }
                     }
 
@@ -130,13 +138,18 @@ export component ResultsListView inherits Rectangle {
                             padding-left: 16px;
                             padding-right: 16px;
 
-                            for cell in row.cells: Text {
-                                text: cell;
-                                font-size: 12px;
-                                color: Theme.text;
-                                overflow: elide;
+                            // Same reasoning as the header row above.
+                            for cell in row.cells: Rectangle {
                                 horizontal-stretch: 1;
-                                vertical-alignment: center;
+                                clip: true;
+                                Text {
+                                    text: cell;
+                                    width: 100%;
+                                    font-size: 12px;
+                                    color: Theme.text;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
                     }
