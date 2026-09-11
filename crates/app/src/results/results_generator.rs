@@ -28,7 +28,7 @@ pub enum Aggregation {
     Count,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Column {
     ObjectId,
     ObjectClass,
@@ -164,8 +164,9 @@ impl ResultsGenerator {
         _view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let column_names: Vec<String> = filter
-            .columns
+        let mut ordered_columns = filter.columns.clone();
+        ordered_columns.sort();
+        let column_names: Vec<String> = ordered_columns
             .iter()
             .map(|c| c.as_key().to_string())
             .collect();
@@ -283,8 +284,7 @@ impl ResultsGenerator {
         let rows = objects
             .iter()
             .map(|object| {
-                filter
-                    .columns
+                ordered_columns
                     .iter()
                     .map(|column| cell_for_column(column, object, &classes))
                     .collect()
