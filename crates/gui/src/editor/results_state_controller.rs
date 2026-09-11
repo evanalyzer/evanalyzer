@@ -1,6 +1,6 @@
-use crate::{MultiSelectItem, ResultsListState, ResultsState, UiState};
+use crate::{MultiSelectItem, ResultRow, ResultsListState, ResultsState, UiState};
 use evanalyzer_app::result::{
-    self, Column, ColumnEntry, DatabaseResult, ImageEntry, ResultsGenerator,
+    self, Cell, Column, ColumnEntry, DatabaseResult, ImageEntry, ResultsGenerator,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -10,6 +10,8 @@ use slint::{Color, ComponentHandle, ModelRc, VecModel};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+
+const LIST_PAGE_SIZE: i32 = 500;
 
 #[derive(Default)]
 struct PlaneFilter {
@@ -296,7 +298,7 @@ impl ResultsStateController {
                 object_classes,
                 columns,
                 page: result::Pagination {
-                    limit: -1,
+                    limit: LIST_PAGE_SIZE,
                     offset: 0,
                 },
             },
@@ -308,15 +310,41 @@ impl ResultsStateController {
         self.set_objects_list_in_slint(&result);
     }
 
-    pub fn set_objects_list_in_slint(&self, object_classes: &DatabaseResult) {
+    // Rust never hands this more than one page of rows (see the LIST_PAGE_SIZE
+    // comment on update_list_view), so building fresh VecModels here on every
+    // filter change stays cheap no matter how large the underlying database is.
+    pub fn set_objects_list_in_slint(&self, result: &DatabaseResult) {
         let ui_weak = self.ui.clone();
+        let headers: Vec<slint::SharedString> = result
+            .column_names
+            .iter()
+            .map(|name| name.as_str().into())
+            .collect();
+        let row_count = result.rows.len() as i32;
+        // Plain, `Send`-safe data only: the `ModelRc`s that `ResultRow` and
+        // the table properties need are `Rc`-based and can't cross the
+        // `invoke_from_event_loop` closure boundary, so they're built below
+        // once we're back on the UI thread.
+        let row_cells: Vec<Vec<slint::SharedString>> = result
+            .rows
+            .iter()
+            .map(|row| row.iter().map(cell_to_string).collect())
+            .collect();
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
-
+                let rows: Vec<ResultRow> = row_cells
+                    .into_iter()
+                    .map(|cells| ResultRow {
+                        cells: ModelRc::new(VecModel::from(cells)),
+                    })
+                    .collect();
+                state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
+                state.set_list_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+                state.set_list_row_count(row_count);
             } else {
                 warn!(
-                    "Failed to upgrade UI handle in set_object_classes_in_slint, cannot update class filter options!"
+                    "Failed to upgrade UI handle in set_objects_list_in_slint, cannot update results table!"
                 );
             }
         })
@@ -457,4 +485,13 @@ fn image_items(images: &[ImageEntry]) -> Vec<MultiSelectItem> {
             selected: false,
         })
         .collect()
+}
+
+fn cell_to_string(cell: &Cell) -> slint::SharedString {
+    match cell {
+        Cell::String(value) => value.as_str().into(),
+        Cell::Float(value) => format!("{value:.3}").into(),
+        Cell::Integer(value) => value.to_string().into(),
+        Cell::Class((name, _color)) => name.as_str().into(),
+    }
 }

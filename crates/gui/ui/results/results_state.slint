@@ -43,6 +43,14 @@ export struct ColocPartner {
     overlap-pct: int,
 }
 
+// One row of the flat object table. `cells` holds one already-formatted
+// string per currently visible column, in the same order as
+// `ResultsState.list-column-headers` — kept row-only (no per-column typing)
+// so the table can render any column selection without a struct per shape.
+export struct ResultRow {
+    cells: [string],
+}
+
 export global ResultsState {
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
@@ -96,6 +104,12 @@ export global ResultsState {
     in-out property <[string]> list-columns-groups: ["General", "Geometry"];
     in-out property <string> list-columns-summary: "3 of 4 columns";
 
+    // Table body. Rust only ever fills this with the current page (see
+    // ResultsStateController::update_list_view) — never the full result set
+    // — so it stays cheap to diff/render no matter how large the underlying
+    // database is.
+    in-out property <[string]> list-column-headers: [];
+    in-out property <[ResultRow]> list-rows: [];
     in-out property <int> list-row-count: 0;
     callback list-image-filter-changed(string);
     callback list-class-selected(string, bool);
