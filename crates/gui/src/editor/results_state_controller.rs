@@ -218,22 +218,23 @@ impl ResultsStateController {
             // than passed through the callback.
             let manager = self.clone();
             let ui_weak = self.ui.clone();
-            ui.global::<ResultsState>().on_matrix_value_clicked(move || {
-                let Some(ui_ready) = ui_weak.upgrade() else {
-                    warn!("Failed to upgrade UI handle in on_matrix_value_clicked");
-                    return;
-                };
-                let items = ui_ready.global::<ResultsState>().get_matrix_column_items();
-                let Some(item) = items.iter().find(|item| item.selected) else {
-                    warn!("No column selected in matrix column picker");
-                    return;
-                };
-                let Some(column) = Column::from_key(item.key.as_str()) else {
-                    warn!("Unknown matrix column key selected: {}", item.key);
-                    return;
-                };
-                manager.matrix_filter.lock().expect("Poisned").column = column;
-            });
+            ui.global::<ResultsState>()
+                .on_matrix_value_clicked(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_matrix_value_clicked");
+                        return;
+                    };
+                    let items = ui_ready.global::<ResultsState>().get_matrix_column_items();
+                    let Some(item) = items.iter().find(|item| item.selected) else {
+                        warn!("No column selected in matrix column picker");
+                        return;
+                    };
+                    let Some(column) = Column::from_key(item.key.as_str()) else {
+                        warn!("Unknown matrix column key selected: {}", item.key);
+                        return;
+                    };
+                    manager.matrix_filter.lock().expect("Poisned").column = column;
+                });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -243,7 +244,7 @@ impl ResultsStateController {
                         "Minimum" => Aggregation::Min,
                         "Maximum" => Aggregation::Max,
                         "Std Dev" | "Stddev" => Aggregation::Stddev,
-                        "Count" => Aggregation::Count,
+                        "Sum" => Aggregation::Sum,
                         other => {
                             warn!("Unknown matrix aggregate selected: {other}");
                             return;
@@ -277,17 +278,27 @@ impl ResultsStateController {
                 });
 
             let manager = self.clone();
-            ui.global::<ResultsState>().on_matrix_regex_changed(move |regex| {
-                manager.matrix_filter.lock().expect("Poisned").group_by_regex =
-                    regex.to_string();
-            });
-
-            // No UI to pick a specific color schema/scale yet — the pill
-            // just displays the current one and fires this on click, with no
-            // way to say which value the user wants, so there's nothing to
-            // store yet.
             ui.global::<ResultsState>()
-                .on_matrix_color_scale_clicked(move || {});
+                .on_matrix_regex_changed(move |regex| {
+                    manager
+                        .matrix_filter
+                        .lock()
+                        .expect("Poisned")
+                        .group_by_regex = regex.to_string();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_color_schema_selected(move |key, selected| {
+                    if !selected {
+                        return;
+                    }
+                    let Some(schema) = color_schema_from_key(key.as_str()) else {
+                        warn!("Unknown color schema selected: {key}");
+                        return;
+                    };
+                    manager.matrix_filter.lock().expect("Poisned").color_schema = schema;
+                });
             ui.global::<ResultsState>()
                 .on_plate_cell_clicked(move |_key| {});
             ui.global::<ResultsState>()
@@ -360,6 +371,9 @@ impl ResultsStateController {
                     results.get_nr_of_t_stacks(),
                     results.get_nr_of_z_stacks(),
                 );
+
+                self.set_color_schemas_in_slint();
+                *self.matrix_filter.lock().expect("Poisned") = MatrixFilter::default();
 
                 *self.list_filter.lock().expect("Poisened") = ListFilter {
                     image_rel_path: Vec::new(),
@@ -536,6 +550,7 @@ impl ResultsStateController {
     pub fn set_object_classes_in_slint(&self, object_classes: &Vec<Class>) {
         let ui_weak = self.ui.clone();
         let items = class_filter_items(object_classes, true);
+        let matrix_items = class_filter_items(object_classes, false);
         let summary = list_summary(
             items.iter().filter(|item| item.selected).count(),
             items.len(),
@@ -545,8 +560,7 @@ impl ResultsStateController {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
-                state
-                    .set_matrix_class_items(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
+                state.set_matrix_class_items(ModelRc::from(Rc::new(VecModel::from(matrix_items))));
                 state.set_chart_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
                 state.set_list_class_summary(summary);
             } else {
@@ -584,6 +598,28 @@ impl ResultsStateController {
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_columns_in_slint, cannot update column filter options!"
+                );
+            }
+        })
+        .ok();
+    }
+
+    pub fn set_color_schemas_in_slint(&self) {
+        let ui_weak = self.ui.clone();
+        let items = color_schema_items();
+        let summary = items
+            .iter()
+            .find(|item| item.selected)
+            .map(|item| item.value.clone())
+            .unwrap_or_default();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_matrix_color_schema_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_matrix_color_scale_summary(summary);
+            } else {
+                warn!(
+                    "Failed to upgrade UI handle in set_color_schemas_in_slint, cannot update color schema options!"
                 );
             }
         })
@@ -837,6 +873,33 @@ fn column_groups(columns: &[ColumnEntry]) -> Vec<slint::SharedString> {
         }
     }
     groups
+}
+
+fn color_schemas() -> [(&'static str, ColorSchema); 2] {
+    [
+        ("Viridis", ColorSchema::Viridis),
+        ("Excel", ColorSchema::Excel),
+    ]
+}
+
+fn color_schema_items() -> Vec<MultiSelectItem> {
+    color_schemas()
+        .into_iter()
+        .map(|(name, schema)| MultiSelectItem {
+            key: name.into(),
+            value: name.into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: schema == ColorSchema::default(),
+        })
+        .collect()
+}
+
+fn color_schema_from_key(key: &str) -> Option<ColorSchema> {
+    color_schemas()
+        .into_iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, schema)| schema)
 }
 
 fn image_items(images: &[ImageEntry], selected: bool) -> Vec<MultiSelectItem> {

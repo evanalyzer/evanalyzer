@@ -238,8 +238,11 @@ export component ResultsMatrixView inherits Rectangle {
                     summary-text: ResultsState.matrix-class-summary;
                     items <=> ResultsState.matrix-class-items;
                     multi-select: false;
-                    pill-width: 120px;
-                    item-selected(key, value, selected) => { ResultsState.matrix-class-selected(key, selected); }
+                    pill-width: 250px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.matrix-class-summary = value;
+                        ResultsState.matrix-class-selected(key, selected);
+                    }
                 }
 
                 VerticalLayout {
@@ -284,11 +287,16 @@ export component ResultsMatrixView inherits Rectangle {
                     }
                 }
 
-                FilterPill {
-                    label: "COLOR SCALE";
-                    value: ResultsState.matrix-color-scale;
-                    pill-width: 110px;
-                    clicked => { ResultsState.matrix-color-scale-clicked(); }
+                MultiSelectDropdown {
+                    label: "COLOR SCHEMA";
+                    summary-text: ResultsState.matrix-color-scale-summary;
+                    items <=> ResultsState.matrix-color-schema-items;
+                    multi-select: false;
+                    pill-width: 120px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.matrix-color-scale-summary = value;
+                        ResultsState.matrix-color-schema-selected(key, selected);
+                    }
                 }
 
                 Rectangle {

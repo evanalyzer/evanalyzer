@@ -186,8 +186,9 @@ export global ResultsState {
     in-out property <[MultiSelectItem]> matrix-class-items: [];
     in-out property <string> matrix-class-summary: "No Class";
     in-out property <string> matrix-group-regex: "";
-    in-out property <string> matrix-color-scale: "Viridis";
-    in-out property <[string]> matrix-aggregate-options: ["Average", "Median", "Sum", "Max", "Min"];
+    in-out property <string> matrix-color-scale-summary: "Viridis";
+    in-out property <[MultiSelectItem]> matrix-color-schema-items: [];
+    in-out property <[string]> matrix-aggregate-options: ["Average", "Minimum", "Maximum", "Std Dev", "Sum"];
     in-out property <[MatrixCell]> plate-cells: [];
     in-out property <int> plate-rows: 8;
     in-out property <int> plate-cols: 12;
@@ -204,7 +205,7 @@ export global ResultsState {
     callback matrix-aggregate-selected(string);
     callback matrix-class-selected(string, bool);
     callback matrix-regex-changed(string);
-    callback matrix-color-scale-clicked();
+    callback matrix-color-schema-selected(string, bool);
     callback plate-cell-clicked(string);
     callback well-field-clicked(string);
     callback object-marker-clicked(int);

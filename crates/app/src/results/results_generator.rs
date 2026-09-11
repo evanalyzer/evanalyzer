@@ -26,10 +26,10 @@ pub enum Aggregation {
     Min,
     Max,
     Stddev,
-    Count,
+    Sum,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub enum ColorSchema {
     Viridis,
     #[default]
@@ -593,18 +593,26 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
         Column::Solidity => Cell::Float(object.solidity as f32),
         Column::Eccentricity => Cell::Float(object.eccentricity as f32),
         Column::ColocCount => Cell::Integer(coloc_count(&object.coloc_json)),
-        Column::IntensityAvg(channel) => {
-            Cell::Float(intensity_stat(&object.intensities_json, *channel, "mean_raw"))
-        }
-        Column::IntensitySum(channel) => {
-            Cell::Float(intensity_stat(&object.intensities_json, *channel, "sum_raw"))
-        }
-        Column::IntensityMin(channel) => {
-            Cell::Float(intensity_stat(&object.intensities_json, *channel, "min_raw"))
-        }
-        Column::IntensityMax(channel) => {
-            Cell::Float(intensity_stat(&object.intensities_json, *channel, "max_raw"))
-        }
+        Column::IntensityAvg(channel) => Cell::Float(intensity_stat(
+            &object.intensities_json,
+            *channel,
+            "mean_raw",
+        )),
+        Column::IntensitySum(channel) => Cell::Float(intensity_stat(
+            &object.intensities_json,
+            *channel,
+            "sum_raw",
+        )),
+        Column::IntensityMin(channel) => Cell::Float(intensity_stat(
+            &object.intensities_json,
+            *channel,
+            "min_raw",
+        )),
+        Column::IntensityMax(channel) => Cell::Float(intensity_stat(
+            &object.intensities_json,
+            *channel,
+            "max_raw",
+        )),
     }
 }
 

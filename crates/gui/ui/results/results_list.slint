@@ -41,7 +41,7 @@ export component ResultsListView inherits Rectangle {
                     items <=> ResultsState.list-class-items;
                     multi-select: true;
                     show-select-all: true;
-                    pill-width: 150px;
+                    pill-width: 250px;
                     item-selected(key, value, selected) => { ResultsState.list-class-selected(key, selected); }
                     select-all => { ResultsState.list-class-select-all(); }
                     select-none => { ResultsState.list-class-select-none(); }
