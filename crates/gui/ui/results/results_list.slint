@@ -30,7 +30,10 @@ export component ResultsListView inherits Rectangle {
                     multi-select: true;
                     show-select-all: true;
                     pill-width: 150px;
-                    item-selected(key, value, selected) => { ResultsState.list-image-selected(key, selected); }
+                    item-selected(key, value, selected) => {
+                        ResultsState.list-image-summary = "{} of {} Images" + ResultsState.list-image-items.length;
+                        ResultsState.list-image-selected(key, selected);
+                    }
                 }
 
                 MultiSelectDropdown {
@@ -40,7 +43,10 @@ export component ResultsListView inherits Rectangle {
                     multi-select: true;
                     show-select-all: true;
                     pill-width: 150px;
-                    item-selected(key, value, selected) => { ResultsState.list-class-selected(key, selected); }
+                    item-selected(key, value, selected) => {
+                        ResultsState.list-class-summary = "{} of {} Classes" + ResultsState.list-class-items.length;
+                        ResultsState.list-class-selected(key, selected);
+                    }
                 }
 
                 Rectangle {
@@ -55,7 +61,10 @@ export component ResultsListView inherits Rectangle {
                     multi-select: true;
                     show-select-all: true;
                     pill-width: 130px;
-                    item-selected(key, value, selected) => { ResultsState.list-columns-item-selected(key, selected); }
+                    item-selected(key, value, selected) => {
+                        ResultsState.list-image-summary = "{} of {} Columns" + ResultsState.list-columns.length;
+                        ResultsState.list-columns-item-selected(key, selected);
+                    }
                     select-all => { ResultsState.list-columns-select-all(); }
                     select-none => { ResultsState.list-columns-select-none(); }
                 }

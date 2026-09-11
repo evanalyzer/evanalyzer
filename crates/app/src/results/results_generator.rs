@@ -31,6 +31,7 @@ pub enum Aggregation {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Column {
     ObjectId,
+    ImageName,
     ObjectClass,
     AreaSizePx,
     AreaSizeNm,
@@ -53,6 +54,7 @@ impl Column {
     pub fn as_key(&self) -> &'static str {
         match self {
             Column::ObjectId => "object_id",
+            Column::ImageName => "image_name",
             Column::ObjectClass => "object_class_name",
             Column::AreaSizePx => "area_px",
             Column::AreaSizeNm => "area_nm2",
@@ -73,6 +75,7 @@ impl Column {
     pub fn from_key(key: &str) -> Option<Self> {
         Some(match key {
             "object_id" => Column::ObjectId,
+            "image_name" => Column::ImageName,
             "object_class_name" => Column::ObjectClass,
             "area_px" => Column::AreaSizePx,
             "area_nm2" => Column::AreaSizeNm,
@@ -244,7 +247,7 @@ impl ResultsGenerator {
         let limit = filter.page.limit.max(0);
         let offset = filter.page.offset.max(0);
         let sql = format!(
-            "SELECT object_id, CAST(object_class_name AS VARCHAR[]), seg_class_name,\n\
+            "SELECT object_id, image_name, CAST(object_class_name AS VARCHAR[]), seg_class_name,\n\
                     area_px, area_nm2, perimeter_px, perimeter_nm,\n\
                     circularity, solidity, eccentricity,\n\
                     coloc_json, intensities_json\n\
@@ -253,24 +256,23 @@ impl ResultsGenerator {
              LIMIT {limit} OFFSET {offset}"
         );
 
-        println!("SELECT: {}", sql);
-
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
         let objects = stmt
             .query_map([], |row| {
                 Ok(ObjectRow {
                     object_id: row.get(0)?,
-                    object_class_name: extract_string_list(row.get::<_, Value>(1)?),
-                    seg_class_name: row.get(2)?,
-                    area_px: row.get(3)?,
-                    area_nm2: row.get(4)?,
-                    perimeter_px: row.get(5)?,
-                    perimeter_nm: row.get(6)?,
-                    circularity: row.get(7)?,
-                    solidity: row.get(8)?,
-                    eccentricity: row.get(9)?,
-                    coloc_json: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
-                    intensities_json: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+                    image_name: row.get(1)?,
+                    object_class_name: extract_string_list(row.get::<_, Value>(2)?),
+                    seg_class_name: row.get(3)?,
+                    area_px: row.get(4)?,
+                    area_nm2: row.get(5)?,
+                    perimeter_px: row.get(6)?,
+                    perimeter_nm: row.get(7)?,
+                    circularity: row.get(8)?,
+                    solidity: row.get(9)?,
+                    eccentricity: row.get(10)?,
+                    coloc_json: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+                    intensities_json: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
                 })
             })
             .map_err(err)?
@@ -379,6 +381,11 @@ impl ResultsGenerator {
                 group: "General".into(),
             },
             ColumnEntry {
+                display_name: "Image".into(),
+                key: Column::ImageName,
+                group: "General".into(),
+            },
+            ColumnEntry {
                 display_name: "Class".into(),
                 key: Column::ObjectClass,
                 group: "General".into(),
@@ -478,6 +485,7 @@ impl ResultsGenerator {
 /// `cell_for_column`), not every column the table has.
 struct ObjectRow {
     object_id: String,
+    image_name: String,
     object_class_name: Vec<String>,
     seg_class_name: Option<String>,
     area_px: u64,
@@ -531,6 +539,7 @@ fn extract_string_list(value: Value) -> Vec<String> {
 fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Cell {
     match column {
         Column::ObjectId => Cell::String(object.object_id.clone()),
+        Column::ImageName => Cell::String(object.image_name.clone()),
         Column::ObjectClass => {
             let label = if object.object_class_name.is_empty() {
                 object.seg_class_name.clone().unwrap_or_default()

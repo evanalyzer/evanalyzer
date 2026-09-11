@@ -13,6 +13,13 @@ use std::sync::{Arc, Mutex};
 
 const LIST_PAGE_SIZE: i32 = 500;
 
+const DEFAULT_LIST_COLUMNS: [Column; 4] = [
+    Column::ObjectId,
+    Column::ImageName,
+    Column::ObjectClass,
+    Column::AreaSizeNm,
+];
+
 #[derive(Default)]
 struct PlaneFilter {
     pub selected_z_stack: u32,
@@ -34,6 +41,8 @@ pub struct ResultsStateController {
     plane_filter: Mutex<PlaneFilter>,
     list_page: Mutex<i32>,
     classes: Mutex<Vec<Class>>,
+    image_count: Mutex<usize>,
+    column_count: Mutex<usize>,
 }
 
 impl ResultsStateController {
@@ -46,6 +55,8 @@ impl ResultsStateController {
             plane_filter: Mutex::new(PlaneFilter::default()),
             list_page: Mutex::new(0),
             classes: Mutex::new(Vec::new()),
+            image_count: Mutex::new(0),
+            column_count: Mutex::new(0),
         }
     }
 
@@ -102,7 +113,9 @@ impl ResultsStateController {
                     } else {
                         list_filter.image_rel_path.retain(|p| p != &rel_path);
                     }
+                    let selected_count = list_filter.image_rel_path.len();
                     drop(list_filter);
+                    manager.push_image_summary(selected_count);
                     manager.refresh_list();
                 });
             let manager = self.clone();
@@ -128,7 +141,9 @@ impl ResultsStateController {
                     } else {
                         list_filter.object_classes.retain(|c| c != &object_class);
                     }
+                    let selected_count = list_filter.object_classes.len();
                     drop(list_filter);
+                    manager.push_class_summary(selected_count);
                     manager.refresh_list();
                 });
 
@@ -147,7 +162,9 @@ impl ResultsStateController {
                     } else {
                         list_filter.columns.retain(|c| c != &column);
                     }
+                    let selected_count = list_filter.columns.len();
                     drop(list_filter);
+                    manager.push_columns_summary(selected_count);
                     manager.refresh_list();
                 });
 
@@ -212,8 +229,10 @@ impl ResultsStateController {
         let db = result::ResultsGenerator::open_database(path);
         match db {
             Ok(results) => {
+                let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
                     Ok(classes) => {
+                        default_object_classes = classes.iter().map(|class| class.id).collect();
                         *self.classes.lock().expect("Poisened") = classes.clone();
                         self.set_object_classes_in_slint(&classes);
                     }
@@ -244,6 +263,12 @@ impl ResultsStateController {
                     results.get_nr_of_t_stacks(),
                     results.get_nr_of_z_stacks(),
                 );
+
+                *self.list_filter.lock().expect("Poisened") = ListFilter {
+                    image_rel_path: Vec::new(),
+                    object_classes: default_object_classes,
+                    columns: DEFAULT_LIST_COLUMNS.to_vec(),
+                };
 
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
@@ -414,6 +439,11 @@ impl ResultsStateController {
     pub fn set_object_classes_in_slint(&self, object_classes: &Vec<Class>) {
         let ui_weak = self.ui.clone();
         let items = class_filter_items(object_classes);
+        let summary = list_summary(
+            items.iter().filter(|item| item.selected).count(),
+            items.len(),
+            "Classes",
+        );
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
@@ -421,6 +451,7 @@ impl ResultsStateController {
                 state
                     .set_matrix_class_items(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
                 state.set_chart_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_class_summary(summary);
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_object_classes_in_slint, cannot update class filter options!"
@@ -434,12 +465,19 @@ impl ResultsStateController {
         let ui_weak = self.ui.clone();
         let items = column_items(columns);
         let groups = column_groups(columns);
+        *self.column_count.lock().expect("Poisned") = items.len();
+        let summary = list_summary(
+            items.iter().filter(|item| item.selected).count(),
+            items.len(),
+            "Columns",
+        );
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
                 state.set_matrix_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
                 state.set_list_columns_groups(ModelRc::from(Rc::new(VecModel::from(groups))));
+                state.set_list_columns_summary(summary);
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_columns_in_slint, cannot update column filter options!"
@@ -452,10 +490,17 @@ impl ResultsStateController {
     pub fn set_images_in_slint(&self, images: &Vec<ImageEntry>) {
         let ui_weak = self.ui.clone();
         let items = image_items(images);
+        *self.image_count.lock().expect("Poisned") = items.len();
+        let summary = list_summary(
+            items.iter().filter(|item| item.selected).count(),
+            items.len(),
+            "Images",
+        );
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_list_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_image_summary(summary);
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_columns_in_slint, cannot update column filter options!"
@@ -464,30 +509,83 @@ impl ResultsStateController {
         })
         .ok();
     }
+
+    // Recompute+push a dropdown's "N of M ..." summary after a single item's
+    // selection toggles — the initial `set_*_in_slint` calls above compute
+    // the same text from the freshly-built item list, but a toggle only
+    // touches one item, so it's cheaper to just recombine the new selected
+    // count with the cached total than to rebuild the whole item list again.
+    fn push_image_summary(&self, selected: usize) {
+        let total = *self.image_count.lock().expect("Poisned");
+        let text = list_summary(selected, total, "Images");
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready
+                    .global::<ResultsState>()
+                    .set_list_image_summary(text);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the images summary!");
+            }
+        })
+        .ok();
+    }
+
+    fn push_class_summary(&self, selected: usize) {
+        let total = self.classes.lock().expect("Poisened").len();
+        let text = list_summary(selected, total, "Classes");
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready
+                    .global::<ResultsState>()
+                    .set_list_class_summary(text);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the classes summary!");
+            }
+        })
+        .ok();
+    }
+
+    fn push_columns_summary(&self, selected: usize) {
+        let total = *self.column_count.lock().expect("Poisned");
+        let text = list_summary(selected, total, "Columns");
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready
+                    .global::<ResultsState>()
+                    .set_list_columns_summary(text);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the columns summary!");
+            }
+        })
+        .ok();
+    }
+}
+
+// Shared "N of M <noun>" text for the images/classes/columns dropdown pills
+// (e.g. "3 of 12 Columns").
+fn list_summary(selected: usize, total: usize, noun: &str) -> slint::SharedString {
+    format!("{selected} of {total} {noun}").into()
 }
 
 // "All classes" (selected by default) followed by one entry per class from
 // the open database's classification settings.
 fn class_filter_items(object_classes: &[Class]) -> Vec<MultiSelectItem> {
-    let mut items = vec![MultiSelectItem {
-        key: "All classes".into(),
-        value: "All classes".into(),
-        color: Color::default(),
-        group: "".into(),
-        selected: true,
-    }];
+    let mut items = vec![];
     items.extend(object_classes.iter().map(|class| MultiSelectItem {
         key: class.name.as_str().into(),
         value: class.name.as_str().into(),
         color: Color::default(),
         group: "".into(),
-        selected: false,
+        selected: true,
     }));
     items
 }
 
-// All columns selected by default so the table shows every available column
-// until the user narrows it down via the columns dropdown.
+// DEFAULT_LIST_COLUMNS selected by default so the table shows a reasonable
+// column set immediately, until the user changes it via the dropdown.
 fn column_items(columns: &[ColumnEntry]) -> Vec<MultiSelectItem> {
     columns
         .iter()
@@ -496,7 +594,7 @@ fn column_items(columns: &[ColumnEntry]) -> Vec<MultiSelectItem> {
             value: column.display_name.as_str().into(),
             color: Color::default(),
             group: column.group.as_str().into(),
-            selected: false,
+            selected: DEFAULT_LIST_COLUMNS.contains(&column.key),
         })
         .collect()
 }

@@ -92,7 +92,7 @@ export global ResultsState {
         { key: "mitochondria", value: "Mitochondria", color: #ff9f0a, group: "", selected: false },
         { key: "debris", value: "Debris", color: #8e8e93, group: "", selected: false },
     ];
-    in-out property <string> list-class-summary: "All classes";
+    in-out property <string> list-class-summary: "x of y classes";
 
     // Column selector
     in-out property <[MultiSelectItem]> list-columns: [
@@ -180,7 +180,7 @@ export global ResultsState {
     in-out property <string> matrix-column-summary: "Number of objects";
     in-out property <string> matrix-aggregate: "Average";
     in-out property <[MultiSelectItem]> matrix-class-items: [];
-    in-out property <string> matrix-class-summary: "All classes";
+    in-out property <string> matrix-class-summary: "No Class";
     in-out property <string> matrix-group-regex: "";
     in-out property <string> matrix-color-scale: "Viridis";
     in-out property <[string]> matrix-aggregate-options: ["Average", "Median", "Sum", "Max", "Min"];
@@ -211,7 +211,7 @@ export global ResultsState {
     in-out property <ResultsChartKind2> chart-kind: ResultsChartKind2.histogram;
     in-out property <string> chart-property: "Area (µm²)";
     in-out property <[MultiSelectItem]> chart-class-items: [];
-    in-out property <string> chart-class-summary: "All classes";
+    in-out property <string> chart-class-summary: "No Class";
     callback chart-kind-selected(ResultsChartKind2);
     callback chart-property-clicked();
     callback chart-class-selected(string, bool);
