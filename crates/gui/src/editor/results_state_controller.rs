@@ -7,7 +7,7 @@ use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_gui_slint::ResultsWindow;
 use log::{error, info, warn};
-use slint::{Color, ComponentHandle, ModelRc, VecModel};
+use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -38,7 +38,6 @@ struct ListFilter {
 struct MatrixFilter {
     pub object_classe: ObjectClass,
     pub column: Column,
-    pub selected_c_stack: u32,
     pub aggregation: Aggregation,
     pub group_by_regex: String,
     pub color_schema: ColorSchema,
@@ -212,14 +211,81 @@ impl ResultsStateController {
             });
 
             // -- Matrix / plate / well / object --
+            // The COLUMN dropdown is single-select and its `item-selected`
+            // handler (in results_matrix.slint) only forwards a no-argument
+            // `matrix-value-clicked()` — the chosen key lives in
+            // `matrix-column-items` itself, so it's read back here rather
+            // than passed through the callback.
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>().on_matrix_value_clicked(move || {
+                let Some(ui_ready) = ui_weak.upgrade() else {
+                    warn!("Failed to upgrade UI handle in on_matrix_value_clicked");
+                    return;
+                };
+                let items = ui_ready.global::<ResultsState>().get_matrix_column_items();
+                let Some(item) = items.iter().find(|item| item.selected) else {
+                    warn!("No column selected in matrix column picker");
+                    return;
+                };
+                let Some(column) = Column::from_key(item.key.as_str()) else {
+                    warn!("Unknown matrix column key selected: {}", item.key);
+                    return;
+                };
+                manager.matrix_filter.lock().expect("Poisned").column = column;
+            });
+
+            let manager = self.clone();
             ui.global::<ResultsState>()
-                .on_matrix_value_clicked(move || {});
+                .on_matrix_aggregate_selected(move |aggregate| {
+                    let aggregation = match aggregate.as_str() {
+                        "Average" => Aggregation::Avg,
+                        "Minimum" => Aggregation::Min,
+                        "Maximum" => Aggregation::Max,
+                        "Std Dev" | "Stddev" => Aggregation::Stddev,
+                        "Count" => Aggregation::Count,
+                        other => {
+                            warn!("Unknown matrix aggregate selected: {other}");
+                            return;
+                        }
+                    };
+                    manager.matrix_filter.lock().expect("Poisned").aggregation = aggregation;
+                });
+
+            let manager = self.clone();
             ui.global::<ResultsState>()
-                .on_matrix_aggregate_selected(move |_aggregate| {});
-            ui.global::<ResultsState>()
-                .on_matrix_class_selected(move |_key, _selected| {});
-            ui.global::<ResultsState>()
-                .on_matrix_regex_changed(move |_regex| {});
+                .on_matrix_class_selected(move |key, selected| {
+                    // Single-select: `MultiSelectDropdown.toggle()` only ever
+                    // fires this with `selected == true` for the newly
+                    // picked row, never `false` for the one it replaces.
+                    if !selected {
+                        return;
+                    }
+                    let class_name = key.to_string();
+                    let Some(object_class) = manager
+                        .classes
+                        .lock()
+                        .expect("Poisened")
+                        .iter()
+                        .find(|class| class.name == class_name)
+                        .map(|class| class.id)
+                    else {
+                        warn!("Unknown class selected: {class_name}");
+                        return;
+                    };
+                    manager.matrix_filter.lock().expect("Poisned").object_classe = object_class;
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_matrix_regex_changed(move |regex| {
+                manager.matrix_filter.lock().expect("Poisned").group_by_regex =
+                    regex.to_string();
+            });
+
+            // No UI to pick a specific color schema/scale yet — the pill
+            // just displays the current one and fires this on click, with no
+            // way to say which value the user wants, so there's nothing to
+            // store yet.
             ui.global::<ResultsState>()
                 .on_matrix_color_scale_clicked(move || {});
             ui.global::<ResultsState>()

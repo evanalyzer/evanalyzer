@@ -57,38 +57,52 @@ pub enum Column {
     Solidity,
     Eccentricity,
     ColocCount,
-    IntensityAvg,
-    IntensitySum,
-    IntensityMin,
-    IntensityMax,
+    IntensityAvg(u32),
+    IntensitySum(u32),
+    IntensityMin(u32),
+    IntensityMax(u32),
 }
 
 impl Column {
-    /// Stable string key (matches the underlying database column name) used
-    /// to store this variant in UI widgets that only accept strings, e.g. the
-    /// slint columns dropdown.
-    pub fn as_key(&self) -> &'static str {
+    /// Stable string key (matches the underlying database column name, with
+    /// a `_ch{n}` suffix for the per-channel intensity variants) used to
+    /// store this variant in UI widgets that only accept strings, e.g. the
+    /// slint columns dropdown. Owned (not `&'static str`) because the
+    /// channel number has to be formatted in.
+    pub fn as_key(&self) -> String {
         match self {
-            Column::ObjectId => "object_id",
-            Column::ImageName => "image_name",
-            Column::ObjectClass => "object_class_name",
-            Column::AreaSizePx => "area_px",
-            Column::AreaSizeNm => "area_nm2",
-            Column::PerimeterPx => "perimeter_px",
-            Column::PerimeterNm => "perimeter_nm",
-            Column::Circularity => "circularity",
-            Column::Solidity => "solidity",
-            Column::Eccentricity => "eccentricity",
-            Column::ColocCount => "n_colocalized",
-            Column::IntensityAvg => "mean_raw",
-            Column::IntensitySum => "sum_raw",
-            Column::IntensityMin => "min_raw",
-            Column::IntensityMax => "max_raw",
+            Column::ObjectId => "object_id".to_string(),
+            Column::ImageName => "image_name".to_string(),
+            Column::ObjectClass => "object_class_name".to_string(),
+            Column::AreaSizePx => "area_px".to_string(),
+            Column::AreaSizeNm => "area_nm2".to_string(),
+            Column::PerimeterPx => "perimeter_px".to_string(),
+            Column::PerimeterNm => "perimeter_nm".to_string(),
+            Column::Circularity => "circularity".to_string(),
+            Column::Solidity => "solidity".to_string(),
+            Column::Eccentricity => "eccentricity".to_string(),
+            Column::ColocCount => "n_colocalized".to_string(),
+            Column::IntensityAvg(channel) => format!("mean_raw_ch{channel}"),
+            Column::IntensitySum(channel) => format!("sum_raw_ch{channel}"),
+            Column::IntensityMin(channel) => format!("min_raw_ch{channel}"),
+            Column::IntensityMax(channel) => format!("max_raw_ch{channel}"),
         }
     }
 
     /// Inverse of [`Column::as_key`].
     pub fn from_key(key: &str) -> Option<Self> {
+        if let Some(channel) = key.strip_prefix("mean_raw_ch") {
+            return channel.parse().ok().map(Column::IntensityAvg);
+        }
+        if let Some(channel) = key.strip_prefix("sum_raw_ch") {
+            return channel.parse().ok().map(Column::IntensitySum);
+        }
+        if let Some(channel) = key.strip_prefix("min_raw_ch") {
+            return channel.parse().ok().map(Column::IntensityMin);
+        }
+        if let Some(channel) = key.strip_prefix("max_raw_ch") {
+            return channel.parse().ok().map(Column::IntensityMax);
+        }
         Some(match key {
             "object_id" => Column::ObjectId,
             "image_name" => Column::ImageName,
@@ -101,10 +115,6 @@ impl Column {
             "solidity" => Column::Solidity,
             "eccentricity" => Column::Eccentricity,
             "n_colocalized" => Column::ColocCount,
-            "mean_raw" => Column::IntensityAvg,
-            "sum_raw" => Column::IntensitySum,
-            "min_raw" => Column::IntensityMin,
-            "max_raw" => Column::IntensityMax,
             _ => return None,
         })
     }
@@ -390,7 +400,7 @@ impl ResultsGenerator {
     }
 
     pub fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors> {
-        let ret = vec![
+        let mut ret = vec![
             ColumnEntry {
                 display_name: "Object ID".into(),
                 key: Column::ObjectId,
@@ -446,27 +456,32 @@ impl ResultsGenerator {
                 key: Column::ColocCount,
                 group: "Coloc".into(),
             },
-            ColumnEntry {
-                display_name: "Avg Intensity".into(),
-                key: Column::IntensityAvg,
-                group: "intensity".into(),
-            },
-            ColumnEntry {
-                display_name: "Sum Intensity".into(),
-                key: Column::IntensitySum,
-                group: "intensity".into(),
-            },
-            ColumnEntry {
-                display_name: "Min Intensity".into(),
-                key: Column::IntensityMin,
-                group: "intensity".into(),
-            },
-            ColumnEntry {
-                display_name: "Max Intensity".into(),
-                key: Column::IntensityMax,
-                group: "intensity".into(),
-            },
         ];
+
+        // Intensity is measured per image channel, so there's one Avg/Sum/
+        // Min/Max column per channel rather than a single shared one.
+        for channel in 0..self.get_nr_of_c_stacks() {
+            ret.push(ColumnEntry {
+                display_name: format!("Avg Intensity (Ch {channel})"),
+                key: Column::IntensityAvg(channel),
+                group: "intensity".into(),
+            });
+            ret.push(ColumnEntry {
+                display_name: format!("Sum Intensity (Ch {channel})"),
+                key: Column::IntensitySum(channel),
+                group: "intensity".into(),
+            });
+            ret.push(ColumnEntry {
+                display_name: format!("Min Intensity (Ch {channel})"),
+                key: Column::IntensityMin(channel),
+                group: "intensity".into(),
+            });
+            ret.push(ColumnEntry {
+                display_name: format!("Max Intensity (Ch {channel})"),
+                key: Column::IntensityMax(channel),
+                group: "intensity".into(),
+            });
+        }
 
         Ok(ret)
     }
@@ -578,14 +593,18 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
         Column::Solidity => Cell::Float(object.solidity as f32),
         Column::Eccentricity => Cell::Float(object.eccentricity as f32),
         Column::ColocCount => Cell::Integer(coloc_count(&object.coloc_json)),
-        // Only channel 0: `ListFilter` has no channel selector yet for the
-        // flat list view (unlike the per-channel columns the image editor's
-        // object list already supports), so this is a placeholder until one
-        // exists rather than a real multi-channel aggregate.
-        Column::IntensityAvg => Cell::Float(intensity_stat(&object.intensities_json, "mean_raw")),
-        Column::IntensitySum => Cell::Float(intensity_stat(&object.intensities_json, "sum_raw")),
-        Column::IntensityMin => Cell::Float(intensity_stat(&object.intensities_json, "min_raw")),
-        Column::IntensityMax => Cell::Float(intensity_stat(&object.intensities_json, "max_raw")),
+        Column::IntensityAvg(channel) => {
+            Cell::Float(intensity_stat(&object.intensities_json, *channel, "mean_raw"))
+        }
+        Column::IntensitySum(channel) => {
+            Cell::Float(intensity_stat(&object.intensities_json, *channel, "sum_raw"))
+        }
+        Column::IntensityMin(channel) => {
+            Cell::Float(intensity_stat(&object.intensities_json, *channel, "min_raw"))
+        }
+        Column::IntensityMax(channel) => {
+            Cell::Float(intensity_stat(&object.intensities_json, *channel, "max_raw"))
+        }
     }
 }
 
@@ -601,15 +620,15 @@ fn coloc_count(coloc_json: &str) -> i32 {
         .sum::<usize>() as i32
 }
 
-/// One channel-0 stat out of the raw `{"<channel>": {"mean_raw": ..., ...},
+/// One channel's stat out of the raw `{"<channel>": {"mean_raw": ..., ...},
 /// ...}` shape `intensities_json` stores (see `intensities_to_json` in
 /// evanalyzer_core, whose stat key names this mirrors exactly).
-fn intensity_stat(intensities_json: &str, stat: &str) -> f32 {
+fn intensity_stat(intensities_json: &str, channel: u32, stat: &str) -> f32 {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(intensities_json) else {
         return 0.0;
     };
     value
-        .get("0")
+        .get(channel.to_string())
         .and_then(|channel| channel.get(stat))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0) as f32
