@@ -81,15 +81,24 @@ export component ResultsListView inherits Rectangle {
         // -- Table --
         Rectangle {
             vertical-stretch: 1;
+            background: Theme.panel;
 
             VerticalLayout {
                 spacing: 0px;
 
-                Rectangle {
+                header-rect := Rectangle {
                     height: 28px;
                     background: Theme.raised;
+                    // Columns have a fixed pixel width, so the row content
+                    // can be wider than the window; clip the header to its
+                    // 28px band and pan it in step with the body's
+                    // horizontal scroll (below) instead of letting it spill
+                    // out or drift out of alignment with the columns.
+                    clip: true;
 
-                    HorizontalLayout {
+                    header-layout := HorizontalLayout {
+                        x: body-list.viewport-x;
+                        width: max(self.preferred-width, parent.width);
                         padding-left: 16px;
                         padding-right: 16px;
 
@@ -121,24 +130,28 @@ export component ResultsListView inherits Rectangle {
                     }
                 }
 
-                ListView {
+                body-list := ListView {
                     vertical-stretch: 1;
 
                     for row[index] in ResultsState.list-rows: Rectangle {
                         height: 34px;
+                        min-width: row-layout.min-width;
+                      //  width: max(row-layout.preferred-width, parent.width);
+                        width: header-rect.width * ResultsState.list-column-headers.length;
 
                         Rectangle {
                             y: 34px;
                             border-width: 1px;
                             border-color: Theme.border;
                             height: 1px;
+                            x: 0;
                         }
 
                         background: mod(index, 2) == 0 ? ta.has-hover ? Theme.hover : transparent : ta.has-hover ? Theme.hover : transparent;
 
                         ta := TouchArea { }
 
-                        HorizontalLayout {
+                        row-layout := HorizontalLayout {
                             padding-left: 16px;
                             padding-right: 16px;
                             padding-top: 9px;
@@ -154,6 +167,7 @@ export component ResultsListView inherits Rectangle {
                                     text: cell;
                                     width: 260px;
                                     font-size: 12px;
+                                    font-family: Theme.font-mono;
                                     color: Theme.text;
                                     overflow: elide;
                                     vertical-alignment: center;
