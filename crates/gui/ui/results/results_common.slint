@@ -7,28 +7,12 @@
 import { VerticalBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { NavIconLeft } from "../components/navicon_left.slint";
+import { AppButton } from "../components/app_button.slint";
 import {
     ResultsState,
     ResultsRailMode,
     BreadcrumbItem,
 } from "results_state.slint";
-
-// Maps a normalized 0..1 value to a viridis-like color (blue -> teal ->
-// yellow), matching the reference HTML mock's `valueColor`.
-export global ValueColor {
-    public pure function value-color(t: float) -> color {
-        let c = Math.clamp(t, 0.0, 1.0);
-        if (c < 0.35) {
-            return Colors.hsv(255, 30%, 45%).mix(Colors.hsv(225, 28%, 55%), c / 0.35);
-        } else if (c < 0.55) {
-            return Colors.hsv(225, 28%, 55%).mix(Colors.hsv(175, 30%, 62%), (c - 0.35) / 0.2);
-        } else if (c < 0.75) {
-            return Colors.hsv(175, 30%, 62%).mix(Colors.hsv(140, 34%, 74%), (c - 0.55) / 0.2);
-        } else {
-            return Colors.hsv(140, 34%, 74%).mix(Colors.hsv(95, 36%, 88%), (c - 0.75) / 0.25);
-        }
-    }
-}
 
 // -- Left icon rail: List / Matrix / Charts / Coloc + Export at the bottom.
 // Reuses the same NavIconLeft button + panel styling as the main window's
@@ -248,6 +232,26 @@ export component LegendBar inherits VerticalLayout {
     in property <string> value-label: "Value";
     in property <float> min-value: 0;
     in property <float> max-value: 100;
+    // Sampled from the selected `ColorSchema` in Rust
+    // (`color_scale_gradient` in results_generator.rs) — rendered here by
+    // just splitting a `HorizontalLayout` evenly across the stops, so the
+    // legend always matches the schema actually painting the plate cells
+    // instead of a second, independent gradient definition living in Slint.
+    in property <[color]> gradient-stops: [];
+    // Only the Matrix Plate level has a real `ColorScale` behind it today
+    // (see `MatrixFilter` in results_state_controller.rs) — Well/Charts
+    // reuse this component purely for display, so the click-to-edit popup
+    // is opt-in per use site.
+    in property <bool> editable: false;
+    in property <bool> is-manual: false;
+    callback set-auto();
+    callback set-manual(float, float);
+
+    // Local, uncommitted "which tab is highlighted in the popup" state —
+    // separate from `is-manual` (the last value Rust actually committed) so
+    // opening the popup and clicking "Manual" can preview the min/max
+    // fields before "Apply" is pressed.
+    property <bool> manual-tab-selected: root.is-manual;
 
     spacing: 6px;
 
@@ -261,39 +265,30 @@ export component LegendBar inherits VerticalLayout {
     Rectangle {
         height: 10px;
         border-radius: 5px;
-        Rectangle {
-            x: parent.width * 0.0;
-            width: 20%;
-            height: 100%;
-            background: ValueColor.value-color(0.0);
+        // Without `clip: true` the flat-colored stop segments below paint
+        // square corners straight over this rectangle's rounded ones, so
+        // the rounding never actually shows.
+        clip: true;
+
+        HorizontalLayout {
+            for stop in root.gradient-stops: Rectangle {
+                background: stop;
+            }
         }
 
-        Rectangle {
-            x: parent.width * 0.2;
-            width: 20%;
-            height: 100%;
-            background: ValueColor.value-color(0.25);
+        // Only while `set_color_schemas_in_slint` hasn't run yet.
+        if root.gradient-stops.length == 0: Rectangle {
+            background: Theme.border-soft;
         }
 
-        Rectangle {
-            x: parent.width * 0.4;
-            width: 20%;
+        if root.editable: TouchArea {
+            width: 100%;
             height: 100%;
-            background: ValueColor.value-color(0.5);
-        }
-
-        Rectangle {
-            x: parent.width * 0.6;
-            width: 20%;
-            height: 100%;
-            background: ValueColor.value-color(0.75);
-        }
-
-        Rectangle {
-            x: parent.width * 0.8;
-            width: 20%;
-            height: 100%;
-            background: ValueColor.value-color(1.0);
+            mouse-cursor: pointer;
+            clicked => {
+                manual-tab-selected = root.is-manual;
+                popup.show();
+            }
         }
     }
 
@@ -314,6 +309,152 @@ export component LegendBar inherits VerticalLayout {
             font-size: 10px;
             font-family: Theme.font-mono;
             color: Theme.text-mute;
+        }
+    }
+
+    if root.is-manual: Text {
+        text: "Manual";
+        font-size: 9px;
+        letter-spacing: 0.4px;
+        color: Theme.text-faint;
+        horizontal-alignment: center;
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: 34px;
+        width: 190px;
+        close-policy: close-on-click-outside;
+        height: 44px + (manual-tab-selected ? 130px : 0px);
+
+        Rectangle {
+            width: 190px;
+            height: parent.height;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            drop-shadow-color: Theme.shadow;
+            drop-shadow-blur: 16px;
+            drop-shadow-offset-y: 4px;
+            clip: true;
+
+            VerticalLayout {
+                padding: 10px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            manual-tab-selected = false;
+                            root.set-auto();
+                            popup.close();
+                        }
+                        Rectangle {
+                            height: 26px;
+                            border-radius: 6px;
+                            background: manual-tab-selected ? Theme.raised : Theme.accent;
+                            Text {
+                                text: "Auto";
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: manual-tab-selected ? Theme.text : Theme.text-bright;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { manual-tab-selected = true; }
+                        Rectangle {
+                            height: 26px;
+                            border-radius: 6px;
+                            background: manual-tab-selected ? Theme.accent : Theme.raised;
+                            Text {
+                                text: "Manual";
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: manual-tab-selected ? Theme.text-bright : Theme.text;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                if manual-tab-selected: VerticalLayout {
+                    spacing: 6px;
+
+                    Text {
+                        text: "MIN";
+                        font-size: 9px;
+                        letter-spacing: 0.4px;
+                        color: Theme.text-mute;
+                    }
+                    Rectangle {
+                        height: 26px;
+                        border-radius: Theme.radius-sm;
+                        background: Theme.raised;
+                        border-width: 1px;
+                        border-color: min-input.has-focus ? Theme.accent : Theme.border-soft;
+                        min-input := TextInput {
+                            x: 8px;
+                            width: parent.width - 16px;
+                            height: parent.height;
+                            // Default value only — the conditional `if`
+                            // block this lives in is recreated fresh each
+                            // time the popup switches to the Manual tab, so
+                            // this always starts at the currently displayed
+                            // range rather than needing to be reset
+                            // imperatively from the bar's click handler.
+                            text: "\{root.min-value}";
+                            vertical-alignment: center;
+                            font-size: 11px;
+                            color: Theme.text;
+                            single-line: true;
+                        }
+                    }
+
+                    Text {
+                        text: "MAX";
+                        font-size: 9px;
+                        letter-spacing: 0.4px;
+                        color: Theme.text-mute;
+                    }
+                    Rectangle {
+                        height: 26px;
+                        border-radius: Theme.radius-sm;
+                        background: Theme.raised;
+                        border-width: 1px;
+                        border-color: max-input.has-focus ? Theme.accent : Theme.border-soft;
+                        max-input := TextInput {
+                            x: 8px;
+                            width: parent.width - 16px;
+                            height: parent.height;
+                            text: "\{root.max-value}";
+                            vertical-alignment: center;
+                            font-size: 11px;
+                            color: Theme.text;
+                            single-line: true;
+                        }
+                    }
+
+                    AppButton {
+                        text: "Apply";
+                        primary: true;
+                        height: 28px;
+                        clicked => {
+                            root.set-manual(min-input.text.to-float(), max-input.text.to-float());
+                            popup.close();
+                        }
+                    }
+                }
+            }
         }
     }
 }

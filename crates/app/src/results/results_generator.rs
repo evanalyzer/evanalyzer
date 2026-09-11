@@ -1054,6 +1054,24 @@ fn col_number_to_index(digits: &str) -> Option<usize> {
     digits.parse::<usize>().ok()?.checked_sub(1)
 }
 
+/// Number of colors `color_scale_gradient` samples a schema at — enough for
+/// the GUI's legend bar to look like a smooth gradient when it just splits
+/// the stops evenly across a `HorizontalLayout`.
+pub const COLOR_SCALE_GRADIENT_STOPS: usize = 12;
+
+/// Samples `value_to_color` at `COLOR_SCALE_GRADIENT_STOPS` evenly spaced
+/// points across `[0, 1]`, in `0xRRGGBB`. Lets the GUI's legend bar render
+/// the exact gradient a heatmap's cells are colored with, instead of
+/// reimplementing the schema's interpolation a second time in Slint.
+pub fn color_scale_gradient(schema: &ColorSchema) -> [u32; COLOR_SCALE_GRADIENT_STOPS] {
+    let mut stops = [0u32; COLOR_SCALE_GRADIENT_STOPS];
+    for (i, stop) in stops.iter_mut().enumerate() {
+        let t = i as f64 / (COLOR_SCALE_GRADIENT_STOPS - 1) as f64;
+        *stop = value_to_color(t, 0.0, 1.0, schema);
+    }
+    stops
+}
+
 /// Maps `value` (within `[min, max]`) to a `0xRRGGBB` color under the
 /// selected `ColorSchema` — the same packing `evanalyzer_cfg`'s `Class.color`
 /// and `crates/gui/src/helper/color_generators.rs` already use, so the GUI

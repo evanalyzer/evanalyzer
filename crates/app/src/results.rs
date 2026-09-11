@@ -6,6 +6,7 @@ pub use results_generator::CellValue;
 pub use results_generator::ColorScale;
 pub use results_generator::ColorSchema;
 pub use results_generator::Column;
+pub use results_generator::color_scale_gradient;
 pub use results_generator::ColumnEntry;
 pub use results_generator::DatabaseResult;
 pub use results_generator::GroupFilter;

@@ -295,6 +295,7 @@ impl ResultsStateController {
                 });
 
             let manager = self.clone();
+            let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
                 .on_matrix_color_schema_selected(move |key, selected| {
                     if !selected {
@@ -304,9 +305,37 @@ impl ResultsStateController {
                         warn!("Unknown color schema selected: {key}");
                         return;
                     };
+                    if let Some(ui_ready) = ui_weak.upgrade() {
+                        let stops = color_scale_gradient_slint(&schema);
+                        ui_ready
+                            .global::<ResultsState>()
+                            .set_matrix_color_scale_stops(ModelRc::from(Rc::new(VecModel::from(
+                                stops,
+                            ))));
+                    } else {
+                        warn!(
+                            "Failed to upgrade UI handle in on_matrix_color_schema_selected, cannot update legend gradient!"
+                        );
+                    }
                     manager.update_matrix_filter(|filter| filter.color_schema = schema);
                     manager.update_matrix_view();
                 });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_matrix_scale_set_auto(move || {
+                manager.update_matrix_filter(|filter| filter.color_scale = ColorScale::Auto);
+                manager.update_matrix_view();
+            });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_scale_set_manual(move |min, max| {
+                    manager.update_matrix_filter(|filter| {
+                        filter.color_scale = ColorScale::Manual(min, max)
+                    });
+                    manager.update_matrix_view();
+                });
+
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
@@ -605,6 +634,7 @@ impl ResultsStateController {
             aggregation_display_name(&matrix_filter.aggregation),
             column_display_name
         );
+        let is_manual_scale = matches!(matrix_filter.color_scale, ColorScale::Manual(..));
 
         let group_filter = result::GroupFilter {
             plane,
@@ -625,7 +655,7 @@ impl ResultsStateController {
             warn!("Could not load matrix results!");
             return;
         };
-        self.set_matrix_in_slint(&result, value_caption);
+        self.set_matrix_in_slint(&result, value_caption, is_manual_scale);
     }
 
     // `result` is the plate/well grid `get_group_by_plate(.., View::Heatmap)`
@@ -637,7 +667,12 @@ impl ResultsStateController {
     // hardcoded A/B/C.../1/2/3... labels, since those come from index
     // position, not from `row_names`/`column_names` themselves — an accepted
     // limitation of this first pass, not something fixed here.
-    pub fn set_matrix_in_slint(&self, result: &DatabaseResult, value_caption: String) {
+    pub fn set_matrix_in_slint(
+        &self,
+        result: &DatabaseResult,
+        value_caption: String,
+        is_manual_scale: bool,
+    ) {
         let ui_weak = self.ui.clone();
         let rows = result.row_names.len() as i32;
         let cols = result.column_names.len() as i32;
@@ -694,6 +729,7 @@ impl ResultsStateController {
                 state.set_plate_min(range_min);
                 state.set_plate_max(range_max);
                 state.set_plate_cells(ModelRc::from(Rc::new(VecModel::from(cells))));
+                state.set_matrix_scale_is_manual(is_manual_scale);
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_matrix_in_slint, cannot update matrix view!"
@@ -788,11 +824,13 @@ impl ResultsStateController {
             .find(|item| item.selected)
             .map(|item| item.value.clone())
             .unwrap_or_default();
+        let stops = color_scale_gradient_slint(&ColorSchema::default());
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 state.set_matrix_color_schema_items(ModelRc::from(Rc::new(VecModel::from(items))));
                 state.set_matrix_color_scale_summary(summary);
+                state.set_matrix_color_scale_stops(ModelRc::from(Rc::new(VecModel::from(stops))));
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_color_schemas_in_slint, cannot update color schema options!"
@@ -1112,6 +1150,17 @@ fn bg_color_to_slint(bg_color: u32) -> Color {
         ((bg_color >> 8) & 0xFF) as u8,
         (bg_color & 0xFF) as u8,
     )
+}
+
+// Samples `schema` the same way the plate cells are colored (see
+// `value_to_color` in results_generator.rs), so the legend bar's gradient
+// always matches what's on screen instead of reimplementing the
+// interpolation a second time in Slint.
+fn color_scale_gradient_slint(schema: &ColorSchema) -> Vec<Color> {
+    result::color_scale_gradient(schema)
+        .into_iter()
+        .map(bg_color_to_slint)
+        .collect()
 }
 
 fn cell_to_string(cell: &Cell) -> slint::SharedString {

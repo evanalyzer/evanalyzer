@@ -189,6 +189,15 @@ export global ResultsState {
     in-out property <string> matrix-group-regex: "";
     in-out property <string> matrix-color-scale-summary: "Viridis";
     in-out property <[MultiSelectItem]> matrix-color-schema-items: [];
+    // Sampled from the selected schema in Rust (`color_scale_gradient` in
+    // results_generator.rs) so the legend bar always shows the exact
+    // gradient the plate cells are actually colored with.
+    in-out property <[color]> matrix-color-scale-stops: [];
+    // Whether the plate's value range is pinned (`matrix-scale-set-manual`)
+    // rather than auto-computed from the data on every refresh.
+    in-out property <bool> matrix-scale-is-manual: false;
+    callback matrix-scale-set-auto();
+    callback matrix-scale-set-manual(float, float);
     in-out property <[string]> matrix-aggregate-options: ["Average", "Minimum", "Maximum", "Std Dev", "Sum"];
     in-out property <[MatrixCell]> plate-cells: [];
     in-out property <int> plate-rows: 8;

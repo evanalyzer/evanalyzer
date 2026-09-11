@@ -355,6 +355,11 @@ export component ResultsMatrixView inherits Rectangle {
                         value-label: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.matrix-column-summary : "Objects / field";
                         min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : ResultsState.well-min;
                         max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : ResultsState.well-max;
+                        gradient-stops: ResultsState.matrix-color-scale-stops;
+                        editable: ResultsState.matrix-level == MatrixLevel.plate;
+                        is-manual: ResultsState.matrix-scale-is-manual;
+                        set-auto => { ResultsState.matrix-scale-set-auto(); }
+                        set-manual(min, max) => { ResultsState.matrix-scale-set-manual(min, max); }
                     }
 
                     // Selected-well detail card — filled in by
