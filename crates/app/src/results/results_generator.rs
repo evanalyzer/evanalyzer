@@ -1,12 +1,13 @@
-use std::path::PathBuf;
-use std::{cell::RefCell, default};
-
 use duckdb::Connection;
 use duckdb::types::Value;
 use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass},
     settings::classification_settings::Class,
 };
+use std::path::PathBuf;
+use std::{cell::RefCell, default};
+
+const DEFAULT_GROUPING_REGEX: &str = "^(([A-Za-z]+)([0-9]+))";
 
 pub struct ResultsGenerator {
     database: Connection,
@@ -334,12 +335,90 @@ impl ResultsGenerator {
         })
     }
 
+    // First step: return the grouped/aggregated rows as a plain flat table
+    // (group key + aggregated value), same `DatabaseResult` shape as
+    // `get_list`. Turning that into the plate grid's actual rows/cols of
+    // wells (`MatrixCell`s, row/col letters, etc.) is a separate step in the
+    // GUI once this data is available.
     pub fn get_group_by_plate(
         &self,
         filter: &GroupFilter,
         view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
-        Err(("not implemented").into())
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let value_expr = column_aggregate_expr(&filter.column)?;
+        let agg_fn = aggregation_sql_fn(&filter.aggregation);
+
+        // Same default as the example query this is modeled on: everything
+        // before the first `_` in `image_name` (e.g. "A1_field1.tif" -> "A1")
+        // — used whenever the GUI's regex box (`filter.grouping_regex`) is
+        // still empty.
+        let regex = if filter.grouping_regex.trim().is_empty() {
+            DEFAULT_GROUPING_REGEX
+        } else {
+            filter.grouping_regex.as_str()
+        };
+
+        let mut conditions = vec![
+            format!("z_stack = {}", filter.plane.z_stack),
+            format!("t_stack = {}", filter.plane.t_stack),
+        ];
+        if let ObjectClass::Valid(id) = filter.object_class {
+            conditions.push(format!(
+                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                sql_int_array_literal(&[id])
+            ));
+        }
+        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+
+        let sql = format!(
+            "SELECT\n\
+                regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                regexp_extract(image_name, '{regex}', 2) AS row,\n\
+                regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                {agg_fn}({value_expr}) AS value\n\
+             FROM objects\n\
+             {where_clause}\n\
+             GROUP BY group_prefix, row, col\n\
+             ORDER BY group_prefix",
+            regex = regex.replace('\'', "''"),
+        );
+
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+
+        match view {
+            View::List => {
+                let groups: Vec<(String, Option<f64>)> = stmt
+                    .query_map([], |row| Ok((row.get(0)?, row.get(3)?)))
+                    .map_err(err)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
+
+                let column_names = vec!["group".to_string(), filter.column.as_key()];
+                let row_names = groups.iter().map(|(key, _)| key.clone()).collect();
+                let rows = groups
+                    .into_iter()
+                    .map(|(key, value)| {
+                        vec![
+                            Cell {
+                                value: CellValue::String(key),
+                                bg_color: 0,
+                            },
+                            Cell {
+                                value: CellValue::Float(value.unwrap_or(0.0) as f32),
+                                bg_color: 0,
+                            },
+                        ]
+                    })
+                    .collect();
+                Ok(DatabaseResult {
+                    column_names,
+                    row_names,
+                    rows,
+                })
+            }
+            View::Heatmap => todo!(),
+        }
     }
 
     pub fn get_group_by_well(
@@ -702,4 +781,45 @@ fn intensity_stat(intensities_json: &str, channel: u32, stat: &str) -> f32 {
         .and_then(|channel| channel.get(stat))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0) as f32
+}
+
+/// SQL scalar expression for a `Column`, to be wrapped in an aggregate
+/// function by `get_group_by_plate`. Only plain numeric `objects` columns are
+/// supported so far — `ColocCount` and the per-channel intensity columns need
+/// their own JSON-extraction SQL (see `coloc_count`/`intensity_stat`, which
+/// only handle this per-row in Rust today, not as a groupable SQL
+/// expression), left for a follow-up.
+fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
+    Ok(match column {
+        Column::AreaSizePx => "area_px".to_string(),
+        Column::AreaSizeNm => "area_nm2".to_string(),
+        Column::PerimeterPx => "perimeter_px".to_string(),
+        Column::PerimeterNm => "perimeter_nm".to_string(),
+        Column::Circularity => "circularity".to_string(),
+        Column::Solidity => "solidity".to_string(),
+        Column::Eccentricity => "eccentricity".to_string(),
+        Column::ObjectId
+        | Column::ImageName
+        | Column::ObjectClass
+        | Column::ColocCount
+        | Column::IntensityAvg(_)
+        | Column::IntensitySum(_)
+        | Column::IntensityMin(_)
+        | Column::IntensityMax(_) => {
+            return Err(InternalErrors::InvalidArgument(format!(
+                "column {} cannot be aggregated for the plate view yet",
+                column.as_key()
+            )));
+        }
+    })
+}
+
+fn aggregation_sql_fn(aggregation: &Aggregation) -> &'static str {
+    match aggregation {
+        Aggregation::Avg => "AVG",
+        Aggregation::Min => "MIN",
+        Aggregation::Max => "MAX",
+        Aggregation::Stddev => "STDDEV_SAMP",
+        Aggregation::Sum => "SUM",
+    }
 }
