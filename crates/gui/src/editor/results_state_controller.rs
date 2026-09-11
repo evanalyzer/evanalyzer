@@ -41,8 +41,8 @@ pub struct ResultsStateController {
     plane_filter: Mutex<PlaneFilter>,
     list_page: Mutex<i32>,
     classes: Mutex<Vec<Class>>,
-    image_count: Mutex<usize>,
-    column_count: Mutex<usize>,
+    images: Mutex<Vec<ImageEntry>>,
+    available_columns: Mutex<Vec<ColumnEntry>>,
 }
 
 impl ResultsStateController {
@@ -55,8 +55,8 @@ impl ResultsStateController {
             plane_filter: Mutex::new(PlaneFilter::default()),
             list_page: Mutex::new(0),
             classes: Mutex::new(Vec::new()),
-            image_count: Mutex::new(0),
-            column_count: Mutex::new(0),
+            images: Mutex::new(Vec::new()),
+            available_columns: Mutex::new(Vec::new()),
         }
     }
 
@@ -120,6 +120,13 @@ impl ResultsStateController {
                 });
             let manager = self.clone();
             ui.global::<ResultsState>()
+                .on_list_image_select_all(move || manager.select_all_images());
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_image_select_none(move || manager.select_none_images());
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
                 .on_list_class_selected(move |key, selected| {
                     let class_name = key.to_string();
                     let Some(object_class) = manager
@@ -146,6 +153,12 @@ impl ResultsStateController {
                     manager.push_class_summary(selected_count);
                     manager.refresh_list();
                 });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_class_select_all(move || manager.select_all_classes());
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_class_select_none(move || manager.select_none_classes());
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -168,10 +181,12 @@ impl ResultsStateController {
                     manager.refresh_list();
                 });
 
+            let manager = self.clone();
             ui.global::<ResultsState>()
-                .on_list_columns_select_all(move || {});
+                .on_list_columns_select_all(move || manager.select_all_columns());
+            let manager = self.clone();
             ui.global::<ResultsState>()
-                .on_list_columns_select_none(move || {});
+                .on_list_columns_select_none(move || manager.select_none_columns());
 
             let manager = self.clone();
             ui.global::<ResultsState>().on_list_next_page(move || {
@@ -244,6 +259,7 @@ impl ResultsStateController {
                 match results.get_available_columns() {
                     Ok(columns) => {
                         self.set_columns_in_slint(&columns);
+                        *self.available_columns.lock().expect("Poisened") = columns;
                     }
                     Err(err) => {
                         error!("{}", err);
@@ -252,6 +268,7 @@ impl ResultsStateController {
                 match results.get_images() {
                     Ok(images) => {
                         self.set_images_in_slint(&images);
+                        *self.images.lock().expect("Poisened") = images;
                     }
                     Err(err) => {
                         error!("{}", err);
@@ -438,7 +455,7 @@ impl ResultsStateController {
 
     pub fn set_object_classes_in_slint(&self, object_classes: &Vec<Class>) {
         let ui_weak = self.ui.clone();
-        let items = class_filter_items(object_classes);
+        let items = class_filter_items(object_classes, true);
         let summary = list_summary(
             items.iter().filter(|item| item.selected).count(),
             items.len(),
@@ -463,9 +480,8 @@ impl ResultsStateController {
 
     pub fn set_columns_in_slint(&self, columns: &Vec<ColumnEntry>) {
         let ui_weak = self.ui.clone();
-        let items = column_items(columns);
+        let items = column_items(columns, |key| DEFAULT_LIST_COLUMNS.contains(key));
         let groups = column_groups(columns);
-        *self.column_count.lock().expect("Poisned") = items.len();
         let summary = list_summary(
             items.iter().filter(|item| item.selected).count(),
             items.len(),
@@ -489,8 +505,7 @@ impl ResultsStateController {
 
     pub fn set_images_in_slint(&self, images: &Vec<ImageEntry>) {
         let ui_weak = self.ui.clone();
-        let items = image_items(images);
-        *self.image_count.lock().expect("Poisned") = items.len();
+        let items = image_items(images, false);
         let summary = list_summary(
             items.iter().filter(|item| item.selected).count(),
             items.len(),
@@ -516,7 +531,7 @@ impl ResultsStateController {
     // touches one item, so it's cheaper to just recombine the new selected
     // count with the cached total than to rebuild the whole item list again.
     fn push_image_summary(&self, selected: usize) {
-        let total = *self.image_count.lock().expect("Poisned");
+        let total = self.images.lock().expect("Poisened").len();
         let text = list_summary(selected, total, "Images");
         let ui_weak = self.ui.clone();
         slint::invoke_from_event_loop(move || {
@@ -548,7 +563,7 @@ impl ResultsStateController {
     }
 
     fn push_columns_summary(&self, selected: usize) {
-        let total = *self.column_count.lock().expect("Poisned");
+        let total = self.available_columns.lock().expect("Poisened").len();
         let text = list_summary(selected, total, "Columns");
         let ui_weak = self.ui.clone();
         slint::invoke_from_event_loop(move || {
@@ -558,6 +573,126 @@ impl ResultsStateController {
                     .set_list_columns_summary(text);
             } else {
                 warn!("Failed to upgrade UI handle, cannot update the columns summary!");
+            }
+        })
+        .ok();
+    }
+
+    fn select_all_images(&self) {
+        let images = self.images.lock().expect("Poisened");
+        let items = image_items(&images, true);
+        let total = images.len();
+        let rel_paths = images.iter().map(|image| image.rel_path.clone()).collect();
+        drop(images);
+        self.list_filter.lock().expect("Poisened").image_rel_path = rel_paths;
+        self.push_image_items(items, list_summary(total, total, "Images"));
+        self.refresh_list();
+    }
+
+    fn select_none_images(&self) {
+        let images = self.images.lock().expect("Poisened");
+        let items = image_items(&images, false);
+        let total = images.len();
+        drop(images);
+        // Sentinel: a real image's rel-path is never empty (schema
+        // guarantees `image_rel_path` is `NOT NULL`), so this can't match
+        // any real image — which is what "select none" needs, since an
+        // empty `image_rel_path` list means "no filter" (all images) in
+        // `update_list_view`, not "match nothing".
+        self.list_filter.lock().expect("Poisened").image_rel_path = vec![PathBuf::new()];
+        self.push_image_items(items, list_summary(0, total, "Images"));
+        self.refresh_list();
+    }
+
+    fn push_image_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_list_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_image_summary(summary);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the images list!");
+            }
+        })
+        .ok();
+    }
+
+    fn select_all_classes(&self) {
+        let classes = self.classes.lock().expect("Poisened");
+        let items = class_filter_items(&classes, true);
+        let total = classes.len();
+        let ids = classes.iter().map(|class| class.id).collect();
+        drop(classes);
+        self.list_filter.lock().expect("Poisened").object_classes = ids;
+        self.push_class_items(items, list_summary(total, total, "Classes"));
+        self.refresh_list();
+    }
+
+    fn select_none_classes(&self) {
+        let classes = self.classes.lock().expect("Poisened");
+        let items = class_filter_items(&classes, false);
+        let total = classes.len();
+        drop(classes);
+        // Sentinel: `get_object_classes` never returns `ObjectClass::Unset`
+        // (only real `Valid` ids), so this can't match any registered class
+        // — needed because an empty `object_classes` list means "no filter"
+        // (all classes) in `update_list_view`, not "match nothing".
+        self.list_filter.lock().expect("Poisened").object_classes = vec![ObjectClass::Unset];
+        self.push_class_items(items, list_summary(0, total, "Classes"));
+        self.refresh_list();
+    }
+
+    // Only the List view's own class dropdown (`list-class-items`) — the
+    // Matrix/Charts views' class dropdowns are separate, independent
+    // selections (their own not-yet-wired-up callbacks), not something this
+    // toggle should overwrite.
+    fn push_class_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_class_summary(summary);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the class list!");
+            }
+        })
+        .ok();
+    }
+
+    fn select_all_columns(&self) {
+        let columns = self.available_columns.lock().expect("Poisened");
+        let items = column_items(&columns, |_| true);
+        let total = columns.len();
+        let keys = columns.iter().map(|entry| entry.key.clone()).collect();
+        drop(columns);
+        self.list_filter.lock().expect("Poisened").columns = keys;
+        self.push_columns_items(items, list_summary(total, total, "Columns"));
+        self.refresh_list();
+    }
+
+    fn select_none_columns(&self) {
+        let columns = self.available_columns.lock().expect("Poisened");
+        let items = column_items(&columns, |_| false);
+        let total = columns.len();
+        drop(columns);
+        self.list_filter.lock().expect("Poisened").columns = Vec::new();
+        self.push_columns_items(items, list_summary(0, total, "Columns"));
+        self.refresh_list();
+    }
+
+    // Only the List view's own columns dropdown — `matrix-column-items` is a
+    // separate, single-column aggregation picker for the Matrix view.
+    fn push_columns_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_columns_summary(summary);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the columns list!");
             }
         })
         .ok();
@@ -572,21 +707,26 @@ fn list_summary(selected: usize, total: usize, noun: &str) -> slint::SharedStrin
 
 // "All classes" (selected by default) followed by one entry per class from
 // the open database's classification settings.
-fn class_filter_items(object_classes: &[Class]) -> Vec<MultiSelectItem> {
-    let mut items = vec![];
-    items.extend(object_classes.iter().map(|class| MultiSelectItem {
-        key: class.name.as_str().into(),
-        value: class.name.as_str().into(),
-        color: Color::default(),
-        group: "".into(),
-        selected: true,
-    }));
-    items
+fn class_filter_items(object_classes: &[Class], selected: bool) -> Vec<MultiSelectItem> {
+    object_classes
+        .iter()
+        .map(|class| MultiSelectItem {
+            key: class.name.as_str().into(),
+            value: class.name.as_str().into(),
+            color: Color::default(),
+            group: "".into(),
+            selected,
+        })
+        .collect()
 }
 
-// DEFAULT_LIST_COLUMNS selected by default so the table shows a reasonable
-// column set immediately, until the user changes it via the dropdown.
-fn column_items(columns: &[ColumnEntry]) -> Vec<MultiSelectItem> {
+// `selected` decides each item's checked state by key — DEFAULT_LIST_COLUMNS
+// membership for the initial population, or a constant true/false for
+// "select all"/"select none".
+fn column_items(
+    columns: &[ColumnEntry],
+    selected: impl Fn(&Column) -> bool,
+) -> Vec<MultiSelectItem> {
     columns
         .iter()
         .map(|column| MultiSelectItem {
@@ -594,7 +734,7 @@ fn column_items(columns: &[ColumnEntry]) -> Vec<MultiSelectItem> {
             value: column.display_name.as_str().into(),
             color: Color::default(),
             group: column.group.as_str().into(),
-            selected: DEFAULT_LIST_COLUMNS.contains(&column.key),
+            selected: selected(&column.key),
         })
         .collect()
 }
@@ -612,7 +752,7 @@ fn column_groups(columns: &[ColumnEntry]) -> Vec<slint::SharedString> {
     groups
 }
 
-fn image_items(images: &[ImageEntry]) -> Vec<MultiSelectItem> {
+fn image_items(images: &[ImageEntry], selected: bool) -> Vec<MultiSelectItem> {
     images
         .iter()
         .map(|image| MultiSelectItem {
@@ -620,7 +760,7 @@ fn image_items(images: &[ImageEntry]) -> Vec<MultiSelectItem> {
             value: image.name.as_str().into(),
             color: Color::default(),
             group: "".into(),
-            selected: false,
+            selected,
         })
         .collect()
 }
