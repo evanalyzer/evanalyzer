@@ -13,6 +13,11 @@ const DEFAULT_GROUPING_REGEX: &str = r"^(([A-H])([0-9]{1,2}))_([0-9]+)\.([a-zA-Z
 pub struct ResultsGenerator {
     database: Connection,
     classes_cache: RefCell<Option<Vec<Class>>>,
+    // Cached after the first call, same reasoning as `classes_cache` (see
+    // `get_object_classes_with_at_least_coloc`) — a fresh `ResultsGenerator`
+    // per opened database (see `open_database`) means this never needs
+    // invalidating, only ever populating once.
+    coloc_classes_cache: RefCell<Option<Vec<ObjectClass>>>,
 }
 
 #[derive(Clone)]
@@ -90,7 +95,7 @@ pub enum Column {
     Circularity,
     Solidity,
     Eccentricity,
-    ColocCount,
+    ColocCount(ObjectClass),
     IntensityAvg(u32),
     IntensitySum(u32),
     IntensityMin(u32),
@@ -102,8 +107,14 @@ impl Column {
     /// a `_ch{n}` suffix for the per-channel intensity variants) used to
     /// store this variant in UI widgets that only accept strings, e.g. the
     /// slint columns dropdown. Owned (not `&'static str`) because the
-    /// channel number has to be formatted in.
-    pub fn as_key(&self) -> String {
+    /// channel number/class name has to be formatted in.
+    ///
+    /// `classes` (typically `ResultsGenerator::get_object_classes()`, cached
+    /// there so this is cheap to call repeatedly) resolves
+    /// `ColocCount(ObjectClass::Valid(id))`'s class name for the key — falls
+    /// back to the raw numeric id if `classes` doesn't (yet, or any longer)
+    /// recognize that id, e.g. stale GUI state after switching databases.
+    pub fn as_key(&self, classes: &[Class]) -> String {
         match self {
             Column::ObjectId => "object_id".to_string(),
             Column::ImageName => "image_name".to_string(),
@@ -115,7 +126,15 @@ impl Column {
             Column::Circularity => "circularity".to_string(),
             Column::Solidity => "solidity".to_string(),
             Column::Eccentricity => "eccentricity".to_string(),
-            Column::ColocCount => "n_colocalized".to_string(),
+            Column::ColocCount(ObjectClass::Valid(class_id)) => {
+                let name = classes
+                    .iter()
+                    .find(|class| class.id == ObjectClass::Valid(*class_id))
+                    .map(|class| class.name.clone())
+                    .unwrap_or_else(|| class_id.to_string());
+                format!("n_colocalized_class_{name}")
+            }
+            Column::ColocCount(ObjectClass::Unset) => "n_colocalized_unset".to_string(),
             Column::IntensityAvg(channel) => format!("mean_raw_ch{channel}"),
             Column::IntensitySum(channel) => format!("sum_raw_ch{channel}"),
             Column::IntensityMin(channel) => format!("min_raw_ch{channel}"),
@@ -123,8 +142,17 @@ impl Column {
         }
     }
 
-    /// Inverse of [`Column::as_key`].
-    pub fn from_key(key: &str) -> Option<Self> {
+    /// Inverse of [`Column::as_key`] — needs the same `classes` list to
+    /// resolve a `"n_colocalized_class_{name}"` key back to the class's id;
+    /// `None` if `name` isn't (or no longer is) a registered class.
+    pub fn from_key(key: &str, classes: &[Class]) -> Option<Self> {
+        if let Some(name) = key.strip_prefix("n_colocalized_class_") {
+            let class_id = classes.iter().find(|class| class.name == name)?.id;
+            return Some(Column::ColocCount(class_id));
+        }
+        if key == "n_colocalized_unset" {
+            return Some(Column::ColocCount(ObjectClass::Unset));
+        }
         if let Some(channel) = key.strip_prefix("mean_raw_ch") {
             return channel.parse().ok().map(Column::IntensityAvg);
         }
@@ -148,7 +176,6 @@ impl Column {
             "circularity" => Column::Circularity,
             "solidity" => Column::Solidity,
             "eccentricity" => Column::Eccentricity,
-            "n_colocalized" => Column::ColocCount,
             _ => return None,
         })
     }
@@ -282,6 +309,7 @@ impl ResultsGenerator {
         Ok(Self {
             database,
             classes_cache: RefCell::new(None),
+            coloc_classes_cache: RefCell::new(None),
         })
     }
 
@@ -291,11 +319,16 @@ impl ResultsGenerator {
         _view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        // Fetched up front (cached — see `classes_cache`) since
+        // `column_names` below already needs it to resolve a `ColocCount`
+        // column's class name, ahead of where it's also used to validate/
+        // translate `filter.object_classes`.
+        let classes = self.get_object_classes()?;
         let mut ordered_columns = filter.columns.clone();
         ordered_columns.sort();
         let column_names: Vec<String> = ordered_columns
             .iter()
-            .map(|c| c.as_key().to_string())
+            .map(|c| c.as_key(&classes).to_string())
             .collect();
         let empty_result = |column_names: Vec<String>| DatabaseResult {
             column_names,
@@ -332,11 +365,10 @@ impl ResultsGenerator {
         };
 
         // `ListFilter.object_classes` already carries `ObjectClass` ids, but
-        // `get_object_classes()` (cached — see `classes_cache`) still doubles
-        // as validation: an id that no longer names a registered class (e.g.
-        // stale GUI state after switching databases) is dropped rather than
-        // matched against `object_class_id` blindly.
-        let classes = self.get_object_classes()?;
+        // `classes` (fetched above) still doubles as validation: an id that
+        // no longer names a registered class (e.g. stale GUI state after
+        // switching databases) is dropped rather than matched against
+        // `object_class_id` blindly.
         let class_ids = match &filter.object_classes {
             Some(wanted) => {
                 let ids: Vec<u32> = wanted
@@ -428,7 +460,9 @@ impl ResultsGenerator {
         let need_circularity = ordered_columns.contains(&Column::Circularity);
         let need_solidity = ordered_columns.contains(&Column::Solidity);
         let need_eccentricity = ordered_columns.contains(&Column::Eccentricity);
-        let need_coloc = ordered_columns.contains(&Column::ColocCount);
+        let need_coloc = ordered_columns
+            .iter()
+            .any(|c| matches!(c, Column::ColocCount(_)));
         let need_intensities = ordered_columns.iter().any(|c| {
             matches!(
                 c,
@@ -566,6 +600,12 @@ impl ResultsGenerator {
         view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        // `column_aggregate_expr` below rejects `Column::ColocCount(_)`
+        // (can't be aggregated for this view), so `filter.column.as_key()`
+        // further down can never actually need to resolve a class name in
+        // practice — fetched anyway (cached, cheap) so that stays true by
+        // construction rather than by relying on that ordering.
+        let classes = self.get_object_classes()?;
         let value_expr = column_aggregate_expr(&filter.column)?;
         let agg_fn = aggregation_sql_fn(&filter.aggregation);
 
@@ -627,7 +667,7 @@ impl ResultsGenerator {
                     max = 0.0;
                 }
 
-                let column_names = vec!["group".to_string(), filter.column.as_key()];
+                let column_names = vec!["group".to_string(), filter.column.as_key(&classes)];
                 let row_names = groups.iter().map(|(key, _)| key.clone()).collect();
                 let rows = groups
                     .into_iter()
@@ -782,6 +822,7 @@ impl ResultsGenerator {
         view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let classes = self.get_object_classes()?;
         let value_expr = column_aggregate_expr(&filter.column)?;
         let agg_fn = aggregation_sql_fn(&filter.aggregation);
 
@@ -849,7 +890,7 @@ impl ResultsGenerator {
                     max = 0.0;
                 }
 
-                let column_names = vec!["field".to_string(), filter.column.as_key()];
+                let column_names = vec!["field".to_string(), filter.column.as_key(&classes)];
                 let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
                 let rows = fields
                     .into_iter()
@@ -982,6 +1023,7 @@ impl ResultsGenerator {
         view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let classes = self.get_object_classes()?;
         let value_expr = column_aggregate_expr(&filter.column)?;
         let agg_fn = aggregation_sql_fn(&filter.aggregation);
         let square_size = filter.square_size.unwrap_or(256).max(1);
@@ -990,7 +1032,9 @@ impl ResultsGenerator {
         let (width, height): (u32, u32) = self
             .database
             .query_row(
-                &format!("SELECT width, height FROM images WHERE image_rel_path = '{image_rel_path}'"),
+                &format!(
+                    "SELECT width, height FROM images WHERE image_rel_path = '{image_rel_path}'"
+                ),
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -1059,7 +1103,7 @@ impl ResultsGenerator {
                 let mut sorted: Vec<_> = values.iter().collect();
                 sorted.sort_by_key(|(pos, _)| *pos);
 
-                let column_names = vec!["square".to_string(), filter.column.as_key()];
+                let column_names = vec!["square".to_string(), filter.column.as_key(&classes)];
                 let row_names = sorted
                     .iter()
                     .map(|((row, col), _)| format!("R{row}C{col}"))
@@ -1213,6 +1257,56 @@ impl ResultsGenerator {
         Ok(classes)
     }
 
+    /// Every class id that appears as a colocalization partner in at least
+    /// one object's `coloc_json` — i.e. the candidates for a
+    /// `Column::ColocCount(class)` column, mirroring how
+    /// `get_available_columns` enumerates one Avg/Sum/Min/Max intensity
+    /// column per `get_nr_of_c_stacks()` channel. `coloc_json` is keyed by
+    /// class id directly (see `coloc_to_json` in evanalyzer_core's
+    /// duckdb.rs), so this just needs the distinct keys across every
+    /// non-empty `coloc_json` — no join against `classes` required to
+    /// recover the id itself, only to resolve display names later in
+    /// `get_available_columns`.
+    ///
+    /// Cached after the first call for this opened database (see
+    /// `coloc_classes_cache`), same reasoning as `get_object_classes`: this
+    /// scans every non-empty `coloc_json` in the table, and the set of
+    /// classes ever recorded as a coloc partner can't change without
+    /// re-exporting (i.e. opening a different database).
+    pub fn get_object_classes_with_at_least_coloc(
+        &self,
+    ) -> Result<Vec<ObjectClass>, InternalErrors> {
+        if let Some(cached) = self.coloc_classes_cache.borrow().as_ref() {
+            return Ok(cached.clone());
+        }
+
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let mut stmt = self
+            .database
+            .prepare(
+                "SELECT DISTINCT UNNEST(json_keys(coloc_json)) AS class_key \
+                 FROM objects \
+                 WHERE coloc_json IS NOT NULL AND CAST(coloc_json AS VARCHAR) != '{}'",
+            )
+            .map_err(err)?;
+        let keys: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+
+        let mut classes: Vec<ObjectClass> = keys
+            .into_iter()
+            .filter_map(|key| key.parse::<u32>().ok())
+            .map(ObjectClass::Valid)
+            .collect();
+        classes.sort();
+        classes.dedup();
+
+        *self.coloc_classes_cache.borrow_mut() = Some(classes.clone());
+        Ok(classes)
+    }
+
     pub fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors> {
         let mut ret = vec![
             ColumnEntry {
@@ -1265,12 +1359,29 @@ impl ResultsGenerator {
                 key: Column::Eccentricity,
                 group: "Shape".into(),
             },
-            ColumnEntry {
-                display_name: "Coloc count".into(),
-                key: Column::ColocCount,
-                group: "Coloc".into(),
-            },
         ];
+
+        // Coloc count is measured per candidate partner class (like
+        // intensity is measured per channel below), so there's one column
+        // per class that actually shows up as a colocalization partner
+        // somewhere in this database, rather than a single shared "total
+        // across every class" column.
+        let classes = self.get_object_classes()?;
+        for class_id in self.get_object_classes_with_at_least_coloc()? {
+            let display_name = classes
+                .iter()
+                .find(|class| class.id == class_id)
+                .map(|class| format!("Coloc with {}", class.name))
+                .unwrap_or_else(|| match class_id {
+                    ObjectClass::Valid(n) => format!("Coloc with class {n}"),
+                    ObjectClass::Unset => "Coloc with unset".to_string(),
+                });
+            ret.push(ColumnEntry {
+                display_name,
+                key: Column::ColocCount(class_id),
+                group: "Coloc".into(),
+            });
+        }
 
         // Intensity is measured per image channel, so there's one Avg/Sum/
         // Min/Max column per channel rather than a single shared one.
@@ -1444,8 +1555,8 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(object.eccentricity as f32),
             ..no_bg
         },
-        Column::ColocCount => Cell {
-            value: CellValue::Integer(coloc_count(&object.coloc_json)),
+        Column::ColocCount(class) => Cell {
+            value: CellValue::Integer(coloc_count_for_class(&object.coloc_json, *class)),
             ..no_bg
         },
         Column::IntensityAvg(channel) => Cell {
@@ -1483,19 +1594,23 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
     }
 }
 
-/// Total number of colocalization partners across every target class, from
-/// the raw `{"<class_id>": [<object ids>], ...}` shape `coloc_json` stores
-/// (see `coloc_to_json` in evanalyzer_core's duckdb.rs) — keyed by the
-/// target class's numeric id, not its name, but that doesn't matter here
-/// since only the values are summed.
-fn coloc_count(coloc_json: &str) -> i32 {
+/// Number of `class`-colocalizing partners a object has, from the raw
+/// `{"<class_id>": [<object ids>], ...}` shape `coloc_json` stores (see
+/// `coloc_to_json` in evanalyzer_core's duckdb.rs) — keyed by the target
+/// class's numeric id, not its name. `0` if `class` never shows up as a key
+/// at all (no colocalization with that class recorded for this object).
+fn coloc_count_for_class(coloc_json: &str, class: ObjectClass) -> i32 {
     let Ok(serde_json::Value::Object(partners)) = serde_json::from_str(coloc_json) else {
         return 0;
     };
+    let key = match class {
+        ObjectClass::Valid(n) => n.to_string(),
+        ObjectClass::Unset => "unset".to_string(),
+    };
     partners
-        .values()
-        .map(|ids| ids.as_array().map_or(0, |ids| ids.len()))
-        .sum::<usize>() as i32
+        .get(&key)
+        .and_then(|v| v.as_array())
+        .map_or(0, |ids| ids.len() as i32)
 }
 
 /// One channel's stat out of the raw `{"<channel>": {"mean_raw": ..., ...},
@@ -1530,14 +1645,18 @@ fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
         Column::ObjectId
         | Column::ImageName
         | Column::ObjectClass
-        | Column::ColocCount
+        | Column::ColocCount(_)
         | Column::IntensityAvg(_)
         | Column::IntensitySum(_)
         | Column::IntensityMin(_)
         | Column::IntensityMax(_) => {
+            // No classes list handy here (this is a plain error-message
+            // helper, not a `ResultsGenerator` method) — `as_key` already
+            // falls back to the raw numeric id for `ColocCount` when it
+            // can't resolve a name, which is fine for an error message.
             return Err(InternalErrors::InvalidArgument(format!(
                 "column {} cannot be aggregated for the plate view yet",
-                column.as_key()
+                column.as_key(&[])
             )));
         }
     })

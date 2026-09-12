@@ -295,10 +295,12 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_columns_item_selected(move |key, selected| {
-                    let Some(column) = Column::from_key(key.as_str()) else {
+                    let classes = manager.classes.lock().expect("Poisened");
+                    let Some(column) = Column::from_key(key.as_str(), &classes) else {
                         warn!("Unknown column key selected: {key}");
                         return;
                     };
+                    drop(classes);
                     let mut list_filter = manager.list_filter.lock().expect("Poisened".into());
                     if selected {
                         if !list_filter.columns.contains(&column) {
@@ -348,10 +350,12 @@ impl ResultsStateController {
                         warn!("No column selected in matrix column picker");
                         return;
                     };
-                    let Some(column) = Column::from_key(item.key.as_str()) else {
+                    let classes = manager.classes.lock().expect("Poisened");
+                    let Some(column) = Column::from_key(item.key.as_str(), &classes) else {
                         warn!("Unknown matrix column key selected: {}", item.key);
                         return;
                     };
+                    drop(classes);
                     manager.update_matrix_filter(|filter| filter.column = column);
                     manager.refresh_active_matrix_view();
                 });
@@ -945,7 +949,11 @@ impl ResultsStateController {
             .iter()
             .find(|entry| entry.key == matrix_filter.column)
             .map(|entry| entry.display_name.clone())
-            .unwrap_or_else(|| matrix_filter.column.as_key());
+            .unwrap_or_else(|| {
+                matrix_filter
+                    .column
+                    .as_key(&self.classes.lock().expect("Poisened"))
+            });
         format!(
             "{} {}",
             aggregation_display_name(&matrix_filter.aggregation),
@@ -1278,7 +1286,9 @@ impl ResultsStateController {
 
     pub fn set_columns_in_slint(&self, columns: &Vec<ColumnEntry>) {
         let ui_weak = self.ui.clone();
-        let mut items = column_items(columns, |key| DEFAULT_LIST_COLUMNS.contains(key));
+        let classes = self.classes.lock().expect("Poisened");
+        let mut items = column_items(columns, &classes, |key| DEFAULT_LIST_COLUMNS.contains(key));
+        drop(classes);
         let groups = column_groups(columns);
         let summary = list_summary(
             items.iter().filter(|item| item.selected).count(),
@@ -1531,7 +1541,9 @@ impl ResultsStateController {
 
     fn select_all_columns(&self) {
         let columns = self.available_columns.lock().expect("Poisened");
-        let items = column_items(&columns, |_| true);
+        let classes = self.classes.lock().expect("Poisened");
+        let items = column_items(&columns, &classes, |_| true);
+        drop(classes);
         let total = columns.len();
         let keys = columns.iter().map(|entry| entry.key.clone()).collect();
         drop(columns);
@@ -1542,7 +1554,9 @@ impl ResultsStateController {
 
     fn select_none_columns(&self) {
         let columns = self.available_columns.lock().expect("Poisened");
-        let items = column_items(&columns, |_| false);
+        let classes = self.classes.lock().expect("Poisened");
+        let items = column_items(&columns, &classes, |_| false);
+        drop(classes);
         let total = columns.len();
         drop(columns);
         self.list_filter.lock().expect("Poisened").columns = Vec::new();
@@ -1593,12 +1607,13 @@ fn class_filter_items(object_classes: &[Class], selected: bool) -> Vec<MultiSele
 // "select all"/"select none".
 fn column_items(
     columns: &[ColumnEntry],
+    classes: &[Class],
     selected: impl Fn(&Column) -> bool,
 ) -> Vec<MultiSelectItem> {
     columns
         .iter()
         .map(|column| MultiSelectItem {
-            key: column.key.as_key().into(),
+            key: column.key.as_key(classes).into(),
             value: column.display_name.as_str().into(),
             color: Color::default(),
             group: column.group.as_str().into(),
