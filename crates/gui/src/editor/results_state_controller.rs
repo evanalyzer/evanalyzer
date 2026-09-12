@@ -4,7 +4,8 @@ use crate::{
 };
 use evanalyzer_app::result::{
     self, Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry,
-    DatabaseResult, ImageEntry, ResultsGenerator, WellFilter,
+    DatabaseResult, ImageEntry, ImageHeatmapFilter, PlateDimensions, ResultsGenerator, WellFilter,
+    WellSize,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -46,6 +47,12 @@ struct MatrixFilter {
     pub group_by_regex: String,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
+    // Per-level grid-size overrides, one of which applies depending on
+    // `matrix-level` — `None` keeps each level's own default (see
+    // `update_matrix_view`/`update_well_view`/`update_image_heatmap_view`).
+    pub plate_dimension: Option<PlateDimensions>,
+    pub well_size: Option<WellSize>,
+    pub square_size: Option<usize>,
 }
 
 pub struct ResultsStateController {
@@ -67,11 +74,18 @@ pub struct ResultsStateController {
     // Same idea as `matrix_cells`, one level down: last-rendered well-field
     // cells, by image name, for `on_well_cell_clicked`.
     well_cells: Mutex<HashMap<String, MatrixCell>>,
+    // Same idea again, one level further down: last-rendered image-heatmap
+    // tile cells, by tile key (e.g. "R0C0"), for `on_image_heatmap_cell_clicked`.
+    image_heatmap_cells: Mutex<HashMap<String, MatrixCell>>,
     // The well currently drilled into, if any — so a toolbar control change
     // (column/aggregate/class/regex/color) while at the Well level
     // refreshes that well's fields instead of the (hidden) plate grid. See
     // `refresh_active_matrix_view`.
     current_well: Mutex<Option<String>>,
+    // Same idea one level further down: the image (by `image_rel_path`)
+    // currently drilled into, if any, so a toolbar control change while at
+    // the Object level refreshes that image's heatmap.
+    current_image: Mutex<Option<String>>,
 }
 
 impl ResultsStateController {
@@ -90,7 +104,9 @@ impl ResultsStateController {
             available_columns: Mutex::new(Vec::new()),
             matrix_cells: Mutex::new(HashMap::new()),
             well_cells: Mutex::new(HashMap::new()),
+            image_heatmap_cells: Mutex::new(HashMap::new()),
             current_well: Mutex::new(None),
+            current_image: Mutex::new(None),
         }
     }
 
@@ -137,13 +153,16 @@ impl ResultsStateController {
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
                     *manager.current_well.lock().expect("Poisned") = None;
+                    *manager.current_image.lock().expect("Poisned") = None;
                 });
 
-            // Only two drill levels sit below the "All results"/"Plate"
-            // base today (see on_open_well_clicked below) — navigating to
-            // either of those base segments always means "back to the
-            // plate grid", so a length check is enough without tracking
-            // which matrix-level each breadcrumb segment represents.
+            // Three drill levels sit below the "All results"/"Plate" base
+            // today: Plate -> "Well X" -> "{image}" (see on_open_well_clicked
+            // and on_well_field_clicked below), so navigating to a breadcrumb
+            // segment either lands back on the plate grid (kept <= 2) or
+            // back on the well it names (kept == 3, re-entering whichever
+            // well was last drilled into, per the reference behavior
+            // described at the top of results_window.slint).
             let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
@@ -167,6 +186,7 @@ impl ResultsStateController {
                         state.set_active_well_has_value(false);
                         state.set_active_well_value("".into());
                         *manager.current_well.lock().expect("Poisned") = None;
+                        *manager.current_image.lock().expect("Poisned") = None;
                         return;
                     }
                     let mut breadcrumb: Vec<BreadcrumbItem> = state.get_breadcrumb().iter().collect();
@@ -179,6 +199,16 @@ impl ResultsStateController {
                         state.set_active_well_has_value(false);
                         state.set_active_well_value("".into());
                         *manager.current_well.lock().expect("Poisned") = None;
+                        *manager.current_image.lock().expect("Poisned") = None;
+                    } else if keep == 3 {
+                        state.set_matrix_level(MatrixLevel::Well);
+                        state.set_active_well("".into());
+                        state.set_active_well_has_value(false);
+                        state.set_active_well_value("".into());
+                        *manager.current_image.lock().expect("Poisned") = None;
+                        if let Some(well_id) = manager.current_well.lock().expect("Poisned").clone() {
+                            manager.update_well_view(&well_id);
+                        }
                     }
                 });
 
@@ -421,6 +451,64 @@ impl ResultsStateController {
                 });
 
             let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_plate_size_selected(move |key, selected| {
+                    if !selected {
+                        return;
+                    }
+                    let Some(dimension) = plate_dimension_from_key(key.as_str()) else {
+                        warn!("Unknown plate size selected: {key}");
+                        return;
+                    };
+                    manager.update_matrix_filter(|filter| filter.plate_dimension = dimension);
+                    manager.refresh_active_matrix_view();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_well_rows_changed(move |value| {
+                    let Ok(rows) = value.trim().parse::<usize>() else {
+                        warn!("Invalid well rows value: {value}");
+                        return;
+                    };
+                    manager.update_matrix_filter(|filter| {
+                        let mut size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+                        size.rows = rows.max(1);
+                        filter.well_size = Some(size);
+                    });
+                    manager.refresh_active_matrix_view();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_well_cols_changed(move |value| {
+                    let Ok(cols) = value.trim().parse::<usize>() else {
+                        warn!("Invalid well cols value: {value}");
+                        return;
+                    };
+                    manager.update_matrix_filter(|filter| {
+                        let mut size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+                        size.cols = cols.max(1);
+                        filter.well_size = Some(size);
+                    });
+                    manager.refresh_active_matrix_view();
+                });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_matrix_square_size_selected(move |key, selected| {
+                    if !selected {
+                        return;
+                    }
+                    let Ok(size) = key.parse::<usize>() else {
+                        warn!("Unknown square size selected: {key}");
+                        return;
+                    };
+                    manager.update_matrix_filter(|filter| filter.square_size = Some(size));
+                    manager.refresh_active_matrix_view();
+                });
+
+            let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
                 .on_plate_cell_clicked(move |key| {
@@ -459,6 +547,7 @@ impl ResultsStateController {
                         warn!("Failed to upgrade UI handle in on_open_well_clicked");
                     }
                     *manager.current_well.lock().expect("Poisned") = Some(well.to_string());
+                    *manager.current_image.lock().expect("Poisned") = None;
                     manager.update_well_view(&well);
                 });
 
@@ -481,16 +570,62 @@ impl ResultsStateController {
                     state.set_active_well_value(cell.label.clone());
                 });
 
-            // Not implemented yet (object-level image + marker rendering) —
-            // only the level switch (results_matrix.slint's `clicked`
-            // handler) and breadcrumb-back (on_breadcrumb_nav above) work
-            // so far, same as `open-well-clicked` before `get_group_by_well`
-            // existed.
+            // `well-field-clicked` fires with the clicked cell's key, which
+            // is the image *name* (see `flatten_grid_cells`'s search-key
+            // preference — `get_group_by_well`'s cells carry `(image_name,
+            // image_rel_path)`), but `get_image_heatmap` needs the
+            // `image_rel_path`. Reuses the already-loaded `images` list
+            // (populated in `open_database`) to translate one to the other,
+            // the same way `update_list_view`'s image filter does.
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
-                .on_well_field_clicked(move |image| {
-                    info!(
-                        "Open image {image} requested, but object-level data isn't wired up yet"
-                    );
+                .on_well_field_clicked(move |image_name| {
+                    let rel_path = manager
+                        .images
+                        .lock()
+                        .expect("Poisened")
+                        .iter()
+                        .find(|image| image.name == image_name.as_str())
+                        .map(|image| image.rel_path.to_string_lossy().into_owned());
+                    let Some(rel_path) = rel_path else {
+                        warn!("Unknown image clicked: {image_name}");
+                        return;
+                    };
+                    if let Some(ui_ready) = ui_weak.upgrade() {
+                        let state = ui_ready.global::<ResultsState>();
+                        let mut breadcrumb: Vec<BreadcrumbItem> =
+                            state.get_breadcrumb().iter().collect();
+                        breadcrumb.truncate(3);
+                        breadcrumb.push(BreadcrumbItem {
+                            label: image_name.clone(),
+                        });
+                        state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
+                        state.set_active_image_name(image_name);
+                    } else {
+                        warn!("Failed to upgrade UI handle in on_well_field_clicked");
+                    }
+                    *manager.current_image.lock().expect("Poisned") = Some(rel_path.clone());
+                    manager.update_image_heatmap_view(&rel_path);
+                });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>()
+                .on_image_heatmap_cell_clicked(move |key| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_image_heatmap_cell_clicked");
+                        return;
+                    };
+                    let cells = manager.image_heatmap_cells.lock().expect("Poisned");
+                    let Some(cell) = cells.get(key.as_str()) else {
+                        warn!("Unknown heatmap tile clicked: {key}");
+                        return;
+                    };
+                    let state = ui_ready.global::<ResultsState>();
+                    state.set_active_well(key);
+                    state.set_active_well_has_value(cell.has_value);
+                    state.set_active_well_value(cell.label.clone());
                 });
             ui.global::<ResultsState>()
                 .on_object_marker_clicked(move |_id| {});
@@ -562,8 +697,10 @@ impl ResultsStateController {
                 );
 
                 self.set_color_schemas_in_slint();
+                self.set_grid_size_options_in_slint();
                 *self.matrix_filter.lock().expect("Poisned") = None;
                 *self.current_well.lock().expect("Poisned") = None;
+                *self.current_image.lock().expect("Poisned") = None;
 
                 *self.list_filter.lock().expect("Poisened") = ListFilter {
                     image_rel_path: Vec::new(),
@@ -779,16 +916,19 @@ impl ResultsStateController {
             column: matrix_filter.column.clone(),
             color_schema: matrix_filter.color_schema.clone(),
             color_scale: matrix_filter.color_scale.clone(),
-            // No UI to pick a fixed plate size yet — `None` has
-            // `get_group_by_plate` auto-select the smallest standard
-            // dimensions that fit the data.
-            matrix_dimension: None,
+            // `None` (the "Auto" dropdown option) has `get_group_by_plate`
+            // auto-select the smallest standard dimensions that fit the
+            // data; otherwise the user's explicit PLATE SIZE choice.
+            matrix_dimension: matrix_filter.plate_dimension,
         };
         drop(matrix_filter_guard);
 
-        let Ok(result) = db.get_group_by_plate(&group_filter, &result::View::Heatmap) else {
-            warn!("Could not load matrix results!");
-            return;
+        let result = match db.get_group_by_plate(&group_filter, &result::View::Heatmap) {
+            Ok(result) => result,
+            Err(err) => {
+                error!("Could not load matrix results: {err}");
+                return;
+            }
         };
         self.set_matrix_in_slint(&result, value_caption, is_manual_scale);
     }
@@ -824,7 +964,12 @@ impl ResultsStateController {
             return;
         };
         let level = ui_ready.global::<ResultsState>().get_matrix_level();
-        if level == MatrixLevel::Well {
+        if level == MatrixLevel::Object {
+            if let Some(image_rel_path) = self.current_image.lock().expect("Poisned").clone() {
+                self.update_image_heatmap_view(&image_rel_path);
+                return;
+            }
+        } else if level == MatrixLevel::Well {
             if let Some(well_id) = self.current_well.lock().expect("Poisned").clone() {
                 self.update_well_view(&well_id);
                 return;
@@ -866,16 +1011,19 @@ impl ResultsStateController {
             column: matrix_filter.column.clone(),
             color_schema: matrix_filter.color_schema.clone(),
             color_scale: matrix_filter.color_scale.clone(),
-            // No UI to pick a well layout yet — `None` has
-            // `get_group_by_well` assume the common 4x4 field grid.
-            well_size: None,
+            // `None` has `get_group_by_well` assume the common 4x4 field
+            // grid; otherwise the user's explicit ROWS/COLS choice.
+            well_size: matrix_filter.well_size,
             well_order: None,
         };
         drop(matrix_filter_guard);
 
-        let Ok(result) = db.get_group_by_well(&well_filter, &result::View::Heatmap) else {
-            warn!("Could not load well results for {well_id}!");
-            return;
+        let result = match db.get_group_by_well(&well_filter, &result::View::Heatmap) {
+            Ok(result) => result,
+            Err(err) => {
+                error!("Could not load well results for {well_id}: {err}");
+                return;
+            }
         };
         self.set_well_in_slint(&result, value_caption, is_manual_scale);
     }
@@ -985,6 +1133,104 @@ impl ResultsStateController {
         .ok();
     }
 
+    // Fourth (and last) drill level: a heatmap over one image's own pixels.
+    // Reuses the current Matrix toolbar's column/aggregation/class/color
+    // settings scoped down to `image_rel_path` via
+    // `ImageHeatmapFilter::image_rel_path` — same pattern as
+    // `update_well_view` one level up.
+    fn update_image_heatmap_view(&self, image_rel_path: &str) {
+        let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
+            warn!("No database opened!");
+            return;
+        };
+
+        let plane_filter = self.plane_filter.lock().expect("Poisned");
+        let plane = result::PlaneFilter {
+            z_stack: plane_filter.selected_z_stack,
+            t_stack: plane_filter.selected_t_stack,
+        };
+        drop(plane_filter);
+
+        let matrix_filter_guard = self.matrix_filter.lock().expect("Poisned");
+        let Some(matrix_filter) = matrix_filter_guard.as_ref() else {
+            warn!("No matrix filter set, cannot open image {image_rel_path}");
+            return;
+        };
+        let value_caption = self.value_caption_for(matrix_filter);
+        let is_manual_scale = matches!(matrix_filter.color_scale, ColorScale::Manual(..));
+
+        let image_filter = ImageHeatmapFilter {
+            plane,
+            image_rel_path: image_rel_path.to_string(),
+            aggregation: matrix_filter.aggregation.clone(),
+            object_class: matrix_filter.object_classe,
+            column: matrix_filter.column.clone(),
+            color_schema: matrix_filter.color_schema.clone(),
+            color_scale: matrix_filter.color_scale.clone(),
+            // `None` has `get_image_heatmap` default to 256px tiles;
+            // otherwise the user's explicit SQUARE SIZE choice.
+            square_size: matrix_filter.square_size,
+        };
+        drop(matrix_filter_guard);
+
+        let result = match db.get_image_heatmap(&image_filter, &result::View::Heatmap) {
+            Ok(result) => result,
+            Err(err) => {
+                error!("Could not load image heatmap for {image_rel_path}: {err}");
+                return;
+            }
+        };
+        self.set_image_heatmap_in_slint(&result, value_caption, is_manual_scale);
+    }
+
+    // `result` is the image-heatmap grid `get_image_heatmap(.., View::Heatmap)`
+    // returns — same shape `set_well_in_slint` renders one level up, just
+    // into `image-heatmap-*` properties instead of `well-*`, and cached into
+    // `image_heatmap_cells` instead of `well_cells` for
+    // `on_image_heatmap_cell_clicked`.
+    pub fn set_image_heatmap_in_slint(
+        &self,
+        result: &DatabaseResult,
+        value_caption: String,
+        is_manual_scale: bool,
+    ) {
+        let ui_weak = self.ui.clone();
+        let rows = result.row_names.len() as i32;
+        let cols = result.column_names.len() as i32;
+        let range_min = result.min;
+        let range_max = result.max;
+
+        let cells = flatten_grid_cells(result);
+
+        *self.image_heatmap_cells.lock().expect("Poisned") = cells
+            .iter()
+            .map(|cell| (cell.key.to_string(), cell.clone()))
+            .collect();
+
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                // The previously selected tile (if any) belonged to the old
+                // image — hide its card until the user clicks a new one.
+                state.set_active_well("".into());
+                state.set_active_well_has_value(false);
+                state.set_active_well_value("".into());
+                state.set_active_well_caption(value_caption.into());
+                state.set_image_heatmap_rows(rows);
+                state.set_image_heatmap_cols(cols);
+                state.set_image_heatmap_min(range_min);
+                state.set_image_heatmap_max(range_max);
+                state.set_image_heatmap_cells(ModelRc::from(Rc::new(VecModel::from(cells))));
+                state.set_matrix_scale_is_manual(is_manual_scale);
+            } else {
+                warn!(
+                    "Failed to upgrade UI handle in set_image_heatmap_in_slint, cannot update image heatmap view!"
+                );
+            }
+        })
+        .ok();
+    }
+
     pub fn set_max_z_and_t_stack_in_slint(&self, t_stack_max: u32, z_stack_max: u32) {
         let ui_weak = self.ui.clone();
         slint::invoke_from_event_loop(move || {
@@ -1080,6 +1326,45 @@ impl ResultsStateController {
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_color_schemas_in_slint, cannot update color schema options!"
+                );
+            }
+        })
+        .ok();
+    }
+
+    // Initial population for the three per-level grid-size dropdowns/inputs
+    // (see the comment on `ResultsState.matrix-plate-size-items`) — called
+    // once at `open_database`, mirroring `set_color_schemas_in_slint`.
+    pub fn set_grid_size_options_in_slint(&self) {
+        let ui_weak = self.ui.clone();
+        let plate_items = plate_size_items(None);
+        let plate_summary = plate_items
+            .iter()
+            .find(|item| item.selected)
+            .map(|item| item.value.clone())
+            .unwrap_or_default();
+        let square_items = square_size_items(DEFAULT_SQUARE_SIZE);
+        let square_summary = square_items
+            .iter()
+            .find(|item| item.selected)
+            .map(|item| item.value.clone())
+            .unwrap_or_default();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_matrix_plate_size_items(ModelRc::from(Rc::new(VecModel::from(
+                    plate_items,
+                ))));
+                state.set_matrix_plate_size_summary(plate_summary);
+                state.set_matrix_square_size_items(ModelRc::from(Rc::new(VecModel::from(
+                    square_items,
+                ))));
+                state.set_matrix_square_size_summary(square_summary);
+                state.set_matrix_well_rows(4);
+                state.set_matrix_well_cols(4);
+            } else {
+                warn!(
+                    "Failed to upgrade UI handle in set_grid_size_options_in_slint, cannot update grid size options!"
                 );
             }
         })
@@ -1372,6 +1657,65 @@ fn color_schema_from_key(key: &str) -> Option<ColorSchema> {
         .into_iter()
         .find(|(name, _)| *name == key)
         .map(|(_, schema)| schema)
+}
+
+// PLATE SIZE dropdown vocabulary: "Auto" (`None`, `get_group_by_plate`
+// auto-selects the smallest standard format that fits the data — see
+// `best_matching_dimensions`) followed by every standard microplate well
+// count `PlateDimensions` supports, smallest first.
+fn plate_dimensions() -> [(&'static str, Option<PlateDimensions>); 8] {
+    [
+        ("Auto", None),
+        ("6-well (2x3)", Some(PlateDimensions::PLate2x3)),
+        ("12-well (3x4)", Some(PlateDimensions::Plate3x4)),
+        ("24-well (4x6)", Some(PlateDimensions::Plate4x6)),
+        ("48-well (6x8)", Some(PlateDimensions::Plate6x8)),
+        ("96-well (8x12)", Some(PlateDimensions::Plate8x12)),
+        ("384-well (16x24)", Some(PlateDimensions::Plate16x24)),
+        ("1536-well (32x48)", Some(PlateDimensions::Plate32x48)),
+    ]
+}
+
+fn plate_size_items(selected: Option<PlateDimensions>) -> Vec<MultiSelectItem> {
+    plate_dimensions()
+        .into_iter()
+        .map(|(name, dimension)| MultiSelectItem {
+            key: name.into(),
+            value: name.into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: dimension == selected,
+        })
+        .collect()
+}
+
+// Returns `Some(dimension)` for a recognized key — note this is
+// `Option<Option<PlateDimensions>>`: the outer `Option` is "was `key`
+// recognized at all", the inner one is the dropdown item's own meaning
+// ("Auto" -> `None`, an explicit size -> `Some(_)`).
+fn plate_dimension_from_key(key: &str) -> Option<Option<PlateDimensions>> {
+    plate_dimensions()
+        .into_iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, dimension)| dimension)
+}
+
+// SQUARE SIZE dropdown vocabulary for the image heatmap — matches
+// `ImageHeatmapFilter::square_size`'s own default (see `get_image_heatmap`).
+const SQUARE_SIZES: [usize; 6] = [36, 48, 64, 128, 256, 1024];
+const DEFAULT_SQUARE_SIZE: usize = 256;
+
+fn square_size_items(selected: usize) -> Vec<MultiSelectItem> {
+    SQUARE_SIZES
+        .iter()
+        .map(|size| MultiSelectItem {
+            key: size.to_string().into(),
+            value: format!("{size} px").into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: *size == selected,
+        })
+        .collect()
 }
 
 fn image_items(images: &[ImageEntry], selected: bool) -> Vec<MultiSelectItem> {

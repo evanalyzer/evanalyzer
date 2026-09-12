@@ -9,6 +9,7 @@ pub use results_generator::Column;
 pub use results_generator::ColumnEntry;
 pub use results_generator::DatabaseResult;
 pub use results_generator::ImageEntry;
+pub use results_generator::ImageHeatmapFilter;
 pub use results_generator::ListFilter;
 pub use results_generator::Pagination;
 pub use results_generator::PlaneFilter;

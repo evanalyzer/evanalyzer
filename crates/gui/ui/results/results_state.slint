@@ -213,9 +213,38 @@ export global ResultsState {
     in-out property <int> well-cols: 4;
     in-out property <float> well-min: 0;
     in-out property <float> well-max: 0;
+    // Third drill level: a heatmap of square-binned tiles over one image
+    // (`get_image_heatmap`/`ImageHeatmapGrid`) — same shape as `well-*` one
+    // level up, driven by `ImageHeatmapFilter::square_size` instead of
+    // `WellFilter::well_size`.
+    in-out property <[MatrixCell]> image-heatmap-cells: [];
+    in-out property <int> image-heatmap-rows: 4;
+    in-out property <int> image-heatmap-cols: 4;
+    in-out property <float> image-heatmap-min: 0;
+    in-out property <float> image-heatmap-max: 0;
     in-out property <string> active-field: "";
     in-out property <[ObjectMarker]> object-markers: [];
     in-out property <string> active-image-name: "";
+
+    // -- Per-level grid-size controls, one shown in the sidebar per
+    // `matrix-level` (see results_matrix.slint) --
+    // Plate: which standard microplate format to lay the grid out as.
+    // "Auto" (the default item) picks the smallest one that fits the data —
+    // see `best_matching_dimensions` in results_generator.rs.
+    in-out property <[MultiSelectItem]> matrix-plate-size-items: [];
+    in-out property <string> matrix-plate-size-summary: "Auto";
+    callback matrix-plate-size-selected(string, bool);
+    // Well: field grid dimensions (`WellFilter::well_size`).
+    in-out property <int> matrix-well-rows: 4;
+    in-out property <int> matrix-well-cols: 4;
+    callback matrix-well-rows-changed(string);
+    callback matrix-well-cols-changed(string);
+    // Object (image heatmap): tile size in pixels
+    // (`ImageHeatmapFilter::square_size`).
+    in-out property <[MultiSelectItem]> matrix-square-size-items: [];
+    in-out property <string> matrix-square-size-summary: "256 px";
+    callback matrix-square-size-selected(string, bool);
+
     callback matrix-value-clicked();
     callback matrix-aggregate-selected(string);
     callback matrix-class-selected(string, bool);
@@ -225,6 +254,7 @@ export global ResultsState {
     callback open-well-clicked(string);
     callback well-cell-clicked(string);
     callback well-field-clicked(string);
+    callback image-heatmap-cell-clicked(string);
     callback object-marker-clicked(int);
     callback matrix-back-to-plate();
     callback matrix-back-to-well();

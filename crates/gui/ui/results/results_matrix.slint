@@ -163,7 +163,32 @@ component WellGrid inherits Rectangle {
     }
 }
 
-// -- Level 3: single image + object markers ----------------------------------
+// -- Level 3: image heatmap (square-binned tiles of one image) ---------------
+// Identical structure to WellGrid one level up — same MatrixCellView tiles,
+// same row/col loop sized from the real result (`image-heatmap-rows`/
+// `image-heatmap-cols`, from `ImageHeatmapFilter::square_size`).
+component ImageHeatmapGrid inherits Rectangle {
+    padding: 20px;
+
+    VerticalLayout {
+        spacing: 4px;
+        for r in ResultsState.image-heatmap-rows: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 4px;
+
+            for c in ResultsState.image-heatmap-cols: MatrixCellView {
+                horizontal-stretch: 1;
+                cell: ResultsState.image-heatmap-cells[r * ResultsState.image-heatmap-cols + c];
+                range-min: ResultsState.image-heatmap-min;
+                range-max: ResultsState.image-heatmap-max;
+                selected: self.cell.has-value && self.cell.key == ResultsState.active-well;
+                clicked => { ResultsState.image-heatmap-cell-clicked(self.cell.key); }
+            }
+        }
+    }
+}
+
+// -- Unused today: single image + object markers ------------------------------
 component ObjectImage inherits Rectangle {
     background: #08090B;
     border-radius: Theme.radius-md;
@@ -212,12 +237,12 @@ export component ResultsMatrixView inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        // -- Toolbar: shared by the Plate and Well levels (both grids
-        // aggregate per-object values the same way, just scoped to the
-        // whole plate vs. one well — see `get_group_by_plate`/
-        // `get_group_by_well`), hidden only at the Object level, which
-        // shows a single image rather than an aggregated grid.
-        if ResultsState.matrix-level != MatrixLevel.object: Rectangle {
+        // -- Toolbar: shared by all three drill levels — Plate, Well and
+        // Object (the image heatmap) all aggregate per-object values the
+        // same way, just scoped to the whole plate vs. one well vs. one
+        // image — see `get_group_by_plate`/`get_group_by_well`/
+        // `get_image_heatmap`.
+        Rectangle {
             height: 54px;
             HorizontalLayout {
                 padding-left: 16px;
@@ -339,17 +364,11 @@ export component ResultsMatrixView inherits Rectangle {
             if ResultsState.matrix-level == MatrixLevel.well: WellGrid {
                 horizontal-stretch: 1;
             }
-            if ResultsState.matrix-level == MatrixLevel.object: Rectangle {
+            if ResultsState.matrix-level == MatrixLevel.object: ImageHeatmapGrid {
                 horizontal-stretch: 1;
-                ObjectImage {
-                    x: 16px;
-                    y: 16px;
-                    width: parent.width - 32px;
-                    height: parent.height - 32px;
-                }
             }
 
-            if ResultsState.matrix-level != MatrixLevel.object: Rectangle {
+            Rectangle {
                 width: 200px;
                 Rectangle {
                     x: 0;
@@ -368,8 +387,8 @@ export component ResultsMatrixView inherits Rectangle {
                         // level reuses the Plate toolbar above), so its
                         // label is the same regardless of which is showing.
                         value-label: ResultsState.matrix-column-summary;
-                        min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : ResultsState.well-min;
-                        max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : ResultsState.well-max;
+                        min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : (ResultsState.matrix-level == MatrixLevel.well ? ResultsState.well-min : ResultsState.image-heatmap-min);
+                        max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : (ResultsState.matrix-level == MatrixLevel.well ? ResultsState.well-max : ResultsState.image-heatmap-max);
                         gradient-stops: ResultsState.matrix-color-scale-stops;
                         editable: true;
                         is-manual: ResultsState.matrix-scale-is-manual;
@@ -377,13 +396,108 @@ export component ResultsMatrixView inherits Rectangle {
                         set-manual(min, max) => { ResultsState.matrix-scale-set-manual(min, max); }
                     }
 
-                    // Selected-cell detail card — same card at both the
-                    // Plate and Well levels (see the comment on
-                    // `ResultsState.active-well`): filled in by
-                    // `on_plate_cell_clicked`/`on_well_cell_clicked`
+                    // Per-level grid-size control: which one shows depends
+                    // on which grid is on screen (see the comment on
+                    // `ResultsState.matrix-plate-size-items`).
+                    if ResultsState.matrix-level == MatrixLevel.plate: MultiSelectDropdown {
+                        label: "PLATE SIZE";
+                        summary-text: ResultsState.matrix-plate-size-summary;
+                        items <=> ResultsState.matrix-plate-size-items;
+                        multi-select: false;
+                        item-selected(key, value, selected) => {
+                            ResultsState.matrix-plate-size-summary = value;
+                            ResultsState.matrix-plate-size-selected(key, selected);
+                        }
+                    }
+
+                    if ResultsState.matrix-level == MatrixLevel.well: HorizontalLayout {
+                        spacing: 8px;
+
+                        VerticalLayout {
+                            spacing: 4px;
+                            horizontal-stretch: 1;
+
+                            Text {
+                                text: "ROWS";
+                                font-size: 9px;
+                                letter-spacing: 0.4px;
+                                color: Theme.text-mute;
+                            }
+
+                            Rectangle {
+                                height: 26px;
+                                border-radius: Theme.radius-sm;
+                                background: Theme.raised;
+                                border-width: 1px;
+                                border-color: well-rows-input.has-focus ? Theme.accent : Theme.border-soft;
+
+                                well-rows-input := TextInput {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    height: parent.height;
+                                    text: ResultsState.matrix-well-rows;
+                                    input-type: number;
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    edited => { ResultsState.matrix-well-rows-changed(self.text); }
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 4px;
+                            horizontal-stretch: 1;
+
+                            Text {
+                                text: "COLS";
+                                font-size: 9px;
+                                letter-spacing: 0.4px;
+                                color: Theme.text-mute;
+                            }
+
+                            Rectangle {
+                                height: 26px;
+                                border-radius: Theme.radius-sm;
+                                background: Theme.raised;
+                                border-width: 1px;
+                                border-color: well-cols-input.has-focus ? Theme.accent : Theme.border-soft;
+
+                                well-cols-input := TextInput {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    height: parent.height;
+                                    text: ResultsState.matrix-well-cols;
+                                    input-type: number;
+                                    font-size: 11px;
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    edited => { ResultsState.matrix-well-cols-changed(self.text); }
+                                }
+                            }
+                        }
+                    }
+
+                    if ResultsState.matrix-level == MatrixLevel.object: MultiSelectDropdown {
+                        label: "SQUARE SIZE";
+                        summary-text: ResultsState.matrix-square-size-summary;
+                        items <=> ResultsState.matrix-square-size-items;
+                        multi-select: false;
+                        item-selected(key, value, selected) => {
+                            ResultsState.matrix-square-size-summary = value;
+                            ResultsState.matrix-square-size-selected(key, selected);
+                        }
+                    }
+
+                    // Selected-cell detail card — same card at every drill
+                    // level (see the comment on `ResultsState.active-well`):
+                    // filled in by `on_plate_cell_clicked`/
+                    // `on_well_cell_clicked`/`on_image_heatmap_cell_clicked`
                     // (results_state_controller.rs) when a cell is clicked,
                     // hidden until then.
-                    if ResultsState.matrix-level != MatrixLevel.object && ResultsState.active-well != "": Rectangle {
+                    if ResultsState.active-well != "": Rectangle {
                         border-radius: Theme.radius-md;
                         background: Theme.raised;
                         border-width: 1px;
@@ -395,7 +509,7 @@ export component ResultsMatrixView inherits Rectangle {
                             alignment: start;
 
                             Text {
-                                text: (ResultsState.matrix-level == MatrixLevel.plate ? "WELL " : "IMAGE ") + ResultsState.active-well;
+                                text: (ResultsState.matrix-level == MatrixLevel.plate ? "WELL " : (ResultsState.matrix-level == MatrixLevel.well ? "IMAGE " : "TILE ")) + ResultsState.active-well;
                                 font-size: 9px;
                                 letter-spacing: 0.4px;
                                 color: Theme.text-mute;
@@ -416,12 +530,16 @@ export component ResultsMatrixView inherits Rectangle {
                                 overflow: elide;
                             }
 
-                            Rectangle {
+                            // No further drill level exists below the image
+                            // heatmap, so there's nothing for this button to
+                            // open once a tile (rather than a well/field) is
+                            // selected.
+                            if ResultsState.matrix-level != MatrixLevel.object: Rectangle {
                                 height: 1px;
                                 background: Theme.border-soft;
                             }
 
-                            AppButton {
+                            if ResultsState.matrix-level != MatrixLevel.object: AppButton {
                                 text: ResultsState.matrix-level == MatrixLevel.plate ? "Open well ›" : "Open Image ›";
                                 height: 30px;
                                 enabled: ResultsState.active-well-has-value;
