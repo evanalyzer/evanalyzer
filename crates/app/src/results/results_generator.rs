@@ -236,6 +236,8 @@ pub struct Cell {
     pub value: CellValue,
     /// Cell background color
     pub bg_color: u32,
+    /// Optional search (display name, key) (Group name of plate and image_rel_path in well view)
+    pub search_key: Option<(String, String)>,
 }
 
 pub struct ColumnEntry {
@@ -616,14 +618,20 @@ impl ResultsGenerator {
                 let rows = groups
                     .into_iter()
                     .map(|(key, value)| {
+                        // `key` is the group/well id (e.g. "A1") itself, so
+                        // it's its own search key — used by the GUI to
+                        // navigate into that group/well.
+                        let search_key = Some((key.clone(), key.clone()));
                         vec![
                             Cell {
                                 value: CellValue::String(key),
                                 bg_color: 0,
+                                search_key: search_key.clone(),
                             },
                             Cell {
                                 value: CellValue::Float(value.unwrap_or(0.0) as f32),
                                 bg_color: 0,
+                                search_key,
                             },
                         ]
                     })
@@ -641,8 +649,10 @@ impl ResultsGenerator {
                 // "A"/"1" out of well id "A1") are the grid's two axes here,
                 // unlike `View::List` which only needed the full group key
                 // (capture group 1).
-                let cells: Vec<(String, String, Option<f64>)> = stmt
-                    .query_map([], |row| Ok((row.get(1)?, row.get(2)?, row.get(3)?)))
+                let cells: Vec<(String, String, String, Option<f64>)> = stmt
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })
                     .map_err(err)?
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(err)?;
@@ -652,11 +662,12 @@ impl ResultsGenerator {
                 // grid always lines up with a real plate's row/column
                 // numbering (see `matrix_dimension` below) instead of
                 // silently compressing when a row or column has no objects
-                // at all.
-                let mut values: HashMap<(usize, usize), f64> = HashMap::new();
+                // at all. `group_prefix` (e.g. "A1") rides along per cell so
+                // it can be returned as `Cell::search_key` below.
+                let mut values: HashMap<(usize, usize), (f64, String)> = HashMap::new();
                 let mut max_row = None;
                 let mut max_col = None;
-                for (row, col, value) in &cells {
+                for (group_prefix, row, col, value) in &cells {
                     let (Some(row), Some(col)) =
                         (row_letter_to_index(row), col_number_to_index(col))
                     else {
@@ -665,7 +676,7 @@ impl ResultsGenerator {
                     max_row = Some(max_row.map_or(row, |m: usize| m.max(row)));
                     max_col = Some(max_col.map_or(col, |m: usize| m.max(col)));
                     if let Some(value) = value {
-                        values.insert((row, col), *value);
+                        values.insert((row, col), (*value, group_prefix.clone()));
                     }
                 }
 
@@ -684,7 +695,7 @@ impl ResultsGenerator {
                     ColorScale::Auto => {
                         let mut min = f64::INFINITY;
                         let mut max = f64::NEG_INFINITY;
-                        for value in values.values() {
+                        for (value, _) in values.values() {
                             min = min.min(*value);
                             max = max.max(*value);
                         }
@@ -700,7 +711,7 @@ impl ResultsGenerator {
                     .map(|row| {
                         (0..cols)
                             .map(|col| match values.get(&(row, col)) {
-                                Some(value) => Cell {
+                                Some((value, group_prefix)) => Cell {
                                     value: CellValue::Float(*value as f32),
                                     bg_color: value_to_color(
                                         *value,
@@ -708,6 +719,7 @@ impl ResultsGenerator {
                                         range_max,
                                         &filter.color_schema,
                                     ),
+                                    search_key: Some((group_prefix.clone(), group_prefix.clone())),
                                 },
                                 // No object matched this well at all — leave
                                 // it empty rather than showing a misleading 0
@@ -715,6 +727,7 @@ impl ResultsGenerator {
                                 None => Cell {
                                     value: CellValue::Empty,
                                     bg_color: 0,
+                                    search_key: None,
                                 },
                             })
                             .collect()
@@ -784,16 +797,25 @@ impl ResultsGenerator {
         let sql = format!(
             "SELECT\n\
                 regexp_extract(image_name, '{regex}', 4) AS idx,\n\
+                image_rel_path,\n\
+                image_name,\n\
                 {agg_fn}({value_expr}) AS value\n\
              FROM objects\n\
              {where_clause}\n\
-             GROUP BY idx\n\
+             GROUP BY idx, image_rel_path, image_name\n\
              ORDER BY idx"
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let fields: Vec<(String, Option<f64>)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        // (idx, image_rel_path, image_name, value) — `image_rel_path` and
+        // `image_name` are carried through into `Cell::search_key` on every
+        // cell for this field so the GUI can select/open the underlying
+        // image from a well-view tile (see `ImageEntry`, which the GUI
+        // matches images against by `rel_path`).
+        let fields: Vec<(String, String, String, Option<f64>)> = stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
@@ -802,7 +824,7 @@ impl ResultsGenerator {
             View::List => {
                 let mut min = f64::INFINITY;
                 let mut max = f64::NEG_INFINITY;
-                for (_, value) in &fields {
+                for (_, _, _, value) in &fields {
                     if let Some(value) = value {
                         min = min.min(*value);
                         max = max.max(*value);
@@ -814,18 +836,21 @@ impl ResultsGenerator {
                 }
 
                 let column_names = vec!["field".to_string(), filter.column.as_key()];
-                let row_names = fields.iter().map(|(key, _)| key.clone()).collect();
+                let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
                 let rows = fields
                     .into_iter()
-                    .map(|(key, value)| {
+                    .map(|(idx, image_rel_path, image_name, value)| {
+                        let search_key = Some((image_name, image_rel_path));
                         vec![
                             Cell {
-                                value: CellValue::String(key),
+                                value: CellValue::String(idx),
                                 bg_color: 0,
+                                search_key: search_key.clone(),
                             },
                             Cell {
                                 value: CellValue::Float(value.unwrap_or(0.0) as f32),
                                 bg_color: 0,
+                                search_key,
                             },
                         ]
                     })
@@ -850,8 +875,8 @@ impl ResultsGenerator {
                 let well_size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
                 let (rows, cols) = (well_size.rows, well_size.cols);
 
-                let mut values: HashMap<usize, f64> = HashMap::new();
-                for (idx_str, value) in &fields {
+                let mut values: HashMap<usize, (f64, String, String)> = HashMap::new();
+                for (idx_str, image_rel_path, image_name, value) in &fields {
                     let Ok(idx) = idx_str.parse::<u32>() else {
                         continue;
                     };
@@ -863,7 +888,10 @@ impl ResultsGenerator {
                         continue;
                     };
                     if let Some(value) = value {
-                        values.insert(position, *value);
+                        values.insert(
+                            position,
+                            (*value, image_name.clone(), image_rel_path.clone()),
+                        );
                     }
                 }
 
@@ -872,7 +900,7 @@ impl ResultsGenerator {
                     ColorScale::Auto => {
                         let mut min = f64::INFINITY;
                         let mut max = f64::NEG_INFINITY;
-                        for value in values.values() {
+                        for (value, ..) in values.values() {
                             min = min.min(*value);
                             max = max.max(*value);
                         }
@@ -888,7 +916,7 @@ impl ResultsGenerator {
                     .map(|row| {
                         (0..cols)
                             .map(|col| match values.get(&(row * cols + col)) {
-                                Some(value) => Cell {
+                                Some((value, image_name, image_rel_path)) => Cell {
                                     value: CellValue::Float(*value as f32),
                                     bg_color: value_to_color(
                                         *value,
@@ -896,6 +924,7 @@ impl ResultsGenerator {
                                         range_max,
                                         &filter.color_schema,
                                     ),
+                                    search_key: Some((image_name.clone(), image_rel_path.clone())),
                                 },
                                 // No field occupies this grid position —
                                 // leave it empty rather than showing a
@@ -903,6 +932,7 @@ impl ResultsGenerator {
                                 None => Cell {
                                     value: CellValue::Empty,
                                     bg_color: 0,
+                                    search_key: None,
                                 },
                             })
                             .collect()
@@ -1154,6 +1184,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
     let no_bg = Cell {
         value: CellValue::String(String::new()),
         bg_color: 0,
+        search_key: None,
     };
     match column {
         Column::ObjectId => Cell {
@@ -1179,6 +1210,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             Cell {
                 value: CellValue::Class((label, color)),
                 bg_color: color,
+                search_key: None,
             }
         }
         Column::AreaSizePx => Cell {
