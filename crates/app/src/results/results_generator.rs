@@ -1628,11 +1628,14 @@ fn intensity_stat(intensities_json: &str, channel: u32, stat: &str) -> f32 {
 }
 
 /// SQL scalar expression for a `Column`, to be wrapped in an aggregate
-/// function by `get_group_by_plate`. Only plain numeric `objects` columns are
-/// supported so far — `ColocCount` and the per-channel intensity columns need
-/// their own JSON-extraction SQL (see `coloc_count`/`intensity_stat`, which
-/// only handle this per-row in Rust today, not as a groupable SQL
-/// expression), left for a follow-up.
+/// function by `get_group_by_plate`/`get_group_by_well`/`get_image_heatmap`.
+/// Plain numeric `objects` columns are a direct column reference;
+/// `ColocCount` is a `json_array_length` extraction (see
+/// `coloc_count_for_class`, which does the same lookup per-row in Rust for
+/// `get_list`). The per-channel intensity columns still need their own
+/// JSON-extraction SQL (see `intensity_stat`, which — like `coloc_count_for_class`
+/// before this — only handles this per-row in Rust today, not as a groupable
+/// SQL expression), left for a follow-up.
 fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
     Ok(match column {
         Column::AreaSizePx => "area_px".to_string(),
@@ -1642,10 +1645,19 @@ fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
         Column::Circularity => "circularity".to_string(),
         Column::Solidity => "solidity".to_string(),
         Column::Eccentricity => "eccentricity".to_string(),
+        // Same shape as `coloc_partner_count_expr` in evanalyzer_core's
+        // duckdb.rs: `coloc_json` is a native `JSON` column, keyed by class
+        // id (see `coloc_to_json`), so `->` always receives well-formed
+        // JSON — no string-literal-cast guard needed here.
+        Column::ColocCount(ObjectClass::Valid(class_id)) => {
+            format!("COALESCE(json_array_length(coloc_json -> '{class_id}'), 0)")
+        }
+        Column::ColocCount(ObjectClass::Unset) => {
+            "COALESCE(json_array_length(coloc_json -> 'unset'), 0)".to_string()
+        }
         Column::ObjectId
         | Column::ImageName
         | Column::ObjectClass
-        | Column::ColocCount(_)
         | Column::IntensityAvg(_)
         | Column::IntensitySum(_)
         | Column::IntensityMin(_)
