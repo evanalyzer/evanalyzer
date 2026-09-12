@@ -37,6 +37,7 @@ struct ListFilter {
     pub image_rel_path: Vec<PathBuf>,
     pub object_classes: Vec<ObjectClass>,
     pub columns: Vec<Column>,
+    pub with_coloc_details: bool,
 }
 
 #[derive(Default)]
@@ -321,6 +322,13 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_columns_select_none(move || manager.select_none_columns());
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_with_coloc_details_changed(move |enabled| {
+                    manager.list_filter.lock().expect("Poisened").with_coloc_details = enabled;
+                    manager.refresh_list();
+                });
 
             let manager = self.clone();
             ui.global::<ResultsState>().on_list_next_page(move || {
@@ -646,12 +654,6 @@ impl ResultsStateController {
             ui.global::<ResultsState>()
                 .on_chart_class_selected(move |_key, _selected| {});
 
-            // -- Colocalization --
-            ui.global::<ResultsState>()
-                .on_coloc_object_selected(move |_id| {});
-            ui.global::<ResultsState>()
-                .on_coloc_property_toggled(move |_property| {});
-
             // -- Export --
             ui.global::<ResultsState>()
                 .on_export_dialog_open(move || {});
@@ -710,7 +712,21 @@ impl ResultsStateController {
                     image_rel_path: Vec::new(),
                     object_classes: default_object_classes,
                     columns: DEFAULT_LIST_COLUMNS.to_vec(),
+                    with_coloc_details: false,
                 };
+                let ui_weak = self.ui.clone();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(ui_ready) = ui_weak.upgrade() {
+                        ui_ready
+                            .global::<ResultsState>()
+                            .set_list_with_coloc_details(false);
+                    } else {
+                        warn!(
+                            "Failed to upgrade UI handle in open_database, cannot reset the coloc-details toggle!"
+                        );
+                    }
+                })
+                .ok();
 
                 self.show_results_window();
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
@@ -798,6 +814,7 @@ impl ResultsStateController {
             Some(list_filter.object_classes.clone())
         };
         let columns = list_filter.columns.clone();
+        let with_coloc_details = list_filter.with_coloc_details;
         drop(list_filter);
 
         let page = *self.list_page.lock().expect("Poisned") as usize;
@@ -815,7 +832,7 @@ impl ResultsStateController {
                 images,
                 object_classes,
                 columns,
-                with_coloc_details: false,
+                with_coloc_details,
                 page: result::Pagination {
                     limit: LIST_PAGE_SIZE,
                     after: cursor,
@@ -857,7 +874,14 @@ impl ResultsStateController {
         // A full page doesn't prove another page exists, but it's the only
         // signal we have without a separate COUNT(*) query — good enough to
         // gate the Next button until real pagination metadata exists.
-        let has_next_page = row_count == LIST_PAGE_SIZE;
+        // Compared against `source_object_count` (how many source rows the
+        // page's query actually matched), not `rows.len()`/`row_count`:
+        // `ListFilter::with_coloc_details` fan-out (see
+        // `build_coloc_detail_rows` in results_generator.rs) can multiply
+        // `rows.len()` past `LIST_PAGE_SIZE` even on the last page, or leave
+        // it under `LIST_PAGE_SIZE` on a full page of objects with no
+        // partners — only the source count means what this check needs.
+        let has_next_page = result.source_object_count as i32 == LIST_PAGE_SIZE;
         // Plain, `Send`-safe data only: the `ModelRc`s that `ResultRow` and
         // the table properties need are `Rc`-based and can't cross the
         // `invoke_from_event_loop` closure boundary, so they're built below

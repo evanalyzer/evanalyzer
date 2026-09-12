@@ -2,7 +2,7 @@
 // left icon rail, breadcrumb bar (with the global Z/T plane stepper docked
 // on its right, per-spec: Z/T is a global filter, visible in every view),
 // legend bar, and small pill/chip primitives reused across List/Matrix/
-// Charts/Coloc.
+// Charts.
 
 import { VerticalBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
@@ -14,7 +14,7 @@ import {
     BreadcrumbItem,
 } from "results_state.slint";
 
-// -- Left icon rail: List / Matrix / Charts / Coloc + Export at the bottom.
+// -- Left icon rail: List / Matrix / Charts + Export at the bottom.
 // Reuses the same NavIconLeft button + panel styling as the main window's
 // SidebarLeft (components/navicon_left.slint) instead of a bespoke button.
 export component ResultsRail inherits Rectangle {
@@ -48,13 +48,6 @@ export component ResultsRail inherits Rectangle {
             label: "Charts";
             active: ResultsState.rail-mode == ResultsRailMode.charts;
             clicked => { ResultsState.rail-mode = ResultsRailMode.charts; ResultsState.rail-mode-selected(ResultsRailMode.charts); }
-        }
-
-        NavIconLeft {
-            icon: @image-url("../icons/regular-black/intersect-three.svg");
-            label: "Coloc";
-            active: ResultsState.rail-mode == ResultsRailMode.coloc;
-            clicked => { ResultsState.rail-mode = ResultsRailMode.coloc; ResultsState.rail-mode-selected(ResultsRailMode.coloc); }
         }
 
         Rectangle {

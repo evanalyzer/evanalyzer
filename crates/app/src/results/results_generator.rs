@@ -301,6 +301,14 @@ pub struct DatabaseResult {
     pub rows: Vec<Vec<Cell>>,
     pub min: f32,
     pub max: f32,
+    /// How many source rows this page's query actually matched, before
+    /// `ListFilter::with_coloc_details` fan-out can multiply that into more
+    /// `rows` than were fetched (see `build_coloc_detail_rows`) — pagination
+    /// (`has_next_page`) must compare this, not `rows.len()`, against the
+    /// page size, or a fanned-out page reads as "last page" or "more pages"
+    /// independently of whether more source rows actually exist. Equal to
+    /// `rows.len()` everywhere fan-out doesn't apply.
+    pub source_object_count: usize,
 }
 
 impl ResultsGenerator {
@@ -372,6 +380,7 @@ impl ResultsGenerator {
             rows: vec![],
             min: 0.0,
             max: 0.0,
+            source_object_count: 0,
         };
 
         // `ListFilter.images` carries the rel-paths the GUI's image picker
@@ -535,6 +544,7 @@ impl ResultsGenerator {
             rows,
             min: 0.0,
             max: 0.0,
+            source_object_count: objects.len(),
         })
     }
 
@@ -725,7 +735,7 @@ impl ResultsGenerator {
 
                 let column_names = vec!["group".to_string(), filter.column.as_key(&classes)];
                 let row_names = groups.iter().map(|(key, _)| key.clone()).collect();
-                let rows = groups
+                let rows: Vec<Vec<Cell>> = groups
                     .into_iter()
                     .map(|(key, value)| {
                         // `key` is the group/well id (e.g. "A1") itself, so
@@ -746,12 +756,14 @@ impl ResultsGenerator {
                         ]
                     })
                     .collect();
+                let source_object_count = rows.len();
                 Ok(DatabaseResult {
                     column_names,
                     row_names,
                     rows,
                     min: min as f32,
                     max: max as f32,
+                    source_object_count,
                 })
             }
             View::Heatmap => {
@@ -817,7 +829,7 @@ impl ResultsGenerator {
                     }
                 };
 
-                let grid_rows = (0..rows)
+                let grid_rows: Vec<Vec<Cell>> = (0..rows)
                     .map(|row| {
                         (0..cols)
                             .map(|col| match values.get(&(row, col)) {
@@ -844,6 +856,7 @@ impl ResultsGenerator {
                     })
                     .collect();
 
+                let source_object_count = grid_rows.len();
                 Ok(DatabaseResult {
                     column_names: (1..=cols).map(|col| col.to_string()).collect(),
                     row_names: (0..rows).map(row_index_to_letter).collect(),
@@ -854,6 +867,7 @@ impl ResultsGenerator {
                     // with) it from the returned cells.
                     min: range_min as f32,
                     max: range_max as f32,
+                    source_object_count,
                 })
             }
         }
@@ -948,7 +962,7 @@ impl ResultsGenerator {
 
                 let column_names = vec!["field".to_string(), filter.column.as_key(&classes)];
                 let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
-                let rows = fields
+                let rows: Vec<Vec<Cell>> = fields
                     .into_iter()
                     .map(|(idx, image_rel_path, image_name, value)| {
                         let search_key = Some((image_name, image_rel_path));
@@ -966,12 +980,14 @@ impl ResultsGenerator {
                         ]
                     })
                     .collect();
+                let source_object_count = rows.len();
                 Ok(DatabaseResult {
                     column_names,
                     row_names,
                     rows,
                     min: min as f32,
                     max: max as f32,
+                    source_object_count,
                 })
             }
             View::Heatmap => {
@@ -1023,7 +1039,7 @@ impl ResultsGenerator {
                     }
                 };
 
-                let grid_rows = (0..rows)
+                let grid_rows: Vec<Vec<Cell>> = (0..rows)
                     .map(|row| {
                         (0..cols)
                             .map(|col| match values.get(&(row * cols + col)) {
@@ -1050,12 +1066,14 @@ impl ResultsGenerator {
                     })
                     .collect();
 
+                let source_object_count = grid_rows.len();
                 Ok(DatabaseResult {
                     column_names: (1..=cols).map(|col| col.to_string()).collect(),
                     row_names: (1..=rows).map(|row| row.to_string()).collect(),
                     rows: grid_rows,
                     min: range_min as f32,
                     max: range_max as f32,
+                    source_object_count,
                 })
             }
         }
@@ -1164,7 +1182,7 @@ impl ResultsGenerator {
                     .iter()
                     .map(|((row, col), _)| format!("R{row}C{col}"))
                     .collect();
-                let rows_out = sorted
+                let rows_out: Vec<Vec<Cell>> = sorted
                     .into_iter()
                     .map(|((row, col), value)| {
                         // No further drill level exists below the image
@@ -1186,12 +1204,14 @@ impl ResultsGenerator {
                         ]
                     })
                     .collect();
+                let source_object_count = rows_out.len();
                 Ok(DatabaseResult {
                     column_names,
                     row_names,
                     rows: rows_out,
                     min: min as f32,
                     max: max as f32,
+                    source_object_count,
                 })
             }
             View::Heatmap => {
@@ -1212,7 +1232,7 @@ impl ResultsGenerator {
                     }
                 };
 
-                let grid_rows = (0..rows)
+                let grid_rows: Vec<Vec<Cell>> = (0..rows)
                     .map(|row| {
                         (0..cols)
                             .map(|col| match values.get(&(row, col)) {
@@ -1242,12 +1262,14 @@ impl ResultsGenerator {
                     })
                     .collect();
 
+                let source_object_count = grid_rows.len();
                 Ok(DatabaseResult {
                     column_names: (0..cols).map(|col| col.to_string()).collect(),
                     row_names: (0..rows).map(|row| row.to_string()).collect(),
                     rows: grid_rows,
                     min: range_min as f32,
                     max: range_max as f32,
+                    source_object_count,
                 })
             }
         }

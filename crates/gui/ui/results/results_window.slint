@@ -1,5 +1,5 @@
 // results_window.slint — composition root for the redesigned Results
-// window: left icon rail (List/Plate/Charts/Coloc) + breadcrumb bar (with
+// window: left icon rail (List/Plate/Charts) + breadcrumb bar (with
 // the global Z/T plane stepper docked on its right, visible in every view)
 // + the active view's content, with the export dialog as an overlay.
 //
@@ -17,7 +17,6 @@ import {
 import { ResultsRail, ResultsBreadcrumb } from "results_common.slint";
 import { ResultsListView } from "results_list.slint";
 import { ResultsMatrixView } from "results_matrix.slint";
-import { ResultsColocView } from "results_coloc.slint";
 import { ResultsChartsView } from "results_charts.slint";
 // import { ExportDialog } from "../export_dialog.slint";   // existing, unmodified
 
@@ -44,9 +43,6 @@ export component ResultsWindow inherits Window {
                 vertical-stretch: 1;
             }
             if ResultsState.rail-mode == ResultsRailMode.matrix: ResultsMatrixView {
-                vertical-stretch: 1;
-            }
-            if ResultsState.rail-mode == ResultsRailMode.coloc: ResultsColocView {
                 vertical-stretch: 1;
             }
             if ResultsState.rail-mode == ResultsRailMode.charts: ResultsChartsView {

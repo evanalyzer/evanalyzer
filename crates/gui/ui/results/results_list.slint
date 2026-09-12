@@ -2,7 +2,7 @@
 // a grouped column-visibility dropdown, both built on the shared
 // MultiSelectDropdown (components/multi_select_dropdown.slint).
 
-import { ListView } from "std-widgets.slint";
+import { ListView, CheckBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ResultsState } from "results_state.slint";
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
@@ -49,6 +49,12 @@ export component ResultsListView inherits Rectangle {
 
                 Rectangle {
                     horizontal-stretch: 1;
+                }
+
+                CheckBox {
+                    text: "Coloc details";
+                    checked <=> ResultsState.list-with-coloc-details;
+                    toggled => { ResultsState.list-with-coloc-details-changed(self.checked); }
                 }
 
                 MultiSelectDropdown {

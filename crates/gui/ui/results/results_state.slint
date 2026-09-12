@@ -11,7 +11,7 @@
 
 import { MultiSelectItem } from "../components/multi_select_dropdown.slint";
 
-export enum ResultsRailMode { list, matrix, charts, coloc }
+export enum ResultsRailMode { list, matrix, charts }
 // Matrix drill depth: plate (grouped grid) -> well (fields of one well) ->
 // object (single image + detected objects).
 export enum MatrixLevel { plate, well, object }
@@ -35,13 +35,6 @@ export struct ObjectMarker {
     y-pct: float,
     class-color: color,
     selected: bool,
-}
-
-export struct ColocPartner {
-    id: int,
-    class-label: string,
-    class-color: color,
-    overlap-pct: int,
 }
 
 // One row of the flat object table. `cells` holds one already-formatted
@@ -104,6 +97,13 @@ export global ResultsState {
     ];
     in-out property <[string]> list-columns-groups: ["General", "Geometry"];
     in-out property <string> list-columns-summary: "3 of 4 columns";
+
+    // Expands each row with a selected "Coloc with <class>" column into one
+    // row per colocalizing partner, with that partner's own value for every
+    // other selected measurement column (`ListFilter::with_coloc_details` in
+    // results_generator.rs) — replaces the former standalone Coloc tab.
+    in-out property <bool> list-with-coloc-details: false;
+    callback list-with-coloc-details-changed(bool);
 
     // Table body. Rust only ever fills this with the current page (see
     // ResultsStateController::update_list_view) — never the full result set
@@ -272,15 +272,6 @@ export global ResultsState {
     callback chart-kind-selected(ResultsChartKind2);
     callback chart-property-clicked();
     callback chart-class-selected(string, bool);
-
-    // -------- Colocalization --------
-    in-out property <[string]> coloc-object-ids: [];
-    in-out property <int> coloc-selected-id: 0;
-    in-out property <[string]> coloc-properties: ["Intensity", "Size", "Circularity"];
-    in-out property <[string]> coloc-active-properties: ["Intensity", "Size"];
-    in-out property <[ColocPartner]> coloc-partners: [];
-    callback coloc-object-selected(int);
-    callback coloc-property-toggled(string);
 
     // -------- Export --------
     callback export-dialog-open();
