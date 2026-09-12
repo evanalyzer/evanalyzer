@@ -59,9 +59,9 @@ pub enum Aggregation {
 
 #[derive(Default, Clone, PartialEq, Eq)]
 pub enum ColorSchema {
-    Viridis,
     #[default]
     Excel,
+    Viridis,
 }
 
 #[derive(Default, Clone)]
@@ -351,8 +351,9 @@ impl ResultsGenerator {
         // ~5.5M-row table's per-page cost from single-digit GB to
         // single-digit MB, first page included).
         let limit = filter.page.limit.max(0);
-        let key_sql =
-            format!("SELECT object_id FROM objects {where_clause} ORDER BY object_id LIMIT {limit}");
+        let key_sql = format!(
+            "SELECT object_id FROM objects {where_clause} ORDER BY object_id LIMIT {limit}"
+        );
         let mut key_stmt = self.database.prepare(&key_sql).map_err(err)?;
         let ids: Vec<String> = key_stmt
             .query_map([], |row| row.get::<_, String>(0))
@@ -404,7 +405,11 @@ impl ResultsGenerator {
         } else {
             "NULL::VARCHAR"
         };
-        let select_area_px = if need_area_px { "area_px" } else { "0::UBIGINT" };
+        let select_area_px = if need_area_px {
+            "area_px"
+        } else {
+            "0::UBIGINT"
+        };
         let select_area_nm2 = if need_area_nm2 {
             "area_nm2"
         } else {
