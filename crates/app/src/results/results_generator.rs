@@ -4,9 +4,9 @@ use evanalyzer_cfg::{
     core_types::{InternalErrors, ObjectClass},
     settings::classification_settings::Class,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::{cell::RefCell, default};
 
 const DEFAULT_GROUPING_REGEX: &str = r"^(([A-H])([0-9]{1,2}))_([0-9]+)\.([a-zA-Z0-9]+)$";
 
@@ -1792,7 +1792,7 @@ fn is_resolvable_metric(column: &Column) -> bool {
 /// Display label for a `coloc_json`/`object_class_name`-adjacent class,
 /// e.g. for a coloc-detail column header — the class's registered name, or
 /// `"class {n}"` if `n` isn't (or no longer is) a recognized id.
-fn class_display_label(class: ObjectClass, classes: &[Class]) -> String {
+pub(crate) fn class_display_label(class: ObjectClass, classes: &[Class]) -> String {
     match class {
         ObjectClass::Valid(n) => classes
             .iter()

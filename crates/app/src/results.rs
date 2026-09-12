@@ -1,5 +1,8 @@
+mod results_exporter;
 mod results_generator;
 
+pub use results_exporter::ExportFormat;
+pub use results_exporter::ResultExport;
 pub use results_generator::Aggregation;
 pub use results_generator::Cell;
 pub use results_generator::CellValue;

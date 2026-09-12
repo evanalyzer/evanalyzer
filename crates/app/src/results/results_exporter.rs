@@ -1,0 +1,720 @@
+use super::results_generator::class_display_label;
+use crate::result::{
+    Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
+    ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateDimensions, PlateFilter,
+    ResultsGenerator, View, WellFilter, WellSize,
+};
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
+use rust_xlsxwriter::{Color, Format, Workbook, Worksheet, XlsxError};
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
+use std::range::Range;
+
+pub enum ExportFormat {
+    XLSX,
+    CSV,
+}
+
+pub struct ResultExport {
+    /// Directory the export writes its file(s) into — created if missing.
+    /// Every document below lives directly under it (`list.xlsx`,
+    /// `plate.xlsx`, `well.xlsx`, `heatmap_{image}.xlsx`).
+    pub output_dir: PathBuf,
+    pub format: ExportFormat,
+    pub t_stacks: Range<u32>,
+    pub z_stacks: Range<u32>,
+    /// `[]` means every image in the database (see `resolve_images`).
+    pub image_rel_paths: Vec<String>,
+
+    // Variants
+    pub columns: Vec<Column>,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub grouping_regex: String,
+    /// `[]` means every object class registered in the database (see
+    /// `export_plate_and_well`/`export_heatmap`).
+    pub object_classes: Vec<ObjectClass>,
+
+    // Matrix view options
+    pub aggregations: Vec<Aggregation>,
+    pub plate_dimension: Option<PlateDimensions>,
+    pub well_size: Option<WellSize>,
+    pub well_order: Option<Vec<u32>>,
+    pub square_size: Option<usize>,
+
+    // What to export
+    pub with_list_view: bool,
+    pub with_list_coloc_details: bool,
+    pub with_plate_view: bool,
+    pub with_plates_and_wells_as_list: bool,
+    pub with_heatmap: bool,
+}
+
+impl ResultExport {
+    pub fn start_export(&self, database: &ResultsGenerator) -> Result<(), InternalErrors> {
+        match self.format {
+            ExportFormat::CSV => {
+                return Err(InternalErrors::Internal(
+                    "CSV export is not implemented yet — use XLSX for now".to_string(),
+                ));
+            }
+            ExportFormat::XLSX => {}
+        }
+
+        std::fs::create_dir_all(&self.output_dir).map_err(|e| {
+            InternalErrors::Internal(format!(
+                "Could not create export directory {:?}: {e}",
+                self.output_dir
+            ))
+        })?;
+
+        if self.with_list_view {
+            self.export_list(database)?;
+        }
+        // Single flag drives both documents — see the doc comment on
+        // `export_plate_and_well` for why plate and well are always
+        // exported together rather than needing their own toggle each.
+        if self.with_plate_view {
+            self.export_plate_and_well(database)?;
+        }
+        if self.with_heatmap {
+            self.export_heatmap(database)?;
+        }
+        Ok(())
+    }
+
+    // `list.xlsx`: one continuous "List" sheet, ordered exactly as
+    // requested — every object for image0 at t0, then image1 at t0, ...,
+    // then image0 at t1, image1 at t1, .... `get_list`'s own SQL only
+    // orders by `object_id` and only ever filters one (z, t) pair at a
+    // time, so that ordering is produced here by calling it once per
+    // (z, t, image) triple, in `z`/`t`/name-sorted order, and
+    // concatenating — not by a single broader query. A second "List (Coloc
+    // Details)" sheet is added alongside it when `with_list_coloc_details`
+    // is also set.
+    fn export_list(&self, database: &ResultsGenerator) -> Result<(), InternalErrors> {
+        let images = resolve_images(database, self)?;
+        let object_classes = if self.object_classes.is_empty() {
+            None
+        } else {
+            Some(self.object_classes.clone())
+        };
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("List").map_err(xlsx_err)?;
+        write_list_sheet(sheet, database, self, &images, &object_classes, false)?;
+
+        if self.with_list_coloc_details {
+            let coloc_sheet = workbook.add_worksheet();
+            coloc_sheet
+                .set_name("List (Coloc Details)")
+                .map_err(xlsx_err)?;
+            write_list_sheet(coloc_sheet, database, self, &images, &object_classes, true)?;
+        }
+
+        workbook
+            .save(self.output_dir.join("list.xlsx"))
+            .map_err(xlsx_err)?;
+        Ok(())
+    }
+
+    // `plate.xlsx` + `well.xlsx`: one tab per object class in each
+    // document, every tab stacking one grid block per (column, aggregation)
+    // combination (and, one level further down in `well.xlsx`, per well on
+    // top of that) — see `write_grid_block` for the square-sized, colored
+    // grid itself. Both documents come from the same flag: a plate view
+    // without its wells (or vice versa) isn't a meaningful export on its
+    // own, so there's no separate toggle for each.
+    //
+    // Only the first z/t in `self.z_stacks`/`self.t_stacks` is rendered:
+    // unlike the List export, a plate/well grid is inherently a single
+    // plane's snapshot (matching the GUI's own Matrix view, which shows one
+    // z/t at a time via the global stepper, not a time series) — there's no
+    // "stack every t one after another" equivalent for a grid the way
+    // there is for a flat table.
+    fn export_plate_and_well(&self, database: &ResultsGenerator) -> Result<(), InternalErrors> {
+        let classes_all = database.get_object_classes()?;
+        let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
+            classes_all.iter().map(|class| class.id).collect()
+        } else {
+            self.object_classes.clone()
+        };
+        let available_columns = database.get_available_columns()?;
+        let z = self.z_stacks.start;
+        let t = self.t_stacks.start;
+
+        let mut plate_workbook = Workbook::new();
+        let mut plate_names = SheetNamer::new();
+        let mut well_workbook = Workbook::new();
+        let mut well_names = SheetNamer::new();
+
+        for class in &target_classes {
+            let class_label = class_display_label(*class, &classes_all);
+
+            let plate_sheet = plate_workbook.add_worksheet();
+            plate_sheet
+                .set_name(plate_names.unique(&class_label))
+                .map_err(xlsx_err)?;
+            let well_sheet = well_workbook.add_worksheet();
+            well_sheet
+                .set_name(well_names.unique(&class_label))
+                .map_err(xlsx_err)?;
+
+            let mut plate_row = 0u32;
+            let mut well_row = 0u32;
+
+            for column in self.columns.iter().filter(|column| is_aggregable(column)) {
+                let column_label = column_display_name(column, &available_columns);
+                for aggregation in &self.aggregations {
+                    let caption = format!("{column_label} — {}", aggregation_label(aggregation));
+
+                    let plate_filter = PlateFilter {
+                        plane: PlaneFilter {
+                            z_stack: z,
+                            t_stack: t,
+                        },
+                        grouping_regex: self.grouping_regex.clone(),
+                        aggregation: aggregation.clone(),
+                        object_class: *class,
+                        column: column.clone(),
+                        color_schema: self.color_schema.clone(),
+                        color_scale: self.color_scale.clone(),
+                        matrix_dimension: self.plate_dimension,
+                    };
+
+                    // The real well ids for this group (independent of
+                    // `grouping_regex`'s exact output format, unlike
+                    // reconstructing them from the grid's row/col labels) —
+                    // drives which wells get their own block below, and
+                    // doubles as the flat-list form when requested.
+                    let plate_list = database.get_group_by_plate(&plate_filter, &View::List)?;
+                    let plate_grid =
+                        database.get_group_by_plate(&plate_filter, &View::Heatmap)?;
+                    plate_row =
+                        write_grid_block(plate_sheet, plate_row, &caption, &plate_grid)?;
+                    if self.with_plates_and_wells_as_list {
+                        plate_row = write_flat_block(
+                            plate_sheet,
+                            plate_row,
+                            &format!("{caption} (list)"),
+                            &plate_list,
+                        )?;
+                    }
+
+                    for well_id in &plate_list.row_names {
+                        let well_filter = WellFilter {
+                            plane: PlaneFilter {
+                                z_stack: z,
+                                t_stack: t,
+                            },
+                            group_name: well_id.clone(),
+                            grouping_regex: self.grouping_regex.clone(),
+                            aggregation: aggregation.clone(),
+                            object_class: *class,
+                            column: column.clone(),
+                            color_schema: self.color_schema.clone(),
+                            color_scale: self.color_scale.clone(),
+                            well_size: self.well_size,
+                            well_order: self.well_order.clone(),
+                        };
+                        let well_caption = format!("{caption} — Well {well_id}");
+                        let well_grid =
+                            database.get_group_by_well(&well_filter, &View::Heatmap)?;
+                        well_row =
+                            write_grid_block(well_sheet, well_row, &well_caption, &well_grid)?;
+                        if self.with_plates_and_wells_as_list {
+                            let well_list =
+                                database.get_group_by_well(&well_filter, &View::List)?;
+                            well_row = write_flat_block(
+                                well_sheet,
+                                well_row,
+                                &format!("{well_caption} (list)"),
+                                &well_list,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
+        plate_workbook
+            .save(self.output_dir.join("plate.xlsx"))
+            .map_err(xlsx_err)?;
+        well_workbook
+            .save(self.output_dir.join("well.xlsx"))
+            .map_err(xlsx_err)?;
+        Ok(())
+    }
+
+    // One `heatmap_{image}.xlsx` per image — same one-tab-per-class,
+    // stacked-column/aggregation-blocks shape as `plate.xlsx`/`well.xlsx`
+    // above, just partitioned by image into separate files instead of
+    // sharing one document, since a heatmap is inherently local to a single
+    // image. Same single-plane caveat as `export_plate_and_well` applies:
+    // only the first z/t in the given ranges is rendered.
+    fn export_heatmap(&self, database: &ResultsGenerator) -> Result<(), InternalErrors> {
+        let classes_all = database.get_object_classes()?;
+        let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
+            classes_all.iter().map(|class| class.id).collect()
+        } else {
+            self.object_classes.clone()
+        };
+        let available_columns = database.get_available_columns()?;
+        let images = resolve_images(database, self)?;
+        let z = self.z_stacks.start;
+        let t = self.t_stacks.start;
+
+        for image in &images {
+            let mut workbook = Workbook::new();
+            let mut names = SheetNamer::new();
+
+            for class in &target_classes {
+                let class_label = class_display_label(*class, &classes_all);
+                let sheet = workbook.add_worksheet();
+                sheet
+                    .set_name(names.unique(&class_label))
+                    .map_err(xlsx_err)?;
+
+                let mut row = 0u32;
+                for column in self.columns.iter().filter(|column| is_aggregable(column)) {
+                    let column_label = column_display_name(column, &available_columns);
+                    for aggregation in &self.aggregations {
+                        let caption =
+                            format!("{column_label} — {}", aggregation_label(aggregation));
+                        let filter = ImageHeatmapFilter {
+                            plane: PlaneFilter {
+                                z_stack: z,
+                                t_stack: t,
+                            },
+                            image_rel_path: image.clone(),
+                            aggregation: aggregation.clone(),
+                            object_class: *class,
+                            column: column.clone(),
+                            color_schema: self.color_schema.clone(),
+                            color_scale: self.color_scale.clone(),
+                            square_size: self.square_size,
+                        };
+                        let grid = database.get_image_heatmap(&filter, &View::Heatmap)?;
+                        row = write_grid_block(sheet, row, &caption, &grid)?;
+                    }
+                }
+            }
+
+            let file_name = format!("heatmap_{}.xlsx", sanitize_filename_component(&image_stub(image)));
+            workbook
+                .save(self.output_dir.join(file_name))
+                .map_err(xlsx_err)?;
+        }
+        Ok(())
+    }
+}
+
+fn xlsx_err(error: XlsxError) -> InternalErrors {
+    InternalErrors::Internal(format!("XLSX export error: {error}"))
+}
+
+/// The images an export should cover, in the same image-name-sorted order
+/// `get_images()` returns them in — regardless of what order
+/// `ResultExport::image_rel_paths` happens to list them in, so "sorted by
+/// image name" (see `export_list`'s doc comment) holds even when the caller
+/// supplies an explicit subset. `[]` means every image in the database,
+/// except ones the user has disabled — an explicit list is taken as
+/// overriding that (the caller asked for exactly these, disabled or not).
+fn resolve_images(
+    database: &ResultsGenerator,
+    export: &ResultExport,
+) -> Result<Vec<String>, InternalErrors> {
+    let all = database.get_images()?;
+    if export.image_rel_paths.is_empty() {
+        Ok(all
+            .into_iter()
+            .filter(|image| !image.disabled)
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .collect())
+    } else {
+        let wanted: HashSet<&str> = export
+            .image_rel_paths
+            .iter()
+            .map(String::as_str)
+            .collect();
+        Ok(all
+            .into_iter()
+            .map(|image| image.rel_path.to_string_lossy().into_owned())
+            .filter(|rel_path| wanted.contains(rel_path.as_str()))
+            .collect())
+    }
+}
+
+// `get_list` only ever hands back one bounded page (`ListFilter.page`) —
+// same keyset-pagination shape `results_state_controller.rs` pages through
+// for the GUI's List view (see its own `update_list_view`) — so an export,
+// which needs every matching row rather than one page of them, walks every
+// page via the same cursor-from-last-row-id trick and concatenates them.
+// Compared against `source_object_count` (not `rows.len()`), matching that
+// same reasoning: `ListFilter::with_coloc_details` fan-out can multiply
+// `rows.len()` past `PAGE_SIZE` on what's still the final page.
+fn fetch_all_list_rows(
+    database: &ResultsGenerator,
+    base_filter: &ListFilter,
+) -> Result<DatabaseResult, InternalErrors> {
+    const PAGE_SIZE: i32 = 20_000;
+
+    let mut merged = DatabaseResult {
+        column_names: Vec::new(),
+        row_names: Vec::new(),
+        rows: Vec::new(),
+        min: 0.0,
+        max: 0.0,
+        source_object_count: 0,
+        row_locations: Vec::new(),
+    };
+    let mut cursor: Option<String> = None;
+    let mut first_page = true;
+
+    loop {
+        let filter = ListFilter {
+            page: Pagination {
+                limit: PAGE_SIZE,
+                after: cursor.take(),
+            },
+            ..base_filter.clone()
+        };
+        let mut page = database.get_list(&filter, &View::List)?;
+        let is_last_page = page.source_object_count < PAGE_SIZE as usize;
+        cursor = page.row_names.last().cloned();
+
+        if first_page {
+            merged.column_names = std::mem::take(&mut page.column_names);
+            first_page = false;
+        }
+        merged.row_names.extend(page.row_names);
+        merged.rows.extend(page.rows);
+        merged.row_locations.extend(page.row_locations);
+        merged.source_object_count += page.source_object_count;
+
+        if is_last_page {
+            break;
+        }
+    }
+
+    Ok(merged)
+}
+
+// Writes every object matching `export`'s filters, in
+// z/t/image-name-sorted order (see `ResultExport::export_list`), as one
+// continuous table starting at the worksheet's top row.
+fn write_list_sheet(
+    worksheet: &mut Worksheet,
+    database: &ResultsGenerator,
+    export: &ResultExport,
+    images: &[String],
+    object_classes: &Option<Vec<ObjectClass>>,
+    with_coloc_details: bool,
+) -> Result<(), InternalErrors> {
+    let header_format = Format::new().set_bold();
+    let mut next_row: u32 = 0;
+    let mut header_written = false;
+
+    for z in export.z_stacks {
+        for t in export.t_stacks {
+            for image in images {
+                let base_filter = ListFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    images: Some(vec![image.clone()]),
+                    object_classes: object_classes.clone(),
+                    columns: export.columns.clone(),
+                    with_coloc_details,
+                    page: Pagination {
+                        limit: 0,
+                        after: None,
+                    },
+                };
+                let result = fetch_all_list_rows(database, &base_filter)?;
+
+                if !header_written {
+                    for (col_idx, name) in result.column_names.iter().enumerate() {
+                        worksheet
+                            .write_with_format(next_row, col_idx as u16, name.as_str(), &header_format)
+                            .map_err(xlsx_err)?;
+                    }
+                    next_row += 1;
+                    header_written = true;
+                }
+
+                for row in &result.rows {
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        write_cell(worksheet, next_row, col_idx as u16, cell)?;
+                    }
+                    next_row += 1;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Excel cell size (both width and height, in pixels) every plate/well/
+/// heatmap grid block is laid out at, so its cells read as squares — the
+/// grid's own values are unitless relative to a real image/plate scale, so
+/// there's no "correct" size to derive them from; this just needs to be
+/// visually square and legible.
+const GRID_CELL_PX: u32 = 40;
+
+/// Writes one square, colored grid block (`result`, a `View::Heatmap`
+/// `DatabaseResult`) starting at `start_row`: a bold caption, a header row
+/// of `result.column_names`, then one row per `result.row_names` with that
+/// row's label in column 0 and its cells across — see `write_cell` for how
+/// a cell's value/color are actually rendered. Returns the next free row
+/// (one blank row after the block).
+fn write_grid_block(
+    worksheet: &mut Worksheet,
+    start_row: u32,
+    caption: &str,
+    result: &DatabaseResult,
+) -> Result<u32, InternalErrors> {
+    let bold = Format::new().set_bold();
+    worksheet
+        .write_with_format(start_row, 0, caption, &bold)
+        .map_err(xlsx_err)?;
+
+    let header_row = start_row + 1;
+    worksheet
+        .set_row_height_pixels(header_row, GRID_CELL_PX)
+        .map_err(xlsx_err)?;
+    worksheet
+        .set_column_width_pixels(0, GRID_CELL_PX)
+        .map_err(xlsx_err)?;
+    for (col_idx, col_name) in result.column_names.iter().enumerate() {
+        let col = (col_idx + 1) as u16;
+        worksheet
+            .write_with_format(header_row, col, col_name.as_str(), &bold)
+            .map_err(xlsx_err)?;
+        worksheet
+            .set_column_width_pixels(col, GRID_CELL_PX)
+            .map_err(xlsx_err)?;
+    }
+
+    for (row_idx, row_name) in result.row_names.iter().enumerate() {
+        let row = header_row + 1 + row_idx as u32;
+        worksheet
+            .write_with_format(row, 0, row_name.as_str(), &bold)
+            .map_err(xlsx_err)?;
+        worksheet
+            .set_row_height_pixels(row, GRID_CELL_PX)
+            .map_err(xlsx_err)?;
+        for (col_idx, cell) in result.rows[row_idx].iter().enumerate() {
+            write_cell(worksheet, row, (col_idx + 1) as u16, cell)?;
+        }
+    }
+
+    Ok(header_row + 1 + result.row_names.len() as u32 + 1)
+}
+
+/// Writes `result` (a `View::List` `DatabaseResult` — a flat `group`/value
+/// table, not a grid) as a plain two-column-or-more table starting at
+/// `start_row`: a bold caption, then `result.column_names` as a header row,
+/// then one row per `result.rows`. No square sizing or per-cell color here
+/// — unlike `write_grid_block`, this isn't a matrix. Returns the next free
+/// row (one blank row after the block).
+fn write_flat_block(
+    worksheet: &mut Worksheet,
+    start_row: u32,
+    caption: &str,
+    result: &DatabaseResult,
+) -> Result<u32, InternalErrors> {
+    let bold = Format::new().set_bold();
+    worksheet
+        .write_with_format(start_row, 0, caption, &bold)
+        .map_err(xlsx_err)?;
+
+    let header_row = start_row + 1;
+    for (col_idx, name) in result.column_names.iter().enumerate() {
+        worksheet
+            .write_with_format(header_row, col_idx as u16, name.as_str(), &bold)
+            .map_err(xlsx_err)?;
+    }
+
+    for (row_idx, row) in result.rows.iter().enumerate() {
+        let row_num = header_row + 1 + row_idx as u32;
+        for (col_idx, cell) in row.iter().enumerate() {
+            write_cell(worksheet, row_num, col_idx as u16, cell)?;
+        }
+    }
+
+    Ok(header_row + 1 + result.rows.len() as u32 + 1)
+}
+
+/// Writes one `Cell` — its value, typed appropriately (`write_string`/
+/// `write_number`, not everything flattened to text, so the sheet stays
+/// sortable/usable as real data) rather than pre-formatted display text,
+/// plus its `bg_color` as a solid cell fill when it's set (`0` is every
+/// non-colored cell's sentinel throughout `results_generator.rs`, e.g. a
+/// `CellValue::Empty` grid gap, so it's left with Excel's default fill
+/// rather than painted black).
+fn write_cell(
+    worksheet: &mut Worksheet,
+    row: u32,
+    col: u16,
+    cell: &Cell,
+) -> Result<(), InternalErrors> {
+    let format =
+        (cell.bg_color != 0).then(|| Format::new().set_background_color(Color::RGB(cell.bg_color)));
+
+    match &cell.value {
+        CellValue::Empty => {
+            if let Some(format) = &format {
+                worksheet.write_blank(row, col, format).map_err(xlsx_err)?;
+            }
+        }
+        CellValue::String(s) | CellValue::Class((s, _)) => match &format {
+            Some(format) => {
+                worksheet
+                    .write_string_with_format(row, col, s, format)
+                    .map_err(xlsx_err)?;
+            }
+            None => {
+                worksheet.write_string(row, col, s).map_err(xlsx_err)?;
+            }
+        },
+        CellValue::Float(value) => match &format {
+            Some(format) => {
+                worksheet
+                    .write_number_with_format(row, col, *value as f64, format)
+                    .map_err(xlsx_err)?;
+            }
+            None => {
+                worksheet
+                    .write_number(row, col, *value as f64)
+                    .map_err(xlsx_err)?;
+            }
+        },
+        CellValue::Integer(value) => match &format {
+            Some(format) => {
+                worksheet
+                    .write_number_with_format(row, col, *value as f64, format)
+                    .map_err(xlsx_err)?;
+            }
+            None => {
+                worksheet
+                    .write_number(row, col, *value as f64)
+                    .map_err(xlsx_err)?;
+            }
+        },
+    }
+    Ok(())
+}
+
+/// Whether `column` can drive a plate/well/heatmap grid at all — the
+/// inverse of `column_aggregate_expr`'s (in results_generator.rs) "cannot be
+/// aggregated for the plate view yet" arm, kept in sync with it by
+/// inspecting the exact same variants. `self.columns` is shared with the
+/// List export, where every column is valid (one row per object, nothing to
+/// aggregate), so a grid export must filter it down to this subset itself
+/// rather than assume every selected column applies.
+fn is_aggregable(column: &Column) -> bool {
+    !matches!(
+        column,
+        Column::ObjectId
+            | Column::ImageName
+            | Column::ObjectClass
+            | Column::IntensityAvg(_)
+            | Column::IntensitySum(_)
+            | Column::IntensityMin(_)
+            | Column::IntensityMax(_)
+    )
+}
+
+/// `Column`'s human-readable label, matching `get_available_columns()`'s
+/// own `display_name` for that column — falls back to the raw db key
+/// (`Column::as_key`) for a column this database's `available_columns`
+/// doesn't (or no longer) list, e.g. stale export settings.
+fn column_display_name(column: &Column, available_columns: &[ColumnEntry]) -> String {
+    available_columns
+        .iter()
+        .find(|entry| entry.key == *column)
+        .map(|entry| entry.display_name.clone())
+        .unwrap_or_else(|| column.as_key(&[]))
+}
+
+fn aggregation_label(aggregation: &Aggregation) -> &'static str {
+    match aggregation {
+        Aggregation::Avg => "Average",
+        Aggregation::Min => "Minimum",
+        Aggregation::Max => "Maximum",
+        Aggregation::Stddev => "Std Dev",
+        Aggregation::Sum => "Sum",
+        Aggregation::Median => "Median",
+        Aggregation::Skewness => "Skewness",
+    }
+}
+
+/// A usable base filename for `image_rel_path`'s heatmap document — its
+/// file stem (no directory, no extension), since the rel path's own
+/// separators/extension aren't valid or wanted in a sibling file's name.
+fn image_stub(image_rel_path: &str) -> String {
+    Path::new(image_rel_path)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| image_rel_path.to_string())
+}
+
+fn sanitize_filename_component(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Hands out sanitized, unique-within-one-workbook Excel sheet names.
+/// Excel rejects a sheet name that's empty, over 31 characters, contains
+/// `[ ] : * ? / \`, or duplicates another sheet in the same workbook —
+/// `unique` fixes up all four so a class's own (arbitrary, user-entered)
+/// name is always safe to use directly as a tab name.
+struct SheetNamer {
+    used: HashSet<String>,
+}
+
+impl SheetNamer {
+    fn new() -> Self {
+        Self {
+            used: HashSet::new(),
+        }
+    }
+
+    fn unique(&mut self, wanted: &str) -> String {
+        let mut sanitized: String = wanted
+            .chars()
+            .map(|c| if "[]:*?/\\".contains(c) { '_' } else { c })
+            .collect();
+        sanitized = sanitized.trim().to_string();
+        if sanitized.is_empty() {
+            sanitized = "Sheet".to_string();
+        }
+        if sanitized.chars().count() > 31 {
+            sanitized = sanitized.chars().take(31).collect();
+        }
+
+        let mut candidate = sanitized.clone();
+        let mut suffix_n = 2;
+        while self.used.contains(&candidate) {
+            let suffix = format!(" ({suffix_n})");
+            let max_base = 31usize.saturating_sub(suffix.chars().count());
+            let base: String = sanitized.chars().take(max_base).collect();
+            candidate = format!("{base}{suffix}");
+            suffix_n += 1;
+        }
+        self.used.insert(candidate.clone());
+        candidate
+    }
+}
