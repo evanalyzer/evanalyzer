@@ -261,6 +261,7 @@ pub struct ListFilter {
     pub images: Option<Vec<String>>,
     pub object_classes: Option<Vec<ObjectClass>>,
     pub columns: Vec<Column>,
+    pub with_coloc_details: bool,
     pub page: Pagination,
 }
 
@@ -326,10 +327,45 @@ impl ResultsGenerator {
         let classes = self.get_object_classes()?;
         let mut ordered_columns = filter.columns.clone();
         ordered_columns.sort();
-        let column_names: Vec<String> = ordered_columns
+        let mut column_names: Vec<String> = ordered_columns
             .iter()
             .map(|c| c.as_key(&classes).to_string())
             .collect();
+
+        // `ListFilter::with_coloc_details`: every selected `ColocCount(class)`
+        // column crossed with every selected plain-measurement column (see
+        // `is_resolvable_metric`) adds one more header — that combination's
+        // value resolved on the class's colocalizing partner object instead
+        // of the source object. Needs at least one of each to mean anything;
+        // with only coloc-class columns selected (no measurement to resolve)
+        // or vice versa, list rows are built the same as when the flag is
+        // off.
+        let coloc_class_columns: Vec<ObjectClass> = ordered_columns
+            .iter()
+            .filter_map(|c| match c {
+                Column::ColocCount(class) => Some(*class),
+                _ => None,
+            })
+            .collect();
+        let metric_columns: Vec<Column> = ordered_columns
+            .iter()
+            .filter(|c| is_resolvable_metric(c))
+            .cloned()
+            .collect();
+        let details_active =
+            filter.with_coloc_details && !coloc_class_columns.is_empty() && !metric_columns.is_empty();
+        if details_active {
+            for class in &coloc_class_columns {
+                for metric in &metric_columns {
+                    column_names.push(format!(
+                        "{} coloc {}",
+                        class_display_label(*class, &classes),
+                        metric.as_key(&classes)
+                    ));
+                }
+            }
+        }
+
         let empty_result = |column_names: Vec<String>| DatabaseResult {
             column_names,
             row_names: vec![],
@@ -451,130 +487,43 @@ impl ResultsGenerator {
         // the WHERE clause before LIMIT/OFFSET trims it down to one page —
         // this was blowing up RAM on tables with hundreds of thousands of
         // objects even though only `LIST_PAGE_SIZE` rows ever reach the GUI.
-        let need_image_name = ordered_columns.contains(&Column::ImageName);
-        let need_class = ordered_columns.contains(&Column::ObjectClass);
-        let need_area_px = ordered_columns.contains(&Column::AreaSizePx);
-        let need_area_nm2 = ordered_columns.contains(&Column::AreaSizeNm);
-        let need_perimeter_px = ordered_columns.contains(&Column::PerimeterPx);
-        let need_perimeter_nm = ordered_columns.contains(&Column::PerimeterNm);
-        let need_circularity = ordered_columns.contains(&Column::Circularity);
-        let need_solidity = ordered_columns.contains(&Column::Solidity);
-        let need_eccentricity = ordered_columns.contains(&Column::Eccentricity);
-        let need_coloc = ordered_columns
-            .iter()
-            .any(|c| matches!(c, Column::ColocCount(_)));
-        let need_intensities = ordered_columns.iter().any(|c| {
-            matches!(
-                c,
-                Column::IntensityAvg(_)
-                    | Column::IntensitySum(_)
-                    | Column::IntensityMin(_)
-                    | Column::IntensityMax(_)
-            )
-        });
-
-        let select_image_name = if need_image_name { "image_name" } else { "''" };
-        let select_object_class_name = if need_class {
-            "CAST(object_class_name AS VARCHAR[])"
-        } else {
-            "CAST(NULL AS VARCHAR[])"
-        };
-        let select_seg_class_name = if need_class {
-            "seg_class_name"
-        } else {
-            "NULL::VARCHAR"
-        };
-        let select_area_px = if need_area_px {
-            "area_px"
-        } else {
-            "0::UBIGINT"
-        };
-        let select_area_nm2 = if need_area_nm2 {
-            "area_nm2"
-        } else {
-            "0.0::DOUBLE"
-        };
-        let select_perimeter_px = if need_perimeter_px {
-            "perimeter_px"
-        } else {
-            "0.0::DOUBLE"
-        };
-        let select_perimeter_nm = if need_perimeter_nm {
-            "perimeter_nm"
-        } else {
-            "0.0::DOUBLE"
-        };
-        let select_circularity = if need_circularity {
-            "circularity"
-        } else {
-            "0.0::DOUBLE"
-        };
-        let select_solidity = if need_solidity {
-            "solidity"
-        } else {
-            "0.0::DOUBLE"
-        };
-        let select_eccentricity = if need_eccentricity {
-            "eccentricity"
-        } else {
-            "0.0::DOUBLE"
-        };
-        let select_coloc_json = if need_coloc {
-            "coloc_json"
-        } else {
-            "NULL::VARCHAR"
-        };
-        let select_intensities_json = if need_intensities {
-            "intensities_json"
-        } else {
-            "NULL::VARCHAR"
-        };
-
+        let needs = ObjectColumnNeeds::for_columns(&ordered_columns);
         let sql = format!(
-            "SELECT object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
-                    {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
-                    {select_circularity}, {select_solidity}, {select_eccentricity},\n\
-                    {select_coloc_json}, {select_intensities_json}\n\
-             FROM objects {where_clause}\n\
-             ORDER BY object_id"
+            "SELECT {}\n FROM objects {where_clause}\n ORDER BY object_id",
+            object_select_clause(needs)
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let objects = stmt
-            .query_map([], |row| {
-                Ok(ObjectRow {
-                    object_id: row.get(0)?,
-                    image_name: row.get(1)?,
-                    object_class_name: extract_string_list(row.get::<_, Value>(2)?),
-                    seg_class_name: row.get(3)?,
-                    area_px: row.get(4)?,
-                    area_nm2: row.get(5)?,
-                    perimeter_px: row.get(6)?,
-                    perimeter_nm: row.get(7)?,
-                    circularity: row.get(8)?,
-                    solidity: row.get(9)?,
-                    eccentricity: row.get(10)?,
-                    coloc_json: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-                    intensities_json: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
-                })
-            })
+        let objects: Vec<ObjectRow> = stmt
+            .query_map([], map_object_row)
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
 
-        let row_names = objects
-            .iter()
-            .map(|object| object.object_id.clone())
-            .collect();
-        let rows = objects
-            .iter()
-            .map(|object| {
-                ordered_columns
-                    .iter()
-                    .map(|column| cell_for_column(column, object, &classes))
-                    .collect()
-            })
-            .collect();
+        let (row_names, rows) = if details_active {
+            self.build_coloc_detail_rows(
+                &objects,
+                &ordered_columns,
+                &coloc_class_columns,
+                &metric_columns,
+                &classes,
+            )?
+        } else {
+            let row_names = objects
+                .iter()
+                .map(|object| object.object_id.clone())
+                .collect();
+            let rows = objects
+                .iter()
+                .map(|object| {
+                    ordered_columns
+                        .iter()
+                        .map(|column| cell_for_column(column, object, &classes))
+                        .collect()
+                })
+                .collect();
+            (row_names, rows)
+        };
 
         // Not really meaningful across `ordered_columns` (area/circularity/
         // eccentricity/... are different units mixed in one row), unlike the
@@ -587,6 +536,113 @@ impl ResultsGenerator {
             min: 0.0,
             max: 0.0,
         })
+    }
+
+    // `ListFilter::with_coloc_details`: fan out each source object into one
+    // row per (selected coloc-class, colocalizing partner) pair, appending
+    // one resolved-metric cell per `coloc_class_columns` x `metric_columns`
+    // combination — see the confirmed design on `ListFilter::with_coloc_details`
+    // above `get_list`. Independent per-class fan-out: a row built from a
+    // partner of class A shows "-" for every other selected class's metric
+    // cells even if that other class also has real partners elsewhere for
+    // the same source object (those get their own separate rows instead).
+    fn build_coloc_detail_rows(
+        &self,
+        objects: &[ObjectRow],
+        ordered_columns: &[Column],
+        coloc_class_columns: &[ObjectClass],
+        metric_columns: &[Column],
+        classes: &[Class],
+    ) -> Result<(Vec<String>, Vec<Vec<Cell>>), InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let dash = || Cell {
+            value: CellValue::String("-".to_string()),
+            bg_color: 0,
+            search_key: None,
+        };
+
+        let mut partner_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut partners_by_object: HashMap<String, HashMap<ObjectClass, Vec<String>>> =
+            HashMap::new();
+        for object in objects {
+            let parsed: Option<serde_json::Value> = serde_json::from_str(&object.coloc_json).ok();
+            let mut per_class: HashMap<ObjectClass, Vec<String>> = HashMap::new();
+            for class in coloc_class_columns {
+                let key = coloc_class_key(*class);
+                let ids: Vec<String> = parsed
+                    .as_ref()
+                    .and_then(|value| value.get(&key))
+                    .and_then(|value| value.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|value| value.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                partner_ids.extend(ids.iter().cloned());
+                per_class.insert(*class, ids);
+            }
+            partners_by_object.insert(object.object_id.clone(), per_class);
+        }
+
+        let partner_rows: HashMap<String, ObjectRow> = if partner_ids.is_empty() {
+            HashMap::new()
+        } else {
+            let ids: Vec<String> = partner_ids.into_iter().collect();
+            let partner_needs = ObjectColumnNeeds::for_columns(metric_columns);
+            let partner_sql = format!(
+                "SELECT {} FROM objects WHERE object_id IN ({})",
+                object_select_clause(partner_needs),
+                sql_string_in_list(&ids)
+            );
+            let mut partner_stmt = self.database.prepare(&partner_sql).map_err(err)?;
+            partner_stmt
+                .query_map([], map_object_row)
+                .map_err(err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(err)?
+                .into_iter()
+                .map(|row| (row.object_id.clone(), row))
+                .collect()
+        };
+
+        let mut row_names = Vec::new();
+        let mut rows = Vec::new();
+        for object in objects {
+            let per_class_partners = &partners_by_object[&object.object_id];
+            let mut fan_specs: Vec<(ObjectClass, Option<&str>)> = Vec::new();
+            for class in coloc_class_columns {
+                for partner_id in &per_class_partners[class] {
+                    fan_specs.push((*class, Some(partner_id.as_str())));
+                }
+            }
+            if fan_specs.is_empty() {
+                fan_specs.push((coloc_class_columns[0], None));
+            }
+
+            for (active_class, partner_id) in fan_specs {
+                let mut cells: Vec<Cell> = ordered_columns
+                    .iter()
+                    .map(|column| cell_for_column(column, object, classes))
+                    .collect();
+                for class in coloc_class_columns {
+                    for metric in metric_columns {
+                        let cell = if *class == active_class {
+                            partner_id
+                                .and_then(|id| partner_rows.get(id))
+                                .map(|partner_row| cell_for_column(metric, partner_row, classes))
+                                .unwrap_or_else(dash)
+                        } else {
+                            dash()
+                        };
+                        cells.push(cell);
+                    }
+                }
+                row_names.push(object.object_id.clone());
+                rows.push(cells);
+            }
+        }
+        Ok((row_names, rows))
     }
 
     // First step: return the grouped/aggregated rows as a plain flat table
@@ -1453,6 +1509,180 @@ struct ObjectRow {
     eccentricity: f64,
     coloc_json: String,
     intensities_json: String,
+}
+
+/// Which of `ObjectRow`'s source columns a given column selection actually
+/// needs — shared by `get_list`'s main fetch (needs from `ordered_columns`)
+/// and its coloc-detail partner fetch (needs from just `metric_columns`,
+/// see `Column::with_coloc_details` on `ListFilter`), so both build their
+/// `SELECT` list and parse rows the exact same (bug-for-bug consistent) way.
+#[derive(Default, Clone, Copy)]
+struct ObjectColumnNeeds {
+    image_name: bool,
+    class: bool,
+    area_px: bool,
+    area_nm2: bool,
+    perimeter_px: bool,
+    perimeter_nm: bool,
+    circularity: bool,
+    solidity: bool,
+    eccentricity: bool,
+    coloc: bool,
+    intensities: bool,
+}
+
+impl ObjectColumnNeeds {
+    fn for_columns(columns: &[Column]) -> Self {
+        Self {
+            image_name: columns.contains(&Column::ImageName),
+            class: columns.contains(&Column::ObjectClass),
+            area_px: columns.contains(&Column::AreaSizePx),
+            area_nm2: columns.contains(&Column::AreaSizeNm),
+            perimeter_px: columns.contains(&Column::PerimeterPx),
+            perimeter_nm: columns.contains(&Column::PerimeterNm),
+            circularity: columns.contains(&Column::Circularity),
+            solidity: columns.contains(&Column::Solidity),
+            eccentricity: columns.contains(&Column::Eccentricity),
+            coloc: columns.iter().any(|c| matches!(c, Column::ColocCount(_))),
+            intensities: columns.iter().any(|c| {
+                matches!(
+                    c,
+                    Column::IntensityAvg(_)
+                        | Column::IntensitySum(_)
+                        | Column::IntensityMin(_)
+                        | Column::IntensityMax(_)
+                )
+            }),
+        }
+    }
+}
+
+/// The comma-joined `SELECT` column list `get_list` queries `objects`
+/// with — a column not in `need` becomes a cheap constant instead of a real
+/// column reference (see the column-pruning comment on `get_list`), so
+/// `map_object_row` below can always read the same 13 fixed positions
+/// regardless of which are real.
+fn object_select_clause(need: ObjectColumnNeeds) -> String {
+    let select_image_name = if need.image_name { "image_name" } else { "''" };
+    let select_object_class_name = if need.class {
+        "CAST(object_class_name AS VARCHAR[])"
+    } else {
+        "CAST(NULL AS VARCHAR[])"
+    };
+    let select_seg_class_name = if need.class {
+        "seg_class_name"
+    } else {
+        "NULL::VARCHAR"
+    };
+    let select_area_px = if need.area_px { "area_px" } else { "0::UBIGINT" };
+    let select_area_nm2 = if need.area_nm2 {
+        "area_nm2"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_perimeter_px = if need.perimeter_px {
+        "perimeter_px"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_perimeter_nm = if need.perimeter_nm {
+        "perimeter_nm"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_circularity = if need.circularity {
+        "circularity"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_solidity = if need.solidity {
+        "solidity"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_eccentricity = if need.eccentricity {
+        "eccentricity"
+    } else {
+        "0.0::DOUBLE"
+    };
+    let select_coloc_json = if need.coloc { "coloc_json" } else { "NULL::VARCHAR" };
+    let select_intensities_json = if need.intensities {
+        "intensities_json"
+    } else {
+        "NULL::VARCHAR"
+    };
+    format!(
+        "object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
+                {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
+                {select_circularity}, {select_solidity}, {select_eccentricity},\n\
+                {select_coloc_json}, {select_intensities_json}"
+    )
+}
+
+/// Inverse of `object_select_clause`'s fixed 13-column position order —
+/// shared so the main and partner fetches in `get_list` can never drift.
+fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
+    Ok(ObjectRow {
+        object_id: row.get(0)?,
+        image_name: row.get(1)?,
+        object_class_name: extract_string_list(row.get::<_, Value>(2)?),
+        seg_class_name: row.get(3)?,
+        area_px: row.get(4)?,
+        area_nm2: row.get(5)?,
+        perimeter_px: row.get(6)?,
+        perimeter_nm: row.get(7)?,
+        circularity: row.get(8)?,
+        solidity: row.get(9)?,
+        eccentricity: row.get(10)?,
+        coloc_json: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
+        intensities_json: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+    })
+}
+
+/// `coloc_json`'s key for `class` (see `coloc_to_json` in evanalyzer_core's
+/// duckdb.rs) — shared by `coloc_count_for_class` and `get_list`'s
+/// coloc-detail partner resolution so both agree on the same lookup.
+fn coloc_class_key(class: ObjectClass) -> String {
+    match class {
+        ObjectClass::Valid(n) => n.to_string(),
+        ObjectClass::Unset => "unset".to_string(),
+    }
+}
+
+/// Whether `column` names a plain per-object measurement that can be
+/// meaningfully resolved on a *different* object — i.e. a coloc partner's
+/// value for that same column, per `ListFilter::with_coloc_details`.
+/// `ObjectId`/`ImageName`/`ObjectClass`/`ColocCount` describe identity or
+/// colocalization itself, not a measurement, so they're excluded.
+fn is_resolvable_metric(column: &Column) -> bool {
+    matches!(
+        column,
+        Column::AreaSizePx
+            | Column::AreaSizeNm
+            | Column::PerimeterPx
+            | Column::PerimeterNm
+            | Column::Circularity
+            | Column::Solidity
+            | Column::Eccentricity
+            | Column::IntensityAvg(_)
+            | Column::IntensitySum(_)
+            | Column::IntensityMin(_)
+            | Column::IntensityMax(_)
+    )
+}
+
+/// Display label for a `coloc_json`/`object_class_name`-adjacent class,
+/// e.g. for a coloc-detail column header — the class's registered name, or
+/// `"class {n}"` if `n` isn't (or no longer is) a recognized id.
+fn class_display_label(class: ObjectClass, classes: &[Class]) -> String {
+    match class {
+        ObjectClass::Valid(n) => classes
+            .iter()
+            .find(|c| c.id == ObjectClass::Valid(n))
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("class {n}")),
+        ObjectClass::Unset => "unset".to_string(),
+    }
 }
 
 /// Escapes and comma-joins string literals for a SQL `IN (...)` list.

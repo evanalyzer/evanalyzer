@@ -815,6 +815,7 @@ impl ResultsStateController {
                 images,
                 object_classes,
                 columns,
+                with_coloc_details: false,
                 page: result::Pagination {
                     limit: LIST_PAGE_SIZE,
                     after: cursor,
