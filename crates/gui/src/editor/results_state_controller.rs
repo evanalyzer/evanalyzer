@@ -1666,7 +1666,7 @@ fn class_filter_items(object_classes: &[Class], selected: bool) -> Vec<MultiSele
         .map(|class| MultiSelectItem {
             key: class.name.as_str().into(),
             value: class.name.as_str().into(),
-            color: Color::default(),
+            color: bg_color_to_slint(class.color),
             group: "".into(),
             selected,
         })
@@ -1885,7 +1885,7 @@ fn color_scale_gradient_slint(schema: &ColorSchema) -> Vec<Color> {
 
 fn cell_to_string(cell: &Cell) -> slint::SharedString {
     match &cell.value {
-        CellValue::Empty => "".into(),
+        CellValue::Empty => "NaN".into(),
         CellValue::String(value) => value.as_str().into(),
         CellValue::Float(value) => format!("{value:.3}").into(),
         CellValue::Integer(value) => value.to_string().into(),
