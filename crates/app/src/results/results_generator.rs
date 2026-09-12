@@ -217,13 +217,15 @@ pub struct WellFilter {
 #[derive(Clone)]
 pub struct ImageHeatmapFilter {
     pub plane: PlaneFilter,
-    // Name of the group to displax
-    pub image_name: String,
+    /// Image for which the heatmpa should be generated for
+    pub image_rel_path: String,
     pub aggregation: Aggregation,
     pub object_class: ObjectClass,
     pub column: Column,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
+    /// Size of a heatmap element (Default 256)
+    pub square_size: Option<usize>,
 }
 
 #[derive(Clone)]

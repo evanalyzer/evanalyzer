@@ -67,6 +67,11 @@ pub struct ResultsStateController {
     // Same idea as `matrix_cells`, one level down: last-rendered well-field
     // cells, by image name, for `on_well_cell_clicked`.
     well_cells: Mutex<HashMap<String, MatrixCell>>,
+    // The well currently drilled into, if any — so a toolbar control change
+    // (column/aggregate/class/regex/color) while at the Well level
+    // refreshes that well's fields instead of the (hidden) plate grid. See
+    // `refresh_active_matrix_view`.
+    current_well: Mutex<Option<String>>,
 }
 
 impl ResultsStateController {
@@ -85,6 +90,7 @@ impl ResultsStateController {
             available_columns: Mutex::new(Vec::new()),
             matrix_cells: Mutex::new(HashMap::new()),
             well_cells: Mutex::new(HashMap::new()),
+            current_well: Mutex::new(None),
         }
     }
 
@@ -108,6 +114,7 @@ impl ResultsStateController {
             // breadcrumb baseline needs resetting here, so switching away
             // from Matrix and back doesn't leave a stale "Well X" segment
             // or drop the user back into a well they were last looking at.
+            let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
                 .on_rail_mode_selected(move |mode| {
@@ -129,6 +136,7 @@ impl ResultsStateController {
                     state.set_active_well("".into());
                     state.set_active_well_has_value(false);
                     state.set_active_well_value("".into());
+                    *manager.current_well.lock().expect("Poisned") = None;
                 });
 
             // Only two drill levels sit below the "All results"/"Plate"
@@ -136,6 +144,7 @@ impl ResultsStateController {
             // either of those base segments always means "back to the
             // plate grid", so a length check is enough without tracking
             // which matrix-level each breadcrumb segment represents.
+            let manager = self.clone();
             let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
                 .on_breadcrumb_nav(move |index| {
@@ -153,6 +162,7 @@ impl ResultsStateController {
                         state.set_active_well("".into());
                         state.set_active_well_has_value(false);
                         state.set_active_well_value("".into());
+                        *manager.current_well.lock().expect("Poisned") = None;
                     }
                 });
 
@@ -297,7 +307,7 @@ impl ResultsStateController {
                         return;
                     };
                     manager.update_matrix_filter(|filter| filter.column = column);
-                    manager.update_matrix_view();
+                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
@@ -315,7 +325,7 @@ impl ResultsStateController {
                         }
                     };
                     manager.update_matrix_filter(|filter| filter.aggregation = aggregation);
-                    manager.update_matrix_view();
+                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
@@ -340,7 +350,7 @@ impl ResultsStateController {
                         return;
                     };
                     manager.update_matrix_filter(|filter| filter.object_classe = object_class);
-                    manager.update_matrix_view();
+                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
@@ -348,7 +358,7 @@ impl ResultsStateController {
                 .on_matrix_regex_changed(move |regex| {
                     manager
                         .update_matrix_filter(|filter| filter.group_by_regex = regex.to_string());
-                    manager.update_matrix_view();
+                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
@@ -375,14 +385,14 @@ impl ResultsStateController {
                         );
                     }
                     manager.update_matrix_filter(|filter| filter.color_schema = schema);
-                    manager.update_matrix_view();
+                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_matrix_scale_set_auto(move || {
                     manager.update_matrix_filter(|filter| filter.color_scale = ColorScale::Auto);
-                    manager.update_matrix_view();
+                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
@@ -391,7 +401,7 @@ impl ResultsStateController {
                     manager.update_matrix_filter(|filter| {
                         filter.color_scale = ColorScale::Manual(min, max)
                     });
-                    manager.update_matrix_view();
+                    manager.refresh_active_matrix_view();
                 });
 
             let manager = self.clone();
@@ -432,6 +442,7 @@ impl ResultsStateController {
                     } else {
                         warn!("Failed to upgrade UI handle in on_open_well_clicked");
                     }
+                    *manager.current_well.lock().expect("Poisned") = Some(well.to_string());
                     manager.update_well_view(&well);
                 });
 
@@ -536,6 +547,7 @@ impl ResultsStateController {
 
                 self.set_color_schemas_in_slint();
                 *self.matrix_filter.lock().expect("Poisned") = None;
+                *self.current_well.lock().expect("Poisned") = None;
 
                 *self.list_filter.lock().expect("Poisened") = ListFilter {
                     image_rel_path: Vec::new(),
@@ -785,9 +797,28 @@ impl ResultsStateController {
         )
     }
 
+    // Every Matrix-toolbar control (column/aggregate/class/regex/color)
+    // stays visible and live at the Well level too (see results_matrix.slint
+    // — the well level reuses the exact same toolbar as the plate level,
+    // not a separate one), so a change there must refresh whichever grid is
+    // actually on screen rather than always the plate's.
+    fn refresh_active_matrix_view(&self) {
+        let Some(ui_ready) = self.ui.upgrade() else {
+            warn!("Failed to upgrade UI handle in refresh_active_matrix_view");
+            return;
+        };
+        let level = ui_ready.global::<ResultsState>().get_matrix_level();
+        if level == MatrixLevel::Well {
+            if let Some(well_id) = self.current_well.lock().expect("Poisned").clone() {
+                self.update_well_view(&well_id);
+                return;
+            }
+        }
+        self.update_matrix_view();
+    }
+
     // Third drill level from the plate: the fields inside one well. Reuses
     // the current Matrix toolbar's column/aggregation/class/color settings
-    // (the well level has no toolbar of its own — see results_matrix.slint)
     // scoped down to `well_id` via `WellFilter::group_name`.
     fn update_well_view(&self, well_id: &str) {
         let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
@@ -808,6 +839,7 @@ impl ResultsStateController {
             return;
         };
         let value_caption = self.value_caption_for(matrix_filter);
+        let is_manual_scale = matches!(matrix_filter.color_scale, ColorScale::Manual(..));
 
         let well_filter = WellFilter {
             plane,
@@ -829,7 +861,7 @@ impl ResultsStateController {
             warn!("Could not load well results for {well_id}!");
             return;
         };
-        self.set_well_in_slint(&result, value_caption);
+        self.set_well_in_slint(&result, value_caption, is_manual_scale);
     }
 
     // `result` is the plate/well grid `get_group_by_plate(.., View::Heatmap)`
@@ -894,7 +926,12 @@ impl ResultsStateController {
     // returns — same shape `set_matrix_in_slint` renders one level up, just
     // into `well-*` properties instead of `plate-*`, and cached into
     // `well_cells` instead of `matrix_cells` for `on_well_cell_clicked`.
-    pub fn set_well_in_slint(&self, result: &DatabaseResult, value_caption: String) {
+    pub fn set_well_in_slint(
+        &self,
+        result: &DatabaseResult,
+        value_caption: String,
+        is_manual_scale: bool,
+    ) {
         let ui_weak = self.ui.clone();
         let rows = result.row_names.len() as i32;
         let cols = result.column_names.len() as i32;
@@ -922,6 +959,7 @@ impl ResultsStateController {
                 state.set_well_min(range_min);
                 state.set_well_max(range_max);
                 state.set_well_fields(ModelRc::from(Rc::new(VecModel::from(cells))));
+                state.set_matrix_scale_is_manual(is_manual_scale);
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_well_in_slint, cannot update well view!"

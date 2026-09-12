@@ -212,10 +212,12 @@ export component ResultsMatrixView inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        // -- Toolbar: differs slightly by level, but Value/Aggregate/Class/
-        // regex only make sense at the Plate level (fields are already the
-        // finest per-image grouping).
-        if ResultsState.matrix-level == MatrixLevel.plate: Rectangle {
+        // -- Toolbar: shared by the Plate and Well levels (both grids
+        // aggregate per-object values the same way, just scoped to the
+        // whole plate vs. one well — see `get_group_by_plate`/
+        // `get_group_by_well`), hidden only at the Object level, which
+        // shows a single image rather than an aggregated grid.
+        if ResultsState.matrix-level != MatrixLevel.object: Rectangle {
             height: 54px;
             HorizontalLayout {
                 padding-left: 16px;
@@ -362,11 +364,14 @@ export component ResultsMatrixView inherits Rectangle {
                     spacing: 16px;
                     alignment: start;
                     LegendBar {
-                        value-label: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.matrix-column-summary : "Objects / field";
+                        // Same column/aggregate drives both grids (the Well
+                        // level reuses the Plate toolbar above), so its
+                        // label is the same regardless of which is showing.
+                        value-label: ResultsState.matrix-column-summary;
                         min-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-min : ResultsState.well-min;
                         max-value: ResultsState.matrix-level == MatrixLevel.plate ? ResultsState.plate-max : ResultsState.well-max;
                         gradient-stops: ResultsState.matrix-color-scale-stops;
-                        editable: ResultsState.matrix-level == MatrixLevel.plate;
+                        editable: true;
                         is-manual: ResultsState.matrix-scale-is-manual;
                         set-auto => { ResultsState.matrix-scale-set-auto(); }
                         set-manual(min, max) => { ResultsState.matrix-scale-set-manual(min, max); }
