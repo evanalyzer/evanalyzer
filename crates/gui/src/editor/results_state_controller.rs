@@ -142,11 +142,17 @@ impl ResultsStateController {
                     let state = ui_ready.global::<ResultsState>();
                     let breadcrumb = if mode == ResultsRailMode::Matrix {
                         vec![
-                            BreadcrumbItem { label: "All results".into() },
-                            BreadcrumbItem { label: "Plate".into() },
+                            BreadcrumbItem {
+                                label: "All results".into(),
+                            },
+                            BreadcrumbItem {
+                                label: "Plate".into(),
+                            },
                         ]
                     } else {
-                        vec![BreadcrumbItem { label: "All results".into() }]
+                        vec![BreadcrumbItem {
+                            label: "All results".into(),
+                        }]
                     };
                     state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
                     state.set_matrix_level(MatrixLevel::Plate);
@@ -166,52 +172,53 @@ impl ResultsStateController {
             // described at the top of results_window.slint).
             let manager = self.clone();
             let ui_weak = self.ui.clone();
-            ui.global::<ResultsState>()
-                .on_breadcrumb_nav(move |index| {
-                    let Some(ui_ready) = ui_weak.upgrade() else {
-                        warn!("Failed to upgrade UI handle in on_breadcrumb_nav");
-                        return;
-                    };
-                    let state = ui_ready.global::<ResultsState>();
-                    // "All results" (segment 0) sits above the Matrix
-                    // drill-down entirely — it's the List view's home, not a
-                    // plate/well level, so clicking it switches tabs instead
-                    // of just truncating within Matrix.
-                    if index == 0 {
-                        state.set_rail_mode(ResultsRailMode::List);
-                        state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(vec![
-                            BreadcrumbItem { label: "All results".into() },
-                        ]))));
-                        state.set_matrix_level(MatrixLevel::Plate);
-                        state.set_active_well("".into());
-                        state.set_active_well_has_value(false);
-                        state.set_active_well_value("".into());
-                        *manager.current_well.lock().expect("Poisned") = None;
-                        *manager.current_image.lock().expect("Poisned") = None;
-                        return;
+            ui.global::<ResultsState>().on_breadcrumb_nav(move |index| {
+                let Some(ui_ready) = ui_weak.upgrade() else {
+                    warn!("Failed to upgrade UI handle in on_breadcrumb_nav");
+                    return;
+                };
+                let state = ui_ready.global::<ResultsState>();
+                // "All results" (segment 0) sits above the Matrix
+                // drill-down entirely — it's the List view's home, not a
+                // plate/well level, so clicking it switches tabs instead
+                // of just truncating within Matrix.
+                if index == 0 {
+                    state.set_rail_mode(ResultsRailMode::List);
+                    state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(vec![
+                        BreadcrumbItem {
+                            label: "All results".into(),
+                        },
+                    ]))));
+                    state.set_matrix_level(MatrixLevel::Plate);
+                    state.set_active_well("".into());
+                    state.set_active_well_has_value(false);
+                    state.set_active_well_value("".into());
+                    *manager.current_well.lock().expect("Poisned") = None;
+                    *manager.current_image.lock().expect("Poisned") = None;
+                    return;
+                }
+                let mut breadcrumb: Vec<BreadcrumbItem> = state.get_breadcrumb().iter().collect();
+                let keep = ((index as usize) + 1).min(breadcrumb.len());
+                breadcrumb.truncate(keep);
+                state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
+                if keep <= 2 {
+                    state.set_matrix_level(MatrixLevel::Plate);
+                    state.set_active_well("".into());
+                    state.set_active_well_has_value(false);
+                    state.set_active_well_value("".into());
+                    *manager.current_well.lock().expect("Poisned") = None;
+                    *manager.current_image.lock().expect("Poisned") = None;
+                } else if keep == 3 {
+                    state.set_matrix_level(MatrixLevel::Well);
+                    state.set_active_well("".into());
+                    state.set_active_well_has_value(false);
+                    state.set_active_well_value("".into());
+                    *manager.current_image.lock().expect("Poisned") = None;
+                    if let Some(well_id) = manager.current_well.lock().expect("Poisned").clone() {
+                        manager.update_well_view(&well_id);
                     }
-                    let mut breadcrumb: Vec<BreadcrumbItem> = state.get_breadcrumb().iter().collect();
-                    let keep = ((index as usize) + 1).min(breadcrumb.len());
-                    breadcrumb.truncate(keep);
-                    state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
-                    if keep <= 2 {
-                        state.set_matrix_level(MatrixLevel::Plate);
-                        state.set_active_well("".into());
-                        state.set_active_well_has_value(false);
-                        state.set_active_well_value("".into());
-                        *manager.current_well.lock().expect("Poisned") = None;
-                        *manager.current_image.lock().expect("Poisned") = None;
-                    } else if keep == 3 {
-                        state.set_matrix_level(MatrixLevel::Well);
-                        state.set_active_well("".into());
-                        state.set_active_well_has_value(false);
-                        state.set_active_well_value("".into());
-                        *manager.current_image.lock().expect("Poisned") = None;
-                        if let Some(well_id) = manager.current_well.lock().expect("Poisned").clone() {
-                            manager.update_well_view(&well_id);
-                        }
-                    }
-                });
+                }
+            });
 
             // -- Global Z/T plane filter --
             let manager = self.clone();
@@ -326,7 +333,11 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_with_coloc_details_changed(move |enabled| {
-                    manager.list_filter.lock().expect("Poisened").with_coloc_details = enabled;
+                    manager
+                        .list_filter
+                        .lock()
+                        .expect("Poisened")
+                        .with_coloc_details = enabled;
                     manager.refresh_list();
                 });
 
@@ -364,6 +375,15 @@ impl ResultsStateController {
                         return;
                     };
                     drop(classes);
+                    // Count is a row tally, not a per-object measurement —
+                    // averaging/summing/etc. it doesn't mean anything beyond
+                    // the count itself, so the Aggregate picker is disabled
+                    // while it's selected (see `aggregate_sql` in
+                    // results_generator.rs, which ignores `Aggregation`
+                    // entirely for `Column::Count` and always uses COUNT(*)).
+                    ui_ready
+                        .global::<ResultsState>()
+                        .set_matrix_aggregate_enabled(!matches!(column, Column::Count));
                     manager.update_matrix_filter(|filter| filter.column = column);
                     manager.refresh_active_matrix_view();
                 });
@@ -717,12 +737,16 @@ impl ResultsStateController {
                 let ui_weak = self.ui.clone();
                 slint::invoke_from_event_loop(move || {
                     if let Some(ui_ready) = ui_weak.upgrade() {
-                        ui_ready
-                            .global::<ResultsState>()
-                            .set_list_with_coloc_details(false);
+                        let state = ui_ready.global::<ResultsState>();
+                        state.set_list_with_coloc_details(false);
+                        // Matches `matrix_filter` above being reset to `None`
+                        // (no column selected yet) rather than lingering
+                        // disabled from whatever the previous database last
+                        // had selected.
+                        state.set_matrix_aggregate_enabled(true);
                     } else {
                         warn!(
-                            "Failed to upgrade UI handle in open_database, cannot reset the coloc-details toggle!"
+                            "Failed to upgrade UI handle in open_database, cannot reset the coloc-details toggle and matrix aggregate state!"
                         );
                     }
                 })
@@ -886,18 +910,26 @@ impl ResultsStateController {
         // the table properties need are `Rc`-based and can't cross the
         // `invoke_from_event_loop` closure boundary, so they're built below
         // once we're back on the UI thread.
-        let row_cells: Vec<Vec<slint::SharedString>> = result
+        // Every `Cell` in a row carries the same `alternating_color` (see
+        // `build_coloc_detail_rows`), so the first cell's flag speaks for
+        // the whole row; an empty row (no columns selected) just isn't
+        // alternated.
+        let row_cells: Vec<(Vec<slint::SharedString>, bool)> = result
             .rows
             .iter()
-            .map(|row| row.iter().map(cell_to_string).collect())
+            .map(|row| {
+                let alternating = row.first().is_some_and(|cell| cell.alternating_color);
+                (row.iter().map(cell_to_string).collect(), alternating)
+            })
             .collect();
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
                 let rows: Vec<ResultRow> = row_cells
                     .into_iter()
-                    .map(|cells| ResultRow {
+                    .map(|(cells, alternating)| ResultRow {
                         cells: ModelRc::new(VecModel::from(cells)),
+                        alternating,
                     })
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
@@ -1158,9 +1190,7 @@ impl ResultsStateController {
                 state.set_well_fields(ModelRc::from(Rc::new(VecModel::from(cells))));
                 state.set_matrix_scale_is_manual(is_manual_scale);
             } else {
-                warn!(
-                    "Failed to upgrade UI handle in set_well_in_slint, cannot update well view!"
-                );
+                warn!("Failed to upgrade UI handle in set_well_in_slint, cannot update well view!");
             }
         })
         .ok();
@@ -1312,7 +1342,7 @@ impl ResultsStateController {
     pub fn set_columns_in_slint(&self, columns: &Vec<ColumnEntry>) {
         let ui_weak = self.ui.clone();
         let classes = self.classes.lock().expect("Poisened");
-        let mut items = column_items(columns, &classes, |key| DEFAULT_LIST_COLUMNS.contains(key));
+        let items = column_items(columns, &classes, |key| DEFAULT_LIST_COLUMNS.contains(key));
         drop(classes);
         let groups = column_groups(columns);
         let summary = list_summary(
@@ -1320,18 +1350,34 @@ impl ResultsStateController {
             items.len(),
             "Columns",
         );
+        // Matrix view aggregates one column's value across every matched
+        // object into a single well/field/tile cell — an object's own
+        // identity (ID/Image/Class) isn't a value to aggregate, so those
+        // three are excluded here even though they're normal List columns.
+        // Also starts with nothing checked — it's a single-column
+        // aggregation target, not a multi-column display set like the List
+        // view's, so it shouldn't inherit DEFAULT_LIST_COLUMNS' selections.
+        let matrix_items: Vec<MultiSelectItem> = items
+            .iter()
+            .filter(|item| {
+                !matches!(
+                    item.key.as_str(),
+                    "object_id" | "image_name" | "object_class_name"
+                )
+            })
+            .cloned()
+            .map(|mut item| {
+                item.selected = false;
+                item
+            })
+            .collect();
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
-                state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
-                // The Matrix view's column picker starts with nothing
-                // checked — it's a single-column aggregation target, not a
-                // multi-column display set like the List view's, so it
-                // shouldn't inherit DEFAULT_LIST_COLUMNS' selections.
-                for item in items.iter_mut() {
-                    item.selected = false;
-                }
-                state.set_matrix_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_columns(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_matrix_column_items(ModelRc::from(Rc::new(VecModel::from(
+                    matrix_items,
+                ))));
                 state.set_list_columns_groups(ModelRc::from(Rc::new(VecModel::from(groups))));
                 state.set_list_columns_summary(summary);
             } else {
@@ -1674,8 +1720,8 @@ fn aggregation_display_name(aggregation: &Aggregation) -> &'static str {
 
 fn color_schemas() -> [(&'static str, ColorSchema); 2] {
     [
-        ("Viridis", ColorSchema::Viridis),
         ("Excel", ColorSchema::Excel),
+        ("Viridis", ColorSchema::Viridis),
     ]
 }
 

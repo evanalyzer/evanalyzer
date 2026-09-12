@@ -221,18 +221,6 @@ export component ResultsMatrixView inherits Rectangle {
                 }
 
                 MultiSelectDropdown {
-                    label: "AGGREGATE";
-                    summary-text: ResultsState.matrix-aggregate;
-                    items <=> ResultsState.matrix-aggregation-items;
-                    multi-select: false;
-                    pill-width: 120px;
-                    item-selected(key, value, selected) => {
-                        ResultsState.matrix-aggregate = value;
-                        ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate);
-                    }
-                }
-
-                MultiSelectDropdown {
                     label: "COLUMN";
                     summary-text: ResultsState.matrix-column-summary;
                     items <=> ResultsState.matrix-column-items;
@@ -242,6 +230,19 @@ export component ResultsMatrixView inherits Rectangle {
                     item-selected(key, value, selected) => {
                         ResultsState.matrix-column-summary = value;
                         ResultsState.matrix-value-clicked();
+                    }
+                }
+
+                MultiSelectDropdown {
+                    label: "AGGREGATE";
+                    summary-text: ResultsState.matrix-aggregate;
+                    items <=> ResultsState.matrix-aggregation-items;
+                    multi-select: false;
+                    pill-width: 120px;
+                    enabled: ResultsState.matrix-aggregate-enabled;
+                    item-selected(key, value, selected) => {
+                        ResultsState.matrix-aggregate = value;
+                        ResultsState.matrix-aggregate-selected(ResultsState.matrix-aggregate);
                     }
                 }
 

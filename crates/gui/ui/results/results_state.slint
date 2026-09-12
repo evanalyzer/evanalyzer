@@ -43,6 +43,7 @@ export struct ObjectMarker {
 // so the table can render any column selection without a struct per shape.
 export struct ResultRow {
     cells: [string],
+    alternating: bool,
 }
 
 export global ResultsState {
@@ -184,6 +185,10 @@ export global ResultsState {
     in-out property <[MultiSelectItem]> matrix-column-items: [];
     in-out property <string> matrix-column-summary: "Number of objects";
     in-out property <string> matrix-aggregate: "Average";
+    // False while the selected Column is "Count" — averaging/summing/etc. a
+    // count of objects doesn't mean anything beyond the count itself, so the
+    // Aggregate picker is disabled rather than left selectable but ignored.
+    in-out property <bool> matrix-aggregate-enabled: true;
     in-out property <[MultiSelectItem]> matrix-class-items: [];
     in-out property <string> matrix-class-summary: "No Class";
     in-out property <string> matrix-group-regex: "";

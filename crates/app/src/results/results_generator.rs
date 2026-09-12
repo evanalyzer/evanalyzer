@@ -13,10 +13,6 @@ const DEFAULT_GROUPING_REGEX: &str = r"^(([A-H])([0-9]{1,2}))_([0-9]+)\.([a-zA-Z
 pub struct ResultsGenerator {
     database: Connection,
     classes_cache: RefCell<Option<Vec<Class>>>,
-    // Cached after the first call, same reasoning as `classes_cache` (see
-    // `get_object_classes_with_at_least_coloc`) — a fresh `ResultsGenerator`
-    // per opened database (see `open_database`) means this never needs
-    // invalidating, only ever populating once.
     coloc_classes_cache: RefCell<Option<Vec<ObjectClass>>>,
 }
 
@@ -87,6 +83,7 @@ pub enum Column {
     ObjectId,
     ImageName,
     ObjectClass,
+    Count,
     #[default]
     AreaSizePx,
     AreaSizeNm,
@@ -119,6 +116,7 @@ impl Column {
             Column::ObjectId => "object_id".to_string(),
             Column::ImageName => "image_name".to_string(),
             Column::ObjectClass => "object_class_name".to_string(),
+            Column::Count => "count".to_string(),
             Column::AreaSizePx => "area_px".to_string(),
             Column::AreaSizeNm => "area_nm2".to_string(),
             Column::PerimeterPx => "perimeter_px".to_string(),
@@ -169,6 +167,7 @@ impl Column {
             "object_id" => Column::ObjectId,
             "image_name" => Column::ImageName,
             "object_class_name" => Column::ObjectClass,
+            "count" => Column::Count,
             "area_px" => Column::AreaSizePx,
             "area_nm2" => Column::AreaSizeNm,
             "perimeter_px" => Column::PerimeterPx,
@@ -278,6 +277,8 @@ pub struct Cell {
     pub value: CellValue,
     /// Cell background color
     pub bg_color: u32,
+    /// If true this cell should be displayed in alternating color, the ui desides on itself what is alternating
+    pub alternating_color: bool,
     /// Optional search (display name, key) (Group name of plate and image_rel_path in well view)
     pub search_key: Option<(String, String)>,
 }
@@ -360,8 +361,9 @@ impl ResultsGenerator {
             .filter(|c| is_resolvable_metric(c))
             .cloned()
             .collect();
-        let details_active =
-            filter.with_coloc_details && !coloc_class_columns.is_empty() && !metric_columns.is_empty();
+        let details_active = filter.with_coloc_details
+            && !coloc_class_columns.is_empty()
+            && !metric_columns.is_empty();
         if details_active {
             for class in &coloc_class_columns {
                 for metric in &metric_columns {
@@ -565,9 +567,10 @@ impl ResultsGenerator {
         classes: &[Class],
     ) -> Result<(Vec<String>, Vec<Vec<Cell>>), InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
-        let dash = || Cell {
+        let dash = |alternating_color: bool| Cell {
             value: CellValue::String("-".to_string()),
             bg_color: 0,
+            alternating_color,
             search_key: None,
         };
 
@@ -618,7 +621,14 @@ impl ResultsGenerator {
 
         let mut row_names = Vec::new();
         let mut rows = Vec::new();
+        // Flips every time the source object changes (not every fanned-out
+        // row) so every row belonging to the same source object shares one
+        // shade and neighboring objects alternate — lets the GUI shade by
+        // object group instead of by row parity, which would cut a group in
+        // half arbitrarily whenever it has an even number of partner rows.
+        let mut alternating_color = false;
         for object in objects {
+            alternating_color = !alternating_color;
             let per_class_partners = &partners_by_object[&object.object_id];
             let mut fan_specs: Vec<(ObjectClass, Option<&str>)> = Vec::new();
             for class in coloc_class_columns {
@@ -633,18 +643,23 @@ impl ResultsGenerator {
             for (active_class, partner_id) in fan_specs {
                 let mut cells: Vec<Cell> = ordered_columns
                     .iter()
-                    .map(|column| cell_for_column(column, object, classes))
+                    .map(|column| {
+                        let mut cell = cell_for_column(column, object, classes);
+                        cell.alternating_color = alternating_color;
+                        cell
+                    })
                     .collect();
                 for class in coloc_class_columns {
                     for metric in metric_columns {
-                        let cell = if *class == active_class {
+                        let mut cell = if *class == active_class {
                             partner_id
                                 .and_then(|id| partner_rows.get(id))
                                 .map(|partner_row| cell_for_column(metric, partner_row, classes))
-                                .unwrap_or_else(dash)
+                                .unwrap_or_else(|| dash(alternating_color))
                         } else {
-                            dash()
+                            dash(alternating_color)
                         };
+                        cell.alternating_color = alternating_color;
                         cells.push(cell);
                     }
                 }
@@ -672,8 +687,7 @@ impl ResultsGenerator {
         // practice — fetched anyway (cached, cheap) so that stays true by
         // construction rather than by relying on that ordering.
         let classes = self.get_object_classes()?;
-        let value_expr = column_aggregate_expr(&filter.column)?;
-        let agg_fn = aggregation_sql_fn(&filter.aggregation);
+        let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
 
         // Same default as the example query this is modeled on: everything
         // before the first `_` in `image_name` (e.g. "A1_field1.tif" -> "A1")
@@ -746,11 +760,13 @@ impl ResultsGenerator {
                             Cell {
                                 value: CellValue::String(key),
                                 bg_color: 0,
+                                alternating_color: false,
                                 search_key: search_key.clone(),
                             },
                             Cell {
                                 value: CellValue::Float(value.unwrap_or(0.0) as f32),
                                 bg_color: 0,
+                                alternating_color: false,
                                 search_key,
                             },
                         ]
@@ -841,6 +857,7 @@ impl ResultsGenerator {
                                         range_max,
                                         &filter.color_schema,
                                     ),
+                                    alternating_color: false,
                                     search_key: Some((group_prefix.clone(), group_prefix.clone())),
                                 },
                                 // No object matched this well at all — leave
@@ -849,6 +866,7 @@ impl ResultsGenerator {
                                 None => Cell {
                                     value: CellValue::Empty,
                                     bg_color: 0,
+                                    alternating_color: false,
                                     search_key: None,
                                 },
                             })
@@ -893,8 +911,7 @@ impl ResultsGenerator {
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
-        let value_expr = column_aggregate_expr(&filter.column)?;
-        let agg_fn = aggregation_sql_fn(&filter.aggregation);
+        let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
 
         let regex = if filter.grouping_regex.trim().is_empty() {
             DEFAULT_GROUPING_REGEX
@@ -970,11 +987,13 @@ impl ResultsGenerator {
                             Cell {
                                 value: CellValue::String(idx),
                                 bg_color: 0,
+                                alternating_color: false,
                                 search_key: search_key.clone(),
                             },
                             Cell {
                                 value: CellValue::Float(value.unwrap_or(0.0) as f32),
                                 bg_color: 0,
+                                alternating_color: false,
                                 search_key,
                             },
                         ]
@@ -1051,6 +1070,7 @@ impl ResultsGenerator {
                                         range_max,
                                         &filter.color_schema,
                                     ),
+                                    alternating_color: false,
                                     search_key: Some((image_name.clone(), image_rel_path.clone())),
                                 },
                                 // No field occupies this grid position —
@@ -1059,6 +1079,7 @@ impl ResultsGenerator {
                                 None => Cell {
                                     value: CellValue::Empty,
                                     bg_color: 0,
+                                    alternating_color: false,
                                     search_key: None,
                                 },
                             })
@@ -1098,8 +1119,7 @@ impl ResultsGenerator {
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
-        let value_expr = column_aggregate_expr(&filter.column)?;
-        let agg_fn = aggregation_sql_fn(&filter.aggregation);
+        let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
         let square_size = filter.square_size.unwrap_or(256).max(1);
         let image_rel_path = filter.image_rel_path.replace('\'', "''");
 
@@ -1194,11 +1214,13 @@ impl ResultsGenerator {
                             Cell {
                                 value: CellValue::String(key),
                                 bg_color: 0,
+                                alternating_color: false,
                                 search_key: search_key.clone(),
                             },
                             Cell {
                                 value: CellValue::Float(*value as f32),
                                 bg_color: 0,
+                                alternating_color: false,
                                 search_key,
                             },
                         ]
@@ -1246,6 +1268,7 @@ impl ResultsGenerator {
                                             range_max,
                                             &filter.color_schema,
                                         ),
+                                        alternating_color: false,
                                         search_key: Some((key.clone(), key)),
                                     }
                                 }
@@ -1255,6 +1278,7 @@ impl ResultsGenerator {
                                 None => Cell {
                                     value: CellValue::Empty,
                                     bg_color: 0,
+                                    alternating_color: false,
                                     search_key: None,
                                 },
                             })
@@ -1400,6 +1424,11 @@ impl ResultsGenerator {
             ColumnEntry {
                 display_name: "Class".into(),
                 key: Column::ObjectClass,
+                group: "General".into(),
+            },
+            ColumnEntry {
+                display_name: "Count".into(),
+                key: Column::Count,
                 group: "General".into(),
             },
             ColumnEntry {
@@ -1596,7 +1625,11 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
     } else {
         "NULL::VARCHAR"
     };
-    let select_area_px = if need.area_px { "area_px" } else { "0::UBIGINT" };
+    let select_area_px = if need.area_px {
+        "area_px"
+    } else {
+        "0::UBIGINT"
+    };
     let select_area_nm2 = if need.area_nm2 {
         "area_nm2"
     } else {
@@ -1627,7 +1660,11 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
     } else {
         "0.0::DOUBLE"
     };
-    let select_coloc_json = if need.coloc { "coloc_json" } else { "NULL::VARCHAR" };
+    let select_coloc_json = if need.coloc {
+        "coloc_json"
+    } else {
+        "NULL::VARCHAR"
+    };
     let select_intensities_json = if need.intensities {
         "intensities_json"
     } else {
@@ -1750,6 +1787,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
     let no_bg = Cell {
         value: CellValue::String(String::new()),
         bg_color: 0,
+        alternating_color: false,
         search_key: None,
     };
     match column {
@@ -1776,9 +1814,14 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             Cell {
                 value: CellValue::Class((label, color)),
                 bg_color: color,
+                alternating_color: false,
                 search_key: None,
             }
         }
+        Column::Count => Cell {
+            value: CellValue::Integer(1),
+            ..no_bg
+        },
         Column::AreaSizePx => Cell {
             value: CellValue::Integer(object.area_px as i32),
             ..no_bg
@@ -1907,7 +1950,14 @@ fn column_aggregate_expr(column: &Column) -> Result<String, InternalErrors> {
         Column::ColocCount(ObjectClass::Unset) => {
             "COALESCE(json_array_length(coloc_json -> 'unset'), 0)".to_string()
         }
-        Column::ObjectId
+        // Handled by `aggregate_sql` before this function is ever called
+        // with `Column::Count` — `COUNT(*)` doesn't fit the "aggregate
+        // function wraps a per-row scalar expression" shape every other
+        // arm here does, since it counts rows rather than reading a column
+        // off them. Kept here (rather than left unreachable) only so this
+        // match stays exhaustive.
+        Column::Count
+        | Column::ObjectId
         | Column::ImageName
         | Column::ObjectClass
         | Column::IntensityAvg(_)
@@ -1934,6 +1984,23 @@ fn aggregation_sql_fn(aggregation: &Aggregation) -> &'static str {
         Aggregation::Stddev => "STDDEV_SAMP",
         Aggregation::Sum => "SUM",
     }
+}
+
+/// The `{agg_fn}({value_expr})` pair `get_group_by_plate`/`get_group_by_well`/
+/// `get_image_heatmap` plug into their `SELECT`. `Column::Count` ("number of
+/// objects", not a per-object measurement) is special-cased to a flat
+/// `COUNT(*)`, ignoring `aggregation` entirely — averaging or summing a count
+/// across an already-single-valued group wouldn't mean anything the count
+/// itself doesn't already say more plainly. Every other column defers to the
+/// existing `aggregation_sql_fn`/`column_aggregate_expr`.
+fn aggregate_sql(
+    column: &Column,
+    aggregation: &Aggregation,
+) -> Result<(&'static str, String), InternalErrors> {
+    if matches!(column, Column::Count) {
+        return Ok(("COUNT", "*".to_string()));
+    }
+    Ok((aggregation_sql_fn(aggregation), column_aggregate_expr(column)?))
 }
 
 // Approximate 5-stop reproduction of the matplotlib "viridis" colormap
