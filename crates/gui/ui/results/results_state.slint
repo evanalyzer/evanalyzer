@@ -71,9 +71,12 @@ export global ResultsState {
 
     in-out property <[MultiSelectItem]> matrix-aggregation-items: [
         { key: "avg", value: "Average", group: "", selected: true },
-        { key: "sum", value: "Sum", group: "", selected: false },
         { key: "min", value: "Minimum", group: "", selected: false },
         { key: "max", value: "Maximum", group: "", selected: false },
+        { key: "sum", value: "Sum", group: "", selected: false },
+        { key: "stddev", value: "Std Dev", group: "", selected: false },
+        { key: "median", value: "Median", group: "", selected: false },
+        { key: "skewness", value: "Skewness", group: "", selected: false },
     ];
 
     // -------- List view --------
@@ -211,7 +214,7 @@ export global ResultsState {
     in-out property <bool> matrix-scale-is-manual: false;
     callback matrix-scale-set-auto();
     callback matrix-scale-set-manual(float, float);
-    in-out property <[string]> matrix-aggregate-options: ["Average", "Minimum", "Maximum", "Std Dev", "Sum"];
+    in-out property <[string]> matrix-aggregate-options: ["Average", "Minimum", "Maximum", "Std Dev", "Sum", "Median", "Skewness"];
     in-out property <[MatrixCell]> plate-cells: [];
     in-out property <int> plate-rows: 8;
     in-out property <int> plate-cols: 12;

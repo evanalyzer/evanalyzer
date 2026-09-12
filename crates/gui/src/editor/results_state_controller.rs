@@ -58,7 +58,7 @@ struct MatrixFilter {
 
 pub struct ResultsStateController {
     pub(crate) ui: slint::Weak<ResultsWindow>,
-    pub(crate) app_state: Arc<UiState>,
+    pub(crate) _app_state: Arc<UiState>,
     result_generator: Mutex<Option<ResultsGenerator>>,
     list_filter: Mutex<ListFilter>,
     matrix_filter: Mutex<Option<MatrixFilter>>,
@@ -93,7 +93,7 @@ impl ResultsStateController {
     pub fn new(ui: slint::Weak<ResultsWindow>, app_state: Arc<UiState>) -> Self {
         Self {
             ui,
-            app_state: app_state.clone(),
+            _app_state: app_state.clone(),
             result_generator: Mutex::new(None),
             list_filter: Mutex::new(ListFilter::default()),
             matrix_filter: Mutex::new(None),
@@ -114,11 +114,9 @@ impl ResultsStateController {
     pub fn attach_callbacks(self: &Arc<Self>) {
         let ui_handle = self.ui.clone();
         if let Some(ui) = ui_handle.upgrade() {
-            let manager = self.clone();
             ui.global::<ResultsListState>()
                 .on_refresh_clicked(move || {});
 
-            let manager = self.clone();
             ui.global::<ResultsListState>()
                 .on_open_folder_clicked(move || {});
 
@@ -397,6 +395,8 @@ impl ResultsStateController {
                         "Maximum" => Aggregation::Max,
                         "Std Dev" | "Stddev" => Aggregation::Stddev,
                         "Sum" => Aggregation::Sum,
+                        "Median" => Aggregation::Median,
+                        "Skewness" => Aggregation::Skewness,
                         other => {
                             warn!("Unknown matrix aggregate selected: {other}");
                             return;
