@@ -964,13 +964,193 @@ impl ResultsGenerator {
         }
     }
 
-    // Third drill level is the image heatmap
+    // Third drill level: a spatial heatmap over one image's own pixels
+    // (`filter.image_rel_path`, e.g. "A1_01.vsi") — mirrors
+    // `get_group_by_plate`/`get_group_by_well` in shape and view handling,
+    // just with the grid binned by `square_size`-pixel tiles of the image
+    // instead of grouped by a regex-derived key. `centroid_x_px`/
+    // `centroid_y_px` (already computed per object, see `duckdb.rs`'s
+    // exporter) give each object's tile via integer-divide-by-`square_size`;
+    // the image's own `width`/`height` (from the `images` table — see
+    // `finalize_image`) size the grid so every tile is represented even if
+    // it has no objects at all, the same way `get_group_by_plate`'s
+    // `PlateDimensions` fill unmatched wells with `CellValue::Empty` rather
+    // than silently compressing the grid.
     pub fn get_image_heatmap(
         &self,
         filter: &ImageHeatmapFilter,
         view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
-        Err("Not implemente".into())
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let value_expr = column_aggregate_expr(&filter.column)?;
+        let agg_fn = aggregation_sql_fn(&filter.aggregation);
+        let square_size = filter.square_size.unwrap_or(256).max(1);
+        let image_rel_path = filter.image_rel_path.replace('\'', "''");
+
+        let (width, height): (u32, u32) = self
+            .database
+            .query_row(
+                &format!("SELECT width, height FROM images WHERE image_rel_path = '{image_rel_path}'"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(err)?;
+        let cols = (width as usize).div_ceil(square_size).max(1);
+        let rows = (height as usize).div_ceil(square_size).max(1);
+
+        let mut conditions = vec![
+            format!("z_stack = {}", filter.plane.z_stack),
+            format!("t_stack = {}", filter.plane.t_stack),
+            format!("image_rel_path = '{image_rel_path}'"),
+        ];
+        if let ObjectClass::Valid(id) = filter.object_class {
+            conditions.push(format!(
+                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                sql_int_array_literal(&[id])
+            ));
+        }
+        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+
+        let sql = format!(
+            "SELECT\n\
+                CAST(centroid_x_px / {square_size} AS INTEGER) AS col,\n\
+                CAST(centroid_y_px / {square_size} AS INTEGER) AS row,\n\
+                {agg_fn}({value_expr}) AS value\n\
+             FROM objects\n\
+             {where_clause}\n\
+             GROUP BY col, row\n\
+             ORDER BY row, col"
+        );
+
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let raw_cells: Vec<(i64, i64, Option<f64>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+
+        // Clamp rather than drop: an object whose centroid sits exactly on
+        // (or, from floating-point slop, just past) the image's far edge
+        // would otherwise floor-divide into a `cols`/`rows`-th tile that the
+        // grid (sized from `width`/`height`) doesn't have a slot for.
+        let mut values: HashMap<(usize, usize), f64> = HashMap::new();
+        for (col, row, value) in &raw_cells {
+            let (Some(value), Ok(col), Ok(row)) =
+                (value, usize::try_from(*col), usize::try_from(*row))
+            else {
+                continue;
+            };
+            values.insert((row.min(rows - 1), col.min(cols - 1)), *value);
+        }
+
+        match view {
+            View::List => {
+                let mut min = f64::INFINITY;
+                let mut max = f64::NEG_INFINITY;
+                for value in values.values() {
+                    min = min.min(*value);
+                    max = max.max(*value);
+                }
+                if !min.is_finite() || !max.is_finite() {
+                    min = 0.0;
+                    max = 0.0;
+                }
+
+                let mut sorted: Vec<_> = values.iter().collect();
+                sorted.sort_by_key(|(pos, _)| *pos);
+
+                let column_names = vec!["square".to_string(), filter.column.as_key()];
+                let row_names = sorted
+                    .iter()
+                    .map(|((row, col), _)| format!("R{row}C{col}"))
+                    .collect();
+                let rows_out = sorted
+                    .into_iter()
+                    .map(|((row, col), value)| {
+                        // No further drill level exists below the image
+                        // heatmap, so — like the plate's well cells — a
+                        // square is its own search key.
+                        let key = format!("R{row}C{col}");
+                        let search_key = Some((key.clone(), key.clone()));
+                        vec![
+                            Cell {
+                                value: CellValue::String(key),
+                                bg_color: 0,
+                                search_key: search_key.clone(),
+                            },
+                            Cell {
+                                value: CellValue::Float(*value as f32),
+                                bg_color: 0,
+                                search_key,
+                            },
+                        ]
+                    })
+                    .collect();
+                Ok(DatabaseResult {
+                    column_names,
+                    row_names,
+                    rows: rows_out,
+                    min: min as f32,
+                    max: max as f32,
+                })
+            }
+            View::Heatmap => {
+                let (range_min, range_max) = match filter.color_scale {
+                    ColorScale::Manual(min, max) => (min as f64, max as f64),
+                    ColorScale::Auto => {
+                        let mut min = f64::INFINITY;
+                        let mut max = f64::NEG_INFINITY;
+                        for value in values.values() {
+                            min = min.min(*value);
+                            max = max.max(*value);
+                        }
+                        if min.is_finite() && max.is_finite() {
+                            (min, max)
+                        } else {
+                            (0.0, 0.0)
+                        }
+                    }
+                };
+
+                let grid_rows = (0..rows)
+                    .map(|row| {
+                        (0..cols)
+                            .map(|col| match values.get(&(row, col)) {
+                                Some(value) => {
+                                    let key = format!("R{row}C{col}");
+                                    Cell {
+                                        value: CellValue::Float(*value as f32),
+                                        bg_color: value_to_color(
+                                            *value,
+                                            range_min,
+                                            range_max,
+                                            &filter.color_schema,
+                                        ),
+                                        search_key: Some((key.clone(), key)),
+                                    }
+                                }
+                                // No object fell into this tile at all —
+                                // leave it empty rather than showing a
+                                // misleading 0 or a neighboring tile's value.
+                                None => Cell {
+                                    value: CellValue::Empty,
+                                    bg_color: 0,
+                                    search_key: None,
+                                },
+                            })
+                            .collect()
+                    })
+                    .collect();
+
+                Ok(DatabaseResult {
+                    column_names: (0..cols).map(|col| col.to_string()).collect(),
+                    row_names: (0..rows).map(|row| row.to_string()).collect(),
+                    rows: grid_rows,
+                    min: range_min as f32,
+                    max: range_max as f32,
+                })
+            }
+        }
     }
 
     pub fn get_coloc_objects(&self) {}
