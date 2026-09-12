@@ -189,48 +189,6 @@ component ImageHeatmapGrid inherits Rectangle {
 }
 
 // -- Unused today: single image + object markers ------------------------------
-component ObjectImage inherits Rectangle {
-    background: #08090B;
-    border-radius: Theme.radius-md;
-    clip: true;
-
-    Text {
-        x: 12px;
-        y: 12px;
-        text: ResultsState.active-image-name;
-        font-size: 10.5px;
-        font-family: Theme.font-mono;
-        color: Theme.text-mute;
-    }
-
-    for marker in ResultsState.object-markers: Rectangle {
-        width: 16px;
-        height: 16px;
-        x: parent.width * marker.x-pct - self.width / 2;
-        y: parent.height * marker.y-pct - self.height / 2;
-        border-radius: 8px;
-        border-width: 2px;
-        border-color: marker.class-color;
-        background: transparent;
-
-        Rectangle {
-            visible: marker.selected;
-            x: -3px;
-            y: -3px;
-            width: parent.width + 6px;
-            height: parent.height + 6px;
-            border-radius: (parent.width + 6px) / 2;
-            border-width: 2px;
-            border-color: Theme.text.with-alpha(0.6);
-        }
-
-        TouchArea {
-            mouse-cursor: pointer;
-            clicked => { ResultsState.object-marker-clicked(marker.id); }
-        }
-    }
-}
-
 export component ResultsMatrixView inherits Rectangle {
     background: Theme.bg;
 
@@ -251,15 +209,14 @@ export component ResultsMatrixView inherits Rectangle {
                 cross-axis-alignment: center;
 
                 MultiSelectDropdown {
-                    label: "COLUMN";
-                    summary-text: ResultsState.matrix-column-summary;
-                    items <=> ResultsState.matrix-column-items;
+                    label: "CLASS";
+                    summary-text: ResultsState.matrix-class-summary;
+                    items <=> ResultsState.matrix-class-items;
                     multi-select: false;
-                    groups: ResultsState.list-columns-groups;
-                    pill-width: 160px;
+                    pill-width: 250px;
                     item-selected(key, value, selected) => {
-                        ResultsState.matrix-column-summary = value;
-                        ResultsState.matrix-value-clicked();
+                        ResultsState.matrix-class-summary = value;
+                        ResultsState.matrix-class-selected(key, selected);
                     }
                 }
 
@@ -276,14 +233,27 @@ export component ResultsMatrixView inherits Rectangle {
                 }
 
                 MultiSelectDropdown {
-                    label: "CLASS";
-                    summary-text: ResultsState.matrix-class-summary;
-                    items <=> ResultsState.matrix-class-items;
+                    label: "COLUMN";
+                    summary-text: ResultsState.matrix-column-summary;
+                    items <=> ResultsState.matrix-column-items;
                     multi-select: false;
-                    pill-width: 250px;
+                    groups: ResultsState.list-columns-groups;
+                    pill-width: 160px;
                     item-selected(key, value, selected) => {
-                        ResultsState.matrix-class-summary = value;
-                        ResultsState.matrix-class-selected(key, selected);
+                        ResultsState.matrix-column-summary = value;
+                        ResultsState.matrix-value-clicked();
+                    }
+                }
+
+                MultiSelectDropdown {
+                    label: "COLOR SCHEMA";
+                    summary-text: ResultsState.matrix-color-scale-summary;
+                    items <=> ResultsState.matrix-color-schema-items;
+                    multi-select: false;
+                    pill-width: 120px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.matrix-color-scale-summary = value;
+                        ResultsState.matrix-color-schema-selected(key, selected);
                     }
                 }
 
@@ -326,18 +296,6 @@ export component ResultsMatrixView inherits Rectangle {
                             color: Theme.text-faint;
                             vertical-alignment: center;
                         }
-                    }
-                }
-
-                MultiSelectDropdown {
-                    label: "COLOR SCHEMA";
-                    summary-text: ResultsState.matrix-color-scale-summary;
-                    items <=> ResultsState.matrix-color-schema-items;
-                    multi-select: false;
-                    pill-width: 120px;
-                    item-selected(key, value, selected) => {
-                        ResultsState.matrix-color-scale-summary = value;
-                        ResultsState.matrix-color-schema-selected(key, selected);
                     }
                 }
 
