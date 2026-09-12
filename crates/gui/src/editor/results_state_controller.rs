@@ -660,7 +660,7 @@ impl ResultsStateController {
         );
         let is_manual_scale = matches!(matrix_filter.color_scale, ColorScale::Manual(..));
 
-        let group_filter = result::GroupFilter {
+        let group_filter = result::PlateFilter {
             plane,
             grouping_regex: matrix_filter.group_by_regex.clone(),
             aggregation: matrix_filter.aggregation.clone(),

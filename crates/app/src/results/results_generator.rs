@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::{cell::RefCell, default};
 
-const DEFAULT_GROUPING_REGEX: &str = "^(([A-Za-z]+)([0-9]+))";
+const DEFAULT_GROUPING_REGEX: &str = r"^(([A-H])([0-9]{1,2}))_([0-9]+)\.([a-zA-Z0-9]+)$";
 
 pub struct ResultsGenerator {
     database: Connection,
@@ -22,29 +22,35 @@ pub enum View {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MatrixDimensions {
-    Well6,
-    Well12,
-    Well24,
-    Well48,
-    Well96,
-    Well384,
-    Well1536,
+pub enum PlateDimensions {
+    PLate2x3,
+    Plate3x4,
+    Plate4x6,
+    Plate6x8,
+    Plate8x12,
+    Plate16x24,
+    Plate32x48,
 }
 
-impl MatrixDimensions {
+impl PlateDimensions {
     /// Returns the matrix dimensions as a `(rows, columns)` tuple.
     pub const fn dimensions(&self) -> (usize, usize) {
         match self {
-            Self::Well6 => (2, 3),
-            Self::Well12 => (3, 4),
-            Self::Well24 => (4, 6),
-            Self::Well48 => (6, 8),
-            Self::Well96 => (8, 12),
-            Self::Well384 => (16, 24),
-            Self::Well1536 => (32, 48),
+            Self::PLate2x3 => (2, 3),
+            Self::Plate3x4 => (3, 4),
+            Self::Plate4x6 => (4, 6),
+            Self::Plate6x8 => (6, 8),
+            Self::Plate8x12 => (8, 12),
+            Self::Plate16x24 => (16, 24),
+            Self::Plate32x48 => (32, 48),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WellSize {
+    pub rows: usize,
+    pub cols: usize,
 }
 
 #[derive(Default, Clone)]
@@ -157,32 +163,55 @@ pub struct PlaneFilter {
 #[derive(Clone)]
 pub struct Pagination {
     pub limit: i32,
-    /// Keyset cursor: `None` fetches the first page; `Some(id)` fetches the
-    /// page starting right after that `object_id` (the last row of the
-    /// previous page). Deliberately not an `OFFSET` — `object_id` has no
-    /// index, so `ORDER BY object_id LIMIT n OFFSET m` forces DuckDB to sort
-    /// (and pull every selected column, however wide, for) every row up to
-    /// `m`, which got worse the deeper the user paged: on a real ~5.5M-row
-    /// table this measured 900MB-8GB of peak RAM and hundreds of ms just to
-    /// return 500 rows. `object_id` is a time-ordered UUID, so rows are
-    /// already roughly clustered by it on disk; `WHERE object_id > :cursor`
-    /// lets DuckDB's zone maps skip whole row groups below the cursor
-    /// instead of sorting the full table, which measured flat, low-single-
-    /// digit-millisecond, low-single-digit-MB pages regardless of how deep
-    /// the user has paged.
+    /// Keyset cursor: `None` fetches the first page; `Some(id)` fetches the page starting right after that `object_id`.
     pub after: Option<String>,
 }
 
 #[derive(Clone)]
-pub struct GroupFilter {
+pub struct PlateFilter {
     pub plane: PlaneFilter,
+    // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
+    // - Group1: the match of the group (e.g. A1)
+    // - Group2: the match of the plate row (e.g. A)
+    // - Group3: the match of the plate col (e.g. 1)
+    // - Group4: the match of the image index (e.g. 01)
     pub grouping_regex: String,
     pub aggregation: Aggregation,
     pub object_class: ObjectClass,
     pub column: Column,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
-    pub matrix_dimension: Option<MatrixDimensions>,
+    pub matrix_dimension: Option<PlateDimensions>,
+}
+
+#[derive(Clone)]
+pub struct WellFilter {
+    pub plane: PlaneFilter,
+    // Name of the group to displax
+    pub group_name: String,
+    // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
+    // - Group1: the match of the group (e.g. A1)
+    // - Group2: the match of the plate row (e.g. A)
+    // - Group3: the match of the plate col (e.g. 1)
+    // - Group4: the match of the image index (e.g. 01)
+    pub grouping_regex: String,
+    pub aggregation: Aggregation,
+    pub object_class: ObjectClass,
+    pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    /// Grid dimensions to lay the well's fields out in. `None` assumes a
+    /// 4x4 well (the common case for a plate imager's per-well field
+    /// count) rather than fitting to whatever fields were actually found,
+    /// so a well missing a field still shows a gap at that field's real
+    /// position instead of the grid silently shrinking.
+    pub well_size: Option<WellSize>,
+    /// Maps grid position -> field index for non-trivial (e.g. snake)
+    /// acquisition patterns: `well_order[position]` is the field `idx`
+    /// (the regex's 4th capture group, e.g. the "01" in "A1_01.vsi") shown
+    /// at that row-major grid position. `None` uses `idx` as the position
+    /// directly (1-based: idx 1 -> position 0, top-left).
+    pub well_order: Option<Vec<u32>>,
 }
 
 #[derive(Clone)]
@@ -517,7 +546,7 @@ impl ResultsGenerator {
     // GUI once this data is available.
     pub fn get_group_by_plate(
         &self,
-        filter: &GroupFilter,
+        filter: &PlateFilter,
         view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
@@ -707,12 +736,188 @@ impl ResultsGenerator {
         }
     }
 
+    // Second drill level: the fields (individual images) inside one well
+    // (`filter.group_name`, e.g. "A1"). Mirrors `get_group_by_plate` in
+    // shape and view handling, just one level deeper — group key here is
+    // the field index (regex capture group 4, e.g. the "01" in
+    // "A1_01.vsi"), not the well id.
+    //
+    // The example query this is modeled on filtered with
+    // `WHERE group_prefix = 'A1'`, but `group_prefix` is a `SELECT`-list
+    // alias (itself a `regexp_extract(...)` call) — DuckDB (like standard
+    // SQL) evaluates `WHERE` before `SELECT`, so a bare alias reference
+    // there is not visible yet. Re-running the same `regexp_extract(...)`
+    // call directly in the `WHERE` clause below gets the same filter
+    // without that alias problem.
     pub fn get_group_by_well(
         &self,
-        filter: &GroupFilter,
+        filter: &WellFilter,
         view: &View,
     ) -> Result<DatabaseResult, InternalErrors> {
-        Err(("not implemented").into())
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let value_expr = column_aggregate_expr(&filter.column)?;
+        let agg_fn = aggregation_sql_fn(&filter.aggregation);
+
+        let regex = if filter.grouping_regex.trim().is_empty() {
+            DEFAULT_GROUPING_REGEX
+        } else {
+            filter.grouping_regex.as_str()
+        };
+        let regex = regex.replace('\'', "''");
+
+        let mut conditions = vec![
+            format!("z_stack = {}", filter.plane.z_stack),
+            format!("t_stack = {}", filter.plane.t_stack),
+            format!(
+                "regexp_extract(image_name, '{regex}', 1) = '{}'",
+                filter.group_name.replace('\'', "''")
+            ),
+        ];
+        if let ObjectClass::Valid(id) = filter.object_class {
+            conditions.push(format!(
+                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                sql_int_array_literal(&[id])
+            ));
+        }
+        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+
+        let sql = format!(
+            "SELECT\n\
+                regexp_extract(image_name, '{regex}', 4) AS idx,\n\
+                {agg_fn}({value_expr}) AS value\n\
+             FROM objects\n\
+             {where_clause}\n\
+             GROUP BY idx\n\
+             ORDER BY idx"
+        );
+
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let fields: Vec<(String, Option<f64>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+
+        match view {
+            View::List => {
+                let mut min = f64::INFINITY;
+                let mut max = f64::NEG_INFINITY;
+                for (_, value) in &fields {
+                    if let Some(value) = value {
+                        min = min.min(*value);
+                        max = max.max(*value);
+                    }
+                }
+                if !min.is_finite() || !max.is_finite() {
+                    min = 0.0;
+                    max = 0.0;
+                }
+
+                let column_names = vec!["field".to_string(), filter.column.as_key()];
+                let row_names = fields.iter().map(|(key, _)| key.clone()).collect();
+                let rows = fields
+                    .into_iter()
+                    .map(|(key, value)| {
+                        vec![
+                            Cell {
+                                value: CellValue::String(key),
+                                bg_color: 0,
+                            },
+                            Cell {
+                                value: CellValue::Float(value.unwrap_or(0.0) as f32),
+                                bg_color: 0,
+                            },
+                        ]
+                    })
+                    .collect();
+                Ok(DatabaseResult {
+                    column_names,
+                    row_names,
+                    rows,
+                    min: min as f32,
+                    max: max as f32,
+                })
+            }
+            View::Heatmap => {
+                // No `well_order` (see the doc comment on
+                // `WellFilter::well_order`): a field's `idx` (1-based) is
+                // its position directly, in row-major reading order —
+                // idx 1 -> (0, 0), idx 2 -> (0, 1), .... Given a
+                // `well_order`, it's a lookup table instead: the value at
+                // `well_order[position]` names which field idx sits at
+                // that (row-major) grid position, letting a well be laid
+                // out in a non-trivial (e.g. snake) acquisition pattern.
+                let well_size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+                let (rows, cols) = (well_size.rows, well_size.cols);
+
+                let mut values: HashMap<usize, f64> = HashMap::new();
+                for (idx_str, value) in &fields {
+                    let Ok(idx) = idx_str.parse::<u32>() else {
+                        continue;
+                    };
+                    let position = match &filter.well_order {
+                        Some(order) => order.iter().position(|&field_idx| field_idx == idx),
+                        None => idx.checked_sub(1).map(|p| p as usize),
+                    };
+                    let Some(position) = position else {
+                        continue;
+                    };
+                    if let Some(value) = value {
+                        values.insert(position, *value);
+                    }
+                }
+
+                let (range_min, range_max) = match filter.color_scale {
+                    ColorScale::Manual(min, max) => (min as f64, max as f64),
+                    ColorScale::Auto => {
+                        let mut min = f64::INFINITY;
+                        let mut max = f64::NEG_INFINITY;
+                        for value in values.values() {
+                            min = min.min(*value);
+                            max = max.max(*value);
+                        }
+                        if min.is_finite() && max.is_finite() {
+                            (min, max)
+                        } else {
+                            (0.0, 0.0)
+                        }
+                    }
+                };
+
+                let grid_rows = (0..rows)
+                    .map(|row| {
+                        (0..cols)
+                            .map(|col| match values.get(&(row * cols + col)) {
+                                Some(value) => Cell {
+                                    value: CellValue::Float(*value as f32),
+                                    bg_color: value_to_color(
+                                        *value,
+                                        range_min,
+                                        range_max,
+                                        &filter.color_schema,
+                                    ),
+                                },
+                                // No field occupies this grid position —
+                                // leave it empty rather than showing a
+                                // misleading 0 or another field's value.
+                                None => Cell {
+                                    value: CellValue::Empty,
+                                    bg_color: 0,
+                                },
+                            })
+                            .collect()
+                    })
+                    .collect();
+
+                Ok(DatabaseResult {
+                    column_names: (1..=cols).map(|col| col.to_string()).collect(),
+                    row_names: (1..=rows).map(|row| row.to_string()).collect(),
+                    rows: grid_rows,
+                    min: range_min as f32,
+                    max: range_max as f32,
+                })
+            }
+        }
     }
 
     pub fn get_coloc_objects(&self) {}
@@ -1129,14 +1334,14 @@ const EXCEL_STOPS: [(f32, (u8, u8, u8)); 3] = [
 
 /// Every standard plate size, smallest first — `best_matching_dimensions`
 /// relies on this order to find the smallest one that fits.
-const ALL_MATRIX_DIMENSIONS: [MatrixDimensions; 7] = [
-    MatrixDimensions::Well6,
-    MatrixDimensions::Well12,
-    MatrixDimensions::Well24,
-    MatrixDimensions::Well48,
-    MatrixDimensions::Well96,
-    MatrixDimensions::Well384,
-    MatrixDimensions::Well1536,
+const ALL_PLATE_DIMENSIONS: [PlateDimensions; 7] = [
+    PlateDimensions::PLate2x3,
+    PlateDimensions::Plate3x4,
+    PlateDimensions::Plate4x6,
+    PlateDimensions::Plate6x8,
+    PlateDimensions::Plate8x12,
+    PlateDimensions::Plate16x24,
+    PlateDimensions::Plate32x48,
 ];
 
 /// The smallest standard plate size whose row/column count covers every well
@@ -1144,16 +1349,16 @@ const ALL_MATRIX_DIMENSIONS: [MatrixDimensions; 7] = [
 /// to the largest known size if even that doesn't fit (a plate bigger than
 /// any standard format, or a `grouping_regex` extracting something that
 /// isn't really a well id).
-fn best_matching_dimensions(max_row: Option<usize>, max_col: Option<usize>) -> MatrixDimensions {
+fn best_matching_dimensions(max_row: Option<usize>, max_col: Option<usize>) -> PlateDimensions {
     let needed_rows = max_row.map_or(1, |row| row + 1);
     let needed_cols = max_col.map_or(1, |col| col + 1);
-    ALL_MATRIX_DIMENSIONS
+    ALL_PLATE_DIMENSIONS
         .into_iter()
         .find(|dimensions| {
             let (rows, cols) = dimensions.dimensions();
             rows >= needed_rows && cols >= needed_cols
         })
-        .unwrap_or(MatrixDimensions::Well1536)
+        .unwrap_or(PlateDimensions::Plate32x48)
 }
 
 /// Parses a well's row letters ("A", "B", ..., "Z", "AA", "AB", ...) into a
