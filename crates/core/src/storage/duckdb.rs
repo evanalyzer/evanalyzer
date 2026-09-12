@@ -240,7 +240,9 @@ CREATE TABLE IF NOT EXISTS images (
     image_rel_path  VARCHAR NOT NULL PRIMARY KEY,
     successful      BOOLEAN NOT NULL DEFAULT true,
     error_message   VARCHAR,
-    disabled        BOOLEAN NOT NULL DEFAULT false
+    disabled        BOOLEAN NOT NULL DEFAULT false,
+    width           UINTEGER NOT NULL,
+    height          UINTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS classes (
@@ -585,6 +587,8 @@ impl PipelineResultExporter for DuckDbExporter {
     fn finalize_image(
         &self,
         image_rel_path: &Path,
+        width: u32,
+        height: u32,
         error: Option<&str>,
     ) -> Result<(), InternalErrors> {
         let conn = self
@@ -596,8 +600,8 @@ impl PipelineResultExporter for DuckDbExporter {
         let successful = error.is_none();
 
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path, successful, error_message) VALUES (?, ?, ?, ?)",
-            params![image_name, image_rel, successful, error],
+            "INSERT INTO images (image_name, image_rel_path, successful, error_message, width, height) VALUES (?, ?, ?, ?, ?, ?)",
+            params![image_name, image_rel, successful, error, width, height],
         )
         .map_err(|e| InternalErrors::Io(e.to_string()))?;
         Ok(())

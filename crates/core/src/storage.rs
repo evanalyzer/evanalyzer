@@ -15,6 +15,10 @@ pub trait PipelineResultExporter: Send + Sync {
     /// separate per-image summary (e.g. `DuckDbExporter`'s `images` table)
     /// need to override this.
     ///
+    /// `width`/`height`: the full (untiled) image's pixel dimensions -
+    /// implementations that record per-image metadata (`DuckDbExporter`'s
+    /// `images` table) persist these alongside the row.
+    ///
     /// `error`: `None` if every tile/plane for this image exported
     /// successfully, `Some(message)` otherwise. Implementations that record
     /// per-image status (again, `DuckDbExporter`) must persist this rather
@@ -24,6 +28,8 @@ pub trait PipelineResultExporter: Send + Sync {
     fn finalize_image(
         &self,
         _image_rel_path: &std::path::Path,
+        _width: u32,
+        _height: u32,
         _error: Option<&str>,
     ) -> Result<(), InternalErrors> {
         Ok(())
