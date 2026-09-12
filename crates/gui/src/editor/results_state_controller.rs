@@ -153,6 +153,22 @@ impl ResultsStateController {
                         return;
                     };
                     let state = ui_ready.global::<ResultsState>();
+                    // "All results" (segment 0) sits above the Matrix
+                    // drill-down entirely — it's the List view's home, not a
+                    // plate/well level, so clicking it switches tabs instead
+                    // of just truncating within Matrix.
+                    if index == 0 {
+                        state.set_rail_mode(ResultsRailMode::List);
+                        state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(vec![
+                            BreadcrumbItem { label: "All results".into() },
+                        ]))));
+                        state.set_matrix_level(MatrixLevel::Plate);
+                        state.set_active_well("".into());
+                        state.set_active_well_has_value(false);
+                        state.set_active_well_value("".into());
+                        *manager.current_well.lock().expect("Poisned") = None;
+                        return;
+                    }
                     let mut breadcrumb: Vec<BreadcrumbItem> = state.get_breadcrumb().iter().collect();
                     let keep = ((index as usize) + 1).min(breadcrumb.len());
                     breadcrumb.truncate(keep);
