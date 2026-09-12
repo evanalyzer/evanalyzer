@@ -157,7 +157,20 @@ pub struct PlaneFilter {
 #[derive(Clone)]
 pub struct Pagination {
     pub limit: i32,
-    pub offset: i32,
+    /// Keyset cursor: `None` fetches the first page; `Some(id)` fetches the
+    /// page starting right after that `object_id` (the last row of the
+    /// previous page). Deliberately not an `OFFSET` — `object_id` has no
+    /// index, so `ORDER BY object_id LIMIT n OFFSET m` forces DuckDB to sort
+    /// (and pull every selected column, however wide, for) every row up to
+    /// `m`, which got worse the deeper the user paged: on a real ~5.5M-row
+    /// table this measured 900MB-8GB of peak RAM and hundreds of ms just to
+    /// return 500 rows. `object_id` is a time-ordered UUID, so rows are
+    /// already roughly clustered by it on disk; `WHERE object_id > :cursor`
+    /// lets DuckDB's zone maps skip whole row groups below the cursor
+    /// instead of sorting the full table, which measured flat, low-single-
+    /// digit-millisecond, low-single-digit-MB pages regardless of how deep
+    /// the user has paged.
+    pub after: Option<String>,
 }
 
 #[derive(Clone)]
@@ -310,18 +323,136 @@ impl ResultsGenerator {
                 sql_int_array_literal(ids)
             ));
         }
+        // Keyset pagination (see the doc comment on `Pagination::after`):
+        // narrowing to `object_id > cursor` here, in the same WHERE clause
+        // DuckDB already zone-map-prunes on, is what lets it skip whole row
+        // groups below the cursor instead of sorting/reading the full table.
+        if let Some(cursor) = &filter.page.after {
+            conditions.push(format!(
+                "object_id > '{}'::UUID",
+                cursor.replace('\'', "''")
+            ));
+        }
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
+        // Two-step fetch: first find just the `object_id`s of this page —
+        // a query that only ever touches the (fixed-width, cheap) filter
+        // columns and `object_id` itself, never the wide/JSON columns below
+        // — then re-fetch full rows filtered to exactly those ids. Doing it
+        // in one wide `SELECT ... WHERE ... ORDER BY object_id LIMIT n`
+        // forces DuckDB to decode every selected column (including whatever
+        // of `coloc_json`/`intensities_json` was requested) for every row
+        // that matches the WHERE clause before it can even start sorting —
+        // on this app's tables that's routinely the *entire* table, since
+        // z/t-plane and image/class filters often don't narrow anything.
+        // Splitting it lets the second query's `object_id IN (...)` use
+        // DuckDB's per-row-group zone maps to skip straight to the row
+        // groups that actually contain those ids (measured this dropping a
+        // ~5.5M-row table's per-page cost from single-digit GB to
+        // single-digit MB, first page included).
         let limit = filter.page.limit.max(0);
-        let offset = filter.page.offset.max(0);
+        let key_sql =
+            format!("SELECT object_id FROM objects {where_clause} ORDER BY object_id LIMIT {limit}");
+        let mut key_stmt = self.database.prepare(&key_sql).map_err(err)?;
+        let ids: Vec<String> = key_stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        if ids.is_empty() {
+            return Ok(empty_result(column_names));
+        }
+        let where_clause = format!("WHERE object_id IN ({})", sql_string_in_list(&ids));
+
+        // Only pull the source columns `ordered_columns` actually needs.
+        // DuckDB is columnar: a column replaced by a constant here is never
+        // read off disk or carried through the sort, so an unselected
+        // `coloc_json`/`intensities_json` (each row's biggest fields, since
+        // every other field is a fixed-width number or a short string) costs
+        // nothing instead of being materialized for every row that matches
+        // the WHERE clause before LIMIT/OFFSET trims it down to one page —
+        // this was blowing up RAM on tables with hundreds of thousands of
+        // objects even though only `LIST_PAGE_SIZE` rows ever reach the GUI.
+        let need_image_name = ordered_columns.contains(&Column::ImageName);
+        let need_class = ordered_columns.contains(&Column::ObjectClass);
+        let need_area_px = ordered_columns.contains(&Column::AreaSizePx);
+        let need_area_nm2 = ordered_columns.contains(&Column::AreaSizeNm);
+        let need_perimeter_px = ordered_columns.contains(&Column::PerimeterPx);
+        let need_perimeter_nm = ordered_columns.contains(&Column::PerimeterNm);
+        let need_circularity = ordered_columns.contains(&Column::Circularity);
+        let need_solidity = ordered_columns.contains(&Column::Solidity);
+        let need_eccentricity = ordered_columns.contains(&Column::Eccentricity);
+        let need_coloc = ordered_columns.contains(&Column::ColocCount);
+        let need_intensities = ordered_columns.iter().any(|c| {
+            matches!(
+                c,
+                Column::IntensityAvg(_)
+                    | Column::IntensitySum(_)
+                    | Column::IntensityMin(_)
+                    | Column::IntensityMax(_)
+            )
+        });
+
+        let select_image_name = if need_image_name { "image_name" } else { "''" };
+        let select_object_class_name = if need_class {
+            "CAST(object_class_name AS VARCHAR[])"
+        } else {
+            "CAST(NULL AS VARCHAR[])"
+        };
+        let select_seg_class_name = if need_class {
+            "seg_class_name"
+        } else {
+            "NULL::VARCHAR"
+        };
+        let select_area_px = if need_area_px { "area_px" } else { "0::UBIGINT" };
+        let select_area_nm2 = if need_area_nm2 {
+            "area_nm2"
+        } else {
+            "0.0::DOUBLE"
+        };
+        let select_perimeter_px = if need_perimeter_px {
+            "perimeter_px"
+        } else {
+            "0.0::DOUBLE"
+        };
+        let select_perimeter_nm = if need_perimeter_nm {
+            "perimeter_nm"
+        } else {
+            "0.0::DOUBLE"
+        };
+        let select_circularity = if need_circularity {
+            "circularity"
+        } else {
+            "0.0::DOUBLE"
+        };
+        let select_solidity = if need_solidity {
+            "solidity"
+        } else {
+            "0.0::DOUBLE"
+        };
+        let select_eccentricity = if need_eccentricity {
+            "eccentricity"
+        } else {
+            "0.0::DOUBLE"
+        };
+        let select_coloc_json = if need_coloc {
+            "coloc_json"
+        } else {
+            "NULL::VARCHAR"
+        };
+        let select_intensities_json = if need_intensities {
+            "intensities_json"
+        } else {
+            "NULL::VARCHAR"
+        };
+
         let sql = format!(
-            "SELECT object_id, image_name, CAST(object_class_name AS VARCHAR[]), seg_class_name,\n\
-                    area_px, area_nm2, perimeter_px, perimeter_nm,\n\
-                    circularity, solidity, eccentricity,\n\
-                    coloc_json, intensities_json\n\
+            "SELECT object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
+                    {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
+                    {select_circularity}, {select_solidity}, {select_eccentricity},\n\
+                    {select_coloc_json}, {select_intensities_json}\n\
              FROM objects {where_clause}\n\
-             ORDER BY object_id\n\
-             LIMIT {limit} OFFSET {offset}"
+             ORDER BY object_id"
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;

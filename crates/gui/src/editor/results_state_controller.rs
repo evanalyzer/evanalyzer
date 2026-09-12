@@ -53,6 +53,7 @@ pub struct ResultsStateController {
     matrix_filter: Mutex<Option<MatrixFilter>>,
     plane_filter: Mutex<PlaneFilter>,
     list_page: Mutex<i32>,
+    list_page_cursors: Mutex<Vec<Option<String>>>,
     classes: Mutex<Vec<Class>>,
     images: Mutex<Vec<ImageEntry>>,
     available_columns: Mutex<Vec<ColumnEntry>>,
@@ -72,6 +73,7 @@ impl ResultsStateController {
             matrix_filter: Mutex::new(None),
             plane_filter: Mutex::new(PlaneFilter::default()),
             list_page: Mutex::new(0),
+            list_page_cursors: Mutex::new(vec![None]),
             classes: Mutex::new(Vec::new()),
             images: Mutex::new(Vec::new()),
             available_columns: Mutex::new(Vec::new()),
@@ -322,10 +324,11 @@ impl ResultsStateController {
                 });
 
             let manager = self.clone();
-            ui.global::<ResultsState>().on_matrix_scale_set_auto(move || {
-                manager.update_matrix_filter(|filter| filter.color_scale = ColorScale::Auto);
-                manager.update_matrix_view();
-            });
+            ui.global::<ResultsState>()
+                .on_matrix_scale_set_auto(move || {
+                    manager.update_matrix_filter(|filter| filter.color_scale = ColorScale::Auto);
+                    manager.update_matrix_view();
+                });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -472,6 +475,7 @@ impl ResultsStateController {
     // filter, so jump back to page 1.
     fn refresh_list(&self) {
         *self.list_page.lock().expect("Poisned") = 0;
+        *self.list_page_cursors.lock().expect("Poisned") = vec![None];
         self.update_list_view();
     }
 
@@ -529,7 +533,14 @@ impl ResultsStateController {
         let columns = list_filter.columns.clone();
         drop(list_filter);
 
-        let page = *self.list_page.lock().expect("Poisned");
+        let page = *self.list_page.lock().expect("Poisned") as usize;
+        let cursor = self
+            .list_page_cursors
+            .lock()
+            .expect("Poisned")
+            .get(page)
+            .cloned()
+            .flatten();
 
         let Ok(result) = db.get_list(
             &evanalyzer_app::result::ListFilter {
@@ -539,7 +550,7 @@ impl ResultsStateController {
                 columns,
                 page: result::Pagination {
                     limit: LIST_PAGE_SIZE,
-                    offset: page * LIST_PAGE_SIZE,
+                    after: cursor,
                 },
             },
             &result::View::List,
@@ -547,6 +558,19 @@ impl ResultsStateController {
             warn!("Could not load results!");
             return;
         };
+
+        // Record the cursor for `page + 1` (the last row's `object_id`, from
+        // `row_names` — see `get_list` — regardless of whether ObjectId is a
+        // visible column) so Next can page forward from here. Only append,
+        // never overwrite: revisiting a page via Prev/Next must not disturb
+        // the cursor a later page already recorded.
+        if let Some(last_id) = result.row_names.last() {
+            let mut cursors = self.list_page_cursors.lock().expect("Poisned");
+            if cursors.len() == page + 1 {
+                cursors.push(Some(last_id.clone()));
+            }
+        }
+
         self.set_objects_list_in_slint(&result);
     }
 
