@@ -25,7 +25,7 @@ export component ResultsWindow inherits Window {
     preferred-width: 1500px;
     preferred-height: 900px;
     min-width: 1200px;
-    min-height: 700px;
+    min-height: 900px;
     background: Theme.bg;
 
     HorizontalLayout {
@@ -51,7 +51,10 @@ export component ResultsWindow inherits Window {
         }
     }
 
-    if ExportDialogState.active: ExportDialog { width: 100%; height: 100%; }
+    if ExportDialogState.active: ExportDialog {
+        width: 100%;
+        height: 100%;
+    }
 }
 
 // -------------------------------------------------------------------------

@@ -53,6 +53,7 @@ export global ExportDialogState {
     // -- What to export --
     in-out property <bool> with-list-view: true;
     in-out property <bool> with-list-coloc-details: false;
+    in-out property <bool> with-list-one-file-per-image: false;
     in-out property <bool> with-plate-view: false;
     in-out property <bool> with-plates-and-wells-as-list: false;
     in-out property <bool> with-heatmap: false;
@@ -105,7 +106,7 @@ export component ExportDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 680px;
-        height: 760px;
+        height: 740px;
         background: Theme.panel;
         border-radius: 10px;
         border-width: 1px;
@@ -178,6 +179,7 @@ export component ExportDialog inherits Rectangle {
                     VerticalLayout {
                         padding: 20px;
                         spacing: 18px;
+                        alignment: start;
 
                         // -- Output folder --
                         VerticalLayout {
@@ -220,6 +222,7 @@ export component ExportDialog inherits Rectangle {
                         // -- What to export --
                         VerticalLayout {
                             spacing: 6px;
+                            alignment: start;
                             Text {
                                 text: "What to Export";
                                 color: Theme.text;
@@ -235,6 +238,12 @@ export component ExportDialog inherits Rectangle {
                             CheckBox {
                                 text: "List — Coloc details (second tab)";
                                 checked <=> ExportDialogState.with-list-coloc-details;
+                                enabled: ExportDialogState.with-list-view;
+                            }
+
+                            CheckBox {
+                                text: "List — each image in a separate file";
+                                checked <=> ExportDialogState.with-list-one-file-per-image;
                                 enabled: ExportDialogState.with-list-view;
                             }
 
@@ -258,6 +267,7 @@ export component ExportDialog inherits Rectangle {
                         // -- Z/T range --
                         VerticalLayout {
                             spacing: 8px;
+                            alignment: start;
                             Text {
                                 text: "Z / T Range";
                                 color: Theme.text;
@@ -267,6 +277,7 @@ export component ExportDialog inherits Rectangle {
 
                             HorizontalLayout {
                                 spacing: 10px;
+                                alignment: start;
                                 LabeledField {
                                     field-label: "Z:";
                                     LineEdit {
@@ -320,6 +331,7 @@ export component ExportDialog inherits Rectangle {
                         // -- Filters --
                         VerticalLayout {
                             spacing: 8px;
+                            alignment: start;
                             Text {
                                 text: "Filters";
                                 color: Theme.text;
@@ -352,25 +364,26 @@ export component ExportDialog inherits Rectangle {
                                     select-all => { ExportDialogState.class-select-all(); }
                                     select-none => { ExportDialogState.class-select-none(); }
                                 }
-                            }
 
-                            MultiSelectDropdown {
-                                label: "COLUMNS";
-                                summary-text: ExportDialogState.column-summary;
-                                items <=> ExportDialogState.column-items;
-                                groups: ExportDialogState.column-groups;
-                                multi-select: true;
-                                show-select-all: true;
-                                pill-width: 200px;
-                                item-selected(key, value, selected) => { ExportDialogState.column-item-selected(key, selected); }
-                                select-all => { ExportDialogState.column-select-all(); }
-                                select-none => { ExportDialogState.column-select-none(); }
+                                MultiSelectDropdown {
+                                    label: "COLUMNS";
+                                    summary-text: ExportDialogState.column-summary;
+                                    items <=> ExportDialogState.column-items;
+                                    groups: ExportDialogState.column-groups;
+                                    multi-select: true;
+                                    show-select-all: true;
+                                    pill-width: 200px;
+                                    item-selected(key, value, selected) => { ExportDialogState.column-item-selected(key, selected); }
+                                    select-all => { ExportDialogState.column-select-all(); }
+                                    select-none => { ExportDialogState.column-select-none(); }
+                                }
                             }
                         }
 
                         // -- Plate/Well/Heatmap options --
                         VerticalLayout {
                             spacing: 8px;
+                            alignment: start;
                             Text {
                                 text: "Plate / Well / Heatmap Options";
                                 color: Theme.text;
@@ -398,10 +411,7 @@ export component ExportDialog inherits Rectangle {
                                     pill-width: 140px;
                                     item-selected(key, value, selected) => { if selected { ExportDialogState.color-schema-summary = value; } }
                                 }
-                            }
 
-                            HorizontalLayout {
-                                spacing: 10px;
                                 MultiSelectDropdown {
                                     label: "PLATE SIZE";
                                     summary-text: ExportDialogState.plate-size-summary;
@@ -419,6 +429,11 @@ export component ExportDialog inherits Rectangle {
                                     pill-width: 130px;
                                     item-selected(key, value, selected) => { if selected { ExportDialogState.square-size-summary = value; } }
                                 }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
 
                                 LabeledField {
                                     field-label: "Well rows/cols:";

@@ -22,4 +22,5 @@ pub use results_generator::ResultsGenerator;
 pub use results_generator::View;
 pub use results_generator::WellFilter;
 pub use results_generator::WellSize;
+pub use results_generator::WellsBatchFilter;
 pub use results_generator::color_scale_gradient;

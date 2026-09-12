@@ -2129,6 +2129,7 @@ impl ResultsStateController {
 
         state.set_with_list_view(rail_mode == ResultsRailMode::List);
         state.set_with_list_coloc_details(false);
+        state.set_with_list_one_file_per_image(false);
         state.set_with_plate_view(rail_mode == ResultsRailMode::Matrix);
         state.set_with_plates_and_wells_as_list(false);
         state.set_with_heatmap(false);
@@ -2270,6 +2271,7 @@ impl ResultsStateController {
             square_size: Some(square_size),
             with_list_view: state.get_with_list_view(),
             with_list_coloc_details: state.get_with_list_coloc_details(),
+            with_list_one_file_per_image: state.get_with_list_one_file_per_image(),
             with_plate_view: state.get_with_plate_view(),
             with_plates_and_wells_as_list: state.get_with_plates_and_wells_as_list(),
             with_heatmap: state.get_with_heatmap(),

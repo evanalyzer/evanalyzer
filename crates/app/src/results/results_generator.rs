@@ -242,6 +242,21 @@ pub struct WellFilter {
     pub well_order: Option<Vec<u32>>,
 }
 
+/// Same shape as `WellFilter` minus `group_name` — `get_wells_for_plate`
+/// answers for every well at once, so there's no single well to name.
+#[derive(Clone)]
+pub struct WellsBatchFilter {
+    pub plane: PlaneFilter,
+    pub grouping_regex: String,
+    pub aggregation: Aggregation,
+    pub object_class: ObjectClass,
+    pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub well_size: Option<WellSize>,
+    pub well_order: Option<Vec<u32>>,
+}
+
 #[derive(Clone)]
 pub struct ImageHeatmapFilter {
     pub plane: PlaneFilter,
@@ -982,144 +997,109 @@ impl ResultsGenerator {
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
 
-        match view {
-            View::List => {
-                let mut min = f64::INFINITY;
-                let mut max = f64::NEG_INFINITY;
-                for (_, _, _, value) in &fields {
-                    if let Some(value) = value {
-                        min = min.min(*value);
-                        max = max.max(*value);
-                    }
-                }
-                if !min.is_finite() || !max.is_finite() {
-                    min = 0.0;
-                    max = 0.0;
-                }
+        Ok(well_fields_to_result(
+            fields,
+            &filter.column,
+            &classes,
+            filter.well_size,
+            &filter.well_order,
+            &filter.color_schema,
+            &filter.color_scale,
+            view,
+        ))
+    }
 
-                let column_names = vec!["field".to_string(), filter.column.as_key(&classes)];
-                let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
-                let rows: Vec<Vec<Cell>> = fields
-                    .into_iter()
-                    .map(|(idx, image_rel_path, image_name, value)| {
-                        let search_key = Some((image_name, image_rel_path));
-                        vec![
-                            Cell {
-                                value: CellValue::String(idx),
-                                bg_color: 0,
-                                alternating_color: false,
-                                search_key: search_key.clone(),
-                            },
-                            Cell {
-                                value: CellValue::Float(value.unwrap_or(0.0) as f32),
-                                bg_color: 0,
-                                alternating_color: false,
-                                search_key,
-                            },
-                        ]
-                    })
-                    .collect();
-                let source_object_count = rows.len();
-                Ok(DatabaseResult {
-                    column_names,
-                    row_names,
-                    rows,
-                    min: min as f32,
-                    max: max as f32,
-                    source_object_count,
-                    row_locations: Vec::new(),
-                })
-            }
-            View::Heatmap => {
-                // No `well_order` (see the doc comment on
-                // `WellFilter::well_order`): a field's `idx` (1-based) is
-                // its position directly, in row-major reading order —
-                // idx 1 -> (0, 0), idx 2 -> (0, 1), .... Given a
-                // `well_order`, it's a lookup table instead: the value at
-                // `well_order[position]` names which field idx sits at
-                // that (row-major) grid position, letting a well be laid
-                // out in a non-trivial (e.g. snake) acquisition pattern.
-                let well_size = filter.well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
-                let (rows, cols) = (well_size.rows, well_size.cols);
+    // Batched form of `get_group_by_well`: every well's fields in one query
+    // (grouped by well *and* field, rather than one query per well behind a
+    // `WHERE ... = '{group_name}'` filter) — the well filter can't use an
+    // index (it's a `regexp_extract` match per row), so calling
+    // `get_group_by_well` once per well means scanning the whole table once
+    // per well. An export iterating every well for every (class, column,
+    // aggregation) combination turns that into thousands of full scans;
+    // this does the same work with exactly one scan per (class, column,
+    // aggregation) instead, by asking for every well's answer at once and
+    // partitioning the single result set client-side. Keyed by well/group
+    // id (e.g. "A1"), matching `WellFilter::group_name`.
+    pub fn get_wells_for_plate(
+        &self,
+        filter: &WellsBatchFilter,
+        view: &View,
+    ) -> Result<HashMap<String, DatabaseResult>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let classes = self.get_object_classes()?;
+        let (agg_fn, value_expr) = aggregate_sql(&filter.column, &filter.aggregation)?;
 
-                let mut values: HashMap<usize, (f64, String, String)> = HashMap::new();
-                for (idx_str, image_rel_path, image_name, value) in &fields {
-                    let Ok(idx) = idx_str.parse::<u32>() else {
-                        continue;
-                    };
-                    let position = match &filter.well_order {
-                        Some(order) => order.iter().position(|&field_idx| field_idx == idx),
-                        None => idx.checked_sub(1).map(|p| p as usize),
-                    };
-                    let Some(position) = position else {
-                        continue;
-                    };
-                    if let Some(value) = value {
-                        values.insert(
-                            position,
-                            (*value, image_name.clone(), image_rel_path.clone()),
-                        );
-                    }
-                }
+        let regex = if filter.grouping_regex.trim().is_empty() {
+            DEFAULT_GROUPING_REGEX
+        } else {
+            filter.grouping_regex.as_str()
+        };
+        let regex = regex.replace('\'', "''");
 
-                let (range_min, range_max) = match filter.color_scale {
-                    ColorScale::Manual(min, max) => (min as f64, max as f64),
-                    ColorScale::Auto => {
-                        let mut min = f64::INFINITY;
-                        let mut max = f64::NEG_INFINITY;
-                        for (value, ..) in values.values() {
-                            min = min.min(*value);
-                            max = max.max(*value);
-                        }
-                        if min.is_finite() && max.is_finite() {
-                            (min, max)
-                        } else {
-                            (0.0, 0.0)
-                        }
-                    }
-                };
-
-                let grid_rows: Vec<Vec<Cell>> = (0..rows)
-                    .map(|row| {
-                        (0..cols)
-                            .map(|col| match values.get(&(row * cols + col)) {
-                                Some((value, image_name, image_rel_path)) => Cell {
-                                    value: CellValue::Float(*value as f32),
-                                    bg_color: value_to_color(
-                                        *value,
-                                        range_min,
-                                        range_max,
-                                        &filter.color_schema,
-                                    ),
-                                    alternating_color: false,
-                                    search_key: Some((image_name.clone(), image_rel_path.clone())),
-                                },
-                                // No field occupies this grid position —
-                                // leave it empty rather than showing a
-                                // misleading 0 or another field's value.
-                                None => Cell {
-                                    value: CellValue::Empty,
-                                    bg_color: 0,
-                                    alternating_color: false,
-                                    search_key: None,
-                                },
-                            })
-                            .collect()
-                    })
-                    .collect();
-
-                let source_object_count = grid_rows.len();
-                Ok(DatabaseResult {
-                    column_names: (1..=cols).map(|col| col.to_string()).collect(),
-                    row_names: (1..=rows).map(|row| row.to_string()).collect(),
-                    rows: grid_rows,
-                    min: range_min as f32,
-                    max: range_max as f32,
-                    source_object_count,
-                    row_locations: Vec::new(),
-                })
-            }
+        let mut conditions = vec![
+            format!("z_stack = {}", filter.plane.z_stack),
+            format!("t_stack = {}", filter.plane.t_stack),
+        ];
+        if let ObjectClass::Valid(id) = filter.object_class {
+            conditions.push(format!(
+                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                sql_int_array_literal(&[id])
+            ));
         }
+        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+
+        let sql = format!(
+            "SELECT\n\
+                regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                regexp_extract(image_name, '{regex}', 4) AS idx,\n\
+                image_rel_path,\n\
+                image_name,\n\
+                {agg_fn}({value_expr}) AS value\n\
+             FROM objects\n\
+             {where_clause}\n\
+             GROUP BY group_prefix, idx, image_rel_path, image_name\n\
+             ORDER BY group_prefix, idx"
+        );
+
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let mut fields_by_well: HashMap<String, Vec<(String, String, String, Option<f64>)>> =
+            HashMap::new();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                ))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        for (group_prefix, idx, image_rel_path, image_name, value) in rows {
+            fields_by_well
+                .entry(group_prefix)
+                .or_default()
+                .push((idx, image_rel_path, image_name, value));
+        }
+
+        Ok(fields_by_well
+            .into_iter()
+            .map(|(well_id, fields)| {
+                let result = well_fields_to_result(
+                    fields,
+                    &filter.column,
+                    &classes,
+                    filter.well_size,
+                    &filter.well_order,
+                    &filter.color_schema,
+                    &filter.color_scale,
+                    view,
+                );
+                (well_id, result)
+            })
+            .collect())
     }
 
     // Third drill level: a spatial heatmap over one image's own pixels
@@ -2163,6 +2143,156 @@ pub fn color_scale_gradient(schema: &ColorSchema) -> [u32; COLOR_SCALE_GRADIENT_
         *stop = value_to_color(t, 0.0, 1.0, schema);
     }
     stops
+}
+
+/// Turns one well's raw `(idx, image_rel_path, image_name, value)` field
+/// rows into a `DatabaseResult` — shared by `get_group_by_well` (one well
+/// per call) and `get_wells_for_plate` (every well in one batched query,
+/// calling this once per well over its slice of that batch) so the two
+/// agree on exactly the same List/Heatmap shape.
+fn well_fields_to_result(
+    fields: Vec<(String, String, String, Option<f64>)>,
+    column: &Column,
+    classes: &[Class],
+    well_size: Option<WellSize>,
+    well_order: &Option<Vec<u32>>,
+    color_schema: &ColorSchema,
+    color_scale: &ColorScale,
+    view: &View,
+) -> DatabaseResult {
+    match view {
+        View::List => {
+            let mut min = f64::INFINITY;
+            let mut max = f64::NEG_INFINITY;
+            for (_, _, _, value) in &fields {
+                if let Some(value) = value {
+                    min = min.min(*value);
+                    max = max.max(*value);
+                }
+            }
+            if !min.is_finite() || !max.is_finite() {
+                min = 0.0;
+                max = 0.0;
+            }
+
+            let column_names = vec!["field".to_string(), column.as_key(classes)];
+            let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
+            let rows: Vec<Vec<Cell>> = fields
+                .into_iter()
+                .map(|(idx, image_rel_path, image_name, value)| {
+                    let search_key = Some((image_name, image_rel_path));
+                    vec![
+                        Cell {
+                            value: CellValue::String(idx),
+                            bg_color: 0,
+                            alternating_color: false,
+                            search_key: search_key.clone(),
+                        },
+                        Cell {
+                            value: CellValue::Float(value.unwrap_or(0.0) as f32),
+                            bg_color: 0,
+                            alternating_color: false,
+                            search_key,
+                        },
+                    ]
+                })
+                .collect();
+            let source_object_count = rows.len();
+            DatabaseResult {
+                column_names,
+                row_names,
+                rows,
+                min: min as f32,
+                max: max as f32,
+                source_object_count,
+                row_locations: Vec::new(),
+            }
+        }
+        View::Heatmap => {
+            // No `well_order` (see the doc comment on
+            // `WellFilter::well_order`): a field's `idx` (1-based) is its
+            // position directly, in row-major reading order — idx 1 -> (0,
+            // 0), idx 2 -> (0, 1), .... Given a `well_order`, it's a lookup
+            // table instead: the value at `well_order[position]` names
+            // which field idx sits at that (row-major) grid position,
+            // letting a well be laid out in a non-trivial (e.g. snake)
+            // acquisition pattern.
+            let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+            let (rows, cols) = (well_size.rows, well_size.cols);
+
+            let mut values: HashMap<usize, (f64, String, String)> = HashMap::new();
+            for (idx_str, image_rel_path, image_name, value) in &fields {
+                let Ok(idx) = idx_str.parse::<u32>() else {
+                    continue;
+                };
+                let position = match well_order {
+                    Some(order) => order.iter().position(|&field_idx| field_idx == idx),
+                    None => idx.checked_sub(1).map(|p| p as usize),
+                };
+                let Some(position) = position else {
+                    continue;
+                };
+                if let Some(value) = value {
+                    values.insert(
+                        position,
+                        (*value, image_name.clone(), image_rel_path.clone()),
+                    );
+                }
+            }
+
+            let (range_min, range_max) = match color_scale {
+                ColorScale::Manual(min, max) => (*min as f64, *max as f64),
+                ColorScale::Auto => {
+                    let mut min = f64::INFINITY;
+                    let mut max = f64::NEG_INFINITY;
+                    for (value, ..) in values.values() {
+                        min = min.min(*value);
+                        max = max.max(*value);
+                    }
+                    if min.is_finite() && max.is_finite() {
+                        (min, max)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                }
+            };
+
+            let grid_rows: Vec<Vec<Cell>> = (0..rows)
+                .map(|row| {
+                    (0..cols)
+                        .map(|col| match values.get(&(row * cols + col)) {
+                            Some((value, image_name, image_rel_path)) => Cell {
+                                value: CellValue::Float(*value as f32),
+                                bg_color: value_to_color(*value, range_min, range_max, color_schema),
+                                alternating_color: false,
+                                search_key: Some((image_name.clone(), image_rel_path.clone())),
+                            },
+                            // No field occupies this grid position — leave
+                            // it empty rather than showing a misleading 0
+                            // or another field's value.
+                            None => Cell {
+                                value: CellValue::Empty,
+                                bg_color: 0,
+                                alternating_color: false,
+                                search_key: None,
+                            },
+                        })
+                        .collect()
+                })
+                .collect();
+
+            let source_object_count = grid_rows.len();
+            DatabaseResult {
+                column_names: (1..=cols).map(|col| col.to_string()).collect(),
+                row_names: (1..=rows).map(|row| row.to_string()).collect(),
+                rows: grid_rows,
+                min: range_min as f32,
+                max: range_max as f32,
+                source_object_count,
+                row_locations: Vec::new(),
+            }
+        }
+    }
 }
 
 /// Maps `value` (within `[min, max]`) to a `0xRRGGBB` color under the

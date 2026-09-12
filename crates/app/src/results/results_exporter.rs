@@ -2,7 +2,7 @@ use super::results_generator::class_display_label;
 use crate::result::{
     Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
     ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateDimensions, PlateFilter,
-    ResultsGenerator, View, WellFilter, WellSize,
+    ResultsGenerator, View, WellSize, WellsBatchFilter,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use rust_xlsxwriter::{Color, Format, Workbook, Worksheet, XlsxError};
@@ -56,6 +56,11 @@ pub struct ResultExport {
     // What to export
     pub with_list_view: bool,
     pub with_list_coloc_details: bool,
+    /// `list_{image}.xlsx` per image instead of one shared `list.xlsx` —
+    /// needed once a single image's own object count risks Excel's
+    /// 1,048,576-row-per-sheet limit (a large plate scan can comfortably
+    /// exceed that combined across images, even if no single image does).
+    pub with_list_one_file_per_image: bool,
     pub with_plate_view: bool,
     pub with_plates_and_wells_as_list: bool,
     pub with_heatmap: bool,
@@ -91,9 +96,7 @@ impl ResultExport {
         })?;
 
         if self.with_list_view {
-            on_progress("Exporting List view", 0, 1);
-            self.export_list(database)?;
-            on_progress("Exporting List view", 1, 1);
+            self.export_list(database, &mut *on_progress)?;
         }
         // Single flag drives both documents — see the doc comment on
         // `export_plate_and_well` for why plate and well are always
@@ -116,7 +119,13 @@ impl ResultExport {
     // concatenating — not by a single broader query. A second "List (Coloc
     // Details)" sheet is added alongside it when `with_list_coloc_details`
     // is also set.
-    fn export_list(&self, database: &ResultsGenerator) -> Result<(), InternalErrors> {
+    //
+    // `with_list_one_file_per_image` splits this into `list_{image}.xlsx`
+    // per image instead — each one its own independent single-image,
+    // multi-t/z sheet — so a dataset whose combined row count would blow
+    // past Excel's 1,048,576-per-sheet limit in one shared file still
+    // exports cleanly, as long as no single image alone exceeds it.
+    fn export_list(&self, database: &ResultsGenerator, on_progress: ExportProgress) -> Result<(), InternalErrors> {
         let images = resolve_images(database, self)?;
         let object_classes = if self.object_classes.is_empty() {
             None
@@ -124,6 +133,33 @@ impl ResultExport {
             Some(self.object_classes.clone())
         };
 
+        if self.with_list_one_file_per_image {
+            for (image_idx, image) in images.iter().enumerate() {
+                on_progress(&format!("Exporting List: {image}"), image_idx + 1, images.len());
+                let single_image = std::slice::from_ref(image);
+
+                let mut workbook = Workbook::new();
+                let sheet = workbook.add_worksheet();
+                sheet.set_name("List").map_err(xlsx_err)?;
+                write_list_sheet(sheet, database, self, single_image, &object_classes, false)?;
+
+                if self.with_list_coloc_details {
+                    let coloc_sheet = workbook.add_worksheet();
+                    coloc_sheet
+                        .set_name("List (Coloc Details)")
+                        .map_err(xlsx_err)?;
+                    write_list_sheet(coloc_sheet, database, self, single_image, &object_classes, true)?;
+                }
+
+                let file_name = format!("list_{}.xlsx", sanitize_filename_component(&image_stub(image)));
+                workbook
+                    .save(self.output_dir.join(file_name))
+                    .map_err(xlsx_err)?;
+            }
+            return Ok(());
+        }
+
+        on_progress("Exporting List view", 0, 1);
         let mut workbook = Workbook::new();
         let sheet = workbook.add_worksheet();
         sheet.set_name("List").map_err(xlsx_err)?;
@@ -140,6 +176,7 @@ impl ResultExport {
         workbook
             .save(self.output_dir.join("list.xlsx"))
             .map_err(xlsx_err)?;
+        on_progress("Exporting List view", 1, 1);
         Ok(())
     }
 
@@ -216,17 +253,18 @@ impl ResultExport {
                         matrix_dimension: self.plate_dimension,
                     };
 
-                    // The real well ids for this group (independent of
-                    // `grouping_regex`'s exact output format, unlike
-                    // reconstructing them from the grid's row/col labels) —
-                    // drives which wells get their own block below, and
-                    // doubles as the flat-list form when requested.
-                    let plate_list = database.get_group_by_plate(&plate_filter, &View::List)?;
                     let plate_grid =
                         database.get_group_by_plate(&plate_filter, &View::Heatmap)?;
                     plate_row =
                         write_grid_block(plate_sheet, plate_row, &caption, &plate_grid)?;
+                    // Only queried when actually shown - the flat-list form
+                    // is otherwise pure overhead (another full scan; see the
+                    // `get_wells_for_plate` comment below for the same
+                    // reasoning applied per-well). The active well *ids* for
+                    // the loop below come from `well_heatmaps` itself
+                    // instead of this, once that's fetched.
                     if self.with_plates_and_wells_as_list {
+                        let plate_list = database.get_group_by_plate(&plate_filter, &View::List)?;
                         plate_row = write_flat_block(
                             plate_sheet,
                             plate_row,
@@ -235,30 +273,51 @@ impl ResultExport {
                         )?;
                     }
 
-                    for well_id in &plate_list.row_names {
-                        let well_filter = WellFilter {
-                            plane: PlaneFilter {
-                                z_stack: z,
-                                t_stack: t,
-                            },
-                            group_name: well_id.clone(),
-                            grouping_regex: self.grouping_regex.clone(),
-                            aggregation: aggregation.clone(),
-                            object_class: *class,
-                            column: column.clone(),
-                            color_schema: self.color_schema.clone(),
-                            color_scale: self.color_scale.clone(),
-                            well_size: self.well_size,
-                            well_order: self.well_order.clone(),
-                        };
+                    // One query for *every* well's fields, rather than one
+                    // query per well (`get_group_by_well`'s own well filter
+                    // can't use an index, so that would mean re-scanning the
+                    // whole table once per well) — see `get_wells_for_plate`'s
+                    // doc comment. This is the difference between, say, 54
+                    // full scans and 1 per (class, column, aggregation) here.
+                    let wells_filter = WellsBatchFilter {
+                        plane: PlaneFilter {
+                            z_stack: z,
+                            t_stack: t,
+                        },
+                        grouping_regex: self.grouping_regex.clone(),
+                        aggregation: aggregation.clone(),
+                        object_class: *class,
+                        column: column.clone(),
+                        color_schema: self.color_schema.clone(),
+                        color_scale: self.color_scale.clone(),
+                        well_size: self.well_size,
+                        well_order: self.well_order.clone(),
+                    };
+                    let mut well_heatmaps =
+                        database.get_wells_for_plate(&wells_filter, &View::Heatmap)?;
+                    let mut well_lists = if self.with_plates_and_wells_as_list {
+                        Some(database.get_wells_for_plate(&wells_filter, &View::List)?)
+                    } else {
+                        None
+                    };
+
+                    // Sorted for deterministic, well-id-ordered output
+                    // (matching the previous `plate_list.row_names` order) -
+                    // `well_heatmaps` is a `HashMap`, so its own iteration
+                    // order isn't meaningful on its own.
+                    let mut well_ids: Vec<String> = well_heatmaps.keys().cloned().collect();
+                    well_ids.sort();
+
+                    for well_id in &well_ids {
                         let well_caption = format!("{caption} — Well {well_id}");
-                        let well_grid =
-                            database.get_group_by_well(&well_filter, &View::Heatmap)?;
+                        let Some(well_grid) = well_heatmaps.remove(well_id) else {
+                            continue;
+                        };
                         well_row =
                             write_grid_block(well_sheet, well_row, &well_caption, &well_grid)?;
-                        if self.with_plates_and_wells_as_list {
-                            let well_list =
-                                database.get_group_by_well(&well_filter, &View::List)?;
+                        if let Some(well_list) =
+                            well_lists.as_mut().and_then(|lists| lists.remove(well_id))
+                        {
                             well_row = write_flat_block(
                                 well_sheet,
                                 well_row,
