@@ -1715,6 +1715,8 @@ fn aggregation_display_name(aggregation: &Aggregation) -> &'static str {
         Aggregation::Max => "Maximum",
         Aggregation::Stddev => "Std Dev",
         Aggregation::Sum => "Sum",
+        Aggregation::Median => "Median",
+        Aggregation::Skewness => "Skewness",
     }
 }
 

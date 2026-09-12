@@ -62,6 +62,8 @@ pub enum Aggregation {
     Max,
     Stddev,
     Sum,
+    Median,
+    Skewness,
 }
 
 #[derive(Default, Clone, PartialEq, Eq)]
@@ -1983,6 +1985,8 @@ fn aggregation_sql_fn(aggregation: &Aggregation) -> &'static str {
         Aggregation::Max => "MAX",
         Aggregation::Stddev => "STDDEV_SAMP",
         Aggregation::Sum => "SUM",
+        Aggregation::Median => "MEDIAN",
+        Aggregation::Skewness => "SKEWNESS",
     }
 }
 
@@ -2000,7 +2004,10 @@ fn aggregate_sql(
     if matches!(column, Column::Count) {
         return Ok(("COUNT", "*".to_string()));
     }
-    Ok((aggregation_sql_fn(aggregation), column_aggregate_expr(column)?))
+    Ok((
+        aggregation_sql_fn(aggregation),
+        column_aggregate_expr(column)?,
+    ))
 }
 
 // Approximate 5-stop reproduction of the matplotlib "viridis" colormap
