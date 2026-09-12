@@ -310,15 +310,33 @@ export component MultiSelectDropdown inherits Rectangle {
                         }
 
                         if root.groups.length > 0: VerticalLayout {
-                            spacing: 2px;
+                            // 0, not 2px: this layout's direct children are
+                            // one `Rectangle` per item below (mostly 0-height
+                            // - see that loop's comment) plus one
+                            // `VerticalLayout` per group - `spacing` is added
+                            // between *every* child regardless of its own
+                            // size, so at 2px here it was adding a blank gap
+                            // that scaled with the total item count (mostly
+                            // 0-height rows, all still counted) instead of
+                            // collapsing to nothing. Each group's own header
+                            // Text below already separates one section from
+                            // the next visually, so no replacement gap is
+                            // needed here.
+                            spacing: 0px;
 
                             for it[idx] in root.items: Rectangle {
-                                // Explicit (if conditional) height so this wrapper never
-                                // picks up the layout's default stretch factor - without
-                                // it, every row that doesn't match its group would have no
-                                // fixed size and would expand to fill the popup's leftover
-                                // space instead of collapsing to nothing.
-                                height: it.group == "" ? 26px : 0px;
+                                // Slint's `for` can't skip an iteration
+                                // outright (no loop body shorter than one
+                                // element - see the file header note on why
+                                // that matters), so a non-matching item
+                                // still becomes a real, always-present
+                                // child of this layout; that child must be
+                                // sized to occupy nothing more than a
+                                // matching item's own visual gap (2px, baked
+                                // into the 28px below) rather than falling
+                                // back on the layout's `spacing`, which
+                                // can't tell a real row from an empty one.
+                                height: it.group == "" ? 28px : 0px;
                                 if it.group == "": MultiSelectRow {
                                     item: it;
                                     show-checkbox: root.multi-select;
@@ -341,7 +359,8 @@ export component MultiSelectDropdown inherits Rectangle {
                                 }
 
                                 for it[idx] in root.items: Rectangle {
-                                    height: it.group == g ? 26px : 0px;
+                                    // Same reasoning as the ungrouped loop above.
+                                    height: it.group == g ? 28px : 0px;
                                     if it.group == g: MultiSelectRow {
                                         item: it;
                                         show-checkbox: root.multi-select;

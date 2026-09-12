@@ -149,6 +149,8 @@ export component ResultsListView inherits Rectangle {
                       //  width: max(row-layout.preferred-width, parent.width);
                         width: header-rect.width * ResultsState.list-column-headers.length;
 
+                        background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
+
                         Rectangle {
                             y: 34px;
                             border-width: 1px;
@@ -156,8 +158,6 @@ export component ResultsListView inherits Rectangle {
                             height: 1px;
                             x: 0;
                         }
-
-                        background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
 
                         ta := TouchArea { }
 
