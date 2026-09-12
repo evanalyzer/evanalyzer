@@ -156,11 +156,19 @@ impl DuckDbExporter {
         })
     }
 
+    // Plain display name for `object_class_name` (and `coloc_stats`'
+    // source_class/target_class) - must match the `classes` table's own
+    // `name` column exactly (see `Self::new`'s `classes` appender below),
+    // since `results_generator.rs` looks up a class's color by comparing
+    // `object_class_name` entries against `classes.name` verbatim. The
+    // `class_{n}` fallback only fires for a class id this exporter's own
+    // `class_names` registry doesn't recognize, so it can't collide with a
+    // real name.
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
             ObjectClass::Valid(n) => match self.class_names.get(class) {
-                Some((name, _color)) => format!("{} ({})", name, n),
+                Some((name, _color)) => name.clone(),
                 None => format!("class_{}", n),
             },
         }
@@ -273,18 +281,23 @@ fn json_int_array(values: &[i32]) -> String {
 // JSON serialisation helpers
 // ---------------------------------------------------------------------------
 
-fn coloc_to_json(
-    colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>,
-    label: &dyn Fn(&ObjectClass) -> String,
-) -> String {
+// Keys by the class's raw numeric id (not its display name) - a class
+// rename never invalidates an already-written `coloc_json`, and the id is
+// exactly what `Column::ColocCount`/`coloc_count` (results_generator.rs)
+// need anyway, since it only sums values regardless of key.
+fn coloc_to_json(colocalized_with: &IndexMap<ObjectClass, Vec<ObjectId>>) -> String {
     let mut entries = Vec::with_capacity(colocalized_with.len());
     for (class, ids) in colocalized_with {
+        let key = match class {
+            ObjectClass::Unset => "unset".to_string(),
+            ObjectClass::Valid(n) => n.to_string(),
+        };
         let ids_str = ids
             .iter()
             .map(|id| format!("\"{}\"", id))
             .collect::<Vec<_>>()
             .join(",");
-        entries.push(format!("\"{}\":[{}]", label(class), ids_str));
+        entries.push(format!("\"{}\":[{}]", key, ids_str));
     }
     format!("{{{}}}", entries.join(","))
 }
@@ -468,7 +481,7 @@ impl PipelineResultExporter for DuckDbExporter {
                 let object_class_names_json = json_string_array(&object_class_names);
                 let object_class_ids_json = json_int_array(&object_class_ids);
                 let children_json = json_string_array(&children_ids);
-                let coloc_json = coloc_to_json(&object.colocalized_with, &label);
+                let coloc_json = coloc_to_json(&object.colocalized_with);
                 let intensities_json = intensities_to_json(&object.intensities, bit_max);
 
                 let seg_class_name = object.segmentation_class.to_string();

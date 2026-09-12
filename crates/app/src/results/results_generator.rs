@@ -1484,7 +1484,10 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
 }
 
 /// Total number of colocalization partners across every target class, from
-/// the raw `{"<class>": [<object ids>], ...}` shape `coloc_json` stores.
+/// the raw `{"<class_id>": [<object ids>], ...}` shape `coloc_json` stores
+/// (see `coloc_to_json` in evanalyzer_core's duckdb.rs) — keyed by the
+/// target class's numeric id, not its name, but that doesn't matter here
+/// since only the values are summed.
 fn coloc_count(coloc_json: &str) -> i32 {
     let Ok(serde_json::Value::Object(partners)) = serde_json::from_str(coloc_json) else {
         return 0;
