@@ -18,7 +18,7 @@ import { ResultsRail, ResultsBreadcrumb } from "results_common.slint";
 import { ResultsListView } from "results_list.slint";
 import { ResultsMatrixView } from "results_matrix.slint";
 import { ResultsChartsView } from "results_charts.slint";
-// import { ExportDialog } from "../export_dialog.slint";   // existing, unmodified
+import { ExportDialog, ExportDialogState } from "export_dialog.slint";
 
 export component ResultsWindow inherits Window {
     title: "Results - EVAnalyzer";
@@ -51,7 +51,7 @@ export component ResultsWindow inherits Window {
         }
     }
 
-    // if ResultsState.export_dialog_active: ExportDialog { width: 100%; height: 100%; }
+    if ExportDialogState.active: ExportDialog { width: 100%; height: 100%; }
 }
 
 // -------------------------------------------------------------------------

@@ -11,11 +11,21 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::range::Range;
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
+    #[default]
     XLSX,
     CSV,
 }
 
+/// One export step/document completing — `current`/`total` describe
+/// progress *within* the step named by `message` (e.g. "Plate/Well: ch2@spot"
+/// at `current=3, total=22` for the 3rd of 22 classes), not overall export
+/// progress across List/Plate/Well/Heatmap combined, since those phases
+/// have no shared unit to make a single running percentage meaningful.
+pub type ExportProgress<'a> = &'a mut dyn FnMut(&str, usize, usize);
+
+#[derive(Default, Clone)]
 pub struct ResultExport {
     /// Directory the export writes its file(s) into — created if missing.
     /// Every document below lives directly under it (`list.xlsx`,
@@ -52,7 +62,18 @@ pub struct ResultExport {
 }
 
 impl ResultExport {
-    pub fn start_export(&self, database: &ResultsGenerator) -> Result<(), InternalErrors> {
+    /// `on_progress(message, current, total)` is called throughout to
+    /// report what's happening — see `ExportProgress`'s doc comment for what
+    /// `current`/`total` are relative to. Called from a background thread
+    /// (this can take a while for a large database), so `on_progress`
+    /// itself must not touch UI state directly — the caller's closure
+    /// should just forward each call through `slint::invoke_from_event_loop`
+    /// or equivalent.
+    pub fn start_export(
+        &self,
+        database: &ResultsGenerator,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
         match self.format {
             ExportFormat::CSV => {
                 return Err(InternalErrors::Internal(
@@ -70,16 +91,18 @@ impl ResultExport {
         })?;
 
         if self.with_list_view {
+            on_progress("Exporting List view", 0, 1);
             self.export_list(database)?;
+            on_progress("Exporting List view", 1, 1);
         }
         // Single flag drives both documents — see the doc comment on
         // `export_plate_and_well` for why plate and well are always
         // exported together rather than needing their own toggle each.
         if self.with_plate_view {
-            self.export_plate_and_well(database)?;
+            self.export_plate_and_well(database, &mut *on_progress)?;
         }
         if self.with_heatmap {
-            self.export_heatmap(database)?;
+            self.export_heatmap(database, &mut *on_progress)?;
         }
         Ok(())
     }
@@ -134,7 +157,11 @@ impl ResultExport {
     // z/t at a time via the global stepper, not a time series) — there's no
     // "stack every t one after another" equivalent for a grid the way
     // there is for a flat table.
-    fn export_plate_and_well(&self, database: &ResultsGenerator) -> Result<(), InternalErrors> {
+    fn export_plate_and_well(
+        &self,
+        database: &ResultsGenerator,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
             classes_all.iter().map(|class| class.id).collect()
@@ -150,8 +177,13 @@ impl ResultExport {
         let mut well_workbook = Workbook::new();
         let mut well_names = SheetNamer::new();
 
-        for class in &target_classes {
+        for (class_idx, class) in target_classes.iter().enumerate() {
             let class_label = class_display_label(*class, &classes_all);
+            on_progress(
+                &format!("Exporting Plate/Well: {class_label}"),
+                class_idx + 1,
+                target_classes.len(),
+            );
 
             let plate_sheet = plate_workbook.add_worksheet();
             plate_sheet
@@ -254,7 +286,11 @@ impl ResultExport {
     // sharing one document, since a heatmap is inherently local to a single
     // image. Same single-plane caveat as `export_plate_and_well` applies:
     // only the first z/t in the given ranges is rendered.
-    fn export_heatmap(&self, database: &ResultsGenerator) -> Result<(), InternalErrors> {
+    fn export_heatmap(
+        &self,
+        database: &ResultsGenerator,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
         let classes_all = database.get_object_classes()?;
         let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
             classes_all.iter().map(|class| class.id).collect()
@@ -266,7 +302,8 @@ impl ResultExport {
         let z = self.z_stacks.start;
         let t = self.t_stacks.start;
 
-        for image in &images {
+        for (image_idx, image) in images.iter().enumerate() {
+            on_progress(&format!("Exporting Heatmap: {image}"), image_idx + 1, images.len());
             let mut workbook = Workbook::new();
             let mut names = SheetNamer::new();
 

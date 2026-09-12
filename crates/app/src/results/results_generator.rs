@@ -54,7 +54,7 @@ pub struct WellSize {
     pub cols: usize,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub enum Aggregation {
     #[default]
     Avg,

@@ -1,0 +1,515 @@
+// export_dialog.slint — modal overlay for configuring and running a
+// Results export (backed by `ResultExport::start_export` in
+// evanalyzer_app's results_exporter.rs). Lives on `ExportDialogState`
+// rather than the main window's `GlobalAppState`/`DialogType` because
+// `ResultsWindow` is its own top-level Slint component tree (see
+// results_state_controller.rs) and never imports state.slint — Slint
+// globals are per-tree, so the main window's dialog machinery is simply
+// unreachable here.
+
+import { LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { AppButton } from "../components/app_button.slint";
+import {
+    MultiSelectDropdown,
+    MultiSelectItem,
+} from "../components/multi_select_dropdown.slint";
+
+export global ExportDialogState {
+    in-out property <bool> active: false;
+
+    // -- Output --
+    in-out property <string> output-dir: "";
+    callback pick-output-dir();
+
+    // -- Z/T range (exclusive end, matching `ResultExport`'s `Range<u32>`) --
+    in-out property <string> z-start: "0";
+    in-out property <string> z-end: "1";
+    in-out property <string> t-start: "0";
+    in-out property <string> t-end: "1";
+
+    // -- Filters --
+    in-out property <[MultiSelectItem]> image-items: [];
+    in-out property <string> image-summary: "All images";
+    in-out property <[MultiSelectItem]> class-items: [];
+    in-out property <string> class-summary: "All classes";
+    in-out property <[MultiSelectItem]> column-items: [];
+    in-out property <[string]> column-groups: [];
+    in-out property <string> column-summary: "";
+
+    // -- Plate/Well/Heatmap options --
+    in-out property <string> grouping-regex: "";
+    in-out property <[MultiSelectItem]> aggregation-items: [];
+    in-out property <string> aggregation-summary: "";
+    in-out property <[MultiSelectItem]> color-schema-items: [];
+    in-out property <string> color-schema-summary: "Viridis";
+    in-out property <[MultiSelectItem]> plate-size-items: [];
+    in-out property <string> plate-size-summary: "Auto";
+    in-out property <string> well-rows: "4";
+    in-out property <string> well-cols: "4";
+    in-out property <[MultiSelectItem]> square-size-items: [];
+    in-out property <string> square-size-summary: "256 px";
+
+    // -- What to export --
+    in-out property <bool> with-list-view: true;
+    in-out property <bool> with-list-coloc-details: false;
+    in-out property <bool> with-plate-view: false;
+    in-out property <bool> with-plates-and-wells-as-list: false;
+    in-out property <bool> with-heatmap: false;
+
+    // -- Progress (set from Rust while the background export thread runs) --
+    in-out property <bool> is-exporting: false;
+    in-out property <string> progress-message: "";
+    in-out property <int> progress-current: 0;
+    in-out property <int> progress-total: 0;
+    in-out property <bool> done: false;
+    in-out property <bool> has-error: false;
+    in-out property <string> error-message: "";
+
+    callback image-item-selected(string, bool);
+    callback image-select-all();
+    callback image-select-none();
+    callback class-item-selected(string, bool);
+    callback class-select-all();
+    callback class-select-none();
+    callback column-item-selected(string, bool);
+    callback column-select-all();
+    callback column-select-none();
+    callback aggregation-item-selected(string, bool);
+
+    callback start-clicked();
+    callback close-clicked();
+}
+
+component LabeledField inherits HorizontalLayout {
+    in property <string> field-label;
+    spacing: 8px;
+    Text {
+        text: root.field-label;
+        vertical-alignment: center;
+        color: Theme.text-dim;
+        font-size: 11px;
+    }
+
+    @children
+}
+
+export component ExportDialog inherits Rectangle {
+    background: Theme.modal-overlay;
+
+    // Swallows clicks so they don't fall through to whatever's behind the
+    // overlay - matches BaseDialog/ProjectSettingsDialog's own overlay.
+    TouchArea { }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 680px;
+        height: 760px;
+        background: Theme.panel;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.border;
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        clip: true;
+
+        VerticalLayout {
+            spacing: 0;
+
+            Rectangle {
+                height: 56px;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: stretch;
+
+                    Text {
+                        text: "Export Results";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 5px;
+                        background: close-ta.has-hover ? Theme.raised : transparent;
+                        Text {
+                            text: "✕";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-ta := TouchArea {
+                            enabled: !ExportDialogState.is-exporting;
+                            clicked => {
+                                ExportDialogState.close-clicked();
+                                ExportDialogState.active = false;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border-soft;
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg;
+
+                ScrollView {
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 18px;
+
+                        // -- Output folder --
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Output Folder";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 32px;
+                                    border-radius: Theme.radius-sm;
+                                    background: Theme.raised;
+                                    border-width: 1px;
+                                    border-color: Theme.border-soft;
+                                    Text {
+                                        x: 8px;
+                                        width: parent.width - 16px;
+                                        text: ExportDialogState.output-dir == "" ? "Choose a folder…" : ExportDialogState.output-dir;
+                                        color: ExportDialogState.output-dir == "" ? Theme.text-faint : Theme.text;
+                                        vertical-alignment: center;
+                                        font-size: 11.5px;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                AppButton {
+                                    text: "Browse…";
+                                    enabled: !ExportDialogState.is-exporting;
+                                    clicked => { ExportDialogState.pick-output-dir(); }
+                                }
+                            }
+                        }
+
+                        // -- What to export --
+                        VerticalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: "What to Export";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            CheckBox {
+                                text: "List view";
+                                checked <=> ExportDialogState.with-list-view;
+                            }
+
+                            CheckBox {
+                                text: "List — Coloc details (second tab)";
+                                checked <=> ExportDialogState.with-list-coloc-details;
+                                enabled: ExportDialogState.with-list-view;
+                            }
+
+                            CheckBox {
+                                text: "Plate + Well views (one tab per class)";
+                                checked <=> ExportDialogState.with-plate-view;
+                            }
+
+                            CheckBox {
+                                text: "Plate/Well — also as a flat list";
+                                checked <=> ExportDialogState.with-plates-and-wells-as-list;
+                                enabled: ExportDialogState.with-plate-view;
+                            }
+
+                            CheckBox {
+                                text: "Image heatmap (one file per image)";
+                                checked <=> ExportDialogState.with-heatmap;
+                            }
+                        }
+
+                        // -- Z/T range --
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Z / T Range";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                LabeledField {
+                                    field-label: "Z:";
+                                    LineEdit {
+                                        width: 56px;
+                                        input-type: number;
+                                        text <=> ExportDialogState.z-start;
+                                    }
+
+                                    Text {
+                                        text: "to";
+                                        vertical-alignment: center;
+                                        color: Theme.text-mute;
+                                        font-size: 11px;
+                                    }
+
+                                    LineEdit {
+                                        width: 56px;
+                                        input-type: number;
+                                        text <=> ExportDialogState.z-end;
+                                    }
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+
+                                LabeledField {
+                                    field-label: "T:";
+                                    LineEdit {
+                                        width: 56px;
+                                        input-type: number;
+                                        text <=> ExportDialogState.t-start;
+                                    }
+
+                                    Text {
+                                        text: "to";
+                                        vertical-alignment: center;
+                                        color: Theme.text-mute;
+                                        font-size: 11px;
+                                    }
+
+                                    LineEdit {
+                                        width: 56px;
+                                        input-type: number;
+                                        text <=> ExportDialogState.t-end;
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- Filters --
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Filters";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                MultiSelectDropdown {
+                                    label: "IMAGES";
+                                    summary-text: ExportDialogState.image-summary;
+                                    items <=> ExportDialogState.image-items;
+                                    multi-select: true;
+                                    show-select-all: true;
+                                    pill-width: 190px;
+                                    item-selected(key, value, selected) => { ExportDialogState.image-item-selected(key, selected); }
+                                    select-all => { ExportDialogState.image-select-all(); }
+                                    select-none => { ExportDialogState.image-select-none(); }
+                                }
+
+                                MultiSelectDropdown {
+                                    label: "CLASSES";
+                                    summary-text: ExportDialogState.class-summary;
+                                    items <=> ExportDialogState.class-items;
+                                    multi-select: true;
+                                    show-select-all: true;
+                                    pill-width: 190px;
+                                    item-selected(key, value, selected) => { ExportDialogState.class-item-selected(key, selected); }
+                                    select-all => { ExportDialogState.class-select-all(); }
+                                    select-none => { ExportDialogState.class-select-none(); }
+                                }
+                            }
+
+                            MultiSelectDropdown {
+                                label: "COLUMNS";
+                                summary-text: ExportDialogState.column-summary;
+                                items <=> ExportDialogState.column-items;
+                                groups: ExportDialogState.column-groups;
+                                multi-select: true;
+                                show-select-all: true;
+                                pill-width: 200px;
+                                item-selected(key, value, selected) => { ExportDialogState.column-item-selected(key, selected); }
+                                select-all => { ExportDialogState.column-select-all(); }
+                                select-none => { ExportDialogState.column-select-none(); }
+                            }
+                        }
+
+                        // -- Plate/Well/Heatmap options --
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Plate / Well / Heatmap Options";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                MultiSelectDropdown {
+                                    label: "AGGREGATIONS";
+                                    summary-text: ExportDialogState.aggregation-summary;
+                                    items <=> ExportDialogState.aggregation-items;
+                                    multi-select: true;
+                                    show-select-all: true;
+                                    pill-width: 170px;
+                                    item-selected(key, value, selected) => { ExportDialogState.aggregation-item-selected(key, selected); }
+                                }
+
+                                MultiSelectDropdown {
+                                    label: "COLOR SCHEMA";
+                                    summary-text: ExportDialogState.color-schema-summary;
+                                    items <=> ExportDialogState.color-schema-items;
+                                    multi-select: false;
+                                    pill-width: 140px;
+                                    item-selected(key, value, selected) => { if selected { ExportDialogState.color-schema-summary = value; } }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                MultiSelectDropdown {
+                                    label: "PLATE SIZE";
+                                    summary-text: ExportDialogState.plate-size-summary;
+                                    items <=> ExportDialogState.plate-size-items;
+                                    multi-select: false;
+                                    pill-width: 140px;
+                                    item-selected(key, value, selected) => { if selected { ExportDialogState.plate-size-summary = value; } }
+                                }
+
+                                MultiSelectDropdown {
+                                    label: "SQUARE SIZE";
+                                    summary-text: ExportDialogState.square-size-summary;
+                                    items <=> ExportDialogState.square-size-items;
+                                    multi-select: false;
+                                    pill-width: 130px;
+                                    item-selected(key, value, selected) => { if selected { ExportDialogState.square-size-summary = value; } }
+                                }
+
+                                LabeledField {
+                                    field-label: "Well rows/cols:";
+                                    LineEdit {
+                                        width: 46px;
+                                        input-type: number;
+                                        text <=> ExportDialogState.well-rows;
+                                    }
+
+                                    LineEdit {
+                                        width: 46px;
+                                        input-type: number;
+                                        text <=> ExportDialogState.well-cols;
+                                    }
+                                }
+                            }
+
+                            LabeledField {
+                                field-label: "Grouping regex:";
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    placeholder-text: "Default (e.g. A1_01.vsi)";
+                                    text <=> ExportDialogState.grouping-regex;
+                                }
+                            }
+                        }
+
+                        // -- Progress / result --
+                        if ExportDialogState.is-exporting || ExportDialogState.done || ExportDialogState.has-error: VerticalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: ExportDialogState.has-error
+                                    ? "Export failed: " + ExportDialogState.error-message
+                                    : ExportDialogState.done
+                                    ? "Export complete."
+                                    : ExportDialogState.progress-message;
+                                color: ExportDialogState.has-error ? Theme.err : (ExportDialogState.done ? Theme.ok : Theme.text);
+                                font-size: 11.5px;
+                                wrap: word-wrap;
+                            }
+
+                            if ExportDialogState.is-exporting: Rectangle {
+                                height: 8px;
+                                border-radius: 4px;
+                                background: Theme.raised;
+                                Rectangle {
+                                    x: 0;
+                                    width: ExportDialogState.progress-total > 0
+                                        ? parent.width * (ExportDialogState.progress-current * 1.0 / ExportDialogState.progress-total)
+                                        : 0px;
+                                    height: parent.height;
+                                    border-radius: 4px;
+                                    background: Theme.accent;
+                                    animate width {
+                                        duration: 200ms;
+                                        easing: ease-out;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 56px;
+                background: Theme.bg;
+                border-color: Theme.border-soft;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 16px;
+                    spacing: 12px;
+                    alignment: end;
+
+                    AppButton {
+                        text: "Close";
+                        enabled: !ExportDialogState.is-exporting;
+                        clicked => {
+                            ExportDialogState.close-clicked();
+                            ExportDialogState.active = false;
+                        }
+                    }
+
+                    AppButton {
+                        text: ExportDialogState.is-exporting ? "Exporting…" : "Start Export";
+                        primary: true;
+                        enabled: !ExportDialogState.is-exporting && ExportDialogState.output-dir != "";
+                        clicked => { ExportDialogState.start-clicked(); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,12 +1,12 @@
 use crate::editor::images_list_controller::ImagesListController;
 use crate::{
-    BreadcrumbItem, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsListState,
-    ResultsRailMode, ResultsState, UiState,
+    BreadcrumbItem, ExportDialogState, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow,
+    ResultsListState, ResultsRailMode, ResultsState, UiState,
 };
 use evanalyzer_app::result::{
     self, Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry,
-    DatabaseResult, ImageEntry, ImageHeatmapFilter, PlateDimensions, ResultsGenerator, WellFilter,
-    WellSize,
+    DatabaseResult, ExportFormat, ImageEntry, ImageHeatmapFilter, PlateDimensions, ResultExport,
+    ResultsGenerator, WellFilter, WellSize,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -95,6 +95,23 @@ pub struct ResultsStateController {
     // database.
     list_row_locations: Mutex<Vec<(String, [u32; 4])>>,
     image_list_controller: Arc<ImagesListController>,
+    // The path `result_generator`'s connection was opened from — so
+    // `on_export_start_clicked` can open its *own* fresh connection for the
+    // (potentially long-running) export, rather than holding
+    // `result_generator`'s lock for the whole export and blocking every
+    // other List/Matrix query on the UI thread for as long as it runs.
+    db_path: Mutex<Option<PathBuf>>,
+    // Whether the export dialog's defaults have already been seeded for the
+    // currently-open database (see `populate_export_defaults`) — reset to
+    // `false` on every `open_database` so a fresh database gets fresh
+    // defaults the next time the dialog opens, but re-opening the dialog
+    // against the *same* database leaves whatever the user already
+    // configured alone. The configuration itself needs no Rust-side mirror:
+    // every dialog control (checkboxes, text fields, the
+    // MultiSelectDropdowns' own `items`) is two-way bound straight to
+    // `ExportDialogState` in Slint, which retains it for the life of the
+    // window — `on_export_start_clicked` reads it back from there directly.
+    export_populated: Mutex<bool>,
 }
 
 impl ResultsStateController {
@@ -122,6 +139,8 @@ impl ResultsStateController {
             current_image: Mutex::new(None),
             list_row_locations: Mutex::new(Vec::new()),
             image_list_controller,
+            db_path: Mutex::new(None),
+            export_populated: Mutex::new(false),
         }
     }
 
@@ -738,16 +757,237 @@ impl ResultsStateController {
                 .on_chart_class_selected(move |_key, _selected| {});
 
             // -- Export --
-            ui.global::<ResultsState>()
-                .on_export_dialog_open(move || {});
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ResultsState>().on_export_dialog_open(move || {
+                let Some(ui_ready) = ui_weak.upgrade() else {
+                    warn!("Failed to upgrade UI handle in on_export_dialog_open");
+                    return;
+                };
+                let already_populated = {
+                    let mut populated = manager.export_populated.lock().expect("Poisened");
+                    let was_populated = *populated;
+                    *populated = true;
+                    was_populated
+                };
+                if !already_populated {
+                    manager.populate_export_defaults(&ui_ready);
+                }
+                ui_ready.global::<ExportDialogState>().set_active(true);
+            });
+
+            let ui_weak = self.ui.clone();
+            ui.global::<ExportDialogState>()
+                .on_pick_output_dir(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_pick_output_dir");
+                        return;
+                    };
+                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        ui_ready
+                            .global::<ExportDialogState>()
+                            .set_output_dir(path.to_string_lossy().into_owned().into());
+                    }
+                });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ExportDialogState>()
+                .on_image_item_selected(move |_key, _selected| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_image_item_selected");
+                        return;
+                    };
+                    let state = ui_ready.global::<ExportDialogState>();
+                    let items = state.get_image_items();
+                    let selected = items.iter().filter(|item| item.selected).count();
+                    let total = manager.images.lock().expect("Poisened").len();
+                    state.set_image_summary(list_summary(selected, total, "Images"));
+                });
+
+            let ui_weak = self.ui.clone();
+            let manager = self.clone();
+            ui.global::<ExportDialogState>().on_image_select_all(move || {
+                let Some(ui_ready) = ui_weak.upgrade() else {
+                    warn!("Failed to upgrade UI handle in on_image_select_all");
+                    return;
+                };
+                let images = manager.images.lock().expect("Poisened");
+                let items = image_items(&images, true);
+                let total = images.len();
+                drop(images);
+                let state = ui_ready.global::<ExportDialogState>();
+                state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_image_summary(list_summary(total, total, "Images"));
+            });
+
+            let ui_weak = self.ui.clone();
+            let manager = self.clone();
+            ui.global::<ExportDialogState>().on_image_select_none(move || {
+                let Some(ui_ready) = ui_weak.upgrade() else {
+                    warn!("Failed to upgrade UI handle in on_image_select_none");
+                    return;
+                };
+                let images = manager.images.lock().expect("Poisened");
+                let items = image_items(&images, false);
+                let total = images.len();
+                drop(images);
+                let state = ui_ready.global::<ExportDialogState>();
+                state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_image_summary(list_summary(0, total, "Images"));
+            });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ExportDialogState>()
+                .on_class_item_selected(move |_key, _selected| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_class_item_selected");
+                        return;
+                    };
+                    let state = ui_ready.global::<ExportDialogState>();
+                    let items = state.get_class_items();
+                    let selected = items.iter().filter(|item| item.selected).count();
+                    let total = manager.classes.lock().expect("Poisened").len();
+                    state.set_class_summary(list_summary(selected, total, "Classes"));
+                });
+
+            let ui_weak = self.ui.clone();
+            let manager = self.clone();
+            ui.global::<ExportDialogState>().on_class_select_all(move || {
+                let Some(ui_ready) = ui_weak.upgrade() else {
+                    warn!("Failed to upgrade UI handle in on_class_select_all");
+                    return;
+                };
+                let classes = manager.classes.lock().expect("Poisened");
+                let items = class_filter_items(&classes, true);
+                let total = classes.len();
+                drop(classes);
+                let state = ui_ready.global::<ExportDialogState>();
+                state.set_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_class_summary(list_summary(total, total, "Classes"));
+            });
+
+            let ui_weak = self.ui.clone();
+            let manager = self.clone();
+            ui.global::<ExportDialogState>().on_class_select_none(move || {
+                let Some(ui_ready) = ui_weak.upgrade() else {
+                    warn!("Failed to upgrade UI handle in on_class_select_none");
+                    return;
+                };
+                let classes = manager.classes.lock().expect("Poisened");
+                let items = class_filter_items(&classes, false);
+                let total = classes.len();
+                drop(classes);
+                let state = ui_ready.global::<ExportDialogState>();
+                state.set_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_class_summary(list_summary(0, total, "Classes"));
+            });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ExportDialogState>()
+                .on_column_item_selected(move |_key, _selected| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_column_item_selected");
+                        return;
+                    };
+                    let state = ui_ready.global::<ExportDialogState>();
+                    let items = state.get_column_items();
+                    let selected = items.iter().filter(|item| item.selected).count();
+                    let total = manager.available_columns.lock().expect("Poisened").len();
+                    state.set_column_summary(list_summary(selected, total, "Columns"));
+                });
+
+            let ui_weak = self.ui.clone();
+            let manager = self.clone();
+            ui.global::<ExportDialogState>()
+                .on_column_select_all(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_column_select_all");
+                        return;
+                    };
+                    let columns = manager.available_columns.lock().expect("Poisened");
+                    let classes = manager.classes.lock().expect("Poisened");
+                    let items = column_items(&columns, &classes, |_| true);
+                    drop(classes);
+                    let total = columns.len();
+                    drop(columns);
+                    let state = ui_ready.global::<ExportDialogState>();
+                    state.set_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                    state.set_column_summary(list_summary(total, total, "Columns"));
+                });
+
+            let ui_weak = self.ui.clone();
+            let manager = self.clone();
+            ui.global::<ExportDialogState>()
+                .on_column_select_none(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_column_select_none");
+                        return;
+                    };
+                    let columns = manager.available_columns.lock().expect("Poisened");
+                    let classes = manager.classes.lock().expect("Poisened");
+                    let items = column_items(&columns, &classes, |_| false);
+                    drop(classes);
+                    let total = columns.len();
+                    drop(columns);
+                    let state = ui_ready.global::<ExportDialogState>();
+                    state.set_column_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                    state.set_column_summary(list_summary(0, total, "Columns"));
+                });
+
+            let ui_weak = self.ui.clone();
+            ui.global::<ExportDialogState>()
+                .on_aggregation_item_selected(move |_key, _selected| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_aggregation_item_selected");
+                        return;
+                    };
+                    let state = ui_ready.global::<ExportDialogState>();
+                    let items = state.get_aggregation_items();
+                    let selected = items.iter().filter(|item| item.selected).count();
+                    state.set_aggregation_summary(list_summary(selected, AGGREGATIONS.len(), "Aggregations"));
+                });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
+            ui.global::<ExportDialogState>().on_start_clicked(move || {
+                let Some(ui_ready) = ui_weak.upgrade() else {
+                    warn!("Failed to upgrade UI handle in on_start_clicked");
+                    return;
+                };
+                let state = ui_ready.global::<ExportDialogState>();
+                match manager.read_export_settings(&ui_ready) {
+                    Ok(export) => {
+                        state.set_is_exporting(true);
+                        state.set_done(false);
+                        state.set_has_error(false);
+                        state.set_error_message("".into());
+                        state.set_progress_message("Starting export…".into());
+                        state.set_progress_current(0);
+                        state.set_progress_total(1);
+                        manager.run_export(export);
+                    }
+                    Err(message) => {
+                        state.set_has_error(true);
+                        state.set_error_message(message.into());
+                    }
+                }
+            });
+
+            ui.global::<ExportDialogState>()
+                .on_close_clicked(move || {});
         }
     }
 
     pub fn open_database(&self, path: PathBuf) {
         info!("Opening database {:?}", path);
-        let db = result::ResultsGenerator::open_database(path);
+        let db = result::ResultsGenerator::open_database(path.clone());
         match db {
             Ok(results) => {
+                *self.db_path.lock().expect("Poisened") = Some(path);
+                *self.export_populated.lock().expect("Poisened") = false;
                 let mut default_object_classes = Vec::new();
                 match results.get_object_classes() {
                     Ok(classes) => {
@@ -1714,6 +1954,400 @@ impl ResultsStateController {
         })
         .ok();
     }
+
+    // Seeds `ExportDialogState` from whatever's currently selected in the
+    // List/Matrix views — called once per opened database, the first time
+    // the export dialog is opened against it (see `export_populated` and
+    // `on_export_dialog_open`). Runs directly on the UI thread (it's called
+    // from a Slint callback), so it pushes into `ExportDialogState` right
+    // away rather than through `invoke_from_event_loop`.
+    fn populate_export_defaults(&self, ui_ready: &ResultsWindow) {
+        let rail_mode = ui_ready.global::<ResultsState>().get_rail_mode();
+        let z_stack_max = ui_ready.global::<ResultsState>().get_z_stack_max().max(0) as u32;
+        let t_stack_max = ui_ready.global::<ResultsState>().get_t_stack_max().max(0) as u32;
+
+        let list_filter = self.list_filter.lock().expect("Poisened");
+        let matrix_filter_guard = self.matrix_filter.lock().expect("Poisened");
+        let classes = self.classes.lock().expect("Poisened");
+        let images = self.images.lock().expect("Poisened");
+        let available_columns = self.available_columns.lock().expect("Poisened");
+
+        // `select_none_images`/`select_none_classes` store a sentinel (a
+        // single entry that can't match any real image/class) rather than
+        // a genuinely empty list, since empty means "no filter" (all) to
+        // `update_list_view` — exporting is naturally "all" whenever
+        // nothing meaningful was excluded, so the sentinel maps back to an
+        // empty `ResultExport` list here rather than trying to preserve a
+        // "selected literally nothing" state an export has no use for.
+        let image_rel_paths: Vec<String> = if list_filter.image_rel_path == [PathBuf::new()] {
+            Vec::new()
+        } else {
+            list_filter
+                .image_rel_path
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect()
+        };
+        let object_classes: Vec<ObjectClass> = if list_filter.object_classes == [ObjectClass::Unset]
+        {
+            Vec::new()
+        } else {
+            list_filter.object_classes.clone()
+        };
+        let columns = if list_filter.columns.is_empty() {
+            DEFAULT_LIST_COLUMNS.to_vec()
+        } else {
+            list_filter.columns.clone()
+        };
+        // Export always uses `ColorScale::Auto` (see `read_export_settings`)
+        // - the dialog exposes no manual min/max override, so the current
+        // Matrix view's own scale (which may be pinned) isn't mirrored here.
+        let (aggregations, color_schema, grouping_regex, plate_dimension, well_size, square_size) =
+            match matrix_filter_guard.as_ref() {
+                Some(filter) => (
+                    vec![filter.aggregation.clone()],
+                    filter.color_schema.clone(),
+                    filter.group_by_regex.clone(),
+                    filter.plate_dimension,
+                    filter.well_size,
+                    filter.square_size,
+                ),
+                None => (
+                    vec![Aggregation::default()],
+                    ColorSchema::default(),
+                    String::new(),
+                    None,
+                    None,
+                    None,
+                ),
+            };
+        let well_size = well_size.unwrap_or(WellSize { rows: 4, cols: 4 });
+        let square_size = square_size.unwrap_or(DEFAULT_SQUARE_SIZE);
+
+        let selected_images: std::collections::HashSet<&str> =
+            image_rel_paths.iter().map(String::as_str).collect();
+        let image_items_vec: Vec<MultiSelectItem> = images
+            .iter()
+            .map(|image| {
+                let key = image.rel_path.to_str().unwrap_or_default();
+                MultiSelectItem {
+                    key: key.into(),
+                    value: image.name.as_str().into(),
+                    color: Color::default(),
+                    group: "".into(),
+                    selected: image_rel_paths.is_empty() || selected_images.contains(key),
+                }
+            })
+            .collect();
+        let image_summary = list_summary(
+            if image_rel_paths.is_empty() {
+                images.len()
+            } else {
+                image_rel_paths.len()
+            },
+            images.len(),
+            "Images",
+        );
+
+        let class_items_vec: Vec<MultiSelectItem> = classes
+            .iter()
+            .map(|class| MultiSelectItem {
+                key: class.name.as_str().into(),
+                value: class.name.as_str().into(),
+                color: bg_color_to_slint(class.color),
+                group: "".into(),
+                selected: object_classes.is_empty() || object_classes.contains(&class.id),
+            })
+            .collect();
+        let class_summary = list_summary(
+            if object_classes.is_empty() {
+                classes.len()
+            } else {
+                object_classes.len()
+            },
+            classes.len(),
+            "Classes",
+        );
+
+        let column_items_vec = column_items(&available_columns, &classes, |key| columns.contains(key));
+        let column_groups_vec = column_groups(&available_columns);
+        let column_summary = list_summary(columns.len(), available_columns.len(), "Columns");
+
+        let aggregation_items_vec = aggregation_items(&aggregations);
+        let aggregation_summary = list_summary(aggregations.len(), AGGREGATIONS.len(), "Aggregations");
+
+        drop(available_columns);
+        drop(images);
+        drop(classes);
+        drop(matrix_filter_guard);
+        drop(list_filter);
+
+        let state = ui_ready.global::<ExportDialogState>();
+        state.set_output_dir("".into());
+        state.set_z_start("0".into());
+        state.set_z_end((z_stack_max + 1).to_string().into());
+        state.set_t_start("0".into());
+        state.set_t_end((t_stack_max + 1).to_string().into());
+
+        state.set_image_items(ModelRc::from(Rc::new(VecModel::from(image_items_vec))));
+        state.set_image_summary(image_summary);
+        state.set_class_items(ModelRc::from(Rc::new(VecModel::from(class_items_vec))));
+        state.set_class_summary(class_summary);
+        state.set_column_items(ModelRc::from(Rc::new(VecModel::from(column_items_vec))));
+        state.set_column_groups(ModelRc::from(Rc::new(VecModel::from(column_groups_vec))));
+        state.set_column_summary(column_summary);
+
+        state.set_grouping_regex(grouping_regex.into());
+        state.set_aggregation_items(ModelRc::from(Rc::new(VecModel::from(aggregation_items_vec))));
+        state.set_aggregation_summary(aggregation_summary);
+        state.set_color_schema_items(ModelRc::from(Rc::new(VecModel::from(color_schema_items()))));
+        state.set_color_schema_summary(
+            color_schemas()
+                .into_iter()
+                .find(|(_, schema)| *schema == color_schema)
+                .map(|(name, _)| name)
+                .unwrap_or("Viridis")
+                .into(),
+        );
+        state.set_plate_size_items(ModelRc::from(Rc::new(VecModel::from(plate_size_items(
+            plate_dimension,
+        )))));
+        state.set_plate_size_summary(
+            plate_dimensions()
+                .into_iter()
+                .find(|(_, dimension)| *dimension == plate_dimension)
+                .map(|(name, _)| name)
+                .unwrap_or("Auto")
+                .into(),
+        );
+        state.set_well_rows(well_size.rows.to_string().into());
+        state.set_well_cols(well_size.cols.to_string().into());
+        state.set_square_size_items(ModelRc::from(Rc::new(VecModel::from(square_size_items(
+            square_size,
+        )))));
+        state.set_square_size_summary(format!("{square_size} px").into());
+
+        state.set_with_list_view(rail_mode == ResultsRailMode::List);
+        state.set_with_list_coloc_details(false);
+        state.set_with_plate_view(rail_mode == ResultsRailMode::Matrix);
+        state.set_with_plates_and_wells_as_list(false);
+        state.set_with_heatmap(false);
+
+        state.set_is_exporting(false);
+        state.set_done(false);
+        state.set_has_error(false);
+        state.set_error_message("".into());
+        state.set_progress_message("".into());
+        state.set_progress_current(0);
+        state.set_progress_total(0);
+    }
+
+    // Reads `ExportDialogState`'s current values back into a `ResultExport`
+    // at "Start Export" time — the single point where the dialog's Slint
+    // state (the source of truth for everything a control lets the user
+    // edit directly) gets turned into the typed request `start_export`
+    // wants. `Err` for a setting that can't be parsed/resolved at all
+    // (blank output folder, unrecognized dropdown key, non-numeric range
+    // field) — shown in the dialog's error area rather than silently
+    // falling back to a default the user didn't ask for.
+    fn read_export_settings(&self, ui_ready: &ResultsWindow) -> Result<ResultExport, String> {
+        let state = ui_ready.global::<ExportDialogState>();
+        let classes = self.classes.lock().expect("Poisened");
+
+        let output_dir = state.get_output_dir().to_string();
+        if output_dir.is_empty() {
+            return Err("Choose an output folder first.".to_string());
+        }
+
+        let parse_u32 = |label: &str, text: slint::SharedString| -> Result<u32, String> {
+            text.trim()
+                .parse::<u32>()
+                .map_err(|_| format!("\"{text}\" isn't a valid {label}."))
+        };
+        let z_start = parse_u32("Z start", state.get_z_start())?;
+        let z_end = parse_u32("Z end", state.get_z_end())?;
+        let t_start = parse_u32("T start", state.get_t_start())?;
+        let t_end = parse_u32("T end", state.get_t_end())?;
+        let well_rows = parse_u32("well row count", state.get_well_rows())?.max(1) as usize;
+        let well_cols = parse_u32("well column count", state.get_well_cols())?.max(1) as usize;
+
+        let selected_keys = |items: ModelRc<MultiSelectItem>| -> Vec<slint::SharedString> {
+            items
+                .iter()
+                .filter(|item| item.selected)
+                .map(|item| item.key)
+                .collect()
+        };
+
+        let image_rel_paths: Vec<String> = selected_keys(state.get_image_items())
+            .into_iter()
+            .map(|key| key.to_string())
+            .collect();
+
+        let mut object_classes = Vec::new();
+        for key in selected_keys(state.get_class_items()) {
+            let Some(class) = classes.iter().find(|class| class.name == key.as_str()) else {
+                return Err(format!("Unknown class \"{key}\" selected for export."));
+            };
+            object_classes.push(class.id);
+        }
+        drop(classes);
+
+        let available_columns = self.available_columns.lock().expect("Poisened");
+        let class_list = self.classes.lock().expect("Poisened");
+        let mut columns = Vec::new();
+        for key in selected_keys(state.get_column_items()) {
+            let Some(column) = Column::from_key(key.as_str(), &class_list) else {
+                return Err(format!("Unknown column \"{key}\" selected for export."));
+            };
+            columns.push(column);
+        }
+        drop(class_list);
+        drop(available_columns);
+
+        let mut aggregations = Vec::new();
+        for key in selected_keys(state.get_aggregation_items()) {
+            let Some(aggregation) = aggregation_from_key(key.as_str()) else {
+                return Err(format!("Unknown aggregation \"{key}\" selected for export."));
+            };
+            aggregations.push(aggregation);
+        }
+
+        let color_schema_key = state
+            .get_color_schema_items()
+            .iter()
+            .find(|item| item.selected)
+            .map(|item| item.key)
+            .unwrap_or_else(|| "Viridis".into());
+        let Some(color_schema) = color_schema_from_key(color_schema_key.as_str()) else {
+            return Err(format!("Unknown color schema \"{color_schema_key}\"."));
+        };
+
+        let plate_size_key = state
+            .get_plate_size_items()
+            .iter()
+            .find(|item| item.selected)
+            .map(|item| item.key)
+            .unwrap_or_else(|| "Auto".into());
+        let Some(plate_dimension) = plate_dimension_from_key(plate_size_key.as_str()) else {
+            return Err(format!("Unknown plate size \"{plate_size_key}\"."));
+        };
+
+        let square_size_key = state
+            .get_square_size_items()
+            .iter()
+            .find(|item| item.selected)
+            .map(|item| item.key)
+            .unwrap_or_else(|| DEFAULT_SQUARE_SIZE.to_string().into());
+        let square_size = square_size_key
+            .parse::<usize>()
+            .map_err(|_| format!("Unknown square size \"{square_size_key}\"."))?;
+
+        Ok(ResultExport {
+            output_dir: PathBuf::from(output_dir),
+            format: ExportFormat::XLSX,
+            z_stacks: std::range::Range {
+                start: z_start,
+                end: z_end.max(z_start + 1),
+            },
+            t_stacks: std::range::Range {
+                start: t_start,
+                end: t_end.max(t_start + 1),
+            },
+            image_rel_paths,
+            columns,
+            color_schema,
+            color_scale: ColorScale::Auto,
+            grouping_regex: state.get_grouping_regex().to_string(),
+            object_classes,
+            aggregations,
+            plate_dimension,
+            well_size: Some(WellSize {
+                rows: well_rows,
+                cols: well_cols,
+            }),
+            well_order: None,
+            square_size: Some(square_size),
+            with_list_view: state.get_with_list_view(),
+            with_list_coloc_details: state.get_with_list_coloc_details(),
+            with_plate_view: state.get_with_plate_view(),
+            with_plates_and_wells_as_list: state.get_with_plates_and_wells_as_list(),
+            with_heatmap: state.get_with_heatmap(),
+        })
+    }
+
+    // Runs `export` on a background thread against a *fresh* database
+    // connection (see `db_path`'s doc comment for why not
+    // `result_generator`), reporting progress/completion/error back to
+    // `ExportDialogState` as it goes.
+    fn run_export(self: &Arc<Self>, export: ResultExport) {
+        let Some(path) = self.db_path.lock().expect("Poisened").clone() else {
+            self.push_export_error("No database is open.".to_string());
+            return;
+        };
+        let manager = self.clone();
+        std::thread::spawn(move || {
+            let database = match ResultsGenerator::open_database(path) {
+                Ok(database) => database,
+                Err(err) => {
+                    manager.push_export_error(format!("Could not open database: {err}"));
+                    return;
+                }
+            };
+            let manager_for_progress = manager.clone();
+            let result = export.start_export(&database, &mut |message, current, total| {
+                manager_for_progress.push_export_progress(message.to_string(), current, total);
+            });
+            match result {
+                Ok(()) => manager.push_export_done(),
+                Err(err) => manager.push_export_error(err.to_string()),
+            }
+        });
+    }
+
+    fn push_export_progress(&self, message: String, current: usize, total: usize) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ExportDialogState>();
+                state.set_progress_message(message.into());
+                state.set_progress_current(current as i32);
+                state.set_progress_total(total as i32);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update export progress!");
+            }
+        })
+        .ok();
+    }
+
+    fn push_export_done(&self) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ExportDialogState>();
+                state.set_is_exporting(false);
+                state.set_done(true);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot mark export as done!");
+            }
+        })
+        .ok();
+    }
+
+    fn push_export_error(&self, message: String) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ExportDialogState>();
+                state.set_is_exporting(false);
+                state.set_has_error(true);
+                state.set_error_message(message.into());
+            } else {
+                warn!("Failed to upgrade UI handle, cannot report export error!");
+            }
+        })
+        .ok();
+    }
 }
 
 // Shared "N of M <noun>" text for the images/classes/columns dropdown pills
@@ -1782,6 +2416,42 @@ fn aggregation_display_name(aggregation: &Aggregation) -> &'static str {
         Aggregation::Median => "Median",
         Aggregation::Skewness => "Skewness",
     }
+}
+
+const AGGREGATIONS: [Aggregation; 7] = [
+    Aggregation::Avg,
+    Aggregation::Min,
+    Aggregation::Max,
+    Aggregation::Stddev,
+    Aggregation::Sum,
+    Aggregation::Median,
+    Aggregation::Skewness,
+];
+
+// The Export dialog's AGGREGATIONS picker is multi-select (unlike the
+// Matrix toolbar's single-select one) — `selected` is a whole `Vec` to
+// check each fixed option against, not one currently-chosen value.
+fn aggregation_items(selected: &[Aggregation]) -> Vec<MultiSelectItem> {
+    AGGREGATIONS
+        .iter()
+        .map(|aggregation| {
+            let name = aggregation_display_name(aggregation);
+            MultiSelectItem {
+                key: name.into(),
+                value: name.into(),
+                color: Color::default(),
+                group: "".into(),
+                selected: selected.contains(aggregation),
+            }
+        })
+        .collect()
+}
+
+fn aggregation_from_key(key: &str) -> Option<Aggregation> {
+    AGGREGATIONS
+        .iter()
+        .find(|aggregation| aggregation_display_name(aggregation) == key)
+        .cloned()
 }
 
 fn color_schemas() -> [(&'static str, ColorSchema); 2] {
@@ -1965,5 +2635,149 @@ fn cell_to_string(cell: &Cell) -> slint::SharedString {
         CellValue::Float(value) => format!("{value:.3}").into(),
         CellValue::Integer(value) => value.to_string().into(),
         CellValue::Class((name, _color)) => name.as_str().into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::histogram_controller::HistogramController;
+    use crate::editor::image_meta_controller::ImageMetaController;
+    use crate::editor::object_list_controller::ObjectListController;
+    use crate::editor::test_support::{test_ui_state, test_ui_windows};
+    use crate::editor::viewport_controller::ViewportController;
+    use crate::AppWindow;
+
+    fn make_controller_with_ui(
+        ui: slint::Weak<AppWindow>,
+        results_ui: slint::Weak<ResultsWindow>,
+    ) -> Arc<ResultsStateController> {
+        let ui_state = test_ui_state();
+        let viewport_controller = Arc::new(ViewportController::new(ui.clone(), ui_state.clone()));
+        let object_list_controller = Arc::new(ObjectListController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let histogram_controller = Arc::new(HistogramController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_meta_controller = Arc::new(ImageMetaController::new(
+            ui.clone(),
+            ui_state.clone(),
+            viewport_controller.clone(),
+        ));
+        let image_list_controller = Arc::new(ImagesListController::new(
+            ui,
+            ui_state.clone(),
+            viewport_controller,
+            histogram_controller,
+            image_meta_controller,
+            object_list_controller,
+        ));
+        Arc::new(ResultsStateController::new(
+            results_ui,
+            ui_state,
+            image_list_controller,
+        ))
+    }
+
+    // Regression test for the export dialog's very first hurdle: for a long
+    // time this failed to even *compile* (`ExportDialogState` had no public
+    // Rust binding at all - it wasn't re-exported from main.slint's own
+    // top-level `export { ... }` block, the same way every other dialog
+    // global there is, see main.slint). Exercises the actual callback
+    // wiring end to end against a real (headless) `ResultsWindow`, with no
+    // database open - the state every dialog control's defaults must still
+    // fall back to sanely (an empty images/classes list, no matrix filter
+    // set yet).
+    #[test]
+    fn attach_callbacks_export_dialog_open_populates_defaults_and_activates() {
+        let (ui, results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        controller.attach_callbacks();
+
+        assert!(!results_ui.global::<ExportDialogState>().get_active());
+
+        results_ui
+            .global::<ResultsState>()
+            .invoke_export_dialog_open();
+
+        let state = results_ui.global::<ExportDialogState>();
+        assert!(state.get_active(), "dialog should activate on open");
+        // No matrix view has been rendered yet (`matrix_filter` starts
+        // `None`) and the rail starts on List - see `populate_export_defaults`.
+        assert!(state.get_with_list_view());
+        assert!(!state.get_with_plate_view());
+        assert!(!state.get_with_heatmap());
+        // z/t default to the database's full range, exclusive end - starting
+        // at 0, and past whatever `ResultsState.z-stack-max`/`t-stack-max`
+        // are currently set to (their own default, before any real database
+        // has been opened, is a temporary design-preview placeholder - see
+        // that property's doc comment in results_state.slint - so this only
+        // checks the *shape* of the range, not its exact placeholder bound).
+        assert_eq!(state.get_z_start(), "0");
+        assert_eq!(state.get_t_start(), "0");
+        let z_end: i32 = state.get_z_end().parse().expect("z_end should be numeric");
+        let t_end: i32 = state.get_t_end().parse().expect("t_end should be numeric");
+        assert!(z_end >= 1);
+        assert!(t_end >= 1);
+        // No images/classes/columns registered without an open database.
+        assert_eq!(state.get_image_items().row_count(), 0);
+        assert_eq!(state.get_class_items().row_count(), 0);
+    }
+
+    // Re-opening the dialog after the user has already changed something
+    // (here: unchecking "List view") must not clobber it - only the *first*
+    // open after a database loads re-seeds the defaults (see
+    // `export_populated`).
+    #[test]
+    fn attach_callbacks_export_dialog_reopen_keeps_user_changes() {
+        let (ui, results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        controller.attach_callbacks();
+
+        results_ui
+            .global::<ResultsState>()
+            .invoke_export_dialog_open();
+        results_ui
+            .global::<ExportDialogState>()
+            .set_with_list_view(false);
+        results_ui.global::<ExportDialogState>().set_active(false);
+
+        results_ui
+            .global::<ResultsState>()
+            .invoke_export_dialog_open();
+
+        let state = results_ui.global::<ExportDialogState>();
+        assert!(state.get_active());
+        assert!(
+            !state.get_with_list_view(),
+            "re-opening must not reset a setting the user already changed"
+        );
+    }
+
+    // `on_start_clicked` with no output folder chosen must surface a
+    // validation error rather than silently doing nothing or panicking
+    // (there's no database open in this test either, so this also exercises
+    // that `read_export_settings` fails fast before ever touching
+    // `db_path`).
+    #[test]
+    fn attach_callbacks_export_start_without_output_dir_reports_an_error() {
+        let (ui, results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        controller.attach_callbacks();
+
+        results_ui
+            .global::<ResultsState>()
+            .invoke_export_dialog_open();
+        results_ui.global::<ExportDialogState>().invoke_start_clicked();
+
+        let state = results_ui.global::<ExportDialogState>();
+        assert!(state.get_has_error());
+        assert!(!state.get_is_exporting());
+        assert!(!state.get_error_message().is_empty());
     }
 }
