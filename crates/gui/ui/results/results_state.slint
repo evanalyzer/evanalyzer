@@ -180,6 +180,10 @@ export global ResultsState {
     in-out property <bool> list-has-next-page: false;
     callback list-next-page();
     callback list-prev-page();
+    // Fired when a row is clicked — index into `list-rows`
+    // (`ResultsStateController::list_row_locations` mirrors it 1:1) so Rust
+    // can open that object's source image and highlight it there.
+    callback list-row-clicked(int);
 
     callback list-image-filter-changed(string);
     callback list-class-selected(string, bool);

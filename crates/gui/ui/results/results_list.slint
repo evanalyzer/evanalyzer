@@ -143,7 +143,7 @@ export component ResultsListView inherits Rectangle {
                 body-list := ListView {
                     vertical-stretch: 1;
 
-                    for row in ResultsState.list-rows: Rectangle {
+                    for row[index] in ResultsState.list-rows: Rectangle {
                         height: 34px;
                         min-width: row-layout.min-width;
                       //  width: max(row-layout.preferred-width, parent.width);
@@ -159,7 +159,10 @@ export component ResultsListView inherits Rectangle {
                             x: 0;
                         }
 
-                        ta := TouchArea { }
+                        ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { ResultsState.list-row-clicked(index); }
+                        }
 
                         row-layout := HorizontalLayout {
                             padding-left: 16px;

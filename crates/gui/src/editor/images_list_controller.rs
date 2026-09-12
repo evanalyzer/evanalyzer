@@ -169,12 +169,17 @@ impl ImagesListController {
 
     /// Opens the image identified by `rel_path` (as stored in a results file) and
     /// paints `bbox_px` (`[xmin, ymin, xmax, ymax]`, in image pixels) as a
-    /// highlight box in the viewport. Used when a object row is selected in the
-    /// results table so the user can locate the object in its source image.
+    /// highlight box in the viewport. Used when a row is selected in the
+    /// results table (an object row, `paint_as_rectangle: false` - a
+    /// crosshair points at it from outside so the object itself stays
+    /// unobscured) or in the results Matrix's image heatmap (a tile,
+    /// `paint_as_rectangle: true` - the box itself *is* the region of
+    /// interest there, so it's traced directly instead).
     pub fn open_image_and_highlight_object(
         self: &Arc<Self>,
         rel_path: &PathBuf,
         bbox_px: [u32; 4],
+        paint_as_rectangle: bool,
     ) {
         self.open_new_image_from_rel_path(rel_path);
 
@@ -192,6 +197,7 @@ impl ImagesListController {
             w_px: (xmax.saturating_sub(xmin) + 1) as f32,
             h_px: (ymax.saturating_sub(ymin) + 1) as f32,
             active: true,
+            paint_as_rectangle,
         };
         let ui_weak = self.ui.clone();
         let _ = slint::invoke_from_event_loop(move || {

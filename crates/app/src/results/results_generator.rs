@@ -312,6 +312,13 @@ pub struct DatabaseResult {
     /// independently of whether more source rows actually exist. Equal to
     /// `rows.len()` everywhere fan-out doesn't apply.
     pub source_object_count: usize,
+    /// Parallel to `rows`/`row_names`: each row's `(image_rel_path,
+    /// [xmin, ymin, xmax, ymax])` for navigating to and highlighting that
+    /// object in its source image (only meaningful for `get_list`'s object
+    /// rows — the plate/well/image-heatmap grid views group many objects
+    /// into one cell, so there's no single location to navigate to and
+    /// leave this empty).
+    pub row_locations: Vec<(String, [u32; 4])>,
 }
 
 impl ResultsGenerator {
@@ -385,6 +392,7 @@ impl ResultsGenerator {
             min: 0.0,
             max: 0.0,
             source_object_count: 0,
+            row_locations: vec![],
         };
 
         // `ListFilter.images` carries the rel-paths the GUI's image picker
@@ -513,7 +521,7 @@ impl ResultsGenerator {
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
 
-        let (row_names, rows) = if details_active {
+        let (row_names, rows, row_locations) = if details_active {
             self.build_coloc_detail_rows(
                 &objects,
                 &ordered_columns,
@@ -535,7 +543,8 @@ impl ResultsGenerator {
                         .collect()
                 })
                 .collect();
-            (row_names, rows)
+            let row_locations = objects.iter().map(object_location).collect();
+            (row_names, rows, row_locations)
         };
 
         // Not really meaningful across `ordered_columns` (area/circularity/
@@ -549,6 +558,7 @@ impl ResultsGenerator {
             min: 0.0,
             max: 0.0,
             source_object_count: objects.len(),
+            row_locations,
         })
     }
 
@@ -567,7 +577,7 @@ impl ResultsGenerator {
         coloc_class_columns: &[ObjectClass],
         metric_columns: &[Column],
         classes: &[Class],
-    ) -> Result<(Vec<String>, Vec<Vec<Cell>>), InternalErrors> {
+    ) -> Result<(Vec<String>, Vec<Vec<Cell>>, Vec<(String, [u32; 4])>), InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let dash = |alternating_color: bool| Cell {
             value: CellValue::String("-".to_string()),
@@ -623,6 +633,7 @@ impl ResultsGenerator {
 
         let mut row_names = Vec::new();
         let mut rows = Vec::new();
+        let mut row_locations = Vec::new();
         // Flips every time the source object changes (not every fanned-out
         // row) so every row belonging to the same source object shares one
         // shade and neighboring objects alternate — lets the GUI shade by
@@ -667,9 +678,14 @@ impl ResultsGenerator {
                 }
                 row_names.push(object.object_id.clone());
                 rows.push(cells);
+                // The row is fanned out over this object's colocalizing
+                // partners, but it's still fundamentally a row *about* the
+                // source object — navigating from it should go to the
+                // source object's own location, not a partner's.
+                row_locations.push(object_location(object));
             }
         }
-        Ok((row_names, rows))
+        Ok((row_names, rows, row_locations))
     }
 
     // First step: return the grouped/aggregated rows as a plain flat table
@@ -782,6 +798,7 @@ impl ResultsGenerator {
                     min: min as f32,
                     max: max as f32,
                     source_object_count,
+                    row_locations: Vec::new(),
                 })
             }
             View::Heatmap => {
@@ -888,6 +905,7 @@ impl ResultsGenerator {
                     min: range_min as f32,
                     max: range_max as f32,
                     source_object_count,
+                    row_locations: Vec::new(),
                 })
             }
         }
@@ -1009,6 +1027,7 @@ impl ResultsGenerator {
                     min: min as f32,
                     max: max as f32,
                     source_object_count,
+                    row_locations: Vec::new(),
                 })
             }
             View::Heatmap => {
@@ -1097,6 +1116,7 @@ impl ResultsGenerator {
                     min: range_min as f32,
                     max: range_max as f32,
                     source_object_count,
+                    row_locations: Vec::new(),
                 })
             }
         }
@@ -1236,6 +1256,7 @@ impl ResultsGenerator {
                     min: min as f32,
                     max: max as f32,
                     source_object_count,
+                    row_locations: Vec::new(),
                 })
             }
             View::Heatmap => {
@@ -1296,6 +1317,7 @@ impl ResultsGenerator {
                     min: range_min as f32,
                     max: range_max as f32,
                     source_object_count,
+                    row_locations: Vec::new(),
                 })
             }
         }
@@ -1562,6 +1584,16 @@ struct ObjectRow {
     eccentricity: f64,
     coloc_json: String,
     intensities_json: String,
+    // Always fetched (unlike every field above, gated by `ObjectColumnNeeds`
+    // on whether its `Column` is actually selected/displayed) - needed by
+    // the GUI to navigate to and highlight this object in its source image
+    // (see `DatabaseResult::row_locations`) regardless of which columns the
+    // user chose to show.
+    image_rel_path: String,
+    bbox_xmin_px: u32,
+    bbox_ymin_px: u32,
+    bbox_xmax_px: u32,
+    bbox_ymax_px: u32,
 }
 
 /// Which of `ObjectRow`'s source columns a given column selection actually
@@ -1613,8 +1645,12 @@ impl ObjectColumnNeeds {
 /// The comma-joined `SELECT` column list `get_list` queries `objects`
 /// with — a column not in `need` becomes a cheap constant instead of a real
 /// column reference (see the column-pruning comment on `get_list`), so
-/// `map_object_row` below can always read the same 13 fixed positions
-/// regardless of which are real.
+/// `map_object_row` below can always read the same fixed positions
+/// regardless of which are real. `image_rel_path`/the four `bbox_*_px`
+/// columns are the exception: small fixed-width columns, always selected
+/// for real regardless of `need`, since the GUI needs an object's location
+/// to navigate to and highlight it (see `DatabaseResult::row_locations`)
+/// independent of which columns are actually displayed.
 fn object_select_clause(need: ObjectColumnNeeds) -> String {
     let select_image_name = if need.image_name { "image_name" } else { "''" };
     let select_object_class_name = if need.class {
@@ -1676,11 +1712,12 @@ fn object_select_clause(need: ObjectColumnNeeds) -> String {
         "object_id, {select_image_name}, {select_object_class_name}, {select_seg_class_name},\n\
                 {select_area_px}, {select_area_nm2}, {select_perimeter_px}, {select_perimeter_nm},\n\
                 {select_circularity}, {select_solidity}, {select_eccentricity},\n\
-                {select_coloc_json}, {select_intensities_json}"
+                {select_coloc_json}, {select_intensities_json},\n\
+                image_rel_path, bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px"
     )
 }
 
-/// Inverse of `object_select_clause`'s fixed 13-column position order —
+/// Inverse of `object_select_clause`'s fixed column position order —
 /// shared so the main and partner fetches in `get_list` can never drift.
 fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
     Ok(ObjectRow {
@@ -1697,6 +1734,11 @@ fn map_object_row(row: &duckdb::Row<'_>) -> duckdb::Result<ObjectRow> {
         eccentricity: row.get(10)?,
         coloc_json: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
         intensities_json: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+        image_rel_path: row.get(13)?,
+        bbox_xmin_px: row.get(14)?,
+        bbox_ymin_px: row.get(15)?,
+        bbox_xmax_px: row.get(16)?,
+        bbox_ymax_px: row.get(17)?,
     })
 }
 
@@ -1708,6 +1750,21 @@ fn coloc_class_key(class: ObjectClass) -> String {
         ObjectClass::Valid(n) => n.to_string(),
         ObjectClass::Unset => "unset".to_string(),
     }
+}
+
+/// `DatabaseResult::row_locations`' entry for `object` — its source image
+/// (by rel path) and pixel bounding box, for the GUI to navigate to and
+/// highlight it.
+fn object_location(object: &ObjectRow) -> (String, [u32; 4]) {
+    (
+        object.image_rel_path.clone(),
+        [
+            object.bbox_xmin_px,
+            object.bbox_ymin_px,
+            object.bbox_xmax_px,
+            object.bbox_ymax_px,
+        ],
+    )
 }
 
 /// Whether `column` names a plain per-object measurement that can be

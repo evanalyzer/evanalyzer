@@ -1102,6 +1102,7 @@ mod tests {
         let results_table_controller = Arc::new(ResultsStateController::new(
             slint::Weak::default(),
             ui_state.clone(),
+            image_list_controller.clone(),
         ));
         let results_list_controller = Arc::new(ResultsListController::new(
             slint::Weak::default(),

@@ -1,3 +1,4 @@
+use crate::editor::images_list_controller::ImagesListController;
 use crate::{
     BreadcrumbItem, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsListState,
     ResultsRailMode, ResultsState, UiState,
@@ -87,10 +88,21 @@ pub struct ResultsStateController {
     // currently drilled into, if any, so a toolbar control change while at
     // the Object level refreshes that image's heatmap.
     current_image: Mutex<Option<String>>,
+    // Last-rendered List rows' `(image_rel_path, bbox_px)`, by row index —
+    // `DatabaseResult::row_locations`, cached the same way `matrix_cells`/
+    // `well_cells`/`image_heatmap_cells` are, so `on_list_row_clicked` can
+    // navigate to a clicked object's own image without re-querying the
+    // database.
+    list_row_locations: Mutex<Vec<(String, [u32; 4])>>,
+    image_list_controller: Arc<ImagesListController>,
 }
 
 impl ResultsStateController {
-    pub fn new(ui: slint::Weak<ResultsWindow>, app_state: Arc<UiState>) -> Self {
+    pub fn new(
+        ui: slint::Weak<ResultsWindow>,
+        app_state: Arc<UiState>,
+        image_list_controller: Arc<ImagesListController>,
+    ) -> Self {
         Self {
             ui,
             _app_state: app_state.clone(),
@@ -108,6 +120,8 @@ impl ResultsStateController {
             image_heatmap_cells: Mutex::new(HashMap::new()),
             current_well: Mutex::new(None),
             current_image: Mutex::new(None),
+            list_row_locations: Mutex::new(Vec::new()),
+            image_list_controller,
         }
     }
 
@@ -347,6 +361,24 @@ impl ResultsStateController {
             ui.global::<ResultsState>().on_list_prev_page(move || {
                 manager.change_list_page(-1);
             });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_row_clicked(move |index| {
+                    let location = manager
+                        .list_row_locations
+                        .lock()
+                        .expect("Poisned")
+                        .get(index as usize)
+                        .cloned();
+                    let Some((rel_path, bbox_px)) = location else {
+                        warn!("No location cached for clicked list row {index}");
+                        return;
+                    };
+                    manager
+                        .image_list_controller
+                        .open_image_and_highlight_object(&PathBuf::from(rel_path), bbox_px, false);
+                });
 
             // -- Matrix / plate / well / object --
             // The COLUMN dropdown is single-select and its `item-selected`
@@ -655,9 +687,40 @@ impl ResultsStateController {
                         return;
                     };
                     let state = ui_ready.global::<ResultsState>();
-                    state.set_active_well(key);
+                    state.set_active_well(key.clone());
                     state.set_active_well_has_value(cell.has_value);
                     state.set_active_well_value(cell.label.clone());
+                    drop(cells);
+
+                    // Paint the clicked tile's own bounds as a rectangle
+                    // over the image it belongs to — unlike a list row's
+                    // crosshair (`on_list_row_clicked`), the tile itself
+                    // *is* the region of interest, see
+                    // `ObjectHighlightBox::paint_as_rectangle`.
+                    let Some(rel_path) = manager.current_image.lock().expect("Poisned").clone()
+                    else {
+                        warn!("No image open, cannot highlight heatmap tile {key}");
+                        return;
+                    };
+                    let Some((row, col)) = parse_tile_key(&key) else {
+                        warn!("Unrecognized heatmap tile key: {key}");
+                        return;
+                    };
+                    let square_size = manager
+                        .matrix_filter
+                        .lock()
+                        .expect("Poisned")
+                        .as_ref()
+                        .and_then(|filter| filter.square_size)
+                        .unwrap_or(DEFAULT_SQUARE_SIZE) as u32;
+                    let xmin = col * square_size;
+                    let ymin = row * square_size;
+                    let bbox_px = [xmin, ymin, xmin + square_size - 1, ymin + square_size - 1];
+                    manager.image_list_controller.open_image_and_highlight_object(
+                        &PathBuf::from(rel_path),
+                        bbox_px,
+                        true,
+                    );
                 });
             ui.global::<ResultsState>()
                 .on_object_marker_clicked(move |_id| {});
@@ -922,6 +985,7 @@ impl ResultsStateController {
                 (row.iter().map(cell_to_string).collect(), alternating)
             })
             .collect();
+        *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
@@ -1792,6 +1856,15 @@ fn plate_dimension_from_key(key: &str) -> Option<Option<PlateDimensions>> {
 // `ImageHeatmapFilter::square_size`'s own default (see `get_image_heatmap`).
 const SQUARE_SIZES: [usize; 6] = [36, 48, 64, 128, 256, 1024];
 const DEFAULT_SQUARE_SIZE: usize = 256;
+
+/// Inverse of `get_image_heatmap`'s tile key format (`format!("R{row}C{col}")`
+/// in results_generator.rs) — used by `on_image_heatmap_cell_clicked` to
+/// recover which tile was clicked so its pixel bounds can be computed.
+fn parse_tile_key(key: &str) -> Option<(u32, u32)> {
+    let rest = key.strip_prefix('R')?;
+    let (row, col) = rest.split_once('C')?;
+    Some((row.parse().ok()?, col.parse().ok()?))
+}
 
 fn square_size_items(selected: usize) -> Vec<MultiSelectItem> {
     SQUARE_SIZES
