@@ -1360,8 +1360,8 @@ impl ResultsStateController {
                     square_items,
                 ))));
                 state.set_matrix_square_size_summary(square_summary);
-                state.set_matrix_well_rows(4);
-                state.set_matrix_well_cols(4);
+                state.set_matrix_well_rows("4".into());
+                state.set_matrix_well_cols("4".into());
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_grid_size_options_in_slint, cannot update grid size options!"

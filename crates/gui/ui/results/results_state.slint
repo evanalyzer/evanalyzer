@@ -234,9 +234,14 @@ export global ResultsState {
     in-out property <[MultiSelectItem]> matrix-plate-size-items: [];
     in-out property <string> matrix-plate-size-summary: "Auto";
     callback matrix-plate-size-selected(string, bool);
-    // Well: field grid dimensions (`WellFilter::well_size`).
-    in-out property <int> matrix-well-rows: 4;
-    in-out property <int> matrix-well-cols: 4;
+    // Well: field grid dimensions (`WellFilter::well_size`). `string`, not
+    // `int` — these back a `TextInput.text` via a two-way `<=>` alias
+    // (results_matrix.slint), which only works between matching types;
+    // typed digits live here directly rather than needing Rust to push
+    // every keystroke back through a one-way binding (which would fight the
+    // input and reset visibly on every recompute).
+    in-out property <string> matrix-well-rows: "4";
+    in-out property <string> matrix-well-cols: "4";
     callback matrix-well-rows-changed(string);
     callback matrix-well-cols-changed(string);
     // Object (image heatmap): tile size in pixels
