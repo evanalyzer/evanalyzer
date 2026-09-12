@@ -137,18 +137,28 @@ component PlateGrid inherits Rectangle {
 }
 
 // -- Level 2: Well grid (fields) ---------------------------------------------
+// Same row/col layout approach as PlateGrid (just without the plate's A-H /
+// 1-12 axis-label gutters, since a field's position within a well isn't a
+// coordinate anyone reads off directly) — sized from the real result
+// (`well-rows`/`well-cols`, from `WellFilter::well_size`) rather than a
+// fixed guess, so it renders correctly regardless of well size.
 component WellGrid inherits Rectangle {
-    padding: 24px;
+    padding: 20px;
 
-    GridLayout {
-        spacing: 14px;
-        for field[i] in ResultsState.well-fields: MatrixCellView {
-            row: i / 3;
-            col: mod(i, 3);
-            cell: field;
-            range-min: ResultsState.well-min;
-            range-max: ResultsState.well-max;
-            clicked => { ResultsState.well-field-clicked(self.cell.key); }
+    VerticalLayout {
+        spacing: 4px;
+        for r in ResultsState.well-rows: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 4px;
+
+            for c in ResultsState.well-cols: MatrixCellView {
+                horizontal-stretch: 1;
+                cell: ResultsState.well-fields[r * ResultsState.well-cols + c];
+                range-min: ResultsState.well-min;
+                range-max: ResultsState.well-max;
+                selected: self.cell.has-value && self.cell.key == ResultsState.active-well;
+                clicked => { ResultsState.well-cell-clicked(self.cell.key); }
+            }
         }
     }
 }
@@ -362,10 +372,13 @@ export component ResultsMatrixView inherits Rectangle {
                         set-manual(min, max) => { ResultsState.matrix-scale-set-manual(min, max); }
                     }
 
-                    // Selected-well detail card — filled in by
-                    // `on_plate_cell_clicked` (results_state_controller.rs)
-                    // when a plate cell is clicked; hidden until then.
-                    if ResultsState.matrix-level == MatrixLevel.plate && ResultsState.active-well != "": Rectangle {
+                    // Selected-cell detail card — same card at both the
+                    // Plate and Well levels (see the comment on
+                    // `ResultsState.active-well`): filled in by
+                    // `on_plate_cell_clicked`/`on_well_cell_clicked`
+                    // (results_state_controller.rs) when a cell is clicked,
+                    // hidden until then.
+                    if ResultsState.matrix-level != MatrixLevel.object && ResultsState.active-well != "": Rectangle {
                         border-radius: Theme.radius-md;
                         background: Theme.raised;
                         border-width: 1px;
@@ -377,7 +390,7 @@ export component ResultsMatrixView inherits Rectangle {
                             alignment: start;
 
                             Text {
-                                text: "WELL " + ResultsState.active-well;
+                                text: (ResultsState.matrix-level == MatrixLevel.plate ? "WELL " : "IMAGE ") + ResultsState.active-well;
                                 font-size: 9px;
                                 letter-spacing: 0.4px;
                                 color: Theme.text-mute;
@@ -404,12 +417,17 @@ export component ResultsMatrixView inherits Rectangle {
                             }
 
                             AppButton {
-                                text: "Open well ›";
+                                text: ResultsState.matrix-level == MatrixLevel.plate ? "Open well ›" : "Open Image ›";
                                 height: 30px;
                                 enabled: ResultsState.active-well-has-value;
                                 clicked => {
-                                    ResultsState.matrix-level = MatrixLevel.well;
-                                    ResultsState.open-well-clicked(ResultsState.active-well);
+                                    if (ResultsState.matrix-level == MatrixLevel.plate) {
+                                        ResultsState.matrix-level = MatrixLevel.well;
+                                        ResultsState.open-well-clicked(ResultsState.active-well);
+                                    } else {
+                                        ResultsState.matrix-level = MatrixLevel.object;
+                                        ResultsState.well-field-clicked(ResultsState.active-well);
+                                    }
                                 }
                             }
                         }

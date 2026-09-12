@@ -215,6 +215,18 @@ pub struct WellFilter {
 }
 
 #[derive(Clone)]
+pub struct ImageHeatmapFilter {
+    pub plane: PlaneFilter,
+    // Name of the group to displax
+    pub image_name: String,
+    pub aggregation: Aggregation,
+    pub object_class: ObjectClass,
+    pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+}
+
+#[derive(Clone)]
 pub struct ListFilter {
     pub plane: PlaneFilter,
     pub images: Option<Vec<String>>,
@@ -948,6 +960,15 @@ impl ResultsGenerator {
                 })
             }
         }
+    }
+
+    // Third drill level is the image heatmap
+    pub fn get_image_heatmap(
+        &self,
+        filter: &ImageHeatmapFilter,
+        view: &View,
+    ) -> Result<DatabaseResult, InternalErrors> {
+        Err("Not implemente".into())
     }
 
     pub fn get_coloc_objects(&self) {}

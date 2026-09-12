@@ -1,7 +1,10 @@
-use crate::{MatrixCell, MultiSelectItem, ResultRow, ResultsListState, ResultsState, UiState};
+use crate::{
+    BreadcrumbItem, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow, ResultsListState,
+    ResultsRailMode, ResultsState, UiState,
+};
 use evanalyzer_app::result::{
     self, Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry,
-    DatabaseResult, ImageEntry, ResultsGenerator,
+    DatabaseResult, ImageEntry, ResultsGenerator, WellFilter,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -61,6 +64,9 @@ pub struct ResultsStateController {
     // `on_plate_cell_clicked` can look up what to show in the sidebar
     // without re-querying the database.
     matrix_cells: Mutex<HashMap<String, MatrixCell>>,
+    // Same idea as `matrix_cells`, one level down: last-rendered well-field
+    // cells, by image name, for `on_well_cell_clicked`.
+    well_cells: Mutex<HashMap<String, MatrixCell>>,
 }
 
 impl ResultsStateController {
@@ -78,6 +84,7 @@ impl ResultsStateController {
             images: Mutex::new(Vec::new()),
             available_columns: Mutex::new(Vec::new()),
             matrix_cells: Mutex::new(HashMap::new()),
+            well_cells: Mutex::new(HashMap::new()),
         }
     }
 
@@ -96,10 +103,58 @@ impl ResultsStateController {
             // Prototypes only for now - wire up the real behavior next.
 
             // -- Navigation --
+            // The rail buttons already set `rail-mode` themselves
+            // (results_common.slint) before firing this — only the
+            // breadcrumb baseline needs resetting here, so switching away
+            // from Matrix and back doesn't leave a stale "Well X" segment
+            // or drop the user back into a well they were last looking at.
+            let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
-                .on_rail_mode_selected(move |_mode| {});
+                .on_rail_mode_selected(move |mode| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_rail_mode_selected");
+                        return;
+                    };
+                    let state = ui_ready.global::<ResultsState>();
+                    let breadcrumb = if mode == ResultsRailMode::Matrix {
+                        vec![
+                            BreadcrumbItem { label: "All results".into() },
+                            BreadcrumbItem { label: "Plate".into() },
+                        ]
+                    } else {
+                        vec![BreadcrumbItem { label: "All results".into() }]
+                    };
+                    state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
+                    state.set_matrix_level(MatrixLevel::Plate);
+                    state.set_active_well("".into());
+                    state.set_active_well_has_value(false);
+                    state.set_active_well_value("".into());
+                });
+
+            // Only two drill levels sit below the "All results"/"Plate"
+            // base today (see on_open_well_clicked below) — navigating to
+            // either of those base segments always means "back to the
+            // plate grid", so a length check is enough without tracking
+            // which matrix-level each breadcrumb segment represents.
+            let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
-                .on_breadcrumb_nav(move |_index| {});
+                .on_breadcrumb_nav(move |index| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_breadcrumb_nav");
+                        return;
+                    };
+                    let state = ui_ready.global::<ResultsState>();
+                    let mut breadcrumb: Vec<BreadcrumbItem> = state.get_breadcrumb().iter().collect();
+                    let keep = ((index as usize) + 1).min(breadcrumb.len());
+                    breadcrumb.truncate(keep);
+                    state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
+                    if keep <= 2 {
+                        state.set_matrix_level(MatrixLevel::Plate);
+                        state.set_active_well("".into());
+                        state.set_active_well_has_value(false);
+                        state.set_active_well_value("".into());
+                    }
+                });
 
             // -- Global Z/T plane filter --
             let manager = self.clone();
@@ -358,15 +413,58 @@ impl ResultsStateController {
                     state.set_active_well_value(cell.label.clone());
                 });
 
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
                 .on_open_well_clicked(move |well| {
-                    // `get_group_by_well` isn't implemented yet, so there's no
-                    // well-level data to load — the level switch itself already
-                    // happens in results_matrix.slint's `clicked` handler.
-                    info!("Open well {well} requested, but well-level data isn't wired up yet");
+                    // The level switch itself already happened in
+                    // results_matrix.slint's `clicked` handler — push the
+                    // breadcrumb segment for it here and load its fields.
+                    if let Some(ui_ready) = ui_weak.upgrade() {
+                        let state = ui_ready.global::<ResultsState>();
+                        let mut breadcrumb: Vec<BreadcrumbItem> =
+                            state.get_breadcrumb().iter().collect();
+                        breadcrumb.truncate(2);
+                        breadcrumb.push(BreadcrumbItem {
+                            label: format!("Well {well}").into(),
+                        });
+                        state.set_breadcrumb(ModelRc::from(Rc::new(VecModel::from(breadcrumb))));
+                    } else {
+                        warn!("Failed to upgrade UI handle in on_open_well_clicked");
+                    }
+                    manager.update_well_view(&well);
                 });
+
+            let manager = self.clone();
+            let ui_weak = self.ui.clone();
             ui.global::<ResultsState>()
-                .on_well_field_clicked(move |_key| {});
+                .on_well_cell_clicked(move |key| {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_well_cell_clicked");
+                        return;
+                    };
+                    let cells = manager.well_cells.lock().expect("Poisned");
+                    let Some(cell) = cells.get(key.as_str()) else {
+                        warn!("Unknown field clicked: {key}");
+                        return;
+                    };
+                    let state = ui_ready.global::<ResultsState>();
+                    state.set_active_well(key);
+                    state.set_active_well_has_value(cell.has_value);
+                    state.set_active_well_value(cell.label.clone());
+                });
+
+            // Not implemented yet (object-level image + marker rendering) —
+            // only the level switch (results_matrix.slint's `clicked`
+            // handler) and breadcrumb-back (on_breadcrumb_nav above) work
+            // so far, same as `open-well-clicked` before `get_group_by_well`
+            // existed.
+            ui.global::<ResultsState>()
+                .on_well_field_clicked(move |image| {
+                    info!(
+                        "Open image {image} requested, but object-level data isn't wired up yet"
+                    );
+                });
             ui.global::<ResultsState>()
                 .on_object_marker_clicked(move |_id| {});
             ui.global::<ResultsState>()
@@ -642,22 +740,7 @@ impl ResultsStateController {
         let Some(matrix_filter) = matrix_filter_guard.as_ref() else {
             return;
         };
-        // What the plate's values actually are, e.g. "Average Area [px]" —
-        // shown in the sidebar for whichever well gets clicked, since they
-        // all share this one aggregation/column.
-        let column_display_name = self
-            .available_columns
-            .lock()
-            .expect("Poisned")
-            .iter()
-            .find(|entry| entry.key == matrix_filter.column)
-            .map(|entry| entry.display_name.clone())
-            .unwrap_or_else(|| matrix_filter.column.as_key());
-        let value_caption = format!(
-            "{} {}",
-            aggregation_display_name(&matrix_filter.aggregation),
-            column_display_name
-        );
+        let value_caption = self.value_caption_for(matrix_filter);
         let is_manual_scale = matches!(matrix_filter.color_scale, ColorScale::Manual(..));
 
         let group_filter = result::PlateFilter {
@@ -680,6 +763,73 @@ impl ResultsStateController {
             return;
         };
         self.set_matrix_in_slint(&result, value_caption, is_manual_scale);
+    }
+
+    // What the plate/well's values actually are, e.g. "Average Area [px]" —
+    // shown in the sidebar for whichever well/field gets clicked, since
+    // every cell in a given plate or well render shares this one
+    // aggregation/column.
+    fn value_caption_for(&self, matrix_filter: &MatrixFilter) -> String {
+        let column_display_name = self
+            .available_columns
+            .lock()
+            .expect("Poisned")
+            .iter()
+            .find(|entry| entry.key == matrix_filter.column)
+            .map(|entry| entry.display_name.clone())
+            .unwrap_or_else(|| matrix_filter.column.as_key());
+        format!(
+            "{} {}",
+            aggregation_display_name(&matrix_filter.aggregation),
+            column_display_name
+        )
+    }
+
+    // Third drill level from the plate: the fields inside one well. Reuses
+    // the current Matrix toolbar's column/aggregation/class/color settings
+    // (the well level has no toolbar of its own — see results_matrix.slint)
+    // scoped down to `well_id` via `WellFilter::group_name`.
+    fn update_well_view(&self, well_id: &str) {
+        let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
+            warn!("No database opened!");
+            return;
+        };
+
+        let plane_filter = self.plane_filter.lock().expect("Poisned");
+        let plane = result::PlaneFilter {
+            z_stack: plane_filter.selected_z_stack,
+            t_stack: plane_filter.selected_t_stack,
+        };
+        drop(plane_filter);
+
+        let matrix_filter_guard = self.matrix_filter.lock().expect("Poisned");
+        let Some(matrix_filter) = matrix_filter_guard.as_ref() else {
+            warn!("No matrix filter set, cannot open well {well_id}");
+            return;
+        };
+        let value_caption = self.value_caption_for(matrix_filter);
+
+        let well_filter = WellFilter {
+            plane,
+            group_name: well_id.to_string(),
+            grouping_regex: matrix_filter.group_by_regex.clone(),
+            aggregation: matrix_filter.aggregation.clone(),
+            object_class: matrix_filter.object_classe,
+            column: matrix_filter.column.clone(),
+            color_schema: matrix_filter.color_schema.clone(),
+            color_scale: matrix_filter.color_scale.clone(),
+            // No UI to pick a well layout yet — `None` has
+            // `get_group_by_well` assume the common 4x4 field grid.
+            well_size: None,
+            well_order: None,
+        };
+        drop(matrix_filter_guard);
+
+        let Ok(result) = db.get_group_by_well(&well_filter, &result::View::Heatmap) else {
+            warn!("Could not load well results for {well_id}!");
+            return;
+        };
+        self.set_well_in_slint(&result, value_caption);
     }
 
     // `result` is the plate/well grid `get_group_by_plate(.., View::Heatmap)`
@@ -706,30 +856,7 @@ impl ResultsStateController {
         let range_min = result.min;
         let range_max = result.max;
 
-        let cells: Vec<MatrixCell> = result
-            .row_names
-            .iter()
-            .zip(result.rows.iter())
-            .flat_map(|(row_key, row_cells)| {
-                result
-                    .column_names
-                    .iter()
-                    .zip(row_cells.iter())
-                    .map(move |(col_key, cell)| {
-                        let (has_value, value, label) = match &cell.value {
-                            CellValue::Float(v) => (true, *v, format!("{v:.2}")),
-                            _ => (false, 0.0, String::new()),
-                        };
-                        MatrixCell {
-                            key: format!("{row_key}{col_key}").into(),
-                            value,
-                            has_value,
-                            label: label.into(),
-                            color: bg_color_to_slint(cell.bg_color),
-                        }
-                    })
-            })
-            .collect();
+        let cells = flatten_grid_cells(result);
 
         // Cache by key for `on_plate_cell_clicked` to look up without
         // re-querying — this replaces whatever the previous matrix refresh
@@ -757,6 +884,47 @@ impl ResultsStateController {
             } else {
                 warn!(
                     "Failed to upgrade UI handle in set_matrix_in_slint, cannot update matrix view!"
+                );
+            }
+        })
+        .ok();
+    }
+
+    // `result` is the well grid `get_group_by_well(.., View::Heatmap)`
+    // returns — same shape `set_matrix_in_slint` renders one level up, just
+    // into `well-*` properties instead of `plate-*`, and cached into
+    // `well_cells` instead of `matrix_cells` for `on_well_cell_clicked`.
+    pub fn set_well_in_slint(&self, result: &DatabaseResult, value_caption: String) {
+        let ui_weak = self.ui.clone();
+        let rows = result.row_names.len() as i32;
+        let cols = result.column_names.len() as i32;
+        let range_min = result.min;
+        let range_max = result.max;
+
+        let cells = flatten_grid_cells(result);
+
+        *self.well_cells.lock().expect("Poisned") = cells
+            .iter()
+            .map(|cell| (cell.key.to_string(), cell.clone()))
+            .collect();
+
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                // The previously selected field (if any) belonged to the
+                // old well — hide its card until the user clicks a new one.
+                state.set_active_well("".into());
+                state.set_active_well_has_value(false);
+                state.set_active_well_value("".into());
+                state.set_active_well_caption(value_caption.into());
+                state.set_well_rows(rows);
+                state.set_well_cols(cols);
+                state.set_well_min(range_min);
+                state.set_well_max(range_max);
+                state.set_well_fields(ModelRc::from(Rc::new(VecModel::from(cells))));
+            } else {
+                warn!(
+                    "Failed to upgrade UI handle in set_well_in_slint, cannot update well view!"
                 );
             }
         })
@@ -1161,6 +1329,50 @@ fn image_items(images: &[ImageEntry], selected: bool) -> Vec<MultiSelectItem> {
             color: Color::default(),
             group: "".into(),
             selected,
+        })
+        .collect()
+}
+
+// Flattens a `get_group_by_plate`/`get_group_by_well` `View::Heatmap` result
+// into the row-major `MatrixCell` array `PlateGrid`/`WellGrid`
+// (results_matrix.slint) index as `r * cols + c` — shared by
+// `set_matrix_in_slint` and `set_well_in_slint` since both grids render the
+// exact same way, just against `plate-*`/`well-*` properties respectively.
+fn flatten_grid_cells(result: &DatabaseResult) -> Vec<MatrixCell> {
+    result
+        .row_names
+        .iter()
+        .zip(result.rows.iter())
+        .flat_map(|(row_key, row_cells)| {
+            result
+                .column_names
+                .iter()
+                .zip(row_cells.iter())
+                .map(move |(col_key, cell)| {
+                    let (has_value, value, label) = match &cell.value {
+                        CellValue::Float(v) => (true, *v, format!("{v:.2}")),
+                        _ => (false, 0.0, String::new()),
+                    };
+                    // Prefer the cell's own search key — the well id
+                    // (`get_group_by_plate`) or image name
+                    // (`get_group_by_well`) it actually grouped on — over
+                    // reconstructing one from row+col, which only happens
+                    // to work for the plate view (well id = row+col
+                    // letters/numbers) and not the well view (row/col there
+                    // are just grid position numbers, not identifiers).
+                    let key = cell
+                        .search_key
+                        .as_ref()
+                        .map(|(key, _)| key.clone())
+                        .unwrap_or_else(|| format!("{row_key}{col_key}"));
+                    MatrixCell {
+                        key: key.into(),
+                        value,
+                        has_value,
+                        label: label.into(),
+                        color: bg_color_to_slint(cell.bg_color),
+                    }
+                })
         })
         .collect()
 }
