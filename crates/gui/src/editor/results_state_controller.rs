@@ -1165,7 +1165,6 @@ impl ResultsStateController {
 
                 self.set_color_schemas_in_slint();
                 self.set_grid_size_options_in_slint();
-                *self.matrix_filter.lock().expect("Poisned") = None;
                 *self.current_well.lock().expect("Poisned") = None;
                 *self.current_image.lock().expect("Poisned") = None;
 
@@ -1200,6 +1199,41 @@ impl ResultsStateController {
                     chart_column_items(&available_columns, &classes_for_charts, &default_chart_column);
                 let default_chart_column_label = default_chart_column.display_label(&classes_for_charts);
 
+                // Matrix used to stay at `None` here until the user touched
+                // one of its own toolbar controls (`update_matrix_filter`
+                // lazily creates it) — meaning the very first time the
+                // Plate view was shown, `update_matrix_view` saw `None` and
+                // skipped the query entirely, leaving whatever `plate-cells`
+                // happened to already hold on screen while
+                // `matrix-column-summary` sat at its own unrelated .slint
+                // default ("Count") — a label that never actually matched
+                // what (if anything) was queried. Seeding it here with a
+                // real default column, in sync with `matrix-column-items`'
+                // own selection, means the very first query run after
+                // opening a database is already for the same column the
+                // toolbar displays as selected.
+                let default_matrix_column = available_columns
+                    .iter()
+                    .map(|entry| entry.key.clone())
+                    .find(is_matrix_column)
+                    .unwrap_or_default();
+                *self.matrix_filter.lock().expect("Poisned") = Some(MatrixFilter {
+                    column: default_matrix_column.clone(),
+                    ..MatrixFilter::default()
+                });
+                let matrix_eligible_columns: Vec<ColumnEntry> = available_columns
+                    .iter()
+                    .filter(|entry| is_matrix_column(&entry.key))
+                    .cloned()
+                    .collect();
+                let matrix_column_items_vec = column_items(
+                    &matrix_eligible_columns,
+                    &classes_for_charts,
+                    |key| *key == default_matrix_column,
+                );
+                let default_matrix_column_label =
+                    default_matrix_column.display_label(&classes_for_charts);
+
                 let ui_weak = self.ui.clone();
                 slint::invoke_from_event_loop(move || {
                     if let Some(ui_ready) = ui_weak.upgrade() {
@@ -1213,11 +1247,19 @@ impl ResultsStateController {
                         state.set_list_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
                             aggregation_items(&[Aggregation::Avg]),
                         ))));
-                        // Matches `matrix_filter` above being reset to `None`
-                        // (no column selected yet) rather than lingering
-                        // disabled from whatever the previous database last
-                        // had selected.
-                        state.set_matrix_aggregate_enabled(true);
+
+                        state.set_matrix_column_items(ModelRc::from(Rc::new(VecModel::from(
+                            matrix_column_items_vec,
+                        ))));
+                        state.set_matrix_column_summary(default_matrix_column_label.into());
+                        // Same "Count can't be aggregated" rule
+                        // `on_matrix_value_clicked` applies on every later
+                        // column change — applied here too so the very
+                        // first render is consistent with it.
+                        state.set_matrix_aggregate_enabled(!matches!(
+                            default_matrix_column,
+                            Column::Count
+                        ));
 
                         state.set_chart_kind(ResultsChartKind2::Histogram);
                         state.set_chart_column_items(ModelRc::from(Rc::new(VecModel::from(
@@ -2948,6 +2990,18 @@ fn is_chartable_column(column: &Column) -> bool {
             | Column::IntensitySum(_)
             | Column::IntensityMin(_)
             | Column::IntensityMax(_)
+    )
+}
+
+/// Whether `column` is a valid Matrix (Plate/Well/Heatmap) target — mirrors
+/// `set_columns_in_slint`'s own `matrix_items` filter (an object's identity
+/// isn't a value to aggregate; unlike `is_chartable_column`, `Count` stays
+/// valid here — "how many objects in this well" is meaningful for a grid,
+/// unlike for a histogram/scatter/boxplot).
+fn is_matrix_column(column: &Column) -> bool {
+    !matches!(
+        column,
+        Column::ObjectId | Column::ImageName | Column::ObjectClass
     )
 }
 

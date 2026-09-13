@@ -199,13 +199,24 @@ export component ResultsListView inherits Rectangle {
                     vertical-stretch: 1;
                     accessible-role: list;
                     accessible-orientation: Orientation.vertical;
-                    viewport-width: header-rect.width * ResultsState.list-column-headers.length;
+                    // `header-layout`'s own width is already the correct
+                    // total content width — `max(self.preferred-width,
+                    // parent.width)`, i.e. real column count * 260px (+
+                    // padding), or the panel width if that's wider — reused
+                    // here instead of re-deriving it. The previous
+                    // `header-rect.width * column-count` was wrong: that
+                    // multiplied the whole *panel's* width by the column
+                    // count (thousands of pixels too wide per column),
+                    // which is why the scrollbar let you scroll well past
+                    // the actual content once scrolling started working at
+                    // all.
+                    viewport-width: header-layout.width;
                     viewport-height: ResultsState.list-rows.length * 34px;
 
                     for row[index] in ResultsState.list-rows: Rectangle {
                         y: index * 34px;
                         height: 34px;
-                        width: header-rect.width * ResultsState.list-column-headers.length;
+                        width: header-layout.width;
 
                         background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
 
