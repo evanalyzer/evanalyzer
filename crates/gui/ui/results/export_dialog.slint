@@ -22,6 +22,10 @@ export global ExportDialogState {
     in-out property <string> output-dir: "";
     callback pick-output-dir();
 
+    // -- Format --
+    in-out property <[MultiSelectItem]> format-items: [];
+    in-out property <string> format-summary: "XLSX";
+
     // -- Z/T range (exclusive end, matching `ResultExport`'s `Range<u32>`) --
     in-out property <string> z-start: "0";
     in-out property <string> z-end: "1";
@@ -220,6 +224,35 @@ export component ExportDialog inherits Rectangle {
                             }
                         }
 
+                        // -- Format --
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Format";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                alignment: start;
+                                MultiSelectDropdown {
+                                    summary-text: ExportDialogState.format-summary;
+                                    items <=> ExportDialogState.format-items;
+                                    multi-select: false;
+                                    pill-width: 140px;
+                                    item-selected(key, value, selected) => { if selected { ExportDialogState.format-summary = value; } }
+                                }
+                            }
+
+                            if ExportDialogState.format-summary == "Parquet": Text {
+                                text: "Parquet exports the raw objects table as-is — every column, unfiltered. The options below are ignored.";
+                                color: Theme.text-mute;
+                                font-size: 10.5px;
+                                wrap: word-wrap;
+                            }
+                        }
+
                         // -- What to export --
                         VerticalLayout {
                             spacing: 6px;
@@ -261,6 +294,7 @@ export component ExportDialog inherits Rectangle {
                                 CheckBox {
                                     text: "Image heatmap";
                                     checked <=> ExportDialogState.with-heatmap;
+                                    enabled: ExportDialogState.format-summary == "XLSX";
                                 }
 
                                 HorizontalLayout {
@@ -294,11 +328,13 @@ export component ExportDialog inherits Rectangle {
                             CheckBox {
                                 text: "Plate and Wells as list";
                                 checked <=> ExportDialogState.with-plates-and-wells-as-list;
+                                enabled: ExportDialogState.format-summary == "XLSX";
                             }
 
                             CheckBox {
                                 text: "Plate and Wells as heatmap";
                                 checked <=> ExportDialogState.with-plate-view;
+                                enabled: ExportDialogState.format-summary == "XLSX";
                             }
 
                             LabeledField {

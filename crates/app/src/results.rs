@@ -1,6 +1,8 @@
 mod results_charts;
 mod results_exporter;
 mod results_generator;
+#[cfg(test)]
+mod test_support;
 
 pub use results_charts::BoxplotBox;
 pub use results_charts::BoxplotFilter;

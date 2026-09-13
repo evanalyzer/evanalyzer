@@ -114,6 +114,14 @@ pub enum ExportCommand {
     Csv(TableExportArgs),
     /// Export rows as an XLSX workbook
     Xlsx(TableExportArgs),
+    /// Export the raw `objects` table as a single Parquet file
+    ///
+    /// Unlike `csv`/`xlsx`, this is an unfiltered, every-column dump of the
+    /// database's `objects` table (via DuckDB's own `COPY ... TO ...
+    /// (FORMAT parquet)`) — there's no column selection or image/class/z/t
+    /// filtering to apply, so it takes a plainer set of arguments than
+    /// `TableExportArgs`.
+    Parquet(ParquetExportArgs),
     // Chart image export (histogram/scatter/heatmap PNGs) isn't wired up
     // yet: the current results backend (ResultCharts) only computes chart
     // *data* (bins/points/box stats) — actual pixel rendering only exists
@@ -140,6 +148,17 @@ pub struct TableExportArgs {
 
     #[command(flatten)]
     pub group: GroupArgs,
+}
+
+#[derive(Args)]
+pub struct ParquetExportArgs {
+    /// Results database (.evadb) produced by `analyze`
+    #[arg(long)]
+    pub db: PathBuf,
+
+    /// Output file path
+    #[arg(long)]
+    pub out: PathBuf,
 }
 
 #[derive(Args, Default)]

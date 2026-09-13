@@ -1,4 +1,4 @@
-use crate::args::{ExportArgs, ExportCommand, TableExportArgs};
+use crate::args::{ExportArgs, ExportCommand, ParquetExportArgs, TableExportArgs};
 use crate::commands::common::{resolve_grouping, resolve_image_rel_paths, resolve_object_classes};
 use evanalyzer_app::result::{Column, ExportFormat, ResultExport, ResultsGenerator};
 use evanalyzer_cfg::core_types::InternalErrors;
@@ -7,7 +7,48 @@ pub fn run(args: ExportArgs) -> Result<(), InternalErrors> {
     match args.command {
         ExportCommand::Csv(table) => export_table(table, ExportFormat::CSV),
         ExportCommand::Xlsx(table) => export_table(table, ExportFormat::XLSX),
+        ExportCommand::Parquet(args) => export_parquet(args),
     }
+}
+
+/// `objects.parquet`: the raw `objects` table, every column, unfiltered
+/// (see `ResultExport::export_as_parquet`) — unlike `export_table`, there's
+/// no column/filter/grouping resolution to do first, so this is a much
+/// thinner wrapper around `start_export`.
+fn export_parquet(args: ParquetExportArgs) -> Result<(), InternalErrors> {
+    let db = ResultsGenerator::open_database(args.db.clone())?;
+
+    let scratch_dir = std::env::temp_dir().join(format!(
+        "evanalyzer_cli_export_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    let export = ResultExport {
+        output_dir: scratch_dir.clone(),
+        format: ExportFormat::Parquet,
+        ..Default::default()
+    };
+
+    let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
+    let outcome = export.start_export(&db, &mut no_progress).and_then(|_| {
+        if let Some(parent) = args.out.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
+            })?;
+        }
+        std::fs::rename(scratch_dir.join("objects.parquet"), &args.out).map_err(|e| {
+            InternalErrors::Internal(format!("could not move export output into place: {e}"))
+        })
+    });
+    let _ = std::fs::remove_dir_all(&scratch_dir);
+    outcome?;
+    println!("Exported to {}", args.out.display());
+    Ok(())
 }
 
 /// Builds a `ResultExport` from `args` and runs it — all the actual
@@ -68,9 +109,17 @@ fn export_table(args: TableExportArgs, format: ExportFormat) -> Result<(), Inter
         ..Default::default()
     };
 
+    // `export_table` is only ever called with CSV/XLSX from `run()` above -
+    // Parquet goes through `export_parquet` instead, since it needs none of
+    // the column/filter/grouping resolution this function does.
     let extension = match format {
         ExportFormat::CSV => "csv",
         ExportFormat::XLSX => "xlsx",
+        ExportFormat::Parquet => {
+            return Err(InternalErrors::Internal(
+                "export_table doesn't support Parquet — use export_parquet".to_string(),
+            ));
+        }
     };
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
     let outcome = export
@@ -106,6 +155,25 @@ mod tests {
     use super::*;
     use crate::args::{FilterArgs, GroupArgs};
     use crate::commands::test_support::TempResultsDb;
+
+    #[test]
+    fn export_parquet_writes_a_valid_parquet_file() {
+        let db = TempResultsDb::seeded();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("out.parquet");
+
+        export_parquet(ParquetExportArgs {
+            db: db.path.clone(),
+            out: out.clone(),
+        })
+        .expect("parquet export should succeed");
+
+        let bytes = std::fs::read(&out).expect("read parquet back");
+        // Every Parquet file starts and ends with the 4-byte "PAR1" magic.
+        assert!(bytes.len() > 8, "parquet file is too small: {} bytes", bytes.len());
+        assert_eq!(&bytes[..4], b"PAR1", "missing leading PAR1 magic");
+        assert_eq!(&bytes[bytes.len() - 4..], b"PAR1", "missing trailing PAR1 magic");
+    }
 
     #[test]
     fn export_table_writes_a_csv_file_with_the_expected_rows() {

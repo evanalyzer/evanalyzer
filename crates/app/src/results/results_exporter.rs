@@ -19,11 +19,12 @@ use std::range::Range;
 /// theme to pull from.
 const ALTERNATING_ROW_BG: u32 = 0xF1F1F1;
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
     #[default]
     XLSX,
     CSV,
+    Parquet,
 }
 
 /// One export step/document completing — `current`/`total` describe
@@ -106,6 +107,15 @@ impl ResultExport {
                 self.output_dir
             ))
         })?;
+
+        // Parquet ignores every `with_*`/column/filter setting below - it's
+        // always a single raw dump of the whole `objects` table (see
+        // `export_as_parquet`'s doc comment), so it's handled as its own
+        // early return rather than threaded through the List/Grouped/Plate/
+        // Well/Heatmap dispatch those settings drive.
+        if matches!(self.format, ExportFormat::Parquet) {
+            return self.export_as_parquet(database, &mut *on_progress);
+        }
 
         if self.with_list_view {
             self.export_list(database, &mut *on_progress)?;
@@ -232,9 +242,20 @@ impl ResultExport {
                         images,
                         object_classes,
                         true,
-                        &self.output_dir.join(format!("{file_stem}_coloc_details.csv")),
+                        &self
+                            .output_dir
+                            .join(format!("{file_stem}_coloc_details.csv")),
                     )?;
                 }
+            }
+            // `start_export` returns early for `Parquet` before ever calling
+            // `export_list`/`write_list_document` - reachable only if
+            // something calls this directly, so this stays a real error
+            // rather than a panic.
+            ExportFormat::Parquet => {
+                return Err(InternalErrors::Internal(
+                    "Parquet export doesn't support the List view — call export_as_parquet directly instead".to_string(),
+                ));
             }
         }
         Ok(())
@@ -307,6 +328,12 @@ impl ResultExport {
             }
             ExportFormat::CSV => {
                 write_csv(&result, &self.output_dir.join("grouped_by_image.csv"))?;
+            }
+            // See the identical arm in `write_list_document` above.
+            ExportFormat::Parquet => {
+                return Err(InternalErrors::Internal(
+                    "Parquet export doesn't support the Grouped-by-Image view — call export_as_parquet directly instead".to_string(),
+                ));
             }
         }
         on_progress("Exporting Grouped Image List", 1, 1);
@@ -704,6 +731,35 @@ impl ResultExport {
                 .save(self.output_dir.join(file_name))
                 .map_err(xlsx_err)?;
         }
+        Ok(())
+    }
+
+    /// `objects.parquet`: the entire `objects` table, every column, no z/t/
+    /// image/class filtering and no column selection — DuckDB's own `COPY`
+    /// writes the file directly, so this bypasses `get_object_list`/
+    /// `fetch_all_list_rows` entirely (unlike every other export above).
+    /// Meant for a downstream tool that reads Parquet natively rather than
+    /// for a human to open, so there's no equivalent of `with_list_view`'s
+    /// column/plane scoping to apply here.
+    fn export_as_parquet(
+        &self,
+        database: &ResultsGenerator,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        on_progress("Exporting Parquet", 0, 1);
+        let path = self.output_dir.join("objects.parquet");
+        // DuckDB's `COPY` takes the destination as a single-quoted string
+        // literal inside the SQL text itself (not a bindable parameter), so
+        // any literal `'` in the path has to be escaped the same way a SQL
+        // string literal would be (doubling it) rather than passed through
+        // `params![]`.
+        let path_literal = path.to_string_lossy().replace('\'', "''");
+        let sql = format!("COPY objects TO '{path_literal}' (FORMAT parquet);");
+        database
+            .connection()
+            .execute_batch(&sql)
+            .map_err(|e| InternalErrors::Io(e.to_string()))?;
+        on_progress("Exporting Parquet", 1, 1);
         Ok(())
     }
 }
@@ -1342,7 +1398,7 @@ impl SheetNamer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use duckdb::Connection;
+    use crate::results::test_support::{seed_db, ObjectSpec};
 
     #[test]
     fn csv_escape_quotes_fields_containing_commas_or_quotes() {
@@ -1351,118 +1407,425 @@ mod tests {
         assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
     }
 
-    /// Minimal one-image, one-object `.evadb` — just enough schema/data for
-    /// `start_export` to have something real to write. Mirrors the CLI's own
-    /// `crates/cli/src/commands/test_support.rs` fixture (duplicated rather
-    /// than shared across crates, same reasoning as `cell_text` above).
-    fn seed_minimal_db(path: &Path) {
-        let conn = Connection::open(path).expect("open test db");
-        conn.execute_batch(
-            "CREATE TABLE classes (class_id INTEGER, name VARCHAR, color UINTEGER);
-             CREATE TABLE images (
-                 image_name VARCHAR, image_rel_path VARCHAR,
-                 successful BOOLEAN DEFAULT true, error_message VARCHAR,
-                 disabled BOOLEAN DEFAULT false,
-                 width UINTEGER, height UINTEGER,
-                 c_stacks UINTEGER, z_stacks UINTEGER, t_stacks UINTEGER
-             );
-             CREATE TABLE objects (
-                 image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL,
-                 c_stack INTEGER, z_stack INTEGER, t_stack INTEGER,
-                 object_id UUID NOT NULL, seg_class_name VARCHAR, seg_class_id INTEGER,
-                 object_class_name VARCHAR, object_class_id VARCHAR,
-                 parent_id VARCHAR, children VARCHAR, track_id UBIGINT,
-                 centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
-                 bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
-                 bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE, bbox_xmax_nm DOUBLE, bbox_ymax_nm DOUBLE,
-                 area_px UBIGINT, area_nm2 DOUBLE, perimeter_px DOUBLE, perimeter_nm DOUBLE,
-                 circularity DOUBLE, solidity DOUBLE, aspect_ratio DOUBLE, roundness DOUBLE, compactness DOUBLE,
-                 major_axis_px DOUBLE, minor_axis_px DOUBLE, eccentricity DOUBLE, touches_edge BOOLEAN,
-                 pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
-                 intensities_json JSON, coloc_json JSON
-             );
-             INSERT INTO classes VALUES (1, 'ClassA', 0);
-             INSERT INTO images VALUES ('img1.tif', 'img1.tif', true, NULL, false, 100, 100, 1, 1, 1);
-             INSERT INTO objects (
-                image_name, image_rel_path, t_stack, z_stack, object_id, seg_class_name, seg_class_id,
-                object_class_name, object_class_id, track_id,
-                centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
-                bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
-                bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
-                area_px, area_nm2, perimeter_px, perimeter_nm,
-                circularity, solidity, aspect_ratio, roundness, compactness,
-                major_axis_px, minor_axis_px, eccentricity, touches_edge,
-                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-                intensities_json, coloc_json
-             ) VALUES (
-                'img1.tif', 'img1.tif', 0, 0, '00000000-0000-0000-0000-000000000001', 'ClassA', 1,
-                '[\"ClassA\"]', '[1]', 0,
-                0, 0, 0, 0,
-                0, 0, 10, 10,
-                0, 0, 0, 0,
-                100, 100.0, 40, 40,
-                1.0, 1.0, 1.0, 1.0, 1.0,
-                10, 10, 1.0, false,
-                1.0, 1.0, 1.0,
-                '{}', '{}'
-             );",
+    #[test]
+    fn csv_escape_leaves_a_plain_field_untouched() {
+        assert_eq!(csv_escape("plain text"), "plain text");
+        assert_eq!(csv_escape(""), "");
+    }
+
+    #[test]
+    fn csv_escape_quotes_a_field_containing_a_newline() {
+        assert_eq!(csv_escape("a\nb"), "\"a\nb\"");
+        assert_eq!(csv_escape("a\rb"), "\"a\rb\"");
+    }
+
+    fn cell_str(value: &str) -> Cell {
+        Cell {
+            value: CellValue::String(value.to_string()),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+        }
+    }
+
+    #[test]
+    fn cell_text_reads_back_every_cell_value_variant_as_plain_text() {
+        assert_eq!(cell_text(&cell_str("hi")), "hi");
+        assert_eq!(
+            cell_text(&Cell {
+                value: CellValue::Empty,
+                bg_color: 0,
+                alternating_color: false,
+                search_key: None,
+            }),
+            ""
+        );
+        assert_eq!(
+            cell_text(&Cell {
+                value: CellValue::Float(1.5),
+                bg_color: 0,
+                alternating_color: false,
+                search_key: None,
+            }),
+            "1.5"
+        );
+        assert_eq!(
+            cell_text(&Cell {
+                value: CellValue::Integer(7),
+                bg_color: 0,
+                alternating_color: false,
+                search_key: None,
+            }),
+            "7"
+        );
+        assert_eq!(
+            cell_text(&Cell {
+                value: CellValue::Class(("ClassA".to_string(), 0)),
+                bg_color: 0,
+                alternating_color: false,
+                search_key: None,
+            }),
+            "ClassA"
+        );
+    }
+
+    /// Opens a fresh `ResultsGenerator` over a temp `.evadb` seeded with
+    /// `objects` (see `test_support::seed_db`). Leaks the backing `TempDir`
+    /// (the returned generator only holds an open `Connection`, not the
+    /// directory) - acceptable for a short-lived test process.
+    fn open(objects: &[ObjectSpec]) -> (ResultsGenerator, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("results.evadb");
+        seed_db(&db_path, objects);
+        let out_dir = dir.path().join("out");
+        std::mem::forget(dir);
+        (
+            ResultsGenerator::open_database(db_path).expect("open database"),
+            out_dir,
         )
-        .expect("seed test db");
+    }
+
+    fn no_progress() -> impl FnMut(&str, usize, usize) {
+        |_message: &str, _current: usize, _total: usize| {}
+    }
+
+    fn full_range() -> (Range<u32>, Range<u32>) {
+        (Range { start: 0, end: 1 }, Range { start: 0, end: 1 })
     }
 
     /// End-to-end proof that `start_export`'s CSV path (shared by the CLI
-    /// and, once wired up, the GUI export dialog) actually writes a real
+    /// and the GUI export dialog) actually writes a real
     /// `list.csv`/`grouped_by_image.csv` with the expected content — not
-    /// just that the CLI's own call site happens to work.
+    /// just that a caller's own call site happens to work.
     #[test]
     fn start_export_writes_csv_for_list_and_grouped_by_image() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db_path = dir.path().join("results.evadb");
-        seed_minimal_db(&db_path);
-        let database = ResultsGenerator::open_database(db_path).expect("open database");
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
         let columns: Vec<Column> = database
             .get_available_columns()
             .expect("available columns")
             .into_iter()
             .map(|entry| entry.key)
             .collect();
-        let out_dir = dir.path().join("out");
-        let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
+        let (z_stacks, t_stacks) = full_range();
 
         let list_export = ResultExport {
             output_dir: out_dir.clone(),
             format: ExportFormat::CSV,
-            z_stacks: Range { start: 0, end: 1 },
-            t_stacks: Range { start: 0, end: 1 },
+            z_stacks,
+            t_stacks,
             columns: columns.clone(),
             with_list_view: true,
             ..Default::default()
         };
         list_export
-            .start_export(&database, &mut no_progress)
+            .start_export(&database, &mut no_progress())
             .expect("csv list export");
         let list_csv = std::fs::read_to_string(out_dir.join("list.csv")).expect("read list.csv");
-        assert!(list_csv.contains("Class"), "header: {list_csv}");
+        let mut lines = list_csv.lines();
+        assert!(lines.next().unwrap().contains("Class"));
+        assert_eq!(lines.count(), 2, "expected 2 data rows");
         assert!(list_csv.contains("ClassA"));
+        assert!(list_csv.contains("ClassB"));
 
         let grouped_export = ResultExport {
             output_dir: out_dir.clone(),
             format: ExportFormat::CSV,
-            z_stacks: Range { start: 0, end: 1 },
-            t_stacks: Range { start: 0, end: 1 },
+            z_stacks,
+            t_stacks,
             columns,
             aggregations: vec![Aggregation::Avg],
             with_grouped_by_image_list: true,
             ..Default::default()
         };
         grouped_export
-            .start_export(&database, &mut no_progress)
+            .start_export(&database, &mut no_progress())
             .expect("csv grouped export");
         let grouped_csv = std::fs::read_to_string(out_dir.join("grouped_by_image.csv"))
             .expect("read grouped_by_image.csv");
-        assert!(
-            grouped_csv.lines().count() >= 2,
-            "expected a header and at least one data row: {grouped_csv}"
+        assert_eq!(
+            grouped_csv.lines().count(),
+            3,
+            "expected a header plus one row per image: {grouped_csv}"
         );
+    }
+
+    #[test]
+    fn start_export_writes_a_valid_xlsx_for_list_and_grouped_by_image() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns,
+            aggregations: vec![Aggregation::Avg],
+            with_list_view: true,
+            with_grouped_by_image_list: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("xlsx export");
+
+        for name in ["list.xlsx", "grouped_by_image.xlsx"] {
+            let bytes = std::fs::read(out_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
+            assert!(bytes.len() > 4, "{name} is too small: {} bytes", bytes.len());
+            assert_eq!(&bytes[..4], b"PK\x03\x04", "{name} is not a zip/xlsx file");
+        }
+    }
+
+    #[test]
+    fn start_export_with_list_coloc_details_writes_a_second_csv_document() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns,
+            with_list_view: true,
+            with_list_coloc_details: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("csv export with coloc details");
+
+        assert!(out_dir.join("list.csv").exists());
+        assert!(out_dir.join("list_coloc_details.csv").exists());
+    }
+
+    #[test]
+    fn start_export_with_one_file_per_image_writes_a_document_per_image() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+        ]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns,
+            with_list_view: true,
+            with_list_one_file_per_image: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("csv per-image export");
+
+        let img1 = std::fs::read_to_string(out_dir.join("list_img1.csv")).expect("list_img1.csv");
+        let img2 = std::fs::read_to_string(out_dir.join("list_img2.csv")).expect("list_img2.csv");
+        assert!(img1.contains("ClassA") && !img1.contains("ClassB"));
+        assert!(img2.contains("ClassB") && !img2.contains("ClassA"));
+    }
+
+    #[test]
+    fn start_export_rejects_csv_combined_with_plate_view() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            with_plate_view: true,
+            ..Default::default()
+        };
+        let result = export.start_export(&database, &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_export_rejects_csv_combined_with_heatmap() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            with_heatmap: true,
+            ..Default::default()
+        };
+        let result = export.start_export(&database, &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    /// The Parquet path (`export_as_parquet`) executes DuckDB's own
+    /// `COPY objects TO '<path>' (FORMAT parquet)` directly against the raw
+    /// `objects` table — this proves it actually produces a file DuckDB
+    /// itself can read back, with every seeded row intact, and (unlike
+    /// CSV/XLSX) completely ignoring `columns`/`with_list_view`/filters.
+    #[test]
+    fn start_export_parquet_dumps_the_whole_objects_table_ignoring_other_settings() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 200),
+            ObjectSpec::new("img2.tif", "ClassB", 2, 300),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::Parquet,
+            // Deliberately left at defaults / unset: `columns` is empty,
+            // every `with_*` flag is false - Parquet must ignore all of it.
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("parquet export");
+
+        let parquet_path = out_dir.join("objects.parquet");
+        let bytes = std::fs::read(&parquet_path).expect("read objects.parquet");
+        assert!(bytes.len() > 8);
+        assert_eq!(&bytes[..4], b"PAR1", "missing leading PAR1 magic");
+        assert_eq!(&bytes[bytes.len() - 4..], b"PAR1", "missing trailing PAR1 magic");
+
+        // Read it back through a *separate* DuckDB connection - proof the
+        // file is genuinely valid Parquet, not just magic-byte-shaped.
+        let verify = duckdb::Connection::open_in_memory().expect("open verify connection");
+        let count: i64 = verify
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM read_parquet('{}')",
+                    parquet_path.to_string_lossy().replace('\'', "''")
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .expect("query parquet row count");
+        assert_eq!(count, 3, "expected every seeded object, unfiltered");
+    }
+
+    /// `write_list_document`'s `Parquet` arm is unreachable through
+    /// `start_export` (which returns early for Parquet before ever calling
+    /// `export_list`) - this proves it's still a real, safe error rather
+    /// than a panic if something calls it directly.
+    #[test]
+    fn write_list_document_rejects_parquet_directly() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::Parquet,
+            ..Default::default()
+        };
+        let result = export.write_list_document(&database, &[], &None, "list");
+        assert!(result.is_err());
+    }
+
+    /// Same defensive-arm proof as `write_list_document_rejects_parquet_directly`,
+    /// for `export_grouped_by_image`'s equivalent early return.
+    #[test]
+    fn export_grouped_by_image_rejects_parquet_directly() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::Parquet,
+            ..Default::default()
+        };
+        let result = export.export_grouped_by_image(&database, &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_images_defaults_to_every_non_disabled_image_sorted_by_name() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img2.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir,
+            ..Default::default()
+        };
+        let images = resolve_images(&database, &export).expect("resolve images");
+        assert_eq!(images, vec!["img1.tif".to_string(), "img2.tif".to_string()]);
+    }
+
+    #[test]
+    fn resolve_images_with_an_explicit_list_returns_only_those_images() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 100),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir,
+            image_rel_paths: vec!["img2.tif".to_string()],
+            ..Default::default()
+        };
+        let images = resolve_images(&database, &export).expect("resolve images");
+        assert_eq!(images, vec!["img2.tif".to_string()]);
+    }
+
+    #[test]
+    fn is_aggregable_excludes_identity_and_intensity_columns() {
+        assert!(!is_aggregable(&Column::ObjectId));
+        assert!(!is_aggregable(&Column::ImageName));
+        assert!(!is_aggregable(&Column::ObjectClass));
+        assert!(!is_aggregable(&Column::IntensityAvg(0)));
+        assert!(is_aggregable(&Column::AreaSizePx));
+        assert!(is_aggregable(&Column::Circularity));
+    }
+
+    #[test]
+    fn image_stub_strips_directory_and_extension() {
+        assert_eq!(image_stub("folder/img1.tif"), "img1");
+        assert_eq!(image_stub("img2.ome.tif"), "img2.ome");
+        assert_eq!(image_stub("no_extension"), "no_extension");
+    }
+
+    #[test]
+    fn sanitize_filename_component_replaces_unsafe_characters() {
+        assert_eq!(sanitize_filename_component("a/b:c"), "a_b_c");
+        assert_eq!(sanitize_filename_component("plain-name_1"), "plain-name_1");
+    }
+
+    #[test]
+    fn sheet_namer_deduplicates_and_truncates_long_names() {
+        let mut namer = SheetNamer::new();
+        assert_eq!(namer.unique("Class A"), "Class A");
+        assert_eq!(namer.unique("Class A"), "Class A (2)");
+        assert_eq!(namer.unique("Class A"), "Class A (3)");
+
+        let long_name = "x".repeat(40);
+        let sanitized = namer.unique(&long_name);
+        assert!(sanitized.chars().count() <= 31);
+    }
+
+    #[test]
+    fn sheet_namer_rejects_excel_forbidden_characters() {
+        let mut namer = SheetNamer::new();
+        let name = namer.unique("a[b]:c*d?e/f\\g");
+        assert!(!name.contains(['[', ']', ':', '*', '?', '/', '\\']));
     }
 }

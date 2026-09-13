@@ -2614,6 +2614,10 @@ impl ResultsStateController {
 
         let state = ui_ready.global::<ExportDialogState>();
         state.set_output_dir("".into());
+        state.set_format_items(ModelRc::from(Rc::new(VecModel::from(export_format_items(
+            ExportFormat::XLSX,
+        )))));
+        state.set_format_summary("XLSX".into());
         state.set_z_start("0".into());
         state.set_z_end((z_stack_max + 1).to_string().into());
         state.set_t_start("0".into());
@@ -2779,9 +2783,19 @@ impl ResultsStateController {
             .parse::<usize>()
             .map_err(|_| format!("Unknown square size \"{square_size_key}\"."))?;
 
+        let format_key = state
+            .get_format_items()
+            .iter()
+            .find(|item| item.selected)
+            .map(|item| item.key)
+            .unwrap_or_else(|| "XLSX".into());
+        let Some(format) = export_format_from_key(format_key.as_str()) else {
+            return Err(format!("Unknown export format \"{format_key}\"."));
+        };
+
         Ok(ResultExport {
             output_dir: PathBuf::from(output_dir),
-            format: ExportFormat::XLSX,
+            format,
             z_stacks: std::range::Range {
                 start: z_start,
                 end: z_end.max(z_start + 1),
@@ -3121,6 +3135,39 @@ fn color_schemas() -> [(&'static str, ColorSchema); 11] {
     ]
 }
 
+// FORMAT dropdown vocabulary for the export dialog — mirrors
+// `ExportFormat`'s three variants (see results_exporter.rs); "Parquet"
+// ignores every other dialog setting (column/filter/grouping/plate/well/
+// heatmap), which `export_dialog.slint` calls out with its own note text
+// when selected.
+fn export_format_options() -> [(&'static str, ExportFormat); 3] {
+    [
+        ("XLSX", ExportFormat::XLSX),
+        ("CSV", ExportFormat::CSV),
+        ("Parquet", ExportFormat::Parquet),
+    ]
+}
+
+fn export_format_items(selected: ExportFormat) -> Vec<MultiSelectItem> {
+    export_format_options()
+        .into_iter()
+        .map(|(name, format)| MultiSelectItem {
+            key: name.into(),
+            value: name.into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: format == selected,
+        })
+        .collect()
+}
+
+fn export_format_from_key(key: &str) -> Option<ExportFormat> {
+    export_format_options()
+        .into_iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, format)| format)
+}
+
 fn color_schema_items() -> Vec<MultiSelectItem> {
     color_schemas()
         .into_iter()
@@ -3387,6 +3434,35 @@ mod tests {
         // No images/classes/columns registered without an open database.
         assert_eq!(state.get_image_items().row_count(), 0);
         assert_eq!(state.get_class_items().row_count(), 0);
+        // Format defaults to XLSX with all 3 options present.
+        assert_eq!(state.get_format_summary(), "XLSX");
+        assert_eq!(state.get_format_items().row_count(), 3);
+        assert!(
+            state
+                .get_format_items()
+                .iter()
+                .any(|item| item.key == "XLSX" && item.selected)
+        );
+    }
+
+    #[test]
+    fn export_format_items_marks_only_the_selected_format() {
+        let items = export_format_items(ExportFormat::CSV);
+        let selected: Vec<&str> = items
+            .iter()
+            .filter(|item| item.selected)
+            .map(|item| item.key.as_str())
+            .collect();
+        assert_eq!(selected, vec!["CSV"]);
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn export_format_from_key_round_trips_every_option_and_rejects_unknown_keys() {
+        for (name, format) in export_format_options() {
+            assert_eq!(export_format_from_key(name), Some(format));
+        }
+        assert_eq!(export_format_from_key("bogus"), None);
     }
 
     // Re-opening the dialog after the user has already changed something

@@ -491,3 +491,422 @@ fn value_to_f64(value: Value) -> Option<f64> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::results::test_support::{seed_db, ObjectSpec};
+    use crate::results::results_generator::ResultsGenerator;
+
+    fn open(objects: &[ObjectSpec]) -> ResultsGenerator {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_db(&path, objects);
+        // Leaking the tempdir keeps the backing file alive for the life of
+        // the returned `ResultsGenerator` (which only holds an open
+        // `duckdb::Connection`, not the directory) - acceptable for a test
+        // process that exits shortly after.
+        std::mem::forget(dir);
+        ResultsGenerator::open_database(path).expect("open database")
+    }
+
+    fn plane() -> PlaneFilter {
+        PlaneFilter {
+            z_stack: 0,
+            t_stack: 0,
+        }
+    }
+
+    // -- paint_boxplot --------------------------------------------------
+
+    #[test]
+    fn paint_boxplot_computes_correct_quartiles_and_flags_a_tukey_outlier() {
+        // Sorted [10, 20, 30, 40, 1000]: quantile_cont at p=0.25/0.5/0.75
+        // over 5 values lands exactly on indices 1/2/3 (no interpolation
+        // needed), so q1=20, median=30, q3=40 - IQR=20, outlier bounds
+        // [20-30, 40+30] = [-10, 70], so 1000 is a Tukey outlier but still
+        // counts toward MIN/MAX (10..1000).
+        let objects = [10u64, 20, 30, 40, 1000]
+            .into_iter()
+            .map(|area| ObjectSpec::new("img1.tif", "ClassA", 1, area))
+            .collect::<Vec<_>>();
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_boxplot(
+                &generator,
+                &BoxplotFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                },
+            )
+            .expect("boxplot");
+
+        assert_eq!(result.boxes.len(), 1);
+        let b = &result.boxes[0];
+        assert_eq!(b.label, "ClassA");
+        assert_eq!(b.object_count, 5);
+        assert_eq!(b.min, 10.0);
+        assert_eq!(b.q1, 20.0);
+        assert_eq!(b.median, 30.0);
+        assert_eq!(b.q3, 40.0);
+        assert_eq!(b.max, 1000.0);
+        assert_eq!(b.outliers, vec![1000.0]);
+    }
+
+    #[test]
+    fn paint_boxplot_gives_each_class_its_own_box() {
+        let mut objects = Vec::new();
+        for area in [10u64, 20, 30, 40, 50] {
+            objects.push(ObjectSpec::new("img1.tif", "ClassA", 1, area));
+        }
+        for area in [100u64, 200, 300] {
+            objects.push(ObjectSpec::new("img1.tif", "ClassB", 2, area));
+        }
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_boxplot(
+                &generator,
+                &BoxplotFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                },
+            )
+            .expect("boxplot");
+
+        assert_eq!(result.boxes.len(), 2);
+        let a = result.boxes.iter().find(|b| b.label == "ClassA").unwrap();
+        let b = result.boxes.iter().find(|b| b.label == "ClassB").unwrap();
+        assert_eq!(a.object_count, 5);
+        assert_eq!(b.object_count, 3);
+        assert_eq!(b.median, 200.0);
+    }
+
+    #[test]
+    fn paint_boxplot_object_classes_filter_restricts_to_selected_classes() {
+        let mut objects = Vec::new();
+        for area in [10u64, 20, 30] {
+            objects.push(ObjectSpec::new("img1.tif", "ClassA", 1, area));
+        }
+        for area in [100u64, 200, 300] {
+            objects.push(ObjectSpec::new("img1.tif", "ClassB", 2, area));
+        }
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_boxplot(
+                &generator,
+                &BoxplotFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: Some(vec![ObjectClass::Valid(1)]),
+                    column: Column::AreaSizePx,
+                },
+            )
+            .expect("boxplot");
+
+        assert_eq!(result.boxes.len(), 1);
+        assert_eq!(result.boxes[0].label, "ClassA");
+    }
+
+    #[test]
+    fn paint_boxplot_with_an_explicitly_empty_image_selection_is_empty() {
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_boxplot(
+                &generator,
+                &BoxplotFilter {
+                    plane: plane(),
+                    images: Some(vec![]),
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                },
+            )
+            .expect("boxplot");
+        assert!(result.boxes.is_empty());
+    }
+
+    #[test]
+    fn paint_boxplot_with_an_explicitly_empty_class_selection_is_empty() {
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_boxplot(
+                &generator,
+                &BoxplotFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: Some(vec![]),
+                    column: Column::AreaSizePx,
+                },
+            )
+            .expect("boxplot");
+        assert!(result.boxes.is_empty());
+    }
+
+    #[test]
+    fn paint_boxplot_rejects_a_column_that_cannot_be_charted() {
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let result = ResultCharts {}.paint_boxplot(
+            &generator,
+            &BoxplotFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                column: Column::ObjectId,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    // -- paint_histogram --------------------------------------------------
+
+    #[test]
+    fn paint_histogram_buckets_a_single_repeated_value_into_one_bin() {
+        let objects: Vec<ObjectSpec> = (0..5)
+            .map(|_| ObjectSpec::new("img1.tif", "ClassA", 1, 42))
+            .collect();
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                    bins: 3,
+                },
+            )
+            .expect("histogram");
+
+        assert_eq!(result.min, 42.0);
+        assert_eq!(result.max, 42.0);
+        assert_eq!(result.counts, vec![5, 0, 0]);
+        assert_eq!(result.bin_edges.len(), 4);
+    }
+
+    #[test]
+    fn paint_histogram_spreads_values_across_bins_and_conserves_total_count() {
+        let objects: Vec<ObjectSpec> = (0..10)
+            .map(|i| ObjectSpec::new("img1.tif", "ClassA", 1, i * 10))
+            .collect();
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                    bins: 5,
+                },
+            )
+            .expect("histogram");
+
+        assert_eq!(result.min, 0.0);
+        assert_eq!(result.max, 90.0);
+        assert_eq!(result.counts.iter().sum::<u64>(), 10);
+        assert_eq!(result.counts.len(), 5);
+        assert_eq!(result.bin_edges.len(), 6);
+        assert_eq!(result.bin_edges[0], 0.0);
+        assert_eq!(result.bin_edges[5], 90.0);
+    }
+
+    #[test]
+    fn paint_histogram_with_an_explicitly_empty_image_selection_is_empty() {
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: Some(vec![]),
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                    bins: 4,
+                },
+            )
+            .expect("histogram");
+        assert_eq!(result.counts, vec![0; 4]);
+        assert_eq!(result.min, 0.0);
+        assert_eq!(result.max, 0.0);
+    }
+
+    #[test]
+    fn paint_histogram_bins_is_clamped_to_at_least_one() {
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                    bins: 0,
+                },
+            )
+            .expect("histogram");
+        assert_eq!(result.counts.len(), 1);
+        assert_eq!(result.counts[0], 1);
+    }
+
+    #[test]
+    fn paint_histogram_image_filter_restricts_to_the_selected_image() {
+        let objects = [
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 20),
+        ];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: Some(vec!["img1.tif".to_string()]),
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                    bins: 1,
+                },
+            )
+            .expect("histogram");
+        assert_eq!(result.counts, vec![1]);
+        assert_eq!(result.min, 10.0);
+        assert_eq!(result.max, 10.0);
+    }
+
+    #[test]
+    fn paint_histogram_plane_filter_excludes_objects_on_other_planes() {
+        let objects = [
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 20).at_plane(1, 0),
+        ];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    images: None,
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                    bins: 1,
+                },
+            )
+            .expect("histogram");
+        assert_eq!(result.counts, vec![1]);
+        assert_eq!(result.min, 10.0);
+        assert_eq!(result.max, 10.0);
+    }
+
+    // -- paint_scatter ----------------------------------------------------
+
+    #[test]
+    fn paint_scatter_returns_one_point_per_object_on_the_diagonal() {
+        let objects: Vec<ObjectSpec> = (1..=5)
+            .map(|i| ObjectSpec::new("img1.tif", "ClassA", 1, i * 10))
+            .collect();
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_scatter(
+                &generator,
+                &ScatterFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    x_column: Column::AreaSizePx,
+                    y_column: Column::AreaSizePx,
+                    max_points: None,
+                },
+            )
+            .expect("scatter");
+
+        assert_eq!(result.points.len(), 5);
+        assert_eq!(result.total_object_count, 5);
+        for point in &result.points {
+            assert_eq!(point.x, point.y, "x/y should match: both read area_px");
+        }
+        assert_eq!(result.x_min, 10.0);
+        assert_eq!(result.x_max, 50.0);
+        assert_eq!(result.y_min, 10.0);
+        assert_eq!(result.y_max, 50.0);
+    }
+
+    #[test]
+    fn paint_scatter_max_points_caps_the_point_count_but_not_the_reported_total() {
+        let objects: Vec<ObjectSpec> = (1..=20)
+            .map(|i| ObjectSpec::new("img1.tif", "ClassA", 1, i))
+            .collect();
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_scatter(
+                &generator,
+                &ScatterFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: None,
+                    x_column: Column::AreaSizePx,
+                    y_column: Column::AreaSizePx,
+                    max_points: Some(5),
+                },
+            )
+            .expect("scatter");
+
+        assert_eq!(result.total_object_count, 20);
+        assert!(
+            result.points.len() <= 5,
+            "expected at most 5 sampled points, got {}",
+            result.points.len()
+        );
+    }
+
+    #[test]
+    fn paint_scatter_with_an_explicitly_empty_class_selection_is_empty() {
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_scatter(
+                &generator,
+                &ScatterFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: Some(vec![]),
+                    x_column: Column::AreaSizePx,
+                    y_column: Column::AreaSizePx,
+                    max_points: None,
+                },
+            )
+            .expect("scatter");
+        assert!(result.points.is_empty());
+        assert_eq!(result.total_object_count, 0);
+    }
+
+    #[test]
+    fn paint_scatter_rejects_a_column_that_cannot_be_charted() {
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let result = ResultCharts {}.paint_scatter(
+            &generator,
+            &ScatterFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                x_column: Column::IntensityAvg(0),
+                y_column: Column::AreaSizePx,
+                max_points: None,
+            },
+        );
+        assert!(result.is_err());
+    }
+}
