@@ -192,6 +192,78 @@ pub(crate) fn seed_view_results_db(path: &Path) {
     }
 }
 
+/// Same JSON shape as [`CH0_INTENSITIES_JSON`] but keyed `"0".."n_channels-1"`,
+/// for tests asserting the CLI reports one intensity column group per real
+/// image channel (`evanalyzer_app`'s `ResultsGenerator::get_nr_of_c_stacks`)
+/// rather than a fixed count regardless of how many channels the image
+/// actually has.
+fn intensities_json_for_channels(n_channels: u32) -> String {
+    let entries: Vec<String> = (0..n_channels)
+        .map(|ch| {
+            format!(
+                "\"{ch}\":{{\"sum_raw\":1.0,\"sum_scaled\":255.0,\"mean_raw\":0.5,\"mean_scaled\":127.0,\
+                 \"median_raw\":0.5,\"median_scaled\":127.0,\"std_raw\":0.1,\"std_scaled\":25.5,\
+                 \"min_raw\":0.0,\"min_scaled\":0.0,\"max_raw\":1.0,\"max_scaled\":255.0}}"
+            )
+        })
+        .collect();
+    format!("{{{}}}", entries.join(","))
+}
+
+/// Builds a single-image, single-object results DB whose object carries
+/// intensity data for `n_channels` channels - unlike [`seed_view_results_db`]
+/// (always channel 0 only), for tests that need a specific real channel
+/// count. This `images` table (via `create_results_schema`) predates
+/// `c_stacks`/`z_stacks`/`t_stacks`, so opening it through
+/// `ResultsGenerator::open_database` exercises the same backfill migration a
+/// real pre-upgrade `.evadb` would.
+pub(crate) fn seed_multi_channel_results_db(path: &Path, n_channels: u32) {
+    let conn = duckdb::Connection::open(path).expect("open test db");
+    create_results_schema(&conn);
+
+    conn.execute(
+        "INSERT INTO objects (
+            image_name, image_rel_path, t_stack, z_stack,
+            object_id, seg_class_name, seg_class_id,
+            object_class_name, object_class_id, track_id,
+            centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+            bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+            bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+            area_px, area_nm2, perimeter_px, perimeter_nm,
+            circularity, solidity, aspect_ratio, roundness, compactness,
+            major_axis_px, minor_axis_px, eccentricity, touches_edge,
+            pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+            intensities_json, coloc_json
+        ) VALUES (
+            'img1.tif', 'img1.tif', 0, 0,
+            '00000000-0000-0000-0000-000000000001', 'ClassA', 1,
+            '[\"ClassA\"]', '[1]', 0,
+            0, 0, 0, 0,
+            0, 0, 10, 10,
+            0, 0, 0, 0,
+            100, 100.0, 40, 40,
+            1.0, 1.0, 1.0, 1.0, 1.0,
+            10, 10, 1.0, false,
+            1.0, 1.0, 1.0,
+            ?, '{}'
+        )",
+        duckdb::params![intensities_json_for_channels(n_channels)],
+    )
+    .expect("insert object");
+
+    conn.execute(
+        "INSERT INTO images (image_name, image_rel_path, width, height) VALUES ('img1.tif', 'img1.tif', 100, 100)",
+        [],
+    )
+    .expect("insert image");
+
+    conn.execute(
+        "INSERT INTO classes (class_id, name, color) VALUES (1, 'ClassA', 0)",
+        [],
+    )
+    .expect("insert class");
+}
+
 /// A scratch directory holding a seeded results DuckDB file, cleaned up on
 /// drop. Mirrors [`TempProjectFile`]'s manual temp-dir approach rather than
 /// pulling in `tempfile` for project files, but the `duckdb` dev-dependency
@@ -210,6 +282,15 @@ impl TempResultsDb {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path().join("results.evadb");
         seed_view_results_db(&path);
+        Self { _dir: dir, path }
+    }
+
+    /// Same as [`Self::seeded`], but the one seeded object carries intensity
+    /// data for `n_channels` channels (see [`seed_multi_channel_results_db`]).
+    pub(crate) fn with_channels(n_channels: u32) -> Self {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("results.evadb");
+        seed_multi_channel_results_db(&path, n_channels);
         Self { _dir: dir, path }
     }
 }

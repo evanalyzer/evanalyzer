@@ -2078,17 +2078,6 @@ impl ResultsGenerator {
         Ok(ret)
     }
 
-    /// Number of image channels that actually have measured intensity data,
-    /// i.e. the candidates for a `Column::Intensity*(channel)` column.
-    ///
-    /// This is **not** `MAX(c_stack) + 1` over `objects`: `c_stack` is
-    /// `object.plane.c`, the pipeline's processing-plane index at extraction
-    /// time (almost always `0`, occasionally `1` for a second plane touched
-    /// by e.g. colocalization), not a count of measured channels. Instead
-    /// this reads `images.c_stacks`, populated once per image straight from
-    /// its real metadata by `DuckDbExporter::finalize_image` (evanalyzer_core's
-    /// duckdb.rs) - a `MAX` over one row per image rather than a full scan
-    /// of `intensities_json` across every object.
     pub fn get_nr_of_c_stacks(&self) -> u32 {
         let max_stacks: u32 = self
             .database
@@ -2100,7 +2089,7 @@ impl ResultsGenerator {
     pub fn get_nr_of_z_stacks(&self) -> u32 {
         let max_stack: u32 = self
             .database
-            .query_row("SELECT MAX(z_stack) FROM objects;", [], |row| row.get(0))
+            .query_row("SELECT MAX(z_stacks) FROM images;", [], |row| row.get(0))
             .unwrap_or(1);
         max_stack
     }
@@ -2108,7 +2097,7 @@ impl ResultsGenerator {
     pub fn get_nr_of_t_stacks(&self) -> u32 {
         let max_stack: u32 = self
             .database
-            .query_row("SELECT MAX(t_stack) FROM objects;", [], |row| row.get(0))
+            .query_row("SELECT MAX(t_stacks) FROM images;", [], |row| row.get(0))
             .unwrap_or(1);
         max_stack
     }

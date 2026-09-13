@@ -403,6 +403,37 @@ mod tests {
     }
 
     #[test]
+    fn export_table_writes_one_intensity_column_group_per_real_image_channel() {
+        let db = TempResultsDb::with_channels(3);
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("out.csv");
+
+        export_table(
+            TableExportArgs {
+                db: db.path.clone(),
+                out: out.clone(),
+                filter: FilterArgs::default(),
+                group: GroupArgs::default(),
+            },
+            true,
+        )
+        .expect("csv export should succeed");
+
+        let content = std::fs::read_to_string(&out).expect("read csv back");
+        let header = content.lines().next().expect("header row present");
+        for ch in 0..3 {
+            assert!(
+                header.contains(&format!("Avg Intensity (Ch {ch})")),
+                "header missing channel {ch}'s intensity column: {header}"
+            );
+        }
+        assert!(
+            !header.contains("Ch 3)"),
+            "header should not report a 4th channel that was never measured: {header}"
+        );
+    }
+
+    #[test]
     fn csv_escape_quotes_fields_containing_commas_or_quotes() {
         assert_eq!(csv_escape("plain"), "plain");
         assert_eq!(csv_escape("a,b"), "\"a,b\"");
