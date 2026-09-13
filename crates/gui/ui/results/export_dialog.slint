@@ -225,48 +225,90 @@ export component ExportDialog inherits Rectangle {
                             spacing: 6px;
                             alignment: start;
                             Text {
-                                text: "What to Export";
+                                text: "Images/Objects (ungrouped)";
                                 color: Theme.text;
                                 font-size: 12px;
                                 font-weight: 600;
                             }
 
                             CheckBox {
-                                text: "List view";
+                                text: "Object list";
                                 checked <=> ExportDialogState.with-list-view;
                             }
 
                             CheckBox {
-                                text: "List — Coloc details (second tab)";
+                                x: 20px;
+                                text: "With coloc details";
                                 checked <=> ExportDialogState.with-list-coloc-details;
                                 enabled: ExportDialogState.with-list-view;
                             }
 
                             CheckBox {
-                                text: "List — each image in a separate file";
+                                x: 20px;
+                                text: "Each image in a separate file";
                                 checked <=> ExportDialogState.with-list-one-file-per-image;
                                 enabled: ExportDialogState.with-list-view;
                             }
 
                             CheckBox {
-                                text: "Grouped image list (one row per image)";
+                                text: "Image list";
                                 checked <=> ExportDialogState.with-grouped-by-image-list;
                             }
 
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: 128px;
+                                CheckBox {
+                                    text: "Image heatmap";
+                                    checked <=> ExportDialogState.with-heatmap;
+                                }
+
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 8px;
+                                    Text {
+                                        vertical-alignment: center;
+                                        text: "Squares sizes:";
+                                    }
+
+                                    MultiSelectDropdown {
+                                        enabled: ExportDialogState.with-heatmap;
+                                        summary-text: ExportDialogState.square-size-summary;
+                                        items <=> ExportDialogState.square-size-items;
+                                        multi-select: false;
+                                        pill-width: 130px;
+                                        item-selected(key, value, selected) => { if selected { ExportDialogState.square-size-summary = value; } }
+                                    }
+                                }
+                            }
+
+                            Rectangle { }
+
+                            Text {
+                                text: "Plates/Wells (group by regex)";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
                             CheckBox {
-                                text: "Plate + Well views (one tab per class)";
+                                text: "Plate and Wells as list";
+                                checked <=> ExportDialogState.with-plates-and-wells-as-list;
+                            }
+
+                            CheckBox {
+                                text: "Plate and Wells as heatmap";
                                 checked <=> ExportDialogState.with-plate-view;
                             }
 
-                            CheckBox {
-                                text: "Plate/Well — also as a flat list (separate files)";
-                                checked <=> ExportDialogState.with-plates-and-wells-as-list;
-                                enabled: ExportDialogState.with-plate-view;
-                            }
-
-                            CheckBox {
-                                text: "Image heatmap (one file per image)";
-                                checked <=> ExportDialogState.with-heatmap;
+                            LabeledField {
+                                field-label: "Grouping regex:";
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    placeholder-text: "Default (e.g. A1_01.vsi)";
+                                    text <=> ExportDialogState.grouping-regex;
+                                    enabled: ExportDialogState.with-plates-and-wells-as-list || ExportDialogState.with-plate-view;
+                                }
                             }
                         }
 
@@ -391,7 +433,7 @@ export component ExportDialog inherits Rectangle {
                             spacing: 8px;
                             alignment: start;
                             Text {
-                                text: "Plate / Well / Heatmap Options";
+                                text: "Plate/ Wells Options";
                                 color: Theme.text;
                                 font-size: 12px;
                                 font-weight: 600;
@@ -399,13 +441,14 @@ export component ExportDialog inherits Rectangle {
 
                             HorizontalLayout {
                                 spacing: 10px;
+                                alignment: start;
                                 MultiSelectDropdown {
                                     label: "AGGREGATIONS";
                                     summary-text: ExportDialogState.aggregation-summary;
                                     items <=> ExportDialogState.aggregation-items;
                                     multi-select: true;
                                     show-select-all: true;
-                                    pill-width: 170px;
+                                    pill-width: 140px;
                                     item-selected(key, value, selected) => { ExportDialogState.aggregation-item-selected(key, selected); }
                                 }
 
@@ -427,20 +470,6 @@ export component ExportDialog inherits Rectangle {
                                     item-selected(key, value, selected) => { if selected { ExportDialogState.plate-size-summary = value; } }
                                 }
 
-                                MultiSelectDropdown {
-                                    label: "SQUARE SIZE";
-                                    summary-text: ExportDialogState.square-size-summary;
-                                    items <=> ExportDialogState.square-size-items;
-                                    multi-select: false;
-                                    pill-width: 130px;
-                                    item-selected(key, value, selected) => { if selected { ExportDialogState.square-size-summary = value; } }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-
                                 LabeledField {
                                     field-label: "Well rows/cols:";
                                     LineEdit {
@@ -454,15 +483,6 @@ export component ExportDialog inherits Rectangle {
                                         input-type: number;
                                         text <=> ExportDialogState.well-cols;
                                     }
-                                }
-                            }
-
-                            LabeledField {
-                                field-label: "Grouping regex:";
-                                LineEdit {
-                                    horizontal-stretch: 1;
-                                    placeholder-text: "Default (e.g. A1_01.vsi)";
-                                    text <=> ExportDialogState.grouping-regex;
                                 }
                             }
                         }
