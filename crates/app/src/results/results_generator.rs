@@ -142,6 +142,44 @@ impl Column {
         }
     }
 
+    /// Human-facing label for this column — every header/caption actually
+    /// shown to the user (the List/Matrix table headers, XLSX export
+    /// headers, `get_available_columns()`'s own `display_name`) goes
+    /// through this, so renaming what's displayed only ever needs to
+    /// happen here. Deliberately separate from [`Column::as_key`], which
+    /// looks similar today only because it happens to reuse the database's
+    /// own column names as convenient stable strings — `as_key` is a
+    /// storage/round-trip key (dropdown persistence, `Column::from_key`),
+    /// and changing it would silently break that persistence, so it must
+    /// never be (re)used for display text.
+    pub fn display_label(&self, classes: &[Class]) -> String {
+        match self {
+            Column::ObjectId => "Object ID".to_string(),
+            Column::ImageName => "Image".to_string(),
+            Column::ObjectClass => "Class".to_string(),
+            Column::Count => "Count".to_string(),
+            Column::AreaSizePx => "Area [px]".to_string(),
+            Column::AreaSizeNm => "Area [nm²]".to_string(),
+            Column::PerimeterPx => "Perimeter [px]".to_string(),
+            Column::PerimeterNm => "Perimeter [nm]".to_string(),
+            Column::Circularity => "Circularity".to_string(),
+            Column::Solidity => "Solidity".to_string(),
+            Column::Eccentricity => "Eccentricity".to_string(),
+            Column::ColocCount(class_id) => classes
+                .iter()
+                .find(|class| class.id == *class_id)
+                .map(|class| format!("Coloc with {}", class.name))
+                .unwrap_or_else(|| match class_id {
+                    ObjectClass::Valid(n) => format!("Coloc with class {n}"),
+                    ObjectClass::Unset => "Coloc with unset".to_string(),
+                }),
+            Column::IntensityAvg(channel) => format!("Avg Intensity (Ch {channel})"),
+            Column::IntensitySum(channel) => format!("Sum Intensity (Ch {channel})"),
+            Column::IntensityMin(channel) => format!("Min Intensity (Ch {channel})"),
+            Column::IntensityMax(channel) => format!("Max Intensity (Ch {channel})"),
+        }
+    }
+
     /// Inverse of [`Column::as_key`] — needs the same `classes` list to
     /// resolve a `"n_colocalized_class_{name}"` key back to the class's id;
     /// `None` if `name` isn't (or no longer is) a registered class.
@@ -368,7 +406,7 @@ impl ResultsGenerator {
         ordered_columns.sort();
         let mut column_names: Vec<String> = ordered_columns
             .iter()
-            .map(|c| c.as_key(&classes).to_string())
+            .map(|c| c.display_label(&classes))
             .collect();
 
         // `ListFilter::with_coloc_details`: every selected `ColocCount(class)`
@@ -400,7 +438,7 @@ impl ResultsGenerator {
                     column_names.push(format!(
                         "{} coloc {}",
                         class_display_label(*class, &classes),
-                        metric.as_key(&classes)
+                        metric.display_label(&classes)
                     ));
                 }
             }
@@ -605,7 +643,7 @@ impl ResultsGenerator {
         for column in &filter.columns {
             for aggregation in &filter.aggregation {
                 let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
-                column_names.push(format!("{} ({agg_fn})", column.as_key(&classes)));
+                column_names.push(format!("{} ({agg_fn})", column.display_label(&classes)));
                 value_exprs.push(format!(
                     "{agg_fn}({value_expr}) AS value_{}",
                     value_exprs.len()
@@ -1434,7 +1472,7 @@ impl ResultsGenerator {
                 let mut sorted: Vec<_> = values.iter().collect();
                 sorted.sort_by_key(|(pos, _)| *pos);
 
-                let column_names = vec!["square".to_string(), filter.column.as_key(&classes)];
+                let column_names = vec!["square".to_string(), filter.column.display_label(&classes)];
                 let row_names = sorted
                     .iter()
                     .map(|((row, col), _)| format!("R{row}C{col}"))
@@ -1647,62 +1685,24 @@ impl ResultsGenerator {
     }
 
     pub fn get_available_columns(&self) -> Result<Vec<ColumnEntry>, InternalErrors> {
+        let classes = self.get_object_classes()?;
+        let entry = |key: Column, group: &str| ColumnEntry {
+            display_name: key.display_label(&classes),
+            key,
+            group: group.into(),
+        };
         let mut ret = vec![
-            ColumnEntry {
-                display_name: "Object ID".into(),
-                key: Column::ObjectId,
-                group: "General".into(),
-            },
-            ColumnEntry {
-                display_name: "Image".into(),
-                key: Column::ImageName,
-                group: "General".into(),
-            },
-            ColumnEntry {
-                display_name: "Class".into(),
-                key: Column::ObjectClass,
-                group: "General".into(),
-            },
-            ColumnEntry {
-                display_name: "Count".into(),
-                key: Column::Count,
-                group: "General".into(),
-            },
-            ColumnEntry {
-                display_name: "Area [px]".into(),
-                key: Column::AreaSizePx,
-                group: "Geometry".into(),
-            },
-            ColumnEntry {
-                display_name: "Area [nm²]".into(),
-                key: Column::AreaSizeNm,
-                group: "Geometry".into(),
-            },
-            ColumnEntry {
-                display_name: "Perimeter [px]".into(),
-                key: Column::PerimeterPx,
-                group: "Geometry".into(),
-            },
-            ColumnEntry {
-                display_name: "Perimeter [nm]".into(),
-                key: Column::PerimeterNm,
-                group: "Geometry".into(),
-            },
-            ColumnEntry {
-                display_name: "Circularity".into(),
-                key: Column::Circularity,
-                group: "Shape".into(),
-            },
-            ColumnEntry {
-                display_name: "Solidity".into(),
-                key: Column::Solidity,
-                group: "Shape".into(),
-            },
-            ColumnEntry {
-                display_name: "Eccentricity".into(),
-                key: Column::Eccentricity,
-                group: "Shape".into(),
-            },
+            entry(Column::ObjectId, "General"),
+            entry(Column::ImageName, "General"),
+            entry(Column::ObjectClass, "General"),
+            entry(Column::Count, "General"),
+            entry(Column::AreaSizePx, "Geometry"),
+            entry(Column::AreaSizeNm, "Geometry"),
+            entry(Column::PerimeterPx, "Geometry"),
+            entry(Column::PerimeterNm, "Geometry"),
+            entry(Column::Circularity, "Shape"),
+            entry(Column::Solidity, "Shape"),
+            entry(Column::Eccentricity, "Shape"),
         ];
 
         // Coloc count is measured per candidate partner class (like
@@ -1710,46 +1710,17 @@ impl ResultsGenerator {
         // per class that actually shows up as a colocalization partner
         // somewhere in this database, rather than a single shared "total
         // across every class" column.
-        let classes = self.get_object_classes()?;
         for class_id in self.get_object_classes_with_at_least_coloc()? {
-            let display_name = classes
-                .iter()
-                .find(|class| class.id == class_id)
-                .map(|class| format!("Coloc with {}", class.name))
-                .unwrap_or_else(|| match class_id {
-                    ObjectClass::Valid(n) => format!("Coloc with class {n}"),
-                    ObjectClass::Unset => "Coloc with unset".to_string(),
-                });
-            ret.push(ColumnEntry {
-                display_name,
-                key: Column::ColocCount(class_id),
-                group: "Coloc".into(),
-            });
+            ret.push(entry(Column::ColocCount(class_id), "Coloc"));
         }
 
         // Intensity is measured per image channel, so there's one Avg/Sum/
         // Min/Max column per channel rather than a single shared one.
         for channel in 0..self.get_nr_of_c_stacks() {
-            ret.push(ColumnEntry {
-                display_name: format!("Avg Intensity (Ch {channel})"),
-                key: Column::IntensityAvg(channel),
-                group: "intensity".into(),
-            });
-            ret.push(ColumnEntry {
-                display_name: format!("Sum Intensity (Ch {channel})"),
-                key: Column::IntensitySum(channel),
-                group: "intensity".into(),
-            });
-            ret.push(ColumnEntry {
-                display_name: format!("Min Intensity (Ch {channel})"),
-                key: Column::IntensityMin(channel),
-                group: "intensity".into(),
-            });
-            ret.push(ColumnEntry {
-                display_name: format!("Max Intensity (Ch {channel})"),
-                key: Column::IntensityMax(channel),
-                group: "intensity".into(),
-            });
+            ret.push(entry(Column::IntensityAvg(channel), "intensity"));
+            ret.push(entry(Column::IntensitySum(channel), "intensity"));
+            ret.push(entry(Column::IntensityMin(channel), "intensity"));
+            ret.push(entry(Column::IntensityMax(channel), "intensity"));
         }
 
         Ok(ret)
@@ -2290,11 +2261,13 @@ const VIRIDIS_STOPS: [(f32, (u8, u8, u8)); 5] = [
     (1.0, (0xfd, 0xe7, 0x25)),
 ];
 
-// Excel's built-in "Red - Yellow - Green" 3-Color Scale conditional format.
+// Excel's built-in "Red - Yellow - Green" 3-Color Scale conditional format —
+// red at the high end, green at the low end (`t=0` is `min`, `t=1` is `max`,
+// see `value_to_color`), matching how Excel's own scale reads by default.
 const EXCEL_STOPS: [(f32, (u8, u8, u8)); 3] = [
-    (0.0, (0xf8, 0x69, 0x6b)),
+    (0.0, (0x63, 0xbe, 0x7b)),
     (0.5, (0xff, 0xeb, 0x84)),
-    (1.0, (0x63, 0xbe, 0x7b)),
+    (1.0, (0xf8, 0x69, 0x6b)),
 ];
 
 /// Every standard plate size, smallest first — `best_matching_dimensions`
@@ -2407,7 +2380,7 @@ fn plate_groups_to_result(
                 max = 0.0;
             }
 
-            let column_names = vec!["group".to_string(), column.as_key(classes)];
+            let column_names = vec!["group".to_string(), column.display_label(classes)];
             let row_names = groups.iter().map(|(key, ..)| key.clone()).collect();
             let rows: Vec<Vec<Cell>> = groups
                 .into_iter()
@@ -2569,7 +2542,7 @@ fn well_fields_to_result(
                 max = 0.0;
             }
 
-            let column_names = vec!["field".to_string(), column.as_key(classes)];
+            let column_names = vec!["field".to_string(), column.display_label(classes)];
             let row_names = fields.iter().map(|(idx, ..)| idx.clone()).collect();
             let rows: Vec<Vec<Cell>> = fields
                 .into_iter()

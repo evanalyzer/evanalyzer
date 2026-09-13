@@ -47,16 +47,6 @@ export component ResultsListView inherits Rectangle {
                     select-none => { ResultsState.list-class-select-none(); }
                 }
 
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-
-                CheckBox {
-                    text: "Coloc details";
-                    checked <=> ResultsState.list-with-coloc-details;
-                    toggled => { ResultsState.list-with-coloc-details-changed(self.checked); }
-                }
-
                 MultiSelectDropdown {
                     label: "COLUMNS";
                     summary-text: ResultsState.list-columns-summary;
@@ -70,8 +60,18 @@ export component ResultsListView inherits Rectangle {
                     select-none => { ResultsState.list-columns-select-none(); }
                 }
 
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                CheckBox {
+                    text: "Coloc details";
+                    checked <=> ResultsState.list-with-coloc-details;
+                    toggled => { ResultsState.list-with-coloc-details-changed(self.checked); }
+                }
+
                 MultiSelectDropdown {
-                    label: "GROUP BY";
+                    label: "VIEW";
                     summary-text: ResultsState.list-group-by-summary;
                     items <=> ResultsState.list-group-by-items;
                     multi-select: false;

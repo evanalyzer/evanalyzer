@@ -1067,7 +1067,7 @@ fn column_display_name(column: &Column, available_columns: &[ColumnEntry]) -> St
         .iter()
         .find(|entry| entry.key == *column)
         .map(|entry| entry.display_name.clone())
-        .unwrap_or_else(|| column.as_key(&[]))
+        .unwrap_or_else(|| column.display_label(&[]))
 }
 
 fn aggregation_label(aggregation: &Aggregation) -> &'static str {
