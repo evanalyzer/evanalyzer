@@ -1,6 +1,6 @@
 use super::results_generator::{
-    class_display_label, column_aggregate_expr, sql_int_array_literal, sql_string_in_list, Column,
-    PlaneFilter, ResultsGenerator,
+    Column, PlaneFilter, ResultsGenerator, class_display_label, column_aggregate_expr,
+    sql_int_array_literal, sql_string_in_list,
 };
 use duckdb::types::Value;
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
@@ -495,8 +495,8 @@ fn value_to_f64(value: Value) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results::test_support::{seed_db, ObjectSpec};
     use crate::results::results_generator::ResultsGenerator;
+    use crate::results::test_support::{ObjectSpec, seed_db};
 
     fn open(objects: &[ObjectSpec]) -> ResultsGenerator {
         let dir = tempfile::tempdir().expect("tempdir");

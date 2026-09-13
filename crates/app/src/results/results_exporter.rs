@@ -1398,7 +1398,7 @@ impl SheetNamer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results::test_support::{seed_db, ObjectSpec};
+    use crate::results::test_support::{ObjectSpec, seed_db};
 
     #[test]
     fn csv_escape_quotes_fields_containing_commas_or_quotes() {
@@ -1582,8 +1582,13 @@ mod tests {
             .expect("xlsx export");
 
         for name in ["list.xlsx", "grouped_by_image.xlsx"] {
-            let bytes = std::fs::read(out_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
-            assert!(bytes.len() > 4, "{name} is too small: {} bytes", bytes.len());
+            let bytes =
+                std::fs::read(out_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
+            assert!(
+                bytes.len() > 4,
+                "{name} is too small: {} bytes",
+                bytes.len()
+            );
             assert_eq!(&bytes[..4], b"PK\x03\x04", "{name} is not a zip/xlsx file");
         }
     }
@@ -1710,7 +1715,11 @@ mod tests {
         let bytes = std::fs::read(&parquet_path).expect("read objects.parquet");
         assert!(bytes.len() > 8);
         assert_eq!(&bytes[..4], b"PAR1", "missing leading PAR1 magic");
-        assert_eq!(&bytes[bytes.len() - 4..], b"PAR1", "missing trailing PAR1 magic");
+        assert_eq!(
+            &bytes[bytes.len() - 4..],
+            b"PAR1",
+            "missing trailing PAR1 magic"
+        );
 
         // Read it back through a *separate* DuckDB connection - proof the
         // file is genuinely valid Parquet, not just magic-byte-shaped.

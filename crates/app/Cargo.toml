@@ -14,17 +14,16 @@ log = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 bitvec = { workspace = true }
-pathdiff = "0.2.3"
+pathdiff = { workspace = true }
 rayon = { workspace = true }
-human-sort = "0.2"
+human-sort ={ workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = "0.9"
-regex = "1"
+serde_yaml = { workspace = true }
+regex = { workspace = true }
 csv = { workspace = true }
-rust_xlsxwriter = { version = "0.97.1", features = ["constant_memory"] }
-dirs = "6"
-plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "point_series", "ab_glyph"] }
+rust_xlsxwriter = { workspace = true , features = ["constant_memory"] }
+dirs = { workspace = true }
 image = { workspace = true }
 duckdb = { workspace = true }
 

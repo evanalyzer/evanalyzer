@@ -1,8 +1,8 @@
 use crate::editor::images_list_controller::ImagesListController;
 use crate::{
-    BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ExportDialogState, MatrixCell,
-    MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode,
-    ResultsState, UiState,
+    BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ExportDialogState, MatrixCell, MatrixLevel,
+    MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode, ResultsState,
+    UiState,
 };
 use evanalyzer_app::result::{
     self, Aggregation, BoxplotFilter, Cell, CellValue, ColorScale, ColorSchema, Column,
@@ -825,15 +825,16 @@ impl ResultsStateController {
 
             // -- Charts --
             let manager = self.clone();
-            ui.global::<ResultsState>().on_chart_kind_selected(move |kind| {
-                let kind = match kind {
-                    ResultsChartKind2::Histogram => ChartKind::Histogram,
-                    ResultsChartKind2::Scatter => ChartKind::Scatter,
-                    ResultsChartKind2::Boxplot => ChartKind::Boxplot,
-                };
-                manager.chart_filter.lock().expect("Poisened").kind = kind;
-                manager.refresh_charts();
-            });
+            ui.global::<ResultsState>()
+                .on_chart_kind_selected(move |kind| {
+                    let kind = match kind {
+                        ResultsChartKind2::Histogram => ChartKind::Histogram,
+                        ResultsChartKind2::Scatter => ChartKind::Scatter,
+                        ResultsChartKind2::Boxplot => ChartKind::Boxplot,
+                    };
+                    manager.chart_filter.lock().expect("Poisened").kind = kind;
+                    manager.refresh_charts();
+                });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -882,7 +883,8 @@ impl ResultsStateController {
                         warn!("Unknown class selected: {class_name}");
                         return;
                     };
-                    manager.chart_filter.lock().expect("Poisened").object_class = Some(object_class);
+                    manager.chart_filter.lock().expect("Poisened").object_class =
+                        Some(object_class);
                     manager.refresh_charts();
                 });
 
@@ -1195,9 +1197,13 @@ impl ResultsStateController {
                     y_column: default_chart_column.clone(),
                     object_class: None,
                 };
-                let chart_column_items_vec =
-                    chart_column_items(&available_columns, &classes_for_charts, &default_chart_column);
-                let default_chart_column_label = default_chart_column.display_label(&classes_for_charts);
+                let chart_column_items_vec = chart_column_items(
+                    &available_columns,
+                    &classes_for_charts,
+                    &default_chart_column,
+                );
+                let default_chart_column_label =
+                    default_chart_column.display_label(&classes_for_charts);
 
                 // Matrix used to stay at `None` here until the user touched
                 // one of its own toolbar controls (`update_matrix_filter`
@@ -1226,11 +1232,10 @@ impl ResultsStateController {
                     .filter(|entry| is_matrix_column(&entry.key))
                     .cloned()
                     .collect();
-                let matrix_column_items_vec = column_items(
-                    &matrix_eligible_columns,
-                    &classes_for_charts,
-                    |key| *key == default_matrix_column,
-                );
+                let matrix_column_items_vec =
+                    column_items(&matrix_eligible_columns, &classes_for_charts, |key| {
+                        *key == default_matrix_column
+                    });
                 let default_matrix_column_label =
                     default_matrix_column.display_label(&classes_for_charts);
 
@@ -1398,12 +1403,14 @@ impl ResultsStateController {
                 state.set_chart_histogram_bins(ModelRc::from(Rc::new(VecModel::from(
                     Vec::<f32>::new(),
                 ))));
-                state.set_chart_scatter_points(ModelRc::from(Rc::new(VecModel::from(
-                    Vec::<ChartScatterPoint>::new(),
-                ))));
-                state.set_chart_boxplot_boxes(ModelRc::from(Rc::new(VecModel::from(
-                    Vec::<ChartBoxplotBox>::new(),
-                ))));
+                state.set_chart_scatter_points(ModelRc::from(Rc::new(VecModel::from(Vec::<
+                    ChartScatterPoint,
+                >::new(
+                )))));
+                state.set_chart_boxplot_boxes(ModelRc::from(Rc::new(VecModel::from(Vec::<
+                    ChartBoxplotBox,
+                >::new(
+                )))));
             } else {
                 warn!("Failed to upgrade UI handle, cannot show chart error!");
             }
@@ -1482,8 +1489,12 @@ impl ResultsStateController {
         let mut min = f64::INFINITY;
         let mut max = f64::NEG_INFINITY;
         for b in boxes {
-            min = min.min(b.min).min(b.outliers.iter().copied().fold(b.min, f64::min));
-            max = max.max(b.max).max(b.outliers.iter().copied().fold(b.max, f64::max));
+            min = min
+                .min(b.min)
+                .min(b.outliers.iter().copied().fold(b.min, f64::min));
+            max = max
+                .max(b.max)
+                .max(b.outliers.iter().copied().fold(b.max, f64::max));
         }
         if !min.is_finite() || !max.is_finite() {
             min = 0.0;

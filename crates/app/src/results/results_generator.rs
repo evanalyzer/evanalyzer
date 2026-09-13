@@ -54,7 +54,7 @@ pub struct WellSize {
     pub cols: usize,
 }
 
-#[derive(Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum Aggregation {
     #[default]
     Avg,
@@ -854,7 +854,6 @@ impl ResultsGenerator {
             row_locations: Vec::new(),
         })
     }
-
 
     // `ListFilter::with_coloc_details`: fan out each source object into one
     // row per (selected coloc-class, colocalizing partner) pair, appending
@@ -1889,7 +1888,7 @@ mod tests {
         assert_eq!(generator.get_nr_of_c_stacks(), 1);
     }
 
-    use crate::results::test_support::{seed_db, ObjectSpec};
+    use crate::results::test_support::{ObjectSpec, seed_db};
 
     /// Opens a fresh `ResultsGenerator` over a temp `.evadb` seeded with
     /// `objects` (see `test_support::seed_db`). Leaks the backing `TempDir`
@@ -1900,7 +1899,7 @@ mod tests {
         let path = dir.path().join("results.evadb");
         seed_db(&path, objects);
         std::mem::forget(dir);
-        ResultsGenerator::open_database(path).unwrap()
+        ResultsGenerator::open_database(path.into()).unwrap()
     }
 
     fn plane() -> PlaneFilter {
@@ -1942,7 +1941,10 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(result.column_names, vec!["Class".to_string(), "Area [px]".to_string()]);
+        assert_eq!(
+            result.column_names,
+            vec!["Class".to_string(), "Area [px]".to_string()]
+        );
         assert_eq!(result.rows.len(), 2);
         assert_eq!(result.source_object_count, 2);
         assert_eq!(result.row_names.len(), 2);
@@ -2076,9 +2078,9 @@ mod tests {
     #[test]
     fn get_object_list_intensity_column_reads_the_seeded_channel_value() {
         use crate::results::test_support::CH0_INTENSITIES_JSON;
-        let generator = open(&[
-            ObjectSpec::new("img1.tif", "ClassA", 1, 100).with_intensities(CH0_INTENSITIES_JSON)
-        ]);
+        let generator =
+            open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)
+                .with_intensities(CH0_INTENSITIES_JSON)]);
         let result = generator
             .get_object_list(&ListFilter {
                 plane: plane(),
@@ -2181,8 +2183,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.row_names.len(), 2);
-        let a1_idx = result.row_names.iter().position(|n| n == "A1").expect("A1 group");
-        let b2_idx = result.row_names.iter().position(|n| n == "B2").expect("B2 group");
+        let a1_idx = result
+            .row_names
+            .iter()
+            .position(|n| n == "A1")
+            .expect("A1 group");
+        let b2_idx = result
+            .row_names
+            .iter()
+            .position(|n| n == "B2")
+            .expect("B2 group");
         let cell_f64 = |cell: &Cell| match &cell.value {
             CellValue::Float(v) => *v as f64,
             _ => panic!("expected a float cell"),
@@ -2257,7 +2267,10 @@ mod tests {
 
         let unset = Column::ColocCount(ObjectClass::Unset);
         assert_eq!(unset.as_key(&classes), "n_colocalized_unset");
-        assert_eq!(Column::from_key("n_colocalized_unset", &classes), Some(unset));
+        assert_eq!(
+            Column::from_key("n_colocalized_unset", &classes),
+            Some(unset)
+        );
     }
 
     #[test]
@@ -2281,7 +2294,10 @@ mod tests {
     #[test]
     fn class_display_label_falls_back_to_a_generic_name_for_an_unknown_class_id() {
         let classes: Vec<Class> = vec![];
-        assert_eq!(class_display_label(ObjectClass::Valid(7), &classes), "class 7");
+        assert_eq!(
+            class_display_label(ObjectClass::Valid(7), &classes),
+            "class 7"
+        );
         assert_eq!(class_display_label(ObjectClass::Unset, &classes), "unset");
     }
 
@@ -2293,18 +2309,21 @@ mod tests {
             color: 0,
             notes: String::new(),
         }];
-        assert_eq!(class_display_label(ObjectClass::Valid(1), &classes), "Nuclei");
+        assert_eq!(
+            class_display_label(ObjectClass::Valid(1), &classes),
+            "Nuclei"
+        );
     }
 
     // -- get_available_columns -------------------------------------------------
 
     #[test]
     fn get_available_columns_only_lists_coloc_count_for_classes_that_actually_colocalize() {
-        let mut objects = vec![
-            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+        let objects = vec![
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .with_coloc(r#"{"2":["00000000-0000-0000-0000-000000000001"]}"#),
             ObjectSpec::new("img1.tif", "ClassB", 2, 20),
         ];
-        objects[0].coloc_json = r#"{"2":["00000000-0000-0000-0000-000000000001"]}"#.to_string();
         let generator = open(&objects);
         let columns = generator.get_available_columns().unwrap();
         let coloc_columns: Vec<&ColumnEntry> = columns
@@ -2312,6 +2331,410 @@ mod tests {
             .filter(|c| matches!(c.key, Column::ColocCount(_)))
             .collect();
         assert_eq!(coloc_columns.len(), 1);
+    }
+
+    // -- with_coloc_details fan-out ----------------------------------------
+
+    #[test]
+    fn get_object_list_with_coloc_details_resolves_the_partners_own_metric() {
+        // Object A colocalizes with class 2, partnered with object B (the
+        // second seeded object, id index 1). Both a coloc-class column
+        // (`ColocCount(2)`) and a resolvable metric (`AreaSizePx`) must be
+        // selected together for `with_coloc_details` fan-out to activate
+        // (see `is_resolvable_metric`/`details_active`).
+        let objects = vec![
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .with_coloc(r#"{"2":["00000000-0000-0000-0000-000000000001"]}"#),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 99),
+        ];
+        let generator = open(&objects);
+
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![
+                    Column::ColocCount(ObjectClass::Valid(2)),
+                    Column::AreaSizePx,
+                ],
+                with_coloc_details: true,
+                page: no_page(),
+            })
+            .unwrap();
+
+        assert_eq!(result.column_names.len(), 3);
+        assert!(result.column_names[2].contains("coloc"));
+        assert_eq!(result.rows.len(), 2, "one fanned-out row per source object");
+
+        // Column order is `Column`'s declared `Ord` (`AreaSizePx` before
+        // `ColocCount`), so column 0 is the object's own area, column 1 its
+        // coloc count, column 2 the cross-resolved partner metric.
+        let int_cell = |cell: &Cell| match &cell.value {
+            CellValue::Integer(v) => *v,
+            _ => panic!("expected an integer cell"),
+        };
+        let row_a = &result.rows[0];
+        assert_eq!(int_cell(&row_a[0]), 10, "object A's own area");
+        assert_eq!(
+            int_cell(&row_a[1]),
+            1,
+            "object A colocalizes with exactly 1 class-2 object"
+        );
+        assert_eq!(
+            int_cell(&row_a[2]),
+            99,
+            "resolved onto B, the colocalizing partner"
+        );
+
+        let row_b = &result.rows[1];
+        assert_eq!(int_cell(&row_b[0]), 99, "object B's own area");
+        assert_eq!(
+            int_cell(&row_b[1]),
+            0,
+            "object B itself has no colocalizing partners"
+        );
+        assert!(
+            matches!(row_b[2].value, CellValue::String(ref s) if s == "-"),
+            "no partner to resolve onto for B"
+        );
+    }
+
+    // -- plate/well/heatmap grouping correctness & cross-view plausibility --
+    //
+    // These check that the same underlying data reported through different
+    // "views" of the same aggregate (List vs Heatmap; a single well's own
+    // query vs the batched every-well query used by exports; a single
+    // aggregation vs the multi-aggregation batch) always agree — exactly the
+    // kind of drift a hand-rolled SQL string per view/batch variant could
+    // silently introduce.
+
+    fn plate_filter(column: Column) -> PlateFilter {
+        PlateFilter {
+            plane: plane(),
+            grouping_regex: String::new(),
+            aggregation: Aggregation::Avg,
+            object_class: ObjectClass::Unset,
+            column,
+            color_schema: ColorSchema::default(),
+            color_scale: ColorScale::default(),
+            matrix_dimension: None,
+        }
+    }
+
+    fn well_filter(group_name: &str, column: Column) -> WellFilter {
+        WellFilter {
+            plane: plane(),
+            group_name: group_name.to_string(),
+            grouping_regex: String::new(),
+            aggregation: Aggregation::Avg,
+            object_class: ObjectClass::Unset,
+            column,
+            color_schema: ColorSchema::default(),
+            color_scale: ColorScale::default(),
+            well_size: None,
+            well_order: None,
+        }
+    }
+
+    fn wells_batch_filter(column: Column) -> WellsBatchFilter {
+        WellsBatchFilter {
+            plane: plane(),
+            grouping_regex: String::new(),
+            aggregation: Aggregation::Avg,
+            object_class: ObjectClass::Unset,
+            column,
+            color_schema: ColorSchema::default(),
+            color_scale: ColorScale::default(),
+            well_size: None,
+            well_order: None,
+        }
+    }
+
+    fn float_cell(cell: &Cell) -> f64 {
+        match &cell.value {
+            CellValue::Float(v) => *v as f64,
+            _ => panic!("expected a float cell"),
+        }
+    }
+
+    #[test]
+    fn plate_list_and_plate_heatmap_report_the_same_values_at_matching_positions() {
+        // Well A1 (row 0, col 0): avg(10, 20) = 15. Well B2 (row 1, col 1): 100.
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+        ]);
+        let filter = plate_filter(Column::AreaSizePx);
+
+        let list = generator.get_group_by_plate(&filter, &View::List).unwrap();
+        let heatmap = generator
+            .get_group_by_plate(&filter, &View::Heatmap)
+            .unwrap();
+
+        let list_value = |well: &str| {
+            let idx = list.row_names.iter().position(|n| n == well).unwrap();
+            float_cell(&list.rows[idx][1])
+        };
+        assert_eq!(list_value("A1"), 15.0);
+        assert_eq!(list_value("B2"), 100.0);
+
+        // Heatmap row_names are letters ("A", "B", ...), column_names are
+        // 1-based numbers ("1", "2", ...) - A1 is heatmap[0][0], B2 is
+        // heatmap[1][1].
+        assert_eq!(heatmap.row_names[0], "A");
+        assert_eq!(heatmap.column_names[0], "1");
+        assert_eq!(float_cell(&heatmap.rows[0][0]), list_value("A1"));
+        assert_eq!(float_cell(&heatmap.rows[1][1]), list_value("B2"));
+        // Every other cell in range has no matching well - must stay empty,
+        // not a stray 0.
+        assert!(matches!(heatmap.rows[0][1].value, CellValue::Empty));
+    }
+
+    #[test]
+    fn plate_object_class_filter_restricts_the_grouped_objects() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassB", 2, 1000),
+        ]);
+        let mut filter = plate_filter(Column::AreaSizePx);
+        filter.object_class = ObjectClass::Valid(1);
+        let list = generator.get_group_by_plate(&filter, &View::List).unwrap();
+        assert_eq!(list.row_names, vec!["A1".to_string()]);
+        assert_eq!(
+            float_cell(&list.rows[0][1]),
+            10.0,
+            "ClassB's 1000 must be excluded"
+        );
+    }
+
+    #[test]
+    fn well_list_and_well_heatmap_report_the_same_values_at_matching_positions() {
+        // Field "01" -> position 0 -> heatmap (row 0, col 0); field "02" ->
+        // position 1 -> heatmap (row 0, col 1) (default well_size 4x4, no
+        // well_order: idx-1 read row-major).
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+        ]);
+        let filter = well_filter("A1", Column::AreaSizePx);
+
+        let list = generator.get_group_by_well(&filter, &View::List).unwrap();
+        let heatmap = generator
+            .get_group_by_well(&filter, &View::Heatmap)
+            .unwrap();
+
+        assert_eq!(list.row_names, vec!["01".to_string(), "02".to_string()]);
+        assert_eq!(float_cell(&list.rows[0][1]), 10.0);
+        assert_eq!(float_cell(&list.rows[1][1]), 20.0);
+
+        assert_eq!(float_cell(&heatmap.rows[0][0]), 10.0);
+        assert_eq!(float_cell(&heatmap.rows[0][1]), 20.0);
+        assert!(matches!(heatmap.rows[1][0].value, CellValue::Empty));
+    }
+
+    #[test]
+    fn wells_for_plate_batched_matches_group_by_well_single_call() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+        ]);
+
+        let batched = generator
+            .get_wells_for_plate(&wells_batch_filter(Column::AreaSizePx), &View::List)
+            .unwrap();
+        assert_eq!(batched.len(), 2, "one entry per distinct well");
+
+        for well in ["A1", "B2"] {
+            let single = generator
+                .get_group_by_well(&well_filter(well, Column::AreaSizePx), &View::List)
+                .unwrap();
+            let batch_result = &batched[well];
+            assert_eq!(batch_result.row_names, single.row_names, "well {well}");
+            for (b_row, s_row) in batch_result.rows.iter().zip(&single.rows) {
+                assert_eq!(float_cell(&b_row[1]), float_cell(&s_row[1]), "well {well}");
+            }
+        }
+    }
+
+    #[test]
+    fn group_by_plate_multi_agg_matches_group_by_plate_per_aggregation() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("A1_03.tif", "ClassA", 1, 30),
+        ]);
+        let aggregations = vec![Aggregation::Avg, Aggregation::Min, Aggregation::Max];
+        let multi = generator
+            .get_group_by_plate_multi_agg(
+                &plate_filter(Column::AreaSizePx),
+                &aggregations,
+                &View::List,
+            )
+            .unwrap();
+        assert_eq!(multi.len(), 3);
+
+        for (aggregation, batched_result) in aggregations.iter().zip(&multi) {
+            let mut filter = plate_filter(Column::AreaSizePx);
+            filter.aggregation = aggregation.clone();
+            let single = generator.get_group_by_plate(&filter, &View::List).unwrap();
+            assert_eq!(
+                float_cell(&batched_result.rows[0][1]),
+                float_cell(&single.rows[0][1]),
+                "aggregation {aggregation:?} disagrees between multi_agg batch and single call",
+            );
+        }
+        // Sanity on the actual numbers, not just internal agreement.
+        assert_eq!(float_cell(&multi[0].rows[0][1]), 20.0); // avg
+        assert_eq!(float_cell(&multi[1].rows[0][1]), 10.0); // min
+        assert_eq!(float_cell(&multi[2].rows[0][1]), 30.0); // max
+    }
+
+    #[test]
+    fn wells_for_plate_multi_agg_matches_wells_for_plate_per_aggregation() {
+        let generator = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+        ]);
+        let aggregations = vec![Aggregation::Avg, Aggregation::Sum];
+        let multi = generator
+            .get_wells_for_plate_multi_agg(
+                &wells_batch_filter(Column::AreaSizePx),
+                &aggregations,
+                &View::List,
+            )
+            .unwrap();
+        assert_eq!(multi.len(), 2);
+
+        for (aggregation, batched_by_well) in aggregations.iter().zip(&multi) {
+            let mut filter = wells_batch_filter(Column::AreaSizePx);
+            filter.aggregation = aggregation.clone();
+            let single_by_well = generator.get_wells_for_plate(&filter, &View::List).unwrap();
+            for (well_id, single_result) in &single_by_well {
+                let batch_result = &batched_by_well[well_id];
+                for (b_row, s_row) in batch_result.rows.iter().zip(&single_result.rows) {
+                    assert_eq!(
+                        float_cell(&b_row[1]),
+                        float_cell(&s_row[1]),
+                        "well {well_id}, aggregation {aggregation:?}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn image_heatmap_list_and_heatmap_report_the_same_values_at_matching_positions() {
+        // A 100x100 image, 50px tiles -> a 2x2 grid. One object per tile.
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 20)
+                .at_centroid(60.0, 10.0)
+                .with_image_size(100, 100),
+        ]);
+        let filter = ImageHeatmapFilter {
+            plane: plane(),
+            image_rel_path: "img1.tif".to_string(),
+            aggregation: Aggregation::Avg,
+            object_class: ObjectClass::Unset,
+            column: Column::AreaSizePx,
+            color_schema: ColorSchema::default(),
+            color_scale: ColorScale::default(),
+            square_size: Some(50),
+        };
+
+        let list = generator.get_image_heatmap(&filter, &View::List).unwrap();
+        let heatmap = generator
+            .get_image_heatmap(&filter, &View::Heatmap)
+            .unwrap();
+
+        assert_eq!(heatmap.rows.len(), 2, "2x2 grid");
+        assert_eq!(heatmap.rows[0].len(), 2);
+        assert_eq!(float_cell(&heatmap.rows[0][0]), 10.0, "R0C0");
+        assert_eq!(float_cell(&heatmap.rows[0][1]), 20.0, "R0C1");
+        assert!(matches!(heatmap.rows[1][0].value, CellValue::Empty));
+
+        assert_eq!(list.row_names, vec!["R0C0".to_string(), "R0C1".to_string()]);
+        assert_eq!(
+            float_cell(&list.rows[0][1]),
+            float_cell(&heatmap.rows[0][0])
+        );
+        assert_eq!(
+            float_cell(&list.rows[1][1]),
+            float_cell(&heatmap.rows[0][1])
+        );
+    }
+
+    #[test]
+    fn image_heatmap_clamps_a_centroid_on_the_far_edge_into_the_last_tile() {
+        // A 100x100 image, 50px tiles -> valid tile indices 0..=1. A centroid
+        // sitting exactly on the image's far edge (100.0) floor-divides to
+        // tile index 2, which the 2x2 grid has no slot for - must clamp into
+        // the last tile (index 1) rather than being dropped or panicking.
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+            .at_centroid(100.0, 100.0)
+            .with_image_size(100, 100)]);
+        let filter = ImageHeatmapFilter {
+            plane: plane(),
+            image_rel_path: "img1.tif".to_string(),
+            aggregation: Aggregation::Avg,
+            object_class: ObjectClass::Unset,
+            column: Column::AreaSizePx,
+            color_schema: ColorSchema::default(),
+            color_scale: ColorScale::default(),
+            square_size: Some(50),
+        };
+        let heatmap = generator
+            .get_image_heatmap(&filter, &View::Heatmap)
+            .unwrap();
+        assert_eq!(float_cell(&heatmap.rows[1][1]), 10.0);
+    }
+
+    // -- small pure helpers ---------------------------------------------------
+
+    #[test]
+    fn row_letter_index_round_trips_including_double_letters() {
+        for (letters, index) in [("A", 0), ("B", 1), ("Z", 25), ("AA", 26), ("AB", 27)] {
+            assert_eq!(row_letter_to_index(letters), Some(index));
+            assert_eq!(row_index_to_letter(index), letters);
+        }
+    }
+
+    #[test]
+    fn row_letter_to_index_rejects_non_alphabetic_input() {
+        assert_eq!(row_letter_to_index(""), None);
+        assert_eq!(row_letter_to_index("A1"), None);
+    }
+
+    #[test]
+    fn col_number_to_index_is_one_based() {
+        assert_eq!(col_number_to_index("1"), Some(0));
+        assert_eq!(col_number_to_index("12"), Some(11));
+        assert_eq!(
+            col_number_to_index("0"),
+            None,
+            "0 has no 0-based predecessor"
+        );
+        assert_eq!(col_number_to_index("abc"), None);
+    }
+
+    #[test]
+    fn best_matching_dimensions_picks_the_smallest_plate_that_fits() {
+        // Needs 8 rows (max_row index 7) x 10 cols (max_col index 9) - the
+        // smallest standard size with at least 8 rows and 10 cols is 8x12
+        // (6x8 falls short on rows: 6 < 8).
+        assert_eq!(
+            best_matching_dimensions(Some(7), Some(9)),
+            PlateDimensions::Plate8x12
+        );
+        assert_eq!(
+            best_matching_dimensions(None, None),
+            PlateDimensions::PLate2x3
+        );
     }
 }
 

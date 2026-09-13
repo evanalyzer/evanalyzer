@@ -78,7 +78,12 @@ pub(super) struct ObjectSpec {
 }
 
 impl ObjectSpec {
-    pub(super) fn new(image: &'static str, class_name: &'static str, class_id: i32, area_px: u64) -> Self {
+    pub(super) fn new(
+        image: &'static str,
+        class_name: &'static str,
+        class_id: i32,
+        area_px: u64,
+    ) -> Self {
         Self {
             image,
             class_name,
@@ -142,7 +147,8 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
         std::collections::HashMap::new();
     let mut max_z_by_image: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
     let mut max_t_by_image: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
-    let mut image_size: std::collections::HashMap<&str, (u32, u32)> = std::collections::HashMap::new();
+    let mut image_size: std::collections::HashMap<&str, (u32, u32)> =
+        std::collections::HashMap::new();
 
     for (idx, spec) in objects.iter().enumerate() {
         let object_id = format!("00000000-0000-0000-0000-{idx:012}");

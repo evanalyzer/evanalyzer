@@ -225,7 +225,11 @@ mod tests {
 
         let result = run(view_args(&db.path, false, false));
 
-        assert!(result.is_ok(), "run failed: {:?}", result.err().map(|e| e.to_string()));
+        assert!(
+            result.is_ok(),
+            "run failed: {:?}",
+            result.err().map(|e| e.to_string())
+        );
     }
 
     #[test]
@@ -234,7 +238,11 @@ mod tests {
 
         let result = run(view_args(&db.path, true, false));
 
-        assert!(result.is_ok(), "run failed: {:?}", result.err().map(|e| e.to_string()));
+        assert!(
+            result.is_ok(),
+            "run failed: {:?}",
+            result.err().map(|e| e.to_string())
+        );
     }
 
     #[test]
@@ -257,7 +265,11 @@ mod tests {
 
         let result = run(view_args(&db.path, false, true));
 
-        assert!(result.is_ok(), "run failed: {:?}", result.err().map(|e| e.to_string()));
+        assert!(
+            result.is_ok(),
+            "run failed: {:?}",
+            result.err().map(|e| e.to_string())
+        );
     }
 
     #[test]

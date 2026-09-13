@@ -122,28 +122,23 @@ fn export_table(args: TableExportArgs, format: ExportFormat) -> Result<(), Inter
         }
     };
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
-    let outcome = export
-        .start_export(&db, &mut no_progress)
-        .and_then(|_| {
-            if let Some(parent) = args.out.parent()
-                && !parent.as_os_str().is_empty()
-            {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    InternalErrors::Internal(format!(
-                        "could not create {}: {e}",
-                        parent.display()
-                    ))
-                })?;
-            }
-            let produced = scratch_dir.join(if grouping.group_by_image {
-                format!("grouped_by_image.{extension}")
-            } else {
-                format!("list.{extension}")
-            });
-            std::fs::rename(&produced, &args.out).map_err(|e| {
-                InternalErrors::Internal(format!("could not move export output into place: {e}"))
-            })
+    let outcome = export.start_export(&db, &mut no_progress).and_then(|_| {
+        if let Some(parent) = args.out.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
+            })?;
+        }
+        let produced = scratch_dir.join(if grouping.group_by_image {
+            format!("grouped_by_image.{extension}")
+        } else {
+            format!("list.{extension}")
         });
+        std::fs::rename(&produced, &args.out).map_err(|e| {
+            InternalErrors::Internal(format!("could not move export output into place: {e}"))
+        })
+    });
     let _ = std::fs::remove_dir_all(&scratch_dir);
     outcome?;
     println!("Exported to {}", args.out.display());
@@ -170,9 +165,17 @@ mod tests {
 
         let bytes = std::fs::read(&out).expect("read parquet back");
         // Every Parquet file starts and ends with the 4-byte "PAR1" magic.
-        assert!(bytes.len() > 8, "parquet file is too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 8,
+            "parquet file is too small: {} bytes",
+            bytes.len()
+        );
         assert_eq!(&bytes[..4], b"PAR1", "missing leading PAR1 magic");
-        assert_eq!(&bytes[bytes.len() - 4..], b"PAR1", "missing trailing PAR1 magic");
+        assert_eq!(
+            &bytes[bytes.len() - 4..],
+            b"PAR1",
+            "missing trailing PAR1 magic"
+        );
     }
 
     #[test]
@@ -221,7 +224,11 @@ mod tests {
 
         let bytes = std::fs::read(&out).expect("read xlsx back");
         // XLSX files are zip archives - "PK\x03\x04" is the local-file-header magic.
-        assert!(bytes.len() > 4, "xlsx file is too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 4,
+            "xlsx file is too small: {} bytes",
+            bytes.len()
+        );
         assert_eq!(&bytes[..4], b"PK\x03\x04", "not a zip/xlsx file");
     }
 
@@ -246,7 +253,10 @@ mod tests {
         .expect("grouped csv export should succeed");
 
         let content = std::fs::read_to_string(&out).expect("read csv back");
-        assert!(content.lines().count() >= 2, "expected a header and at least one data row");
+        assert!(
+            content.lines().count() >= 2,
+            "expected a header and at least one data row"
+        );
     }
 
     #[test]

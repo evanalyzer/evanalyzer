@@ -11,7 +11,7 @@ quick-xml = { workspace = true }
 serde_json = { workspace = true }
 ndarray = { workspace = true }
 serde = { workspace = true, features = ["derive","rc"] }
-thiserror = "2.0.19"
+thiserror = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 bitvec = { workspace = true, features = ["serde", "alloc","atomic","std"] }
 schemars = { workspace = true, features = ["indexmap2", "chrono04"] }
@@ -21,8 +21,8 @@ chrono = { workspace = true, features = ["serde"] }
 [build-dependencies]
 # `syn` here is major version 3.x, deliberately not unified with `macros`'
 # 2.x via workspace.dependencies - see the note in the root Cargo.toml.
-syn = { version = "3.0.3", features = ["full", "parsing"] }
-quote = "1.0"
+syn = { workspace = true }
+quote = { workspace = true }
 schemars = { workspace = true, features = ["indexmap2", "chrono04"] }
 serde_json = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
