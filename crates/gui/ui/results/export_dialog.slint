@@ -111,7 +111,7 @@ export component ExportDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 680px;
-        height: 740px;
+        height: 770px;
         background: Theme.panel;
         border-radius: 10px;
         border-width: 1px;
@@ -216,40 +216,21 @@ export component ExportDialog inherits Rectangle {
                                     }
                                 }
 
-                                AppButton {
-                                    text: "Browse…";
-                                    enabled: !ExportDialogState.is-exporting;
-                                    clicked => { ExportDialogState.pick-output-dir(); }
-                                }
-                            }
-                        }
-
-                        // -- Format --
-                        VerticalLayout {
-                            spacing: 8px;
-                            Text {
-                                text: "Format";
-                                color: Theme.text;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-
-                            HorizontalLayout {
-                                alignment: start;
                                 MultiSelectDropdown {
+                                    pill-height: 32px;
                                     summary-text: ExportDialogState.format-summary;
                                     items <=> ExportDialogState.format-items;
                                     multi-select: false;
                                     pill-width: 140px;
                                     item-selected(key, value, selected) => { if selected { ExportDialogState.format-summary = value; } }
                                 }
-                            }
 
-                            if ExportDialogState.format-summary == "Parquet": Text {
-                                text: "Parquet exports the raw objects table as-is — every column, unfiltered. The options below are ignored.";
-                                color: Theme.text-mute;
-                                font-size: 10.5px;
-                                wrap: word-wrap;
+                                AppButton {
+                                    height: 32px;
+                                    text: "Browse…";
+                                    enabled: !ExportDialogState.is-exporting;
+                                    clicked => { ExportDialogState.pick-output-dir(); }
+                                }
                             }
                         }
 

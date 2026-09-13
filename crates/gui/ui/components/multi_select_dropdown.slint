@@ -102,6 +102,7 @@ export component MultiSelectDropdown inherits Rectangle {
     // view's Aggregate picker while its Column is "Count", see
     // results_matrix.slint) rather than never applicable at all.
     in property <bool> enabled: true;
+    in property <length> pill-height: pill-content.preferred-height;
 
     // -------- Formatting --------
     in property <string> label: "";
@@ -150,7 +151,7 @@ export component MultiSelectDropdown inherits Rectangle {
     }
 
     width: root.pill-width;
-    height: pill-content.preferred-height;
+    height: root.pill-height;
 
     pill := Rectangle {
         x: 0;
@@ -162,7 +163,7 @@ export component MultiSelectDropdown inherits Rectangle {
         // height 0. Bind it to the inner layout's own computed preferred
         // height instead of hand-picking a pixel value, so it keeps working
         // whether or not `label` is set.
-        height: pill-content.preferred-height;
+        height: root.pill-height;
         border-radius: Theme.radius-sm;
         background: Theme.raised;
         border-width: 1px;

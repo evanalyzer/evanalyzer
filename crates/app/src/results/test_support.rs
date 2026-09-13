@@ -67,6 +67,14 @@ pub(super) struct ObjectSpec {
     pub(super) t_stack: i32,
     pub(super) intensities_json: String,
     pub(super) coloc_json: String,
+    pub(super) centroid_x_px: f64,
+    pub(super) centroid_y_px: f64,
+    /// Real pixel size of `image` in the `images` table — every object
+    /// belonging to the same `image` must agree (the fixture uses whichever
+    /// spec for that image it seeds last), so only set this on a test whose
+    /// image heatmap needs a specific grid size.
+    pub(super) image_width: u32,
+    pub(super) image_height: u32,
 }
 
 impl ObjectSpec {
@@ -80,6 +88,10 @@ impl ObjectSpec {
             t_stack: 0,
             intensities_json: "{}".to_string(),
             coloc_json: "{}".to_string(),
+            centroid_x_px: 0.0,
+            centroid_y_px: 0.0,
+            image_width: 100,
+            image_height: 100,
         }
     }
 
@@ -91,6 +103,23 @@ impl ObjectSpec {
 
     pub(super) fn with_intensities(mut self, json: &str) -> Self {
         self.intensities_json = json.to_string();
+        self
+    }
+
+    pub(super) fn with_coloc(mut self, json: &str) -> Self {
+        self.coloc_json = json.to_string();
+        self
+    }
+
+    pub(super) fn at_centroid(mut self, x_px: f64, y_px: f64) -> Self {
+        self.centroid_x_px = x_px;
+        self.centroid_y_px = y_px;
+        self
+    }
+
+    pub(super) fn with_image_size(mut self, width: u32, height: u32) -> Self {
+        self.image_width = width;
+        self.image_height = height;
         self
     }
 }
@@ -113,6 +142,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
         std::collections::HashMap::new();
     let mut max_z_by_image: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
     let mut max_t_by_image: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
+    let mut image_size: std::collections::HashMap<&str, (u32, u32)> = std::collections::HashMap::new();
 
     for (idx, spec) in objects.iter().enumerate() {
         let object_id = format!("00000000-0000-0000-0000-{idx:012}");
@@ -131,7 +161,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, 0,
-                0, 0, 0, 0,
+                ?, ?, 0, 0,
                 0, 0, 10, 10,
                 0, 0, 0, 0,
                 ?, ?, 40, 40,
@@ -150,6 +180,8 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
                 spec.class_id,
                 format!("[\"{}\"]", spec.class_name),
                 format!("[{}]", spec.class_id),
+                spec.centroid_x_px,
+                spec.centroid_y_px,
                 spec.area_px,
                 spec.area_px as f64,
                 spec.intensities_json,
@@ -161,6 +193,7 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
         if !images_seen.contains(&spec.image) {
             images_seen.push(spec.image);
         }
+        image_size.insert(spec.image, (spec.image_width, spec.image_height));
         if !classes_seen
             .iter()
             .any(|(id, name)| *id == spec.class_id && *name == spec.class_name)
@@ -185,10 +218,11 @@ pub(super) fn seed_db(path: &Path, objects: &[ObjectSpec]) {
         let c_stacks = (max_channel_by_image.get(image).copied().unwrap_or(-1) + 1).max(1);
         let z_stacks = max_z_by_image.get(image).copied().unwrap_or(0) + 1;
         let t_stacks = max_t_by_image.get(image).copied().unwrap_or(0) + 1;
+        let (width, height) = image_size.get(image).copied().unwrap_or((100, 100));
         conn.execute(
             "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
-             VALUES (?, ?, 100, 100, ?, ?, ?)",
-            duckdb::params![image, image, c_stacks, z_stacks, t_stacks],
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            duckdb::params![image, image, width, height, c_stacks, z_stacks, t_stacks],
         )
         .unwrap_or_else(|e| panic!("insert image {image}: {e}"));
     }
