@@ -6,6 +6,7 @@ use crate::result::{
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use rust_xlsxwriter::{Color, Format, Workbook, Worksheet, XlsxError};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -103,6 +104,9 @@ impl ResultExport {
         // exported together rather than needing their own toggle each.
         if self.with_plate_view {
             self.export_plate_and_well(database, &mut *on_progress)?;
+            if self.with_plates_and_wells_as_list {
+                self.export_plate_and_well_as_flat_list(database, &mut *on_progress)?;
+            }
         }
         if self.with_heatmap {
             self.export_heatmap(database, &mut *on_progress)?;
@@ -181,12 +185,15 @@ impl ResultExport {
     }
 
     // `plate.xlsx` + `well.xlsx`: one tab per object class in each
-    // document, every tab stacking one grid block per (column, aggregation)
-    // combination (and, one level further down in `well.xlsx`, per well on
-    // top of that) — see `write_grid_block` for the square-sized, colored
-    // grid itself. Both documents come from the same flag: a plate view
-    // without its wells (or vice versa) isn't a meaningful export on its
-    // own, so there's no separate toggle for each.
+    // document, every tab stacking one square, colored grid block per
+    // (column, aggregation) combination (and, one level further down in
+    // `well.xlsx`, per well on top of that) — see `write_grid_block`. Both
+    // documents come from the same flag: a plate view without its wells (or
+    // vice versa) isn't a meaningful export on its own, so there's no
+    // separate toggle for each. The flat-list form of the same data (see
+    // `export_plate_and_well_as_flat_list`) is a separate pass into
+    // separate files, not appended here — this function only ever needs
+    // `View::Heatmap` data.
     //
     // Only the first z/t in `self.z_stacks`/`self.t_stacks` is rendered:
     // unlike the List export, a plate/well grid is inherently a single
@@ -236,73 +243,69 @@ impl ResultExport {
 
             for column in self.columns.iter().filter(|column| is_aggregable(column)) {
                 let column_label = column_display_name(column, &available_columns);
-                for aggregation in &self.aggregations {
+
+                // One query covering *every* requested aggregation, rather
+                // than one query per aggregation — the WHERE/GROUP BY here
+                // is identical across all of them, only the aggregate
+                // function itself differs, so this is the difference
+                // between (with all 7 aggregations selected) 7 full scans
+                // and 1. Combined with `get_wells_for_plate_multi_agg`'s own
+                // per-well batching below, a full "every class, every
+                // column, every aggregation" export goes from
+                // classes × columns × aggregations × wells scans down to
+                // classes × columns.
+                let plate_filter = PlateFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    // Ignored by `get_group_by_plate_multi_agg` (it takes
+                    // `self.aggregations` separately) - `PlateFilter` still
+                    // needs some value structurally.
+                    aggregation: Aggregation::default(),
+                    object_class: *class,
+                    column: column.clone(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    matrix_dimension: self.plate_dimension,
+                };
+                let plate_grids = database.get_group_by_plate_multi_agg(
+                    &plate_filter,
+                    &self.aggregations,
+                    &View::Heatmap,
+                )?;
+
+                let wells_filter = WellsBatchFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: Aggregation::default(),
+                    object_class: *class,
+                    column: column.clone(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    well_size: self.well_size,
+                    well_order: self.well_order.clone(),
+                };
+                let well_heatmaps_per_agg = database.get_wells_for_plate_multi_agg(
+                    &wells_filter,
+                    &self.aggregations,
+                    &View::Heatmap,
+                )?;
+
+                for ((aggregation, plate_grid), mut well_heatmaps) in self
+                    .aggregations
+                    .iter()
+                    .zip(plate_grids)
+                    .zip(well_heatmaps_per_agg)
+                {
                     let caption = format!("{column_label} — {}", aggregation_label(aggregation));
+                    plate_row = write_grid_block(plate_sheet, plate_row, &caption, &plate_grid)?;
 
-                    let plate_filter = PlateFilter {
-                        plane: PlaneFilter {
-                            z_stack: z,
-                            t_stack: t,
-                        },
-                        grouping_regex: self.grouping_regex.clone(),
-                        aggregation: aggregation.clone(),
-                        object_class: *class,
-                        column: column.clone(),
-                        color_schema: self.color_schema.clone(),
-                        color_scale: self.color_scale.clone(),
-                        matrix_dimension: self.plate_dimension,
-                    };
-
-                    let plate_grid =
-                        database.get_group_by_plate(&plate_filter, &View::Heatmap)?;
-                    plate_row =
-                        write_grid_block(plate_sheet, plate_row, &caption, &plate_grid)?;
-                    // Only queried when actually shown - the flat-list form
-                    // is otherwise pure overhead (another full scan; see the
-                    // `get_wells_for_plate` comment below for the same
-                    // reasoning applied per-well). The active well *ids* for
-                    // the loop below come from `well_heatmaps` itself
-                    // instead of this, once that's fetched.
-                    if self.with_plates_and_wells_as_list {
-                        let plate_list = database.get_group_by_plate(&plate_filter, &View::List)?;
-                        plate_row = write_flat_block(
-                            plate_sheet,
-                            plate_row,
-                            &format!("{caption} (list)"),
-                            &plate_list,
-                        )?;
-                    }
-
-                    // One query for *every* well's fields, rather than one
-                    // query per well (`get_group_by_well`'s own well filter
-                    // can't use an index, so that would mean re-scanning the
-                    // whole table once per well) — see `get_wells_for_plate`'s
-                    // doc comment. This is the difference between, say, 54
-                    // full scans and 1 per (class, column, aggregation) here.
-                    let wells_filter = WellsBatchFilter {
-                        plane: PlaneFilter {
-                            z_stack: z,
-                            t_stack: t,
-                        },
-                        grouping_regex: self.grouping_regex.clone(),
-                        aggregation: aggregation.clone(),
-                        object_class: *class,
-                        column: column.clone(),
-                        color_schema: self.color_schema.clone(),
-                        color_scale: self.color_scale.clone(),
-                        well_size: self.well_size,
-                        well_order: self.well_order.clone(),
-                    };
-                    let mut well_heatmaps =
-                        database.get_wells_for_plate(&wells_filter, &View::Heatmap)?;
-                    let mut well_lists = if self.with_plates_and_wells_as_list {
-                        Some(database.get_wells_for_plate(&wells_filter, &View::List)?)
-                    } else {
-                        None
-                    };
-
-                    // Sorted for deterministic, well-id-ordered output
-                    // (matching the previous `plate_list.row_names` order) -
+                    // Sorted for deterministic, well-id-ordered output -
                     // `well_heatmaps` is a `HashMap`, so its own iteration
                     // order isn't meaningful on its own.
                     let mut well_ids: Vec<String> = well_heatmaps.keys().cloned().collect();
@@ -315,16 +318,6 @@ impl ResultExport {
                         };
                         well_row =
                             write_grid_block(well_sheet, well_row, &well_caption, &well_grid)?;
-                        if let Some(well_list) =
-                            well_lists.as_mut().and_then(|lists| lists.remove(well_id))
-                        {
-                            well_row = write_flat_block(
-                                well_sheet,
-                                well_row,
-                                &format!("{well_caption} (list)"),
-                                &well_list,
-                            )?;
-                        }
                     }
                 }
             }
@@ -336,6 +329,172 @@ impl ResultExport {
         well_workbook
             .save(self.output_dir.join("well.xlsx"))
             .map_err(xlsx_err)?;
+        Ok(())
+    }
+
+    // `plate_list.xlsx` + `well_list.xlsx`: the same aggregated data as
+    // `export_plate_and_well`, but pivoted into one plain table per document
+    // instead of a grid-per-class-tab — one row per well (or, in
+    // `well_list.xlsx`, per well+field), one column per (class, column,
+    // aggregation) combination, so every class sits side by side in the
+    // same tab rather than needing its own. `well_list.xlsx` also carries
+    // an "Image" column (the source image for that field), independent of
+    // which class/column/aggregation combination is being looked at.
+    //
+    // Only ever needs `View::List` data - never overlaps in query cost with
+    // `export_plate_and_well`'s `View::Heatmap`-only fetches above, even
+    // though both run in the same export when this is enabled.
+    fn export_plate_and_well_as_flat_list(
+        &self,
+        database: &ResultsGenerator,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        let classes_all = database.get_object_classes()?;
+        let target_classes: Vec<ObjectClass> = if self.object_classes.is_empty() {
+            classes_all.iter().map(|class| class.id).collect()
+        } else {
+            self.object_classes.clone()
+        };
+        let available_columns = database.get_available_columns()?;
+        let z = self.z_stacks.start;
+        let t = self.t_stacks.start;
+        let aggregable_columns: Vec<&Column> =
+            self.columns.iter().filter(|column| is_aggregable(column)).collect();
+        let combo_count = target_classes.len() * aggregable_columns.len() * self.aggregations.len();
+
+        let mut combo_labels: Vec<String> = Vec::with_capacity(combo_count);
+        let mut plate_values: HashMap<String, Vec<Option<f64>>> = HashMap::new();
+        let mut well_values: HashMap<(String, String), Vec<Option<f64>>> = HashMap::new();
+        let mut well_images: HashMap<(String, String), String> = HashMap::new();
+        let mut combo_idx = 0usize;
+
+        for (class_idx, class) in target_classes.iter().enumerate() {
+            let class_label = class_display_label(*class, &classes_all);
+            on_progress(
+                &format!("Exporting Flat List: {class_label}"),
+                class_idx + 1,
+                target_classes.len(),
+            );
+
+            for column in &aggregable_columns {
+                let column_label = column_display_name(column, &available_columns);
+
+                // Same one-query-for-every-aggregation batching as
+                // `export_plate_and_well` - see its comment.
+                let plate_filter = PlateFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: Aggregation::default(),
+                    object_class: *class,
+                    column: (*column).clone(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    matrix_dimension: self.plate_dimension,
+                };
+                let plate_lists = database.get_group_by_plate_multi_agg(
+                    &plate_filter,
+                    &self.aggregations,
+                    &View::List,
+                )?;
+
+                let wells_filter = WellsBatchFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    grouping_regex: self.grouping_regex.clone(),
+                    aggregation: Aggregation::default(),
+                    object_class: *class,
+                    column: (*column).clone(),
+                    color_schema: self.color_schema.clone(),
+                    color_scale: self.color_scale.clone(),
+                    well_size: self.well_size,
+                    well_order: self.well_order.clone(),
+                };
+                let well_lists_per_agg = database.get_wells_for_plate_multi_agg(
+                    &wells_filter,
+                    &self.aggregations,
+                    &View::List,
+                )?;
+
+                for ((aggregation, plate_list), well_lists) in self
+                    .aggregations
+                    .iter()
+                    .zip(plate_lists)
+                    .zip(well_lists_per_agg)
+                {
+                    combo_labels.push(format!(
+                        "{class_label} — {column_label} — {}",
+                        aggregation_label(aggregation)
+                    ));
+
+                    for (well_id, row) in plate_list.row_names.iter().zip(&plate_list.rows) {
+                        if let Some(value) = row.get(1).and_then(cell_to_f64) {
+                            plate_values
+                                .entry(well_id.clone())
+                                .or_insert_with(|| vec![None; combo_count])[combo_idx] =
+                                Some(value);
+                        }
+                    }
+
+                    for (well_id, result) in &well_lists {
+                        for (field_idx, row) in result.row_names.iter().zip(&result.rows) {
+                            let key = (well_id.clone(), field_idx.clone());
+                            if let Some(value) = row.get(1).and_then(cell_to_f64) {
+                                well_values
+                                    .entry(key.clone())
+                                    .or_insert_with(|| vec![None; combo_count])[combo_idx] =
+                                    Some(value);
+                            }
+                            if let Some((image_name, _)) =
+                                row.get(1).and_then(|cell| cell.search_key.as_ref())
+                            {
+                                well_images.entry(key).or_insert_with(|| image_name.clone());
+                            }
+                        }
+                    }
+
+                    combo_idx += 1;
+                }
+            }
+        }
+
+        let mut plate_rows: Vec<(String, Vec<Option<f64>>)> = plate_values.into_iter().collect();
+        plate_rows.sort_by(|(a, _), (b, _)| a.cmp(b));
+        write_flat_pivot(
+            &self.output_dir.join("plate_list.xlsx"),
+            "Plate",
+            &["Well"],
+            &combo_labels,
+            plate_rows.into_iter().map(|(well_id, values)| (vec![well_id], values)),
+        )?;
+
+        let mut well_rows: Vec<((String, String), Vec<Option<f64>>)> = well_values.into_iter().collect();
+        well_rows.sort_by(|(a, _), (b, _)| {
+            a.0.cmp(&b.0).then_with(|| {
+                a.1.parse::<u32>()
+                    .ok()
+                    .cmp(&b.1.parse::<u32>().ok())
+                    .then_with(|| a.1.cmp(&b.1))
+            })
+        });
+        write_flat_pivot(
+            &self.output_dir.join("well_list.xlsx"),
+            "Well",
+            &["Well", "Field", "Image"],
+            &combo_labels,
+            well_rows.into_iter().map(|((well_id, field_idx), values)| {
+                let image = well_images
+                    .get(&(well_id.clone(), field_idx.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                (vec![well_id, field_idx, image], values)
+            }),
+        )?;
+
         Ok(())
     }
 
@@ -575,6 +734,13 @@ fn write_grid_block(
     result: &DatabaseResult,
 ) -> Result<u32, InternalErrors> {
     let bold = Format::new().set_bold();
+    // Row/col header cells (the top row of column labels and the left
+    // column of row labels) — solid black fill, white bold text, so they
+    // read as a distinct axis rather than blending into the data cells.
+    let header_format = Format::new()
+        .set_bold()
+        .set_background_color(Color::Black)
+        .set_font_color(Color::White);
     worksheet
         .write_with_format(start_row, 0, caption, &bold)
         .map_err(xlsx_err)?;
@@ -589,7 +755,7 @@ fn write_grid_block(
     for (col_idx, col_name) in result.column_names.iter().enumerate() {
         let col = (col_idx + 1) as u16;
         worksheet
-            .write_with_format(header_row, col, col_name.as_str(), &bold)
+            .write_with_format(header_row, col, col_name.as_str(), &header_format)
             .map_err(xlsx_err)?;
         worksheet
             .set_column_width_pixels(col, GRID_CELL_PX)
@@ -599,51 +765,86 @@ fn write_grid_block(
     for (row_idx, row_name) in result.row_names.iter().enumerate() {
         let row = header_row + 1 + row_idx as u32;
         worksheet
-            .write_with_format(row, 0, row_name.as_str(), &bold)
+            .write_with_format(row, 0, row_name.as_str(), &header_format)
             .map_err(xlsx_err)?;
         worksheet
             .set_row_height_pixels(row, GRID_CELL_PX)
             .map_err(xlsx_err)?;
         for (col_idx, cell) in result.rows[row_idx].iter().enumerate() {
-            write_cell(worksheet, row, (col_idx + 1) as u16, cell)?;
+            let col = (col_idx + 1) as u16;
+            write_cell(worksheet, row, col, cell)?;
         }
     }
 
     Ok(header_row + 1 + result.row_names.len() as u32 + 1)
 }
 
-/// Writes `result` (a `View::List` `DatabaseResult` — a flat `group`/value
-/// table, not a grid) as a plain two-column-or-more table starting at
-/// `start_row`: a bold caption, then `result.column_names` as a header row,
-/// then one row per `result.rows`. No square sizing or per-cell color here
-/// — unlike `write_grid_block`, this isn't a matrix. Returns the next free
-/// row (one blank row after the block).
-fn write_flat_block(
-    worksheet: &mut Worksheet,
-    start_row: u32,
-    caption: &str,
-    result: &DatabaseResult,
-) -> Result<u32, InternalErrors> {
+/// Writes one pivoted flat-list document: a single sheet named
+/// `sheet_name`, headed by `key_labels` (e.g. `["Well"]` or
+/// `["Well", "Field", "Image"]`) followed by `combo_labels` (one column per
+/// class/column/aggregation combination), then one row per `rows` entry —
+/// each a `(key values, one Some(value)-or-None per combo_labels column)`
+/// pair. A `None` (that key had no matching data for that particular
+/// combination — e.g. a well with no objects of some other class) is
+/// written as a plain `"-"`, matching how a missing cell reads everywhere
+/// else in these exports. Unlike `write_grid_block`, this is a plain table,
+/// not a matrix - no square sizing or per-cell color.
+fn write_flat_pivot(
+    path: &Path,
+    sheet_name: &str,
+    key_labels: &[&str],
+    combo_labels: &[String],
+    rows: impl Iterator<Item = (Vec<String>, Vec<Option<f64>>)>,
+) -> Result<(), InternalErrors> {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.add_worksheet();
+    sheet.set_name(sheet_name).map_err(xlsx_err)?;
     let bold = Format::new().set_bold();
-    worksheet
-        .write_with_format(start_row, 0, caption, &bold)
-        .map_err(xlsx_err)?;
 
-    let header_row = start_row + 1;
-    for (col_idx, name) in result.column_names.iter().enumerate() {
-        worksheet
-            .write_with_format(header_row, col_idx as u16, name.as_str(), &bold)
+    for (col_idx, label) in key_labels.iter().enumerate() {
+        sheet
+            .write_with_format(0, col_idx as u16, *label, &bold)
+            .map_err(xlsx_err)?;
+    }
+    let key_cols = key_labels.len();
+    for (i, label) in combo_labels.iter().enumerate() {
+        sheet
+            .write_with_format(0, (key_cols + i) as u16, label.as_str(), &bold)
             .map_err(xlsx_err)?;
     }
 
-    for (row_idx, row) in result.rows.iter().enumerate() {
-        let row_num = header_row + 1 + row_idx as u32;
-        for (col_idx, cell) in row.iter().enumerate() {
-            write_cell(worksheet, row_num, col_idx as u16, cell)?;
+    for (row_idx, (keys, values)) in rows.enumerate() {
+        let row = (row_idx + 1) as u32;
+        for (col_idx, key) in keys.iter().enumerate() {
+            sheet.write(row, col_idx as u16, key.as_str()).map_err(xlsx_err)?;
+        }
+        for (i, value) in values.iter().enumerate() {
+            let col = (key_cols + i) as u16;
+            match value {
+                Some(v) => {
+                    sheet.write(row, col, *v).map_err(xlsx_err)?;
+                }
+                None => {
+                    sheet.write(row, col, "-").map_err(xlsx_err)?;
+                }
+            }
         }
     }
 
-    Ok(header_row + 1 + result.rows.len() as u32 + 1)
+    workbook.save(path).map_err(xlsx_err)?;
+    Ok(())
+}
+
+/// Extracts a `View::List` value cell's number — always `CellValue::Float`
+/// in practice (see `well_fields_to_result`/`get_group_by_plate`'s own
+/// `View::List` arms), but matching `Integer` too costs nothing and keeps
+/// this from silently going quiet if that ever changes.
+fn cell_to_f64(cell: &Cell) -> Option<f64> {
+    match &cell.value {
+        CellValue::Float(value) => Some(*value as f64),
+        CellValue::Integer(value) => Some(*value as f64),
+        _ => None,
+    }
 }
 
 /// Writes one `Cell` — its value, typed appropriately (`write_string`/

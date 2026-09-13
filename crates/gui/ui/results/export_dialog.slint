@@ -253,7 +253,7 @@ export component ExportDialog inherits Rectangle {
                             }
 
                             CheckBox {
-                                text: "Plate/Well — also as a flat list";
+                                text: "Plate/Well — also as a flat list (separate files)";
                                 checked <=> ExportDialogState.with-plates-and-wells-as-list;
                                 enabled: ExportDialogState.with-plate-view;
                             }

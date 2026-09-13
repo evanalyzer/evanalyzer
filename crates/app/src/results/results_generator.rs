@@ -758,172 +758,112 @@ impl ResultsGenerator {
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let groups: Vec<(String, String, String, Option<f64>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
 
-        match view {
-            View::List => {
-                let groups: Vec<(String, Option<f64>)> = stmt
-                    .query_map([], |row| Ok((row.get(0)?, row.get(3)?)))
-                    .map_err(err)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(err)?;
+        Ok(plate_groups_to_result(
+            groups,
+            &filter.column,
+            &classes,
+            filter.matrix_dimension,
+            &filter.color_schema,
+            &filter.color_scale,
+            view,
+        ))
+    }
 
-                let mut min = f64::INFINITY;
-                let mut max = f64::NEG_INFINITY;
-                for (_, value) in &groups {
-                    if let Some(value) = value {
-                        min = min.min(*value);
-                        max = max.max(*value);
-                    }
-                }
-                if !min.is_finite() || !max.is_finite() {
-                    min = 0.0;
-                    max = 0.0;
-                }
+    // Batched form of `get_group_by_plate` across every requested
+    // aggregation at once, in one query instead of one per aggregation —
+    // same reasoning as `get_wells_for_plate` batching across wells: the
+    // WHERE/GROUP BY here is identical for every aggregation, only the
+    // aggregate function itself differs, so computing e.g. AVG, MIN, MAX,
+    // SUM, STDDEV, MEDIAN and SKEWNESS of the same column all in one SELECT
+    // means one full scan instead of seven. Returns one `DatabaseResult` per
+    // `aggregations` entry, same order.
+    pub fn get_group_by_plate_multi_agg(
+        &self,
+        filter: &PlateFilter,
+        aggregations: &[Aggregation],
+        view: &View,
+    ) -> Result<Vec<DatabaseResult>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let classes = self.get_object_classes()?;
 
-                let column_names = vec!["group".to_string(), filter.column.as_key(&classes)];
-                let row_names = groups.iter().map(|(key, _)| key.clone()).collect();
-                let rows: Vec<Vec<Cell>> = groups
-                    .into_iter()
-                    .map(|(key, value)| {
-                        // `key` is the group/well id (e.g. "A1") itself, so
-                        // it's its own search key — used by the GUI to
-                        // navigate into that group/well.
-                        let search_key = Some((key.clone(), key.clone()));
-                        vec![
-                            Cell {
-                                value: CellValue::String(key),
-                                bg_color: 0,
-                                alternating_color: false,
-                                search_key: search_key.clone(),
-                            },
-                            Cell {
-                                value: CellValue::Float(value.unwrap_or(0.0) as f32),
-                                bg_color: 0,
-                                alternating_color: false,
-                                search_key,
-                            },
-                        ]
-                    })
-                    .collect();
-                let source_object_count = rows.len();
-                Ok(DatabaseResult {
-                    column_names,
-                    row_names,
-                    rows,
-                    min: min as f32,
-                    max: max as f32,
-                    source_object_count,
-                    row_locations: Vec::new(),
-                })
-            }
-            View::Heatmap => {
-                // `row`/`col` (capture groups 2/3 of the same regex — e.g.
-                // "A"/"1" out of well id "A1") are the grid's two axes here,
-                // unlike `View::List` which only needed the full group key
-                // (capture group 1).
-                let cells: Vec<(String, String, String, Option<f64>)> = stmt
-                    .query_map([], |row| {
-                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-                    })
-                    .map_err(err)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(err)?;
-
-                // Real 0-based (row, col) well coordinates ("A" -> 0, "1" ->
-                // 0, ...), not just distinct-and-sorted keys — needed so the
-                // grid always lines up with a real plate's row/column
-                // numbering (see `matrix_dimension` below) instead of
-                // silently compressing when a row or column has no objects
-                // at all. `group_prefix` (e.g. "A1") rides along per cell so
-                // it can be returned as `Cell::search_key` below.
-                let mut values: HashMap<(usize, usize), (f64, String)> = HashMap::new();
-                let mut max_row = None;
-                let mut max_col = None;
-                for (group_prefix, row, col, value) in &cells {
-                    let (Some(row), Some(col)) =
-                        (row_letter_to_index(row), col_number_to_index(col))
-                    else {
-                        continue;
-                    };
-                    max_row = Some(max_row.map_or(row, |m: usize| m.max(row)));
-                    max_col = Some(max_col.map_or(col, |m: usize| m.max(col)));
-                    if let Some(value) = value {
-                        values.insert((row, col), (*value, group_prefix.clone()));
-                    }
-                }
-
-                // Given: use it exactly, so the caller can request e.g. a
-                // 384-well layout even if this particular plate only has
-                // objects in a handful of wells. Not given: the smallest
-                // standard plate size that still fits every well this query
-                // actually found.
-                let dimensions = filter
-                    .matrix_dimension
-                    .unwrap_or_else(|| best_matching_dimensions(max_row, max_col));
-                let (rows, cols) = dimensions.dimensions();
-
-                let (range_min, range_max) = match filter.color_scale {
-                    ColorScale::Manual(min, max) => (min as f64, max as f64),
-                    ColorScale::Auto => {
-                        let mut min = f64::INFINITY;
-                        let mut max = f64::NEG_INFINITY;
-                        for (value, _) in values.values() {
-                            min = min.min(*value);
-                            max = max.max(*value);
-                        }
-                        if min.is_finite() && max.is_finite() {
-                            (min, max)
-                        } else {
-                            (0.0, 0.0)
-                        }
-                    }
-                };
-
-                let grid_rows: Vec<Vec<Cell>> = (0..rows)
-                    .map(|row| {
-                        (0..cols)
-                            .map(|col| match values.get(&(row, col)) {
-                                Some((value, group_prefix)) => Cell {
-                                    value: CellValue::Float(*value as f32),
-                                    bg_color: value_to_color(
-                                        *value,
-                                        range_min,
-                                        range_max,
-                                        &filter.color_schema,
-                                    ),
-                                    alternating_color: false,
-                                    search_key: Some((group_prefix.clone(), group_prefix.clone())),
-                                },
-                                // No object matched this well at all — leave
-                                // it empty rather than showing a misleading 0
-                                // or a value from some other well.
-                                None => Cell {
-                                    value: CellValue::Empty,
-                                    bg_color: 0,
-                                    alternating_color: false,
-                                    search_key: None,
-                                },
-                            })
-                            .collect()
-                    })
-                    .collect();
-
-                let source_object_count = grid_rows.len();
-                Ok(DatabaseResult {
-                    column_names: (1..=cols).map(|col| col.to_string()).collect(),
-                    row_names: (0..rows).map(row_index_to_letter).collect(),
-                    rows: grid_rows,
-                    // Same range the cells were colored against above, so the
-                    // GUI's color bar always matches what's actually painted
-                    // rather than recomputing (and potentially disagreeing
-                    // with) it from the returned cells.
-                    min: range_min as f32,
-                    max: range_max as f32,
-                    source_object_count,
-                    row_locations: Vec::new(),
-                })
-            }
+        let mut value_exprs = Vec::with_capacity(aggregations.len());
+        for aggregation in aggregations {
+            let (agg_fn, value_expr) = aggregate_sql(&filter.column, aggregation)?;
+            value_exprs.push(format!("{agg_fn}({value_expr}) AS value_{}", value_exprs.len()));
         }
+        let value_exprs_sql = value_exprs.join(",\n                ");
+
+        let regex = if filter.grouping_regex.trim().is_empty() {
+            DEFAULT_GROUPING_REGEX
+        } else {
+            filter.grouping_regex.as_str()
+        };
+
+        let mut conditions = vec![
+            format!("z_stack = {}", filter.plane.z_stack),
+            format!("t_stack = {}", filter.plane.t_stack),
+        ];
+        if let ObjectClass::Valid(id) = filter.object_class {
+            conditions.push(format!(
+                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                sql_int_array_literal(&[id])
+            ));
+        }
+        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+
+        let sql = format!(
+            "SELECT\n\
+                regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                regexp_extract(image_name, '{regex}', 2) AS row,\n\
+                regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                {value_exprs_sql}\n\
+             FROM objects\n\
+             {where_clause}\n\
+             GROUP BY group_prefix, row, col\n\
+             ORDER BY group_prefix",
+            regex = regex.replace('\'', "''"),
+        );
+
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let n = aggregations.len();
+        let raw: Vec<(String, String, String, Vec<Option<f64>>)> = stmt
+            .query_map([], |row| {
+                let group_prefix: String = row.get(0)?;
+                let group_row: String = row.get(1)?;
+                let group_col: String = row.get(2)?;
+                let mut values = Vec::with_capacity(n);
+                for i in 0..n {
+                    values.push(row.get::<_, Option<f64>>(3 + i)?);
+                }
+                Ok((group_prefix, group_row, group_col, values))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+
+        Ok((0..n)
+            .map(|i| {
+                let groups: Vec<(String, String, String, Option<f64>)> = raw
+                    .iter()
+                    .map(|(g, r, c, values)| (g.clone(), r.clone(), c.clone(), values[i]))
+                    .collect();
+                plate_groups_to_result(
+                    groups,
+                    &filter.column,
+                    &classes,
+                    filter.matrix_dimension,
+                    &filter.color_schema,
+                    &filter.color_scale,
+                    view,
+                )
+            })
+            .collect())
     }
 
     // Second drill level: the fields (individual images) inside one well
@@ -1098,6 +1038,115 @@ impl ResultsGenerator {
                     view,
                 );
                 (well_id, result)
+            })
+            .collect())
+    }
+
+    // Batched form of `get_wells_for_plate` across every requested
+    // aggregation at once (same one-query-instead-of-N reasoning as
+    // `get_group_by_plate_multi_agg`) — combined with `get_wells_for_plate`'s
+    // own per-well batching, this is the difference between, say, 54 wells
+    // × 7 aggregations = 378 full scans and exactly 1, for one (class,
+    // column) combination. Returns one `HashMap<well_id, DatabaseResult>`
+    // per `aggregations` entry, same order.
+    pub fn get_wells_for_plate_multi_agg(
+        &self,
+        filter: &WellsBatchFilter,
+        aggregations: &[Aggregation],
+        view: &View,
+    ) -> Result<Vec<HashMap<String, DatabaseResult>>, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let classes = self.get_object_classes()?;
+
+        let mut value_exprs = Vec::with_capacity(aggregations.len());
+        for aggregation in aggregations {
+            let (agg_fn, value_expr) = aggregate_sql(&filter.column, aggregation)?;
+            value_exprs.push(format!("{agg_fn}({value_expr}) AS value_{}", value_exprs.len()));
+        }
+        let value_exprs_sql = value_exprs.join(",\n                ");
+
+        let regex = if filter.grouping_regex.trim().is_empty() {
+            DEFAULT_GROUPING_REGEX
+        } else {
+            filter.grouping_regex.as_str()
+        };
+        let regex = regex.replace('\'', "''");
+
+        let mut conditions = vec![
+            format!("z_stack = {}", filter.plane.z_stack),
+            format!("t_stack = {}", filter.plane.t_stack),
+        ];
+        if let ObjectClass::Valid(id) = filter.object_class {
+            conditions.push(format!(
+                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                sql_int_array_literal(&[id])
+            ));
+        }
+        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+
+        let sql = format!(
+            "SELECT\n\
+                regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                regexp_extract(image_name, '{regex}', 4) AS idx,\n\
+                image_rel_path,\n\
+                image_name,\n\
+                {value_exprs_sql}\n\
+             FROM objects\n\
+             {where_clause}\n\
+             GROUP BY group_prefix, idx, image_rel_path, image_name\n\
+             ORDER BY group_prefix, idx"
+        );
+
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let n = aggregations.len();
+        let mut fields_by_well: HashMap<String, Vec<(String, String, String, Vec<Option<f64>>)>> =
+            HashMap::new();
+        let rows = stmt
+            .query_map([], |row| {
+                let group_prefix: String = row.get(0)?;
+                let idx: String = row.get(1)?;
+                let image_rel_path: String = row.get(2)?;
+                let image_name: String = row.get(3)?;
+                let mut values = Vec::with_capacity(n);
+                for i in 0..n {
+                    values.push(row.get::<_, Option<f64>>(4 + i)?);
+                }
+                Ok((group_prefix, idx, image_rel_path, image_name, values))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        for (group_prefix, idx, image_rel_path, image_name, values) in rows {
+            fields_by_well
+                .entry(group_prefix)
+                .or_default()
+                .push((idx, image_rel_path, image_name, values));
+        }
+
+        Ok((0..n)
+            .map(|agg_idx| {
+                fields_by_well
+                    .iter()
+                    .map(|(well_id, fields)| {
+                        let per_agg_fields: Vec<(String, String, String, Option<f64>)> = fields
+                            .iter()
+                            .map(|(idx, rel_path, name, values)| {
+                                (idx.clone(), rel_path.clone(), name.clone(), values[agg_idx])
+                            })
+                            .collect();
+                        let result = well_fields_to_result(
+                            per_agg_fields,
+                            &filter.column,
+                            &classes,
+                            filter.well_size,
+                            &filter.well_order,
+                            &filter.color_schema,
+                            &filter.color_scale,
+                            view,
+                        );
+                        (well_id.clone(), result)
+                    })
+                    .collect::<HashMap<String, DatabaseResult>>()
             })
             .collect())
     }
@@ -2143,6 +2192,162 @@ pub fn color_scale_gradient(schema: &ColorSchema) -> [u32; COLOR_SCALE_GRADIENT_
         *stop = value_to_color(t, 0.0, 1.0, schema);
     }
     stops
+}
+
+/// Turns raw `(group_prefix, row, col, value)` plate-group rows into a
+/// `DatabaseResult` — shared by `get_group_by_plate` (one aggregation per
+/// call) and `get_group_by_plate_multi_agg` (every requested aggregation in
+/// one batched query, calling this once per aggregation over its own slice
+/// of that batch) so the two agree on exactly the same List/Heatmap shape.
+fn plate_groups_to_result(
+    groups: Vec<(String, String, String, Option<f64>)>,
+    column: &Column,
+    classes: &[Class],
+    matrix_dimension: Option<PlateDimensions>,
+    color_schema: &ColorSchema,
+    color_scale: &ColorScale,
+    view: &View,
+) -> DatabaseResult {
+    match view {
+        View::List => {
+            let mut min = f64::INFINITY;
+            let mut max = f64::NEG_INFINITY;
+            for (_, _, _, value) in &groups {
+                if let Some(value) = value {
+                    min = min.min(*value);
+                    max = max.max(*value);
+                }
+            }
+            if !min.is_finite() || !max.is_finite() {
+                min = 0.0;
+                max = 0.0;
+            }
+
+            let column_names = vec!["group".to_string(), column.as_key(classes)];
+            let row_names = groups.iter().map(|(key, ..)| key.clone()).collect();
+            let rows: Vec<Vec<Cell>> = groups
+                .into_iter()
+                .map(|(key, _row, _col, value)| {
+                    // `key` is the group/well id (e.g. "A1") itself, so
+                    // it's its own search key — used by the GUI to
+                    // navigate into that group/well.
+                    let search_key = Some((key.clone(), key.clone()));
+                    vec![
+                        Cell {
+                            value: CellValue::String(key),
+                            bg_color: 0,
+                            alternating_color: false,
+                            search_key: search_key.clone(),
+                        },
+                        Cell {
+                            value: CellValue::Float(value.unwrap_or(0.0) as f32),
+                            bg_color: 0,
+                            alternating_color: false,
+                            search_key,
+                        },
+                    ]
+                })
+                .collect();
+            let source_object_count = rows.len();
+            DatabaseResult {
+                column_names,
+                row_names,
+                rows,
+                min: min as f32,
+                max: max as f32,
+                source_object_count,
+                row_locations: Vec::new(),
+            }
+        }
+        View::Heatmap => {
+            // Real 0-based (row, col) well coordinates ("A" -> 0, "1" ->
+            // 0, ...), not just distinct-and-sorted keys — needed so the
+            // grid always lines up with a real plate's row/column
+            // numbering (see `matrix_dimension` below) instead of
+            // silently compressing when a row or column has no objects
+            // at all. `group_prefix` (e.g. "A1") rides along per cell so
+            // it can be returned as `Cell::search_key` below.
+            let mut values: HashMap<(usize, usize), (f64, String)> = HashMap::new();
+            let mut max_row = None;
+            let mut max_col = None;
+            for (group_prefix, row, col, value) in &groups {
+                let (Some(row), Some(col)) = (row_letter_to_index(row), col_number_to_index(col))
+                else {
+                    continue;
+                };
+                max_row = Some(max_row.map_or(row, |m: usize| m.max(row)));
+                max_col = Some(max_col.map_or(col, |m: usize| m.max(col)));
+                if let Some(value) = value {
+                    values.insert((row, col), (*value, group_prefix.clone()));
+                }
+            }
+
+            // Given: use it exactly, so the caller can request e.g. a
+            // 384-well layout even if this particular plate only has
+            // objects in a handful of wells. Not given: the smallest
+            // standard plate size that still fits every well this query
+            // actually found.
+            let dimensions =
+                matrix_dimension.unwrap_or_else(|| best_matching_dimensions(max_row, max_col));
+            let (rows, cols) = dimensions.dimensions();
+
+            let (range_min, range_max) = match color_scale {
+                ColorScale::Manual(min, max) => (*min as f64, *max as f64),
+                ColorScale::Auto => {
+                    let mut min = f64::INFINITY;
+                    let mut max = f64::NEG_INFINITY;
+                    for (value, _) in values.values() {
+                        min = min.min(*value);
+                        max = max.max(*value);
+                    }
+                    if min.is_finite() && max.is_finite() {
+                        (min, max)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                }
+            };
+
+            let grid_rows: Vec<Vec<Cell>> = (0..rows)
+                .map(|row| {
+                    (0..cols)
+                        .map(|col| match values.get(&(row, col)) {
+                            Some((value, group_prefix)) => Cell {
+                                value: CellValue::Float(*value as f32),
+                                bg_color: value_to_color(*value, range_min, range_max, color_schema),
+                                alternating_color: false,
+                                search_key: Some((group_prefix.clone(), group_prefix.clone())),
+                            },
+                            // No object matched this well at all — leave
+                            // it empty rather than showing a misleading 0
+                            // or a value from some other well.
+                            None => Cell {
+                                value: CellValue::Empty,
+                                bg_color: 0,
+                                alternating_color: false,
+                                search_key: None,
+                            },
+                        })
+                        .collect()
+                })
+                .collect();
+
+            let source_object_count = grid_rows.len();
+            DatabaseResult {
+                column_names: (1..=cols).map(|col| col.to_string()).collect(),
+                row_names: (0..rows).map(row_index_to_letter).collect(),
+                rows: grid_rows,
+                // Same range the cells were colored against above, so the
+                // GUI's color bar always matches what's actually painted
+                // rather than recomputing (and potentially disagreeing
+                // with) it from the returned cells.
+                min: range_min as f32,
+                max: range_max as f32,
+                source_object_count,
+                row_locations: Vec::new(),
+            }
+        }
+    }
 }
 
 /// Turns one well's raw `(idx, image_rel_path, image_name, value)` field
