@@ -2,6 +2,7 @@ use crate::args::{ExportArgs, ExportCommand, ParquetExportArgs, TableExportArgs}
 use crate::commands::common::{resolve_grouping, resolve_image_rel_paths, resolve_object_classes};
 use evanalyzer_app::result::{Column, ExportFormat, ResultExport, ResultsGenerator};
 use evanalyzer_cfg::core_types::InternalErrors;
+use std::sync::atomic::AtomicBool;
 
 pub fn run(args: ExportArgs) -> Result<(), InternalErrors> {
     match args.command {
@@ -33,7 +34,8 @@ fn export_parquet(args: ParquetExportArgs) -> Result<(), InternalErrors> {
     };
 
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
-    let outcome = export.start_export(&db, &mut no_progress).and_then(|_| {
+    let cancel = AtomicBool::new(false);
+    let outcome = export.start_export(&db, &cancel, &mut no_progress).and_then(|_| {
         if let Some(parent) = args.out.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -122,7 +124,8 @@ fn export_table(args: TableExportArgs, format: ExportFormat) -> Result<(), Inter
         }
     };
     let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
-    let outcome = export.start_export(&db, &mut no_progress).and_then(|_| {
+    let cancel = AtomicBool::new(false);
+    let outcome = export.start_export(&db, &cancel, &mut no_progress).and_then(|_| {
         if let Some(parent) = args.out.parent()
             && !parent.as_os_str().is_empty()
         {

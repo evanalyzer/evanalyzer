@@ -85,6 +85,7 @@ export global ExportDialogState {
 
     callback start-clicked();
     callback close-clicked();
+    callback cancel-clicked();
 }
 
 component LabeledField inherits HorizontalLayout {
@@ -111,7 +112,7 @@ export component ExportDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 680px;
-        height: 770px;
+        height: 790px;
         background: Theme.panel;
         border-radius: 10px;
         border-width: 1px;
@@ -558,6 +559,11 @@ export component ExportDialog inherits Rectangle {
                             ExportDialogState.close-clicked();
                             ExportDialogState.active = false;
                         }
+                    }
+
+                    if ExportDialogState.is-exporting: AppButton {
+                        text: "Cancel";
+                        clicked => { ExportDialogState.cancel-clicked(); }
                     }
 
                     AppButton {

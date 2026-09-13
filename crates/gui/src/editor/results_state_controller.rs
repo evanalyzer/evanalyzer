@@ -10,7 +10,7 @@ use evanalyzer_app::result::{
     ImageHeatmapFilter, PlateDimensions, ResultCharts, ResultExport, ResultsGenerator,
     ScatterFilter, WellFilter, WellSize,
 };
-use evanalyzer_cfg::core_types::ObjectClass;
+use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use evanalyzer_cfg::settings::classification_settings::Class;
 use evanalyzer_gui_slint::ResultsWindow;
 use log::{error, info, warn};
@@ -18,6 +18,7 @@ use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 const LIST_PAGE_SIZE: i32 = 500;
@@ -147,6 +148,13 @@ pub struct ResultsStateController {
     // `ExportDialogState` in Slint, which retains it for the life of the
     // window — `on_export_start_clicked` reads it back from there directly.
     export_populated: Mutex<bool>,
+    // Set to a fresh flag whenever an export starts, so `on_cancel_clicked`
+    // can signal the background export thread to stop at its next
+    // per-image/per-class checkpoint (see `results_exporter::start_export`'s
+    // `cancel` parameter). Cleared back to `None` once the export finishes
+    // (successfully, with an error, or cancelled) — mirrors
+    // `PipelinesController::pipeline_cancel_flag`'s pattern.
+    export_cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl ResultsStateController {
@@ -177,6 +185,7 @@ impl ResultsStateController {
             image_list_controller,
             db_path: Mutex::new(None),
             export_populated: Mutex::new(false),
+            export_cancel_flag: Mutex::new(None),
         }
     }
 
@@ -1118,6 +1127,13 @@ impl ResultsStateController {
 
             ui.global::<ExportDialogState>()
                 .on_close_clicked(move || {});
+
+            let manager = self.clone();
+            ui.global::<ExportDialogState>().on_cancel_clicked(move || {
+                if let Some(flag) = manager.export_cancel_flag.lock().expect("Poisened").as_ref() {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            });
         }
     }
 
@@ -2848,23 +2864,28 @@ impl ResultsStateController {
             self.push_export_error("No database is open.".to_string());
             return;
         };
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self.export_cancel_flag.lock().expect("Poisened") = Some(cancel.clone());
         let manager = self.clone();
         std::thread::spawn(move || {
             let database = match ResultsGenerator::open_database(path) {
                 Ok(database) => database,
                 Err(err) => {
                     manager.push_export_error(format!("Could not open database: {err}"));
+                    *manager.export_cancel_flag.lock().expect("Poisened") = None;
                     return;
                 }
             };
             let manager_for_progress = manager.clone();
-            let result = export.start_export(&database, &mut |message, current, total| {
+            let result = export.start_export(&database, &cancel, &mut |message, current, total| {
                 manager_for_progress.push_export_progress(message.to_string(), current, total);
             });
             match result {
                 Ok(()) => manager.push_export_done(),
+                Err(InternalErrors::Cancelled) => manager.push_export_cancelled(),
                 Err(err) => manager.push_export_error(err.to_string()),
             }
+            *manager.export_cancel_flag.lock().expect("Poisened") = None;
         });
     }
 
@@ -2907,6 +2928,25 @@ impl ResultsStateController {
                 state.set_error_message(message.into());
             } else {
                 warn!("Failed to upgrade UI handle, cannot report export error!");
+            }
+        })
+        .ok();
+    }
+
+    // A user-cancelled export is not an error - it's reported through
+    // `progress_message` rather than `has_error`/`error_message`, so the
+    // dialog doesn't flash red for something the user explicitly asked for.
+    fn push_export_cancelled(&self) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ExportDialogState>();
+                state.set_is_exporting(false);
+                state.set_done(false);
+                state.set_has_error(false);
+                state.set_progress_message("Export cancelled.".into());
+            } else {
+                warn!("Failed to upgrade UI handle, cannot report export cancellation!");
             }
         })
         .ok();
@@ -3528,6 +3568,38 @@ mod tests {
         assert!(state.get_has_error());
         assert!(!state.get_is_exporting());
         assert!(!state.get_error_message().is_empty());
+    }
+
+    #[test]
+    fn on_cancel_clicked_does_nothing_when_no_export_is_running() {
+        let (ui, results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        controller.attach_callbacks();
+
+        assert!(controller.export_cancel_flag.lock().unwrap().is_none());
+        // Must not panic even though no export ever set the flag.
+        results_ui
+            .global::<ExportDialogState>()
+            .invoke_cancel_clicked();
+        assert!(controller.export_cancel_flag.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn on_cancel_clicked_signals_the_flag_stored_for_the_running_export() {
+        let (ui, results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        controller.attach_callbacks();
+
+        // Simulate `run_export` having just started a background export -
+        // it stores a fresh flag here before spawning the export thread.
+        let flag = Arc::new(AtomicBool::new(false));
+        *controller.export_cancel_flag.lock().unwrap() = Some(flag.clone());
+
+        results_ui
+            .global::<ExportDialogState>()
+            .invoke_cancel_clicked();
+
+        assert!(flag.load(Ordering::Relaxed), "cancel-clicked must signal the stored flag");
     }
 
     // -- Real-database fixture ---------------------------------------------

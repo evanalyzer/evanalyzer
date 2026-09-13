@@ -11,6 +11,23 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::range::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// `Err(InternalErrors::Cancelled)` if `cancel` has been set, `Ok(())`
+/// otherwise — checked at the start of every per-image/per-class/per-plane
+/// iteration below (list export's z/t/image sweep, one document per class in
+/// Plate/Well/flat-list, one document per image in the image heatmap export)
+/// so a cancelled export stops promptly instead of finishing whatever
+/// document it was partway through. Mirrors the identical
+/// `cancel.load(Ordering::Relaxed)` check `JobExecutor::run`/`run_tile` use
+/// for the analyze job in evanalyzer_core's `job_executor.rs`.
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), InternalErrors> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(InternalErrors::Cancelled)
+    } else {
+        Ok(())
+    }
+}
 
 /// Light gray Excel gives every other coloc-detail row (`Cell::alternating_color`)
 /// so the fanned-out rows belonging to one source object stay visually
@@ -88,9 +105,18 @@ impl ResultExport {
     /// itself must not touch UI state directly — the caller's closure
     /// should just forward each call through `slint::invoke_from_event_loop`
     /// or equivalent.
+    ///
+    /// `cancel`: checked between documents and, within a large document,
+    /// between images/classes/planes (see `check_cancelled`) — set it to
+    /// `true` from another thread (e.g. a dialog's Cancel button) to stop
+    /// the export at the next such checkpoint, returning
+    /// `Err(InternalErrors::Cancelled)` rather than finishing. A fresh
+    /// `AtomicBool::new(false)` is fine for a caller that never cancels
+    /// (the CLI, today).
     pub fn start_export(
         &self,
         database: &ResultsGenerator,
+        cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
         if matches!(self.format, ExportFormat::CSV)
@@ -100,6 +126,7 @@ impl ResultExport {
                 "CSV export only supports the List and Grouped-by-Image views — use XLSX for Plate/Well/Heatmap".to_string(),
             ));
         }
+        check_cancelled(cancel)?;
 
         std::fs::create_dir_all(&self.output_dir).map_err(|e| {
             InternalErrors::Internal(format!(
@@ -114,26 +141,26 @@ impl ResultExport {
         // early return rather than threaded through the List/Grouped/Plate/
         // Well/Heatmap dispatch those settings drive.
         if matches!(self.format, ExportFormat::Parquet) {
-            return self.export_as_parquet(database, &mut *on_progress);
+            return self.export_as_parquet(database, cancel, &mut *on_progress);
         }
 
         if self.with_list_view {
-            self.export_list(database, &mut *on_progress)?;
+            self.export_list(database, cancel, &mut *on_progress)?;
         }
         if self.with_grouped_by_image_list {
-            self.export_grouped_by_image(database, &mut *on_progress)?;
+            self.export_grouped_by_image(database, cancel, &mut *on_progress)?;
         }
         // Single flag drives both documents — see the doc comment on
         // `export_plate_and_well` for why plate and well are always
         // exported together rather than needing their own toggle each.
         if self.with_plate_view {
-            self.export_plate_and_well(database, &mut *on_progress)?;
+            self.export_plate_and_well(database, cancel, &mut *on_progress)?;
         }
         if self.with_plates_and_wells_as_list {
-            self.export_plate_and_well_as_flat_list(database, &mut *on_progress)?;
+            self.export_plate_and_well_as_flat_list(database, cancel, &mut *on_progress)?;
         }
         if self.with_heatmap {
-            self.export_heatmap(database, &mut *on_progress)?;
+            self.export_heatmap(database, cancel, &mut *on_progress)?;
         }
         Ok(())
     }
@@ -159,6 +186,7 @@ impl ResultExport {
     fn export_list(
         &self,
         database: &ResultsGenerator,
+        cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
         let images = resolve_images(database, self)?;
@@ -170,6 +198,7 @@ impl ResultExport {
 
         if self.with_list_one_file_per_image {
             for (image_idx, image) in images.iter().enumerate() {
+                check_cancelled(cancel)?;
                 on_progress(
                     &format!("Exporting List: {image}"),
                     image_idx + 1,
@@ -179,6 +208,7 @@ impl ResultExport {
                 let stem = sanitize_filename_component(&image_stub(image));
                 self.write_list_document(
                     database,
+                    cancel,
                     single_image,
                     &object_classes,
                     &format!("list_{stem}"),
@@ -188,7 +218,7 @@ impl ResultExport {
         }
 
         on_progress("Exporting List view", 0, 1);
-        self.write_list_document(database, &images, &object_classes, "list")?;
+        self.write_list_document(database, cancel, &images, &object_classes, "list")?;
         on_progress("Exporting List view", 1, 1);
         Ok(())
     }
@@ -203,6 +233,7 @@ impl ResultExport {
     fn write_list_document(
         &self,
         database: &ResultsGenerator,
+        cancel: &AtomicBool,
         images: &[String],
         object_classes: &Option<Vec<ObjectClass>>,
         file_stem: &str,
@@ -212,14 +243,14 @@ impl ResultExport {
                 let mut workbook = Workbook::new();
                 let sheet = workbook.add_worksheet();
                 sheet.set_name("List").map_err(xlsx_err)?;
-                write_list_sheet(sheet, database, self, images, object_classes, false)?;
+                write_list_sheet(sheet, database, cancel, self, images, object_classes, false)?;
 
                 if self.with_list_coloc_details {
                     let coloc_sheet = workbook.add_worksheet();
                     coloc_sheet
                         .set_name("List (Coloc Details)")
                         .map_err(xlsx_err)?;
-                    write_list_sheet(coloc_sheet, database, self, images, object_classes, true)?;
+                    write_list_sheet(coloc_sheet, database, cancel, self, images, object_classes, true)?;
                 }
 
                 workbook
@@ -229,6 +260,7 @@ impl ResultExport {
             ExportFormat::CSV => {
                 write_list_csv(
                     database,
+                    cancel,
                     self,
                     images,
                     object_classes,
@@ -238,6 +270,7 @@ impl ResultExport {
                 if self.with_list_coloc_details {
                     write_list_csv(
                         database,
+                        cancel,
                         self,
                         images,
                         object_classes,
@@ -271,8 +304,10 @@ impl ResultExport {
     fn export_grouped_by_image(
         &self,
         database: &ResultsGenerator,
+        cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
+        check_cancelled(cancel)?;
         on_progress("Exporting Grouped Image List", 0, 1);
 
         let images = resolve_images(database, self)?;
@@ -360,6 +395,7 @@ impl ResultExport {
     fn export_plate_and_well(
         &self,
         database: &ResultsGenerator,
+        cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
         let classes_all = database.get_object_classes()?;
@@ -378,6 +414,7 @@ impl ResultExport {
         let mut well_names = SheetNamer::new();
 
         for (class_idx, class) in target_classes.iter().enumerate() {
+            check_cancelled(cancel)?;
             let class_label = class_display_label(*class, &classes_all);
             on_progress(
                 &format!("Exporting Plate/Well: {class_label}"),
@@ -503,6 +540,7 @@ impl ResultExport {
     fn export_plate_and_well_as_flat_list(
         &self,
         database: &ResultsGenerator,
+        cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
         let classes_all = database.get_object_classes()?;
@@ -528,6 +566,7 @@ impl ResultExport {
         let mut combo_idx = 0usize;
 
         for (class_idx, class) in target_classes.iter().enumerate() {
+            check_cancelled(cancel)?;
             let class_label = class_display_label(*class, &classes_all);
             on_progress(
                 &format!("Exporting Flat List: {class_label}"),
@@ -669,6 +708,7 @@ impl ResultExport {
     fn export_heatmap(
         &self,
         database: &ResultsGenerator,
+        cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
         let classes_all = database.get_object_classes()?;
@@ -683,6 +723,7 @@ impl ResultExport {
         let t = self.t_stacks.start;
 
         for (image_idx, image) in images.iter().enumerate() {
+            check_cancelled(cancel)?;
             on_progress(
                 &format!("Exporting Heatmap: {image}"),
                 image_idx + 1,
@@ -744,8 +785,10 @@ impl ResultExport {
     fn export_as_parquet(
         &self,
         database: &ResultsGenerator,
+        cancel: &AtomicBool,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
+        check_cancelled(cancel)?;
         on_progress("Exporting Parquet", 0, 1);
         let path = self.output_dir.join("objects.parquet");
         // DuckDB's `COPY` takes the destination as a single-quoted string
@@ -914,6 +957,7 @@ fn fetch_all_grouped_by_image_rows(
 fn write_list_sheet(
     worksheet: &mut Worksheet,
     database: &ResultsGenerator,
+    cancel: &AtomicBool,
     export: &ResultExport,
     images: &[String],
     object_classes: &Option<Vec<ObjectClass>>,
@@ -926,6 +970,7 @@ fn write_list_sheet(
     for z in export.z_stacks {
         for t in export.t_stacks {
             for image in images {
+                check_cancelled(cancel)?;
                 let base_filter = ListFilter {
                     plane: PlaneFilter {
                         z_stack: z,
@@ -976,6 +1021,7 @@ fn write_list_sheet(
 /// worksheet.
 fn write_list_csv(
     database: &ResultsGenerator,
+    cancel: &AtomicBool,
     export: &ResultExport,
     images: &[String],
     object_classes: &Option<Vec<ObjectClass>>,
@@ -991,6 +1037,7 @@ fn write_list_csv(
     for z in export.z_stacks {
         for t in export.t_stacks {
             for image in images {
+                check_cancelled(cancel)?;
                 let base_filter = ListFilter {
                     plane: PlaneFilter {
                         z_stack: z,
@@ -1490,6 +1537,10 @@ mod tests {
         |_message: &str, _current: usize, _total: usize| {}
     }
 
+    fn no_cancel() -> AtomicBool {
+        AtomicBool::new(false)
+    }
+
     fn full_range() -> (Range<u32>, Range<u32>) {
         (Range { start: 0, end: 1 }, Range { start: 0, end: 1 })
     }
@@ -1522,7 +1573,7 @@ mod tests {
             ..Default::default()
         };
         list_export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("csv list export");
         let list_csv = std::fs::read_to_string(out_dir.join("list.csv")).expect("read list.csv");
         let mut lines = list_csv.lines();
@@ -1542,7 +1593,7 @@ mod tests {
             ..Default::default()
         };
         grouped_export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("csv grouped export");
         let grouped_csv = std::fs::read_to_string(out_dir.join("grouped_by_image.csv"))
             .expect("read grouped_by_image.csv");
@@ -1579,7 +1630,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("xlsx export");
 
         for name in ["list.xlsx", "grouped_by_image.xlsx"] {
@@ -1616,7 +1667,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("csv export with coloc details");
 
         assert!(out_dir.join("list.csv").exists());
@@ -1648,7 +1699,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("csv per-image export");
 
         let img1 = std::fs::read_to_string(out_dir.join("list_img1.csv")).expect("list_img1.csv");
@@ -1669,7 +1720,7 @@ mod tests {
             with_plate_view: true,
             ..Default::default()
         };
-        let result = export.start_export(&database, &mut no_progress());
+        let result = export.start_export(&database, &no_cancel(), &mut no_progress());
         assert!(result.is_err());
     }
 
@@ -1685,7 +1736,7 @@ mod tests {
             with_heatmap: true,
             ..Default::default()
         };
-        let result = export.start_export(&database, &mut no_progress());
+        let result = export.start_export(&database, &no_cancel(), &mut no_progress());
         assert!(result.is_err());
     }
 
@@ -1709,7 +1760,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("parquet export");
 
         let parquet_path = out_dir.join("objects.parquet");
@@ -1750,7 +1801,7 @@ mod tests {
             format: ExportFormat::Parquet,
             ..Default::default()
         };
-        let result = export.write_list_document(&database, &[], &None, "list");
+        let result = export.write_list_document(&database, &no_cancel(), &[], &None, "list");
         assert!(result.is_err());
     }
 
@@ -1764,7 +1815,7 @@ mod tests {
             format: ExportFormat::Parquet,
             ..Default::default()
         };
-        let result = export.export_grouped_by_image(&database, &mut no_progress());
+        let result = export.export_grouped_by_image(&database, &no_cancel(), &mut no_progress());
         assert!(result.is_err());
     }
 
@@ -1863,7 +1914,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("xlsx export");
 
         let mut workbook: Xlsx<_> =
@@ -1958,7 +2009,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("plate export");
 
         // Same filter `export_plate_and_well` builds internally for this
@@ -2008,7 +2059,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("well export");
 
         let expected_by_well = database
@@ -2061,7 +2112,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("heatmap export");
 
         let expected = database
@@ -2106,7 +2157,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("flat-pivot export");
 
         let mut plate_wb: calamine::Xlsx<_> =
@@ -2167,7 +2218,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("full xlsx export");
 
         for name in [
@@ -2208,7 +2259,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("filtered export");
 
         for file in ["plate.xlsx", "well.xlsx", "heatmap_A1_01.xlsx"] {
@@ -2256,7 +2307,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("xlsx export with coloc details");
 
         let mut workbook: calamine::Xlsx<_> =
@@ -2284,7 +2335,7 @@ mod tests {
             with_list_view: true,
             ..Default::default()
         };
-        let result = export.start_export(&database, &mut no_progress());
+        let result = export.start_export(&database, &no_cancel(), &mut no_progress());
         assert!(result.is_err());
     }
 
@@ -2307,7 +2358,7 @@ mod tests {
             with_list_view: true,
             ..Default::default()
         };
-        let result = export.start_export(&database, &mut no_progress());
+        let result = export.start_export(&database, &no_cancel(), &mut no_progress());
         assert!(result.is_err());
     }
 
@@ -2329,7 +2380,7 @@ mod tests {
             ..Default::default()
         };
         export
-            .start_export(&database, &mut no_progress())
+            .start_export(&database, &no_cancel(), &mut no_progress())
             .expect("export with a non-matching filter should still succeed");
         let content =
             std::fs::read_to_string(out_dir.join("grouped_by_image.csv")).expect("read csv");
@@ -2376,5 +2427,61 @@ mod tests {
     fn sheet_namer_falls_back_to_a_generic_name_for_a_blank_class_name() {
         let mut namer = SheetNamer::new();
         assert_eq!(namer.unique("   "), "Sheet");
+    }
+
+    // -- cancellation -----------------------------------------------------
+
+    #[test]
+    fn start_export_returns_cancelled_immediately_when_already_cancelled() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            with_list_view: true,
+            ..Default::default()
+        };
+        let cancel = AtomicBool::new(true);
+        let result = export.start_export(&database, &cancel, &mut no_progress());
+        assert!(matches!(result, Err(InternalErrors::Cancelled)));
+        // Nothing should have been written - cancellation is checked before
+        // even creating the output directory.
+        assert!(!out_dir.join("list.csv").exists());
+    }
+
+    #[test]
+    fn start_export_stops_partway_through_a_one_file_per_image_export_once_cancelled() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 20),
+            ObjectSpec::new("img3.tif", "ClassA", 1, 30),
+        ]);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks,
+            t_stacks,
+            columns: vec![Column::AreaSizePx],
+            with_list_view: true,
+            with_list_one_file_per_image: true,
+            ..Default::default()
+        };
+        let cancel = AtomicBool::new(false);
+        // Cancel as soon as the very first image's document has been
+        // written, from inside the progress callback - proves cancellation
+        // is actually observed *during* the export, not just checked once
+        // up front.
+        let mut seen_images = 0usize;
+        let result = export.start_export(&database, &cancel, &mut |_message, _current, _total| {
+            seen_images += 1;
+            cancel.store(true, Ordering::Relaxed);
+        });
+        assert!(matches!(result, Err(InternalErrors::Cancelled)));
+        assert_eq!(seen_images, 1, "should stop right after the first image's progress callback");
+        assert!(out_dir.join("list_img1.csv").exists(), "the first image's file was already written");
+        assert!(!out_dir.join("list_img2.csv").exists(), "must not start the second image");
     }
 }
