@@ -1,559 +1,411 @@
-// Commented out for now, will fix later.
-// use crate::args::{
-//     ChartKind, ColorByKind, ExportArgs, ExportCommand, HeatmapArgs, HistogramArgs, ScatterArgs,
-//     TableExportArgs,
-// };
-// use crate::commands::common::{build_database_filter, build_group_config, discover_columns};
-// use evanalyzer_app::result::{
-//     ColorBy, HeatmapColorScheme, HeatmapMetric, HeatmapRange, ResultsExporter, ResultsLoader,
-//     compute_heatmap, compute_histogram, compute_scatter, save_heatmap_png, save_histogram_png,
-//     save_scatter_png,
-// };
-// use evanalyzer_cfg::core_types::InternalErrors;
-// use std::sync::Arc;
+use crate::args::{ExportArgs, ExportCommand, TableExportArgs};
+use crate::commands::common::{cell_text, resolve_grouping, resolve_image_rel_paths, resolve_object_classes};
+use evanalyzer_app::result::{
+    Column, DatabaseResult, ExportFormat, GroupedByImageFilter, ListFilter, Pagination,
+    PlaneFilter, ResultExport, ResultsGenerator,
+};
+use evanalyzer_cfg::core_types::InternalErrors;
+use std::path::Path;
 
-// pub fn run(args: ExportArgs) -> Result<(), InternalErrors> {
-//     match args.command {
-//         ExportCommand::Csv(table) => export_table(table, true),
-//         ExportCommand::Xlsx(table) => export_table(table, false),
-//         ExportCommand::Chart(chart) => match chart.kind {
-//             ChartKind::Histogram(a) => export_histogram(a),
-//             ChartKind::Scatter(a) => export_scatter(a),
-//             ChartKind::Heatmap(a) => export_heatmap(a),
-//         },
-//     }
-// }
+pub fn run(args: ExportArgs) -> Result<(), InternalErrors> {
+    match args.command {
+        ExportCommand::Csv(table) => export_table(table, true),
+        ExportCommand::Xlsx(table) => export_table(table, false),
+    }
+}
 
-// fn export_table(args: TableExportArgs, csv: bool) -> Result<(), InternalErrors> {
-//     let loader = Arc::new(ResultsLoader::new(&args.db));
-//     let specs = discover_columns(&loader)?;
-//     let filter = build_database_filter(&args.filter, true, 0, 0);
-//     let group = build_group_config(&args.group);
+fn export_table(args: TableExportArgs, csv: bool) -> Result<(), InternalErrors> {
+    let db = ResultsGenerator::open_database(args.db.clone())?;
+    if args.filter.colocalized.is_some() {
+        return Err(InternalErrors::InvalidArgument(
+            "--colocalized isn't supported by the current results backend".to_string(),
+        ));
+    }
+    let grouping = resolve_grouping(&args.group)?;
+    let image_rel_paths = resolve_image_rel_paths(&db, &args.filter.images)?;
+    let object_classes = resolve_object_classes(&db, &args.filter.classes)?;
+    let columns: Vec<Column> = db
+        .get_available_columns()?
+        .into_iter()
+        .map(|entry| entry.key)
+        .collect();
 
-//     let exporter = ResultsExporter::new(loader);
-//     if csv {
-//         exporter.export_to_csv(filter, &group, &specs, &args.out)?;
-//     } else {
-//         exporter.export_to_xlsx(filter, &group, &specs, &args.out)?;
-//     }
-//     println!("Exported to {}", args.out.display());
-//     Ok(())
-// }
+    if csv {
+        let result = if grouping.group_by_image {
+            let groupable_columns = columns.into_iter().filter(is_groupable_column).collect();
+            fetch_all_grouped_by_image(
+                &db,
+                &GroupedByImageFilter {
+                    plane: PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    images: (!image_rel_paths.is_empty()).then_some(image_rel_paths),
+                    object_classes: (!object_classes.is_empty()).then_some(object_classes),
+                    columns: groupable_columns,
+                    aggregation: grouping.aggregations,
+                    page: Pagination {
+                        limit: 0,
+                        after: None,
+                    },
+                },
+            )?
+        } else {
+            // Every z/t plane, like the XLSX path's own `list.xlsx`
+            // (`write_list_sheet`'s `for z ... for t ...` loop) — a flat,
+            // ungrouped export means "every object," not just whichever
+            // happens to sit at the first plane.
+            let images_for_flat = (!image_rel_paths.is_empty()).then_some(image_rel_paths);
+            let object_classes_for_flat = (!object_classes.is_empty()).then_some(object_classes);
+            let mut merged = empty_database_result();
+            let mut first_plane = true;
+            // `get_nr_of_z_stacks`/`get_nr_of_t_stacks` return the *max*
+            // stack index (not a count), so the exclusive upper bound of a
+            // range covering every plane is that value plus one.
+            for z_stack in 0..(db.get_nr_of_z_stacks() + 1) {
+                for t_stack in 0..(db.get_nr_of_t_stacks() + 1) {
+                    let mut plane_result = fetch_all_objects(
+                        &db,
+                        &ListFilter {
+                            plane: PlaneFilter { z_stack, t_stack },
+                            images: images_for_flat.clone(),
+                            object_classes: object_classes_for_flat.clone(),
+                            columns: columns.clone(),
+                            with_coloc_details: false,
+                            page: Pagination {
+                                limit: 0,
+                                after: None,
+                            },
+                        },
+                    )?;
+                    if first_plane {
+                        merged.column_names = std::mem::take(&mut plane_result.column_names);
+                        first_plane = false;
+                    }
+                    merged.row_names.extend(plane_result.row_names);
+                    merged.rows.extend(plane_result.rows);
+                    merged.source_object_count += plane_result.source_object_count;
+                }
+            }
+            merged
+        };
+        write_csv(&result, &args.out)?;
+        println!("Exported to {}", args.out.display());
+        return Ok(());
+    }
 
-// fn export_histogram(args: HistogramArgs) -> Result<(), InternalErrors> {
-//     let loader = ResultsLoader::new(&args.db);
-//     let specs = discover_columns(&loader)?;
-//     let filter = build_database_filter(&args.filter, true, 0, 0);
-//     let objects = loader.get_objects(filter)?;
+    // XLSX: reuse `ResultExport` directly rather than re-deriving its
+    // List/Group-by-image writing logic — this is exactly the "wire the CLI
+    // back up with the new ResultsExporter" the CLI lost. It writes into a
+    // directory under its own fixed filenames (`list.xlsx`/
+    // `grouped_by_image.xlsx`), which would collide with anything already
+    // sitting next to `--out`, so it writes into a private scratch
+    // directory first and moves the one file it produces to `--out`.
+    let scratch_dir = std::env::temp_dir().join(format!(
+        "evanalyzer_cli_export_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    let export = ResultExport {
+        output_dir: scratch_dir.clone(),
+        format: ExportFormat::XLSX,
+        // Same "max stack index, not a count" caveat as the CSV path above.
+        z_stacks: std::range::Range {
+            start: 0,
+            end: db.get_nr_of_z_stacks() + 1,
+        },
+        t_stacks: std::range::Range {
+            start: 0,
+            end: db.get_nr_of_t_stacks() + 1,
+        },
+        image_rel_paths,
+        columns,
+        object_classes,
+        with_list_view: !grouping.group_by_image,
+        with_grouped_by_image_list: grouping.group_by_image,
+        aggregations: grouping.aggregations,
+        ..Default::default()
+    };
+    let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
+    let outcome = export
+        .start_export(&db, &mut no_progress)
+        .and_then(|_| {
+            if let Some(parent) = args.out.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    InternalErrors::Internal(format!(
+                        "could not create {}: {e}",
+                        parent.display()
+                    ))
+                })?;
+            }
+            let produced = scratch_dir.join(if grouping.group_by_image {
+                "grouped_by_image.xlsx"
+            } else {
+                "list.xlsx"
+            });
+            std::fs::rename(&produced, &args.out).map_err(|e| {
+                InternalErrors::Internal(format!("could not move export output into place: {e}"))
+            })
+        });
+    let _ = std::fs::remove_dir_all(&scratch_dir);
+    outcome?;
+    println!("Exported to {}", args.out.display());
+    Ok(())
+}
 
-//     let data = compute_histogram(
-//         &objects,
-//         &args.column,
-//         &specs,
-//         args.buckets,
-//         args.log_scale,
-//         to_color_by(args.color_by),
-//     )
-//     .ok_or_else(|| column_not_found_error(&args.column, &args.db))?;
-//     save_histogram_png(&data, args.width, args.height, &args.out)?;
-//     println!("Saved histogram to {}", args.out.display());
-//     Ok(())
-// }
+/// Whether `column` is something `get_grouped_by_image` can actually
+/// resolve — mirrors the GUI's own `is_aggregable_column`
+/// (results_state_controller.rs)/`is_aggregable`
+/// (results_exporter.rs): identity columns and per-channel intensity aren't
+/// resolvable to the single per-object SQL expression that function needs.
+fn is_groupable_column(column: &Column) -> bool {
+    !matches!(
+        column,
+        Column::ObjectId
+            | Column::ImageName
+            | Column::ObjectClass
+            | Column::IntensityAvg(_)
+            | Column::IntensitySum(_)
+            | Column::IntensityMin(_)
+            | Column::IntensityMax(_)
+    )
+}
 
-// fn export_scatter(args: ScatterArgs) -> Result<(), InternalErrors> {
-//     let loader = ResultsLoader::new(&args.db);
-//     let specs = discover_columns(&loader)?;
-//     let filter = build_database_filter(&args.filter, true, 0, 0);
-//     let objects = loader.get_objects(filter)?;
+fn empty_database_result() -> DatabaseResult {
+    DatabaseResult {
+        column_names: Vec::new(),
+        row_names: Vec::new(),
+        rows: Vec::new(),
+        min: 0.0,
+        max: 0.0,
+        source_object_count: 0,
+        row_locations: Vec::new(),
+    }
+}
 
-//     let data = compute_scatter(
-//         &objects,
-//         &args.x,
-//         &args.y,
-//         to_color_by(args.color_by),
-//         &specs,
-//         args.max_points,
-//     )
-//     .ok_or_else(|| column_not_found_error(&format!("{} / {}", args.x, args.y), &args.db))?;
-//     save_scatter_png(&data, args.width, args.height, &args.out)?;
-//     println!("Saved scatter plot to {}", args.out.display());
-//     Ok(())
-// }
+/// Walks every page of `get_object_list` for `base` (its own `page` is
+/// overwritten each iteration), concatenating them — mirrors
+/// `results_exporter.rs`'s own `fetch_all_list_rows`, which is private to
+/// `evanalyzer_app`, so duplicated here against the same public API.
+fn fetch_all_objects(
+    db: &ResultsGenerator,
+    base: &ListFilter,
+) -> Result<DatabaseResult, InternalErrors> {
+    const PAGE_SIZE: i32 = 20_000;
+    let mut merged = empty_database_result();
+    let mut cursor: Option<String> = None;
+    let mut first_page = true;
 
-// fn export_heatmap(args: HeatmapArgs) -> Result<(), InternalErrors> {
-//     let loader = ResultsLoader::new(&args.db);
-//     let specs = discover_columns(&loader)?;
-//     let filter = build_database_filter(&args.filter, true, 0, 0);
-//     let objects = loader.get_objects(filter)?;
+    loop {
+        let filter = ListFilter {
+            page: Pagination {
+                limit: PAGE_SIZE,
+                after: cursor.take(),
+            },
+            ..base.clone()
+        };
+        let mut page = db.get_object_list(&filter)?;
+        let is_last_page = page.source_object_count < PAGE_SIZE as usize;
+        cursor = page.row_names.last().cloned();
 
-//     let metric = if args.metric == "count" {
-//         HeatmapMetric::Count
-//     } else {
-//         HeatmapMetric::Average(args.metric.clone())
-//     };
+        if first_page {
+            merged.column_names = std::mem::take(&mut page.column_names);
+            first_page = false;
+        }
+        merged.row_names.extend(page.row_names);
+        merged.rows.extend(page.rows);
+        merged.source_object_count += page.source_object_count;
 
-//     let data = compute_heatmap(&objects, &metric, &specs, args.cell_size)
-//         .ok_or_else(|| column_not_found_error(&args.metric, &args.db))?;
-//     let scheme = HeatmapColorScheme::from_label(&args.color_scheme);
-//     // `requires` on the arg definitions guarantees these are either both
-//     // present or both absent.
-//     let range = match (args.range_min, args.range_max) {
-//         (Some(min), Some(max)) => HeatmapRange::Manual { min, max },
-//         _ => HeatmapRange::Auto,
-//     };
-//     save_heatmap_png(&data, scheme, range, args.width, args.height, &args.out)?;
-//     println!("Saved heatmap to {}", args.out.display());
-//     Ok(())
-// }
+        if is_last_page {
+            break;
+        }
+    }
+    Ok(merged)
+}
 
-// fn to_color_by(kind: ColorByKind) -> ColorBy {
-//     match kind {
-//         ColorByKind::None => ColorBy::None,
-//         ColorByKind::Class => ColorBy::Class,
-//         ColorByKind::Colocalized => ColorBy::Colocalized,
-//     }
-// }
+/// Same walk as `fetch_all_objects`, over `get_grouped_by_image` instead —
+/// mirrors `results_exporter.rs`'s private `fetch_all_grouped_by_image_rows`.
+fn fetch_all_grouped_by_image(
+    db: &ResultsGenerator,
+    base: &GroupedByImageFilter,
+) -> Result<DatabaseResult, InternalErrors> {
+    const PAGE_SIZE: i32 = 20_000;
+    let mut merged = empty_database_result();
+    let mut cursor: Option<String> = None;
+    let mut first_page = true;
 
-// fn column_not_found_error(column: &str, db: &std::path::Path) -> InternalErrors {
-//     InternalErrors::InvalidArgument(format!(
-//         "No data for column '{column}': check it exists and matches the active filter \
-//          (see `evanalyzer cli columns --db {}`)",
-//         db.display()
-//     ))
-// }
+    loop {
+        let filter = GroupedByImageFilter {
+            page: Pagination {
+                limit: PAGE_SIZE,
+                after: cursor.take(),
+            },
+            ..base.clone()
+        };
+        let mut page = db.get_grouped_by_image(&filter)?;
+        let is_last_page = page.source_object_count < PAGE_SIZE as usize;
+        cursor = page.row_names.last().cloned();
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::args::{FilterArgs, GroupArgs};
-//     use std::path::PathBuf;
+        if first_page {
+            merged.column_names = std::mem::take(&mut page.column_names);
+            first_page = false;
+        }
+        merged.row_names.extend(page.row_names);
+        merged.rows.extend(page.rows);
+        merged.source_object_count += page.source_object_count;
 
-//     // -----------------------------------------------------------------
-//     // Test-database fixture
-//     // -----------------------------------------------------------------
-//     //
-//     // `evanalyzer_app` has an equivalent seeding helper for its own
-//     // `ResultsLoader`/`ResultsExporter` tests
-//     // (`crates/app/src/results/test_support.rs`), but it's `pub(crate)` and
-//     // `#[cfg(test)]`-only there, so it isn't reachable from this crate. This
-//     // mirrors just enough of that schema (matching the column list
-//     // `evanalyzer_core::storage::duckdb`'s `get_objects` query selects) to
-//     // exercise the `export_*` commands end to end against a real DuckDB file.
+        if is_last_page {
+            break;
+        }
+    }
+    Ok(merged)
+}
 
-//     /// A row's worth of intensity data for channel 0, in the same JSON shape
-//     /// `evanalyzer_core::storage::duckdb::intensities_to_json` writes.
-//     const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
+fn write_csv(result: &DatabaseResult, path: &Path) -> Result<(), InternalErrors> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
+        })?;
+    }
+    let file = std::fs::File::create(path)
+        .map_err(|e| InternalErrors::Internal(format!("could not create {}: {e}", path.display())))?;
+    let mut out = std::io::BufWriter::new(file);
+    let write_err = |e: std::io::Error| InternalErrors::Internal(format!("could not write {}: {e}", path.display()));
 
-//     fn create_schema(conn: &duckdb::Connection) {
-//         conn.execute_batch(
-//             "CREATE TABLE objects (
-//                 image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL,
-//                 c_stack INTEGER, z_stack INTEGER, t_stack INTEGER,
-//                 object_id UUID NOT NULL,
-//                 seg_class_name VARCHAR, seg_class_id INTEGER,
-//                 object_class_name VARCHAR, object_class_id VARCHAR,
-//                 parent_id VARCHAR, children VARCHAR, track_id UBIGINT,
-//                 centroid_x_px DOUBLE, centroid_y_px DOUBLE,
-//                 centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
-//                 bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER,
-//                 bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
-//                 bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE,
-//                 bbox_xmax_nm DOUBLE, bbox_ymax_nm DOUBLE,
-//                 area_px UBIGINT, area_nm2 DOUBLE,
-//                 perimeter_px DOUBLE, perimeter_nm DOUBLE,
-//                 circularity DOUBLE, solidity DOUBLE, aspect_ratio DOUBLE,
-//                 roundness DOUBLE, compactness DOUBLE,
-//                 major_axis_px DOUBLE, minor_axis_px DOUBLE,
-//                 major_axis_nm DOUBLE, minor_axis_nm DOUBLE,
-//                 major_axis_angle DOUBLE, eccentricity DOUBLE,
-//                 feret_diameter_px DOUBLE, min_feret_px DOUBLE,
-//                 feret_diameter_nm DOUBLE, min_feret_nm DOUBLE,
-//                 touches_edge BOOLEAN,
-//                 pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
-//                 image_bit_depth UTINYINT,
-//                 intensities_json JSON, coloc_json JSON
-//             )",
-//         )
-//         .expect("create schema");
-//     }
+    write_csv_row(&mut out, &result.column_names).map_err(write_err)?;
+    for row in &result.rows {
+        let cells: Vec<String> = row.iter().map(cell_text).collect();
+        write_csv_row(&mut out, &cells).map_err(write_err)?;
+    }
+    Ok(())
+}
 
-//     /// One test object: image/class/area/circularity/centroid, chosen so
-//     /// histogram/scatter/heatmap each have distinct, real values to plot.
-//     struct Row {
-//         image: &'static str,
-//         object_id: &'static str,
-//         class_name: &'static str,
-//         class_id: i32,
-//         area_px: u64,
-//         circularity: f64,
-//         centroid_x_px: f64,
-//         centroid_y_px: f64,
-//     }
+fn write_csv_row(out: &mut impl std::io::Write, fields: &[String]) -> std::io::Result<()> {
+    let line: Vec<String> = fields.iter().map(|f| csv_escape(f)).collect();
+    writeln!(out, "{}", line.join(","))
+}
 
-//     fn insert(conn: &duckdb::Connection, row: &Row) {
-//         conn.execute(
-//             "INSERT INTO objects (
-//                 image_name, image_rel_path, object_id, seg_class_name, seg_class_id,
-//                 object_class_name, object_class_id, track_id,
-//                 centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
-//                 bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
-//                 area_px, area_nm2, perimeter_px, perimeter_nm,
-//                 circularity, solidity, aspect_ratio, roundness, compactness,
-//                 major_axis_px, minor_axis_px, touches_edge,
-//                 pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
-//                 intensities_json, coloc_json
-//             ) VALUES (
-//                 ?, ?, ?, ?, ?,
-//                 ?, ?, 0,
-//                 ?, ?, 0, 0,
-//                 0, 0, 10, 10,
-//                 ?, ?, 40, 40,
-//                 ?, 1.0, 1.0, 1.0, 1.0,
-//                 10, 10, false,
-//                 1.0, 1.0, 1.0,
-//                 ?, '{}'
-//             )",
-//             duckdb::params![
-//                 row.image,
-//                 row.image,
-//                 row.object_id,
-//                 row.class_name,
-//                 row.class_id,
-//                 format!("[\"{}\"]", row.class_name),
-//                 format!("[{}]", row.class_id),
-//                 row.centroid_x_px,
-//                 row.centroid_y_px,
-//                 row.area_px,
-//                 row.area_px as f64,
-//                 row.circularity,
-//                 CH0_INTENSITIES_JSON,
-//             ],
-//         )
-//         .unwrap_or_else(|e| panic!("insert object {}: {e}", row.object_id));
-//     }
+fn csv_escape(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
 
-//     /// A temp-dir-backed DuckDB results file seeded with four objects across
-//     /// two images/classes, with distinct `area_px`/`circularity`/centroid
-//     /// values so histogram/scatter/heatmap all have something real to plot.
-//     struct TestDb {
-//         _dir: tempfile::TempDir,
-//         path: PathBuf,
-//     }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::args::{FilterArgs, GroupArgs};
+    use crate::commands::test_support::TempResultsDb;
 
-//     impl TestDb {
-//         fn seeded() -> Self {
-//             let dir = tempfile::tempdir().expect("tempdir");
-//             let path = dir.path().join("results.evadb");
-//             let conn = duckdb::Connection::open(&path).expect("open test db");
-//             create_schema(&conn);
-//             insert(
-//                 &conn,
-//                 &Row {
-//                     image: "img1.tif",
-//                     object_id: "00000000-0000-0000-0000-000000000001",
-//                     class_name: "ClassA",
-//                     class_id: 1,
-//                     area_px: 100,
-//                     circularity: 0.9,
-//                     centroid_x_px: 10.0,
-//                     centroid_y_px: 10.0,
-//                 },
-//             );
-//             insert(
-//                 &conn,
-//                 &Row {
-//                     image: "img1.tif",
-//                     object_id: "00000000-0000-0000-0000-000000000002",
-//                     class_name: "ClassA",
-//                     class_id: 1,
-//                     area_px: 200,
-//                     circularity: 0.7,
-//                     centroid_x_px: 20.0,
-//                     centroid_y_px: 20.0,
-//                 },
-//             );
-//             insert(
-//                 &conn,
-//                 &Row {
-//                     image: "img2.tif",
-//                     object_id: "00000000-0000-0000-0000-000000000003",
-//                     class_name: "ClassB",
-//                     class_id: 2,
-//                     area_px: 300,
-//                     circularity: 0.5,
-//                     centroid_x_px: 500.0,
-//                     centroid_y_px: 500.0,
-//                 },
-//             );
-//             insert(
-//                 &conn,
-//                 &Row {
-//                     image: "img2.tif",
-//                     object_id: "00000000-0000-0000-0000-000000000004",
-//                     class_name: "ClassB",
-//                     class_id: 2,
-//                     area_px: 400,
-//                     circularity: 0.3,
-//                     centroid_x_px: 520.0,
-//                     centroid_y_px: 520.0,
-//                 },
-//             );
-//             drop(conn);
-//             Self { _dir: dir, path }
-//         }
-//     }
+    #[test]
+    fn export_table_writes_a_csv_file_with_the_expected_rows() {
+        let db = TempResultsDb::seeded();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("out.csv");
 
-//     fn assert_png(path: &std::path::Path) {
-//         let bytes = std::fs::read(path).expect("read png back");
-//         assert!(!bytes.is_empty(), "png file is empty");
-//         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "not a PNG file");
-//     }
+        export_table(
+            TableExportArgs {
+                db: db.path.clone(),
+                out: out.clone(),
+                filter: FilterArgs::default(),
+                group: GroupArgs::default(),
+            },
+            true,
+        )
+        .expect("csv export should succeed");
 
-//     // -----------------------------------------------------------------
-//     // export_table
-//     // -----------------------------------------------------------------
+        let content = std::fs::read_to_string(&out).expect("read csv back");
+        let mut lines = content.lines();
+        let header = lines.next().expect("header row present");
+        assert!(header.contains("Class"), "header: {header}");
+        let body: Vec<&str> = lines.collect();
+        assert_eq!(body.len(), 2, "expected 2 data rows, got: {body:?}");
+        assert!(content.contains("ClassA"));
+        assert!(content.contains("ClassB"));
+    }
 
-//     #[test]
-//     fn export_table_writes_a_csv_file_with_the_expected_rows() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("out.csv");
+    #[test]
+    fn export_table_writes_an_xlsx_file_with_the_expected_rows() {
+        let db = TempResultsDb::seeded();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("out.xlsx");
 
-//         export_table(
-//             TableExportArgs {
-//                 db: db.path.clone(),
-//                 out: out.clone(),
-//                 filter: FilterArgs::default(),
-//                 group: GroupArgs::default(),
-//             },
-//             true,
-//         )
-//         .expect("csv export should succeed");
+        export_table(
+            TableExportArgs {
+                db: db.path.clone(),
+                out: out.clone(),
+                filter: FilterArgs::default(),
+                group: GroupArgs::default(),
+            },
+            false,
+        )
+        .expect("xlsx export should succeed");
 
-//         let content = std::fs::read_to_string(&out).expect("read csv back");
-//         let mut lines = content.lines();
-//         let header = lines.next().expect("header row present");
-//         assert!(header.contains("object ID"), "header: {header}");
-//         assert!(header.contains("Area"), "header: {header}");
-//         let body: Vec<&str> = lines.collect();
-//         assert_eq!(body.len(), 4, "expected 4 data rows, got: {body:?}");
-//         assert!(content.contains("ClassA"));
-//         assert!(content.contains("ClassB"));
-//         assert!(content.contains("100"));
-//         assert!(content.contains("400"));
-//     }
+        let bytes = std::fs::read(&out).expect("read xlsx back");
+        // XLSX files are zip archives - "PK\x03\x04" is the local-file-header magic.
+        assert!(bytes.len() > 4, "xlsx file is too small: {} bytes", bytes.len());
+        assert_eq!(&bytes[..4], b"PK\x03\x04", "not a zip/xlsx file");
+    }
 
-//     #[test]
-//     fn export_table_writes_an_xlsx_file_with_the_expected_rows() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("out.xlsx");
+    #[test]
+    fn export_table_grouped_by_image_writes_a_csv_file() {
+        let db = TempResultsDb::seeded();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("grouped.csv");
 
-//         export_table(
-//             TableExportArgs {
-//                 db: db.path.clone(),
-//                 out: out.clone(),
-//                 filter: FilterArgs::default(),
-//                 group: GroupArgs::default(),
-//             },
-//             false,
-//         )
-//         .expect("xlsx export should succeed");
+        export_table(
+            TableExportArgs {
+                db: db.path.clone(),
+                out: out.clone(),
+                filter: FilterArgs::default(),
+                group: GroupArgs {
+                    group_by: Some(crate::args::GroupByKind::Image),
+                    ..Default::default()
+                },
+            },
+            true,
+        )
+        .expect("grouped csv export should succeed");
 
-//         let bytes = std::fs::read(&out).expect("read xlsx back");
-//         // XLSX files are zip archives - "PK\x03\x04" is the local-file-header magic.
-//         assert!(
-//             bytes.len() > 4,
-//             "xlsx file is too small: {} bytes",
-//             bytes.len()
-//         );
-//         assert_eq!(&bytes[..4], b"PK\x03\x04", "not a zip/xlsx file");
-//     }
+        let content = std::fs::read_to_string(&out).expect("read csv back");
+        assert!(content.lines().count() >= 2, "expected a header and at least one data row");
+    }
 
-//     // -----------------------------------------------------------------
-//     // export_histogram
-//     // -----------------------------------------------------------------
+    #[test]
+    fn export_table_rejects_unsupported_group_by_folder() {
+        let db = TempResultsDb::seeded();
+        let out_dir = tempfile::tempdir().expect("tempdir");
+        let out = out_dir.path().join("out.csv");
 
-//     #[test]
-//     fn export_histogram_saves_a_png_for_an_existing_column() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("hist.png");
+        let result = export_table(
+            TableExportArgs {
+                db: db.path.clone(),
+                out,
+                filter: FilterArgs::default(),
+                group: GroupArgs {
+                    group_by: Some(crate::args::GroupByKind::Folder),
+                    ..Default::default()
+                },
+            },
+            true,
+        );
 
-//         export_histogram(HistogramArgs {
-//             db: db.path.clone(),
-//             out: out.clone(),
-//             column: "area_px".into(),
-//             buckets: 4,
-//             log_scale: false,
-//             color_by: ColorByKind::None,
-//             width: 400,
-//             height: 300,
-//             filter: FilterArgs::default(),
-//         })
-//         .expect("histogram export should succeed");
+        assert!(result.is_err());
+    }
 
-//         assert_png(&out);
-//     }
-
-//     #[test]
-//     fn export_histogram_errors_for_a_nonexistent_column() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("hist.png");
-
-//         let result = export_histogram(HistogramArgs {
-//             db: db.path.clone(),
-//             out,
-//             column: "does_not_exist".into(),
-//             buckets: 4,
-//             log_scale: false,
-//             color_by: ColorByKind::None,
-//             width: 400,
-//             height: 300,
-//             filter: FilterArgs::default(),
-//         });
-
-//         assert!(result.is_err(), "expected an unknown column to be rejected");
-//     }
-
-//     // -----------------------------------------------------------------
-//     // export_scatter
-//     // -----------------------------------------------------------------
-
-//     #[test]
-//     fn export_scatter_saves_a_png_for_existing_columns() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("scatter.png");
-
-//         export_scatter(ScatterArgs {
-//             db: db.path.clone(),
-//             out: out.clone(),
-//             x: "area_px".into(),
-//             y: "circularity".into(),
-//             color_by: ColorByKind::Class,
-//             max_points: 1000,
-//             width: 400,
-//             height: 300,
-//             filter: FilterArgs::default(),
-//         })
-//         .expect("scatter export should succeed");
-
-//         assert_png(&out);
-//     }
-
-//     #[test]
-//     fn export_scatter_errors_for_a_nonexistent_column() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("scatter.png");
-
-//         let result = export_scatter(ScatterArgs {
-//             db: db.path.clone(),
-//             out,
-//             x: "does_not_exist".into(),
-//             y: "area_px".into(),
-//             color_by: ColorByKind::None,
-//             max_points: 1000,
-//             width: 400,
-//             height: 300,
-//             filter: FilterArgs::default(),
-//         });
-
-//         assert!(result.is_err(), "expected an unknown column to be rejected");
-//     }
-
-//     // -----------------------------------------------------------------
-//     // export_heatmap
-//     // -----------------------------------------------------------------
-
-//     #[test]
-//     fn export_heatmap_saves_a_png_for_an_existing_metric() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("heatmap.png");
-
-//         export_heatmap(HeatmapArgs {
-//             db: db.path.clone(),
-//             out: out.clone(),
-//             metric: "area_px".into(),
-//             cell_size: 256.0,
-//             color_scheme: "viridis".into(),
-//             range_min: None,
-//             range_max: None,
-//             width: 400,
-//             height: 300,
-//             filter: FilterArgs::default(),
-//         })
-//         .expect("heatmap export should succeed");
-
-//         assert_png(&out);
-//     }
-
-//     #[test]
-//     fn export_heatmap_saves_a_png_for_the_count_metric() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("heatmap_count.png");
-
-//         export_heatmap(HeatmapArgs {
-//             db: db.path.clone(),
-//             out: out.clone(),
-//             metric: "count".into(),
-//             cell_size: 256.0,
-//             color_scheme: "viridis".into(),
-//             range_min: None,
-//             range_max: None,
-//             width: 400,
-//             height: 300,
-//             filter: FilterArgs::default(),
-//         })
-//         .expect("heatmap export should succeed");
-
-//         assert_png(&out);
-//     }
-
-//     #[test]
-//     fn export_heatmap_errors_for_a_nonexistent_metric() {
-//         let db = TestDb::seeded();
-//         let out_dir = tempfile::tempdir().expect("tempdir");
-//         let out = out_dir.path().join("heatmap.png");
-
-//         let result = export_heatmap(HeatmapArgs {
-//             db: db.path.clone(),
-//             out,
-//             metric: "does_not_exist".into(),
-//             cell_size: 256.0,
-//             color_scheme: "viridis".into(),
-//             range_min: None,
-//             range_max: None,
-//             width: 400,
-//             height: 300,
-//             filter: FilterArgs::default(),
-//         });
-
-//         assert!(result.is_err(), "expected an unknown metric to be rejected");
-//     }
-
-//     #[test]
-//     fn to_color_by_maps_every_kind_to_its_matching_variant() {
-//         assert!(matches!(to_color_by(ColorByKind::None), ColorBy::None));
-//         assert!(matches!(to_color_by(ColorByKind::Class), ColorBy::Class));
-//         assert!(matches!(
-//             to_color_by(ColorByKind::Colocalized),
-//             ColorBy::Colocalized
-//         ));
-//     }
-
-//     #[test]
-//     fn column_not_found_error_names_the_column_and_db_path_in_the_message() {
-//         let err = column_not_found_error("area", std::path::Path::new("/tmp/results.evadb"));
-
-//         let InternalErrors::InvalidArgument(msg) = err else {
-//             panic!("expected InvalidArgument, got {err:?}");
-//         };
-//         assert!(msg.contains("area"));
-//         assert!(msg.contains("/tmp/results.evadb"));
-//     }
-// }
+    #[test]
+    fn csv_escape_quotes_fields_containing_commas_or_quotes() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+    }
+}

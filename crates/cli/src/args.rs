@@ -9,12 +9,12 @@ pub enum CliCommand {
     ProjectInfo(ProjectInfoArgs),
     /// Check that every image referenced by a project can be found on disk
     Validate(ValidateArgs),
-    // /// Export a results database to CSV, XLSX, or a chart image
-    // Export(ExportArgs), // commented out for now, will fix later
-    // /// Print a quick summary and a page of rows from a results database
-    // View(ViewArgs), // commented out for now, will fix later
-    // /// List the column ids available for --group-by / chart axes in a results database
-    // Columns(ColumnsArgs), // commented out for now, will fix later
+    /// Export a results database to CSV or XLSX
+    Export(ExportArgs),
+    /// Print a quick summary and a page of rows from a results database
+    View(ViewArgs),
+    /// List the column ids available for --group-by in a results database
+    Columns(ColumnsArgs),
     /// Train a pixel or object classifier from a project's labeled objects and save it under models/
     TrainClassifier(TrainClassifierArgs),
 }
@@ -114,8 +114,15 @@ pub enum ExportCommand {
     Csv(TableExportArgs),
     /// Export rows as an XLSX workbook
     Xlsx(TableExportArgs),
-    /// Render a chart (histogram, scatter or heatmap) to a PNG file
-    Chart(ChartArgs),
+    // Chart image export (histogram/scatter/heatmap PNGs) isn't wired up
+    // yet: the current results backend (ResultCharts) only computes chart
+    // *data* (bins/points/box stats) — actual pixel rendering only exists
+    // in the GUI's Charts tab today, and the old "heatmap" here (a
+    // cross-image object-centroid density map) has no equivalent in the
+    // current API (ResultsGenerator::get_image_heatmap is per-image only).
+    // Revisit once there's a real plotting path (`plotters` is already a
+    // declared-but-unused dependency of evanalyzer_app) or a decision to
+    // just export chart data as CSV/JSON instead of a rendered image.
 }
 
 #[derive(Args)]
@@ -190,145 +197,6 @@ pub enum AggKind {
     Median,
     Stdev,
     Sum,
-}
-
-#[derive(Args)]
-pub struct ChartArgs {
-    #[command(subcommand)]
-    pub kind: ChartKind,
-}
-
-#[derive(Subcommand)]
-pub enum ChartKind {
-    /// Bucket one numeric column into a histogram
-    Histogram(HistogramArgs),
-    /// Plot two numeric columns against each other
-    Scatter(ScatterArgs),
-    /// Bin object centroids into a spatial grid
-    Heatmap(HeatmapArgs),
-}
-
-#[derive(Args)]
-pub struct HistogramArgs {
-    /// Results database (.evadb) produced by `analyze`
-    #[arg(long)]
-    pub db: PathBuf,
-
-    /// Output PNG path
-    #[arg(long)]
-    pub out: PathBuf,
-
-    /// Column id to plot, e.g. area_px, circularity, ch0_avg_bit
-    /// (see `evanalyzer cli columns --db <file>`)
-    #[arg(long)]
-    pub column: String,
-
-    #[arg(long, default_value_t = 20)]
-    pub buckets: usize,
-
-    /// Space buckets equally in log space (use for right-skewed data such as area)
-    #[arg(long)]
-    pub log_scale: bool,
-
-    /// Overlay one semi-transparent histogram per group instead of one plain histogram
-    #[arg(long, value_enum, default_value = "none")]
-    pub color_by: ColorByKind,
-
-    #[arg(long, default_value_t = 1000)]
-    pub width: u32,
-
-    #[arg(long, default_value_t = 700)]
-    pub height: u32,
-
-    #[command(flatten)]
-    pub filter: FilterArgs,
-}
-
-#[derive(Args)]
-pub struct ScatterArgs {
-    /// Results database (.evadb) produced by `analyze`
-    #[arg(long)]
-    pub db: PathBuf,
-
-    /// Output PNG path
-    #[arg(long)]
-    pub out: PathBuf,
-
-    /// Column id for the X axis
-    #[arg(long)]
-    pub x: String,
-
-    /// Column id for the Y axis
-    #[arg(long)]
-    pub y: String,
-
-    #[arg(long, value_enum, default_value = "none")]
-    pub color_by: ColorByKind,
-
-    /// Cap the number of plotted points (0 = no cap)
-    #[arg(long, default_value_t = 5000)]
-    pub max_points: usize,
-
-    #[arg(long, default_value_t = 1000)]
-    pub width: u32,
-
-    #[arg(long, default_value_t = 700)]
-    pub height: u32,
-
-    #[command(flatten)]
-    pub filter: FilterArgs,
-}
-
-#[derive(Copy, Clone, ValueEnum)]
-pub enum ColorByKind {
-    None,
-    Class,
-    Colocalized,
-}
-
-#[derive(Args)]
-pub struct HeatmapArgs {
-    /// Results database (.evadb) produced by `analyze`
-    #[arg(long)]
-    pub db: PathBuf,
-
-    /// Output PNG path
-    #[arg(long)]
-    pub out: PathBuf,
-
-    /// "count", or a numeric column id to average per cell, e.g. area_px
-    #[arg(long)]
-    pub metric: String,
-
-    /// Cell size in image pixels (square cells)
-    #[arg(long, default_value_t = 256.0)]
-    pub cell_size: f64,
-
-    /// Color scheme: viridis, magma, plasma, or grayscale
-    #[arg(long, default_value = "viridis")]
-    pub color_scheme: String,
-
-    /// Pin the color scale's lower bound instead of computing it from this
-    /// heatmap's own data (0). Must be given together with --range-max — the
-    /// point is to render multiple heatmaps under an identical color mapping
-    /// so they're directly comparable.
-    #[arg(long, requires = "range_max")]
-    pub range_min: Option<f64>,
-
-    /// Pin the color scale's upper bound instead of computing it from this
-    /// heatmap's own data (its max cell value). Must be given together with
-    /// --range-min.
-    #[arg(long, requires = "range_min")]
-    pub range_max: Option<f64>,
-
-    #[arg(long, default_value_t = 1000)]
-    pub width: u32,
-
-    #[arg(long, default_value_t = 700)]
-    pub height: u32,
-
-    #[command(flatten)]
-    pub filter: FilterArgs,
 }
 
 #[derive(Args)]

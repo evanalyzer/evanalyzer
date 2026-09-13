@@ -79,16 +79,25 @@ fn create_results_schema(conn: &duckdb::Connection) {
             intensities_json JSON, coloc_json JSON
         );
         CREATE TABLE images (
-            image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY
+            image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
+            successful BOOLEAN NOT NULL DEFAULT true, error_message VARCHAR,
+            disabled BOOLEAN NOT NULL DEFAULT false,
+            width UINTEGER NOT NULL, height UINTEGER NOT NULL
+        );
+        CREATE TABLE classes (
+            class_id INTEGER NOT NULL PRIMARY KEY, name VARCHAR NOT NULL, color UINTEGER
         );",
     )
     .expect("create schema");
 }
 
-/// Builds a minimal `objects` table for `view`/`columns` command tests: two
-/// objects from two different images/classes, with distinct `t_stack`/
-/// `z_stack` values (so `get_t_stack_range`/`get_z_stack_range` each report a
-/// real `Some((min, max))` range instead of the "no axis" `None`) and
+/// Builds a minimal `objects` table for `view`/`export` command tests: two
+/// objects from two different images/classes, at two different (but
+/// contiguous, 0-indexed — real z/t stacks always are)
+/// `t_stack`/`z_stack` planes, so a full-range export
+/// (`ResultsGenerator::get_nr_of_z_stacks`/`get_nr_of_t_stacks`, both of
+/// which return the *max* stack index, not a count) actually has to sweep
+/// more than one plane to see both objects, and
 /// channel-0 intensities (so `--channels` has something to discover).
 pub(crate) fn seed_view_results_db(path: &Path) {
     let conn = duckdb::Connection::open(path).expect("open test db");
@@ -111,7 +120,7 @@ pub(crate) fn seed_view_results_db(path: &Path) {
                 bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
                 area_px, area_nm2, perimeter_px, perimeter_nm,
                 circularity, solidity, aspect_ratio, roundness, compactness,
-                major_axis_px, minor_axis_px, touches_edge,
+                major_axis_px, minor_axis_px, eccentricity, touches_edge,
                 pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
                 intensities_json, coloc_json
             ) VALUES (
@@ -123,7 +132,7 @@ pub(crate) fn seed_view_results_db(path: &Path) {
                 0, 0, 0, 0,
                 ?, ?, 40, 40,
                 1.0, 1.0, 1.0, 1.0, 1.0,
-                10, 10, false,
+                10, 10, 1.0, false,
                 1.0, 1.0, 1.0,
                 ?, '{}'
             )",
@@ -160,18 +169,26 @@ pub(crate) fn seed_view_results_db(path: &Path) {
         "ClassB",
         2,
         200,
-        3,
-        5,
+        1,
+        1,
     );
 
     // Mirrors what `DuckDbExporter::finalize_image` would have written for
     // these two images.
     for image in ["img1.tif", "img2.tif"] {
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path) VALUES (?, ?)",
+            "INSERT INTO images (image_name, image_rel_path, width, height) VALUES (?, ?, 100, 100)",
             duckdb::params![image, image],
         )
         .unwrap_or_else(|e| panic!("insert image {image}: {e}"));
+    }
+
+    for (id, name) in [(1, "ClassA"), (2, "ClassB")] {
+        conn.execute(
+            "INSERT INTO classes (class_id, name, color) VALUES (?, ?, 0)",
+            duckdb::params![id, name],
+        )
+        .unwrap_or_else(|e| panic!("insert class {name}: {e}"));
     }
 }
 
