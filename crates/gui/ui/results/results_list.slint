@@ -69,7 +69,6 @@ export component ResultsListView inherits Rectangle {
                     checked <=> ResultsState.list-with-coloc-details;
                     toggled => { ResultsState.list-with-coloc-details-changed(self.checked); }
                     visible: ResultsState.list-group-by-summary == "Objects";
-                    width: 0px;
                 }
 
                 MultiSelectDropdown {
@@ -173,6 +172,18 @@ export component ResultsListView inherits Rectangle {
                     for row[index] in ResultsState.list-rows: Rectangle {
                         height: 34px;
                         width: header-rect.width * ResultsState.list-column-headers.length;
+                        // `body-list`'s Flickable reads this (not just
+                        // `width` above) to know how far it can actually
+                        // scroll horizontally — it used to come from
+                        // `row-layout.min-width`, which stopped existing
+                        // for any row outside the vertical viewport once
+                        // that HorizontalLayout became conditional (see
+                        // `row-visible` below), collapsing the whole
+                        // scrollable extent to whatever a handful of
+                        // visible rows happened to report. Tied directly
+                        // to the same value as `width` instead, so it no
+                        // longer depends on `row-layout` existing at all.
+                        min-width: self.width;
 
                         background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
 

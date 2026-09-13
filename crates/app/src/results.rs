@@ -1,3 +1,4 @@
+mod results_charts;
 mod results_exporter;
 mod results_generator;
 

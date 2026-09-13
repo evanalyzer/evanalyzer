@@ -2634,10 +2634,19 @@ fn aggregation_from_key(key: &str) -> Option<Aggregation> {
         .cloned()
 }
 
-fn color_schemas() -> [(&'static str, ColorSchema); 2] {
+fn color_schemas() -> [(&'static str, ColorSchema); 11] {
     [
         ("Excel", ColorSchema::Excel),
         ("Viridis", ColorSchema::Viridis),
+        ("Plasma", ColorSchema::Plasma),
+        ("Inferno", ColorSchema::Inferno),
+        ("Cividis", ColorSchema::Cividis),
+        ("Coolwarm", ColorSchema::Coolwarm),
+        ("Red-Blue", ColorSchema::RedBlue),
+        ("YlGnBu", ColorSchema::YlGnBu),
+        ("Haline", ColorSchema::Haline),
+        ("Algae", ColorSchema::Algae),
+        ("Thermal", ColorSchema::Thermal),
     ]
 }
 

@@ -80,9 +80,9 @@ export component ResultsChartsView inherits Rectangle {
 
                 ChartTab {
                     icon: @image-url("../icons/regular-black/grid-four.svg");
-                    label: "Heatmap";
-                    active: ResultsState.chart-kind == ResultsChartKind2.heatmap;
-                    clicked => { ResultsState.chart-kind = ResultsChartKind2.heatmap; ResultsState.chart-kind-selected(ResultsChartKind2.heatmap); }
+                    label: "Boxplot";
+                    active: ResultsState.chart-kind == ResultsChartKind2.boxplot;
+                    clicked => { ResultsState.chart-kind = ResultsChartKind2.boxplot; ResultsState.chart-kind-selected(ResultsChartKind2.boxplot); }
                 }
 
                 Rectangle {
@@ -107,7 +107,7 @@ export component ResultsChartsView inherits Rectangle {
             }
         }
 
-        // Wire your existing ResultsChart (histogram/scatter/heatmap
+        // Wire your existing ResultsChart (histogram/scatter/boxplot
         // rendering) in here, switched on ResultsState.chart-kind:
         //   ResultsChart { vertical-stretch: 1; kind: ResultsState.chart-kind; }
         Rectangle {
