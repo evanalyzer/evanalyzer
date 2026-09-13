@@ -1,7 +1,6 @@
 use crate::object::Intensity;
 use crate::pipeline::pipeline_cache::GlobalPipelineCache;
 use crate::storage::PipelineResultExporter;
-use duckdb::types::Value;
 use duckdb::{Connection, params};
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass, ObjectId};
 use indexmap::IndexMap;
