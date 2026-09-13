@@ -518,7 +518,19 @@ impl<'a> JobExecutor {
         // borrow ends before tiles are processed in parallel - each tile work
         // item below opens its own reader so concurrent threads never share
         // mutable file-handle state.
-        let (full_size, z_proj, z_handling, z_range, t_stacks, is_rgb, nr_bits, pixel_sizes) = {
+        let (
+            full_size,
+            z_proj,
+            z_handling,
+            z_range,
+            t_stacks,
+            is_rgb,
+            nr_bits,
+            pixel_sizes,
+            nr_c_stacks,
+            nr_z_stacks,
+            nr_t_stacks,
+        ) = {
             let start = Instant::now();
             let reader = ImageReader::new(image_path, ReadMode::Default)?;
             let duration = start.elapsed();
@@ -561,6 +573,9 @@ impl<'a> JobExecutor {
                 py_meta.is_rgb,
                 py_meta.nr_bits,
                 pixel_sizes,
+                series_info.nr_c_stacks.max(0) as u32,
+                series_info.nr_z_stacks.max(0) as u32,
+                series_info.nr_t_stacks.max(0) as u32,
             )
         };
 
@@ -973,6 +988,9 @@ impl<'a> JobExecutor {
             image_rel_path,
             full_size.width as u32,
             full_size.height as u32,
+            nr_c_stacks,
+            nr_z_stacks,
+            nr_t_stacks,
             combined_error.as_deref(),
         );
 
@@ -3245,7 +3263,7 @@ mod exporter_poison_tests {
         let recovered = exporter.lock().unwrap_or_else(|e| e.into_inner());
         assert!(
             recovered
-                .finalize_image(std::path::Path::new("after-poison.tif"), 0, 0, None)
+                .finalize_image(std::path::Path::new("after-poison.tif"), 0, 0, 1, 1, 1, None)
                 .is_ok(),
             "the exporter must still be usable after recovering from poison"
         );

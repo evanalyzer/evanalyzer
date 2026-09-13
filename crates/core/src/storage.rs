@@ -19,6 +19,15 @@ pub trait PipelineResultExporter: Send + Sync {
     /// implementations that record per-image metadata (`DuckDbExporter`'s
     /// `images` table) persist these alongside the row.
     ///
+    /// `nr_c_stacks`/`nr_z_stacks`/`nr_t_stacks`: the real number of
+    /// channel/Z/T planes this image has, straight from its metadata -
+    /// *not* how many of them this run actually processed (a Z-projection
+    /// run still reports the image's true `nr_z_stacks`, even though it only
+    /// ever produces one merged plane). `DuckDbExporter` persists these so
+    /// the results view can enumerate per-channel intensity columns from a
+    /// cheap `MAX(c_stacks)` over `images` instead of inferring the channel
+    /// count from what happens to show up in already-measured objects.
+    ///
     /// `error`: `None` if every tile/plane for this image exported
     /// successfully, `Some(message)` otherwise. Implementations that record
     /// per-image status (again, `DuckDbExporter`) must persist this rather
@@ -30,6 +39,9 @@ pub trait PipelineResultExporter: Send + Sync {
         _image_rel_path: &std::path::Path,
         _width: u32,
         _height: u32,
+        _nr_c_stacks: u32,
+        _nr_z_stacks: u32,
+        _nr_t_stacks: u32,
         _error: Option<&str>,
     ) -> Result<(), InternalErrors> {
         Ok(())

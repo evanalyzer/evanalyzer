@@ -717,7 +717,10 @@ impl ResultsGenerator {
             }
             conditions.push(format!(
                 "class_id IN ({})",
-                ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
+                ids.iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         // Keyset pagination over the *groups* (one (image, class) pair =
@@ -1034,7 +1037,10 @@ impl ResultsGenerator {
             if images.is_empty() {
                 return Ok(BoxplotResult { boxes: Vec::new() });
             }
-            conditions.push(format!("image_rel_path IN ({})", sql_string_in_list(images)));
+            conditions.push(format!(
+                "image_rel_path IN ({})",
+                sql_string_in_list(images)
+            ));
         }
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
@@ -1050,7 +1056,13 @@ impl ResultsGenerator {
                 if ids.is_empty() {
                     return Ok(BoxplotResult { boxes: Vec::new() });
                 }
-                format!("WHERE class_id IN ({})", ids.iter().map(u32::to_string).collect::<Vec<_>>().join(", "))
+                format!(
+                    "WHERE class_id IN ({})",
+                    ids.iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             }
             None => String::new(),
         };
@@ -1813,7 +1825,8 @@ impl ResultsGenerator {
                 let mut sorted: Vec<_> = values.iter().collect();
                 sorted.sort_by_key(|(pos, _)| *pos);
 
-                let column_names = vec!["square".to_string(), filter.column.display_label(&classes)];
+                let column_names =
+                    vec!["square".to_string(), filter.column.display_label(&classes)];
                 let row_names = sorted
                     .iter()
                     .map(|((row, col), _)| format!("R{row}C{col}"))
@@ -2065,12 +2078,23 @@ impl ResultsGenerator {
         Ok(ret)
     }
 
+    /// Number of image channels that actually have measured intensity data,
+    /// i.e. the candidates for a `Column::Intensity*(channel)` column.
+    ///
+    /// This is **not** `MAX(c_stack) + 1` over `objects`: `c_stack` is
+    /// `object.plane.c`, the pipeline's processing-plane index at extraction
+    /// time (almost always `0`, occasionally `1` for a second plane touched
+    /// by e.g. colocalization), not a count of measured channels. Instead
+    /// this reads `images.c_stacks`, populated once per image straight from
+    /// its real metadata by `DuckDbExporter::finalize_image` (evanalyzer_core's
+    /// duckdb.rs) - a `MAX` over one row per image rather than a full scan
+    /// of `intensities_json` across every object.
     pub fn get_nr_of_c_stacks(&self) -> u32 {
-        let max_stack: u32 = self
+        let max_stacks: u32 = self
             .database
-            .query_row("SELECT MAX(c_stack) FROM objects;", [], |row| row.get(0))
+            .query_row("SELECT MAX(c_stacks) FROM images;", [], |row| row.get(0))
             .unwrap_or(1);
-        max_stack
+        max_stacks
     }
 
     pub fn get_nr_of_z_stacks(&self) -> u32 {
@@ -2087,6 +2111,126 @@ impl ResultsGenerator {
             .query_row("SELECT MAX(t_stack) FROM objects;", [], |row| row.get(0))
             .unwrap_or(1);
         max_stack
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a `ResultsGenerator` over an in-memory database with just the
+    /// columns `get_available_columns`/`get_nr_of_c_stacks` actually touch.
+    /// `objects.c_stack` is deliberately fixed at `0` for every row (as real
+    /// pipeline extraction does, see `extract_objects.rs`) to prove channel
+    /// discovery no longer depends on it — the real source is `images.c_stacks`,
+    /// populated per image from real metadata (see `finalize_image` in
+    /// evanalyzer_core's duckdb.rs), so this takes one `c_stacks` value per
+    /// "image" row directly rather than inferring it from object data.
+    fn generator_with_c_stacks(c_stacks_per_image: &[u32]) -> ResultsGenerator {
+        let database = Connection::open_in_memory().unwrap();
+        database
+            .execute_batch(
+                "CREATE TABLE classes (class_id INTEGER, name VARCHAR, color UINTEGER);
+                 CREATE TABLE objects (
+                     c_stack INTEGER,
+                     coloc_json JSON,
+                     intensities_json JSON
+                 );
+                 CREATE TABLE images (
+                     image_rel_path VARCHAR,
+                     c_stacks UINTEGER
+                 );",
+            )
+            .unwrap();
+        for (i, c_stacks) in c_stacks_per_image.iter().enumerate() {
+            database
+                .execute(
+                    "INSERT INTO images (image_rel_path, c_stacks) VALUES (?, ?)",
+                    duckdb::params![format!("image_{i}.tif"), c_stacks],
+                )
+                .unwrap();
+        }
+        ResultsGenerator {
+            database,
+            classes_cache: RefCell::new(None),
+            coloc_classes_cache: RefCell::new(None),
+        }
+    }
+
+    #[test]
+    fn nr_of_c_stacks_reads_the_real_per_image_channel_count() {
+        let generator = generator_with_c_stacks(&[3]);
+        assert_eq!(generator.get_nr_of_c_stacks(), 3);
+    }
+
+    #[test]
+    fn nr_of_c_stacks_is_the_max_across_every_image() {
+        let generator = generator_with_c_stacks(&[1, 3, 2]);
+        assert_eq!(generator.get_nr_of_c_stacks(), 3);
+    }
+
+    #[test]
+    fn available_columns_include_one_intensity_group_per_measured_channel() {
+        let generator = generator_with_c_stacks(&[3]);
+        let columns = generator.get_available_columns().unwrap();
+        let intensity_avg_columns = columns
+            .iter()
+            .filter(|c| matches!(c.key, Column::IntensityAvg(_)))
+            .count();
+        assert_eq!(intensity_avg_columns, 3);
+    }
+
+    #[test]
+    fn nr_of_c_stacks_falls_back_to_one_when_images_table_is_empty() {
+        let generator = generator_with_c_stacks(&[]);
+        assert_eq!(generator.get_nr_of_c_stacks(), 1);
+    }
+
+    /// Simulates a `.evadb` written before `images.c_stacks`/`z_stacks`/
+    /// `t_stacks` existed: an `images` table with none of those columns,
+    /// alongside `objects` rows carrying 3-channel `intensities_json` and a
+    /// couple of distinct `z_stack`/`t_stack` plane indices. `open_database`
+    /// runs `ensure_stack_count_columns` on every open, so opening this file
+    /// through the real (file-backed, not in-memory) path must backfill all
+    /// three columns from that object data rather than leaving them at
+    /// whatever default a bare `ALTER TABLE ADD COLUMN` would apply — and,
+    /// via `get_nr_of_c_stacks`, correctly report 3 channels despite never
+    /// having had a real `finalize_image` call populate `c_stacks` directly.
+    #[test]
+    fn opening_a_pre_migration_database_backfills_stack_counts_from_object_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.evadb");
+        {
+            let setup = Connection::open(&path).unwrap();
+            setup
+                .execute_batch(
+                    "CREATE TABLE classes (class_id INTEGER, name VARCHAR, color UINTEGER);
+                     CREATE TABLE images (image_rel_path VARCHAR);
+                     CREATE TABLE objects (
+                         z_stack INTEGER,
+                         t_stack INTEGER,
+                         coloc_json JSON,
+                         intensities_json JSON
+                     );
+                     INSERT INTO images (image_rel_path) VALUES ('image_0.tif');
+                     INSERT INTO objects (z_stack, t_stack, coloc_json, intensities_json) VALUES
+                         (0, 0, '{}', '{\"0\": {\"avg\": 1.0}, \"1\": {\"avg\": 2.0}, \"2\": {\"avg\": 3.0}}'),
+                         (1, 2, '{}', '{\"0\": {\"avg\": 4.0}, \"1\": {\"avg\": 5.0}, \"2\": {\"avg\": 6.0}}');",
+                )
+                .unwrap();
+        }
+
+        let generator = ResultsGenerator::open_database(path).unwrap();
+        assert_eq!(generator.get_nr_of_c_stacks(), 3);
+
+        let (z_stacks, t_stacks): (u32, u32) = generator
+            .database
+            .query_row("SELECT z_stacks, t_stacks FROM images;", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(z_stacks, 2, "MAX(z_stack) of 0/1 across objects, plus one");
+        assert_eq!(t_stacks, 3, "MAX(t_stack) of 0/2 across objects, plus one");
     }
 }
 
@@ -2442,7 +2586,10 @@ fn chart_where_clause(
         if images.is_empty() {
             return None;
         }
-        conditions.push(format!("image_rel_path IN ({})", sql_string_in_list(images)));
+        conditions.push(format!(
+            "image_rel_path IN ({})",
+            sql_string_in_list(images)
+        ));
     }
     if let Some(wanted) = object_classes {
         let ids: Vec<u32> = wanted
