@@ -54,6 +54,7 @@ export global ExportDialogState {
     in-out property <bool> with-list-view: true;
     in-out property <bool> with-list-coloc-details: false;
     in-out property <bool> with-list-one-file-per-image: false;
+    in-out property <bool> with-grouped-by-image-list: false;
     in-out property <bool> with-plate-view: false;
     in-out property <bool> with-plates-and-wells-as-list: false;
     in-out property <bool> with-heatmap: false;
@@ -245,6 +246,11 @@ export component ExportDialog inherits Rectangle {
                                 text: "List — each image in a separate file";
                                 checked <=> ExportDialogState.with-list-one-file-per-image;
                                 enabled: ExportDialogState.with-list-view;
+                            }
+
+                            CheckBox {
+                                text: "Grouped image list (one row per image)";
+                                checked <=> ExportDialogState.with-grouped-by-image-list;
                             }
 
                             CheckBox {

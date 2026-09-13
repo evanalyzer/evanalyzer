@@ -5,8 +5,8 @@ use crate::{
 };
 use evanalyzer_app::result::{
     self, Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry,
-    DatabaseResult, ExportFormat, ImageEntry, ImageHeatmapFilter, PlateDimensions, ResultExport,
-    ResultsGenerator, WellFilter, WellSize,
+    DatabaseResult, ExportFormat, GroupedByImageFilter, ImageEntry, ImageHeatmapFilter,
+    PlateDimensions, ResultExport, ResultsGenerator, WellFilter, WellSize,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -33,12 +33,20 @@ struct PlaneFilter {
     pub selected_t_stack: u32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ListGroupBy {
+    #[default]
+    Objects,
+    Images,
+}
+
 #[derive(Default)]
 struct ListFilter {
     pub image_rel_path: Vec<PathBuf>,
     pub object_classes: Vec<ObjectClass>,
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
+    pub group_by: ListGroupBy,
 }
 
 #[derive(Default)]
@@ -360,6 +368,17 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_columns_select_none(move || manager.select_none_columns());
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_group_by_selected(move |key| {
+                    let group_by = match key.as_str() {
+                        "images" => ListGroupBy::Images,
+                        _ => ListGroupBy::Objects,
+                    };
+                    manager.list_filter.lock().expect("Poisened").group_by = group_by;
+                    manager.refresh_list();
+                });
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -1036,12 +1055,17 @@ impl ResultsStateController {
                     object_classes: default_object_classes,
                     columns: DEFAULT_LIST_COLUMNS.to_vec(),
                     with_coloc_details: false,
+                    group_by: ListGroupBy::Objects,
                 };
                 let ui_weak = self.ui.clone();
                 slint::invoke_from_event_loop(move || {
                     if let Some(ui_ready) = ui_weak.upgrade() {
                         let state = ui_ready.global::<ResultsState>();
                         state.set_list_with_coloc_details(false);
+                        state.set_list_group_by_summary("Objects".into());
+                        state.set_list_group_by_items(ModelRc::from(Rc::new(VecModel::from(
+                            group_by_items(false),
+                        ))));
                         // Matches `matrix_filter` above being reset to `None`
                         // (no column selected yet) rather than lingering
                         // disabled from whatever the previous database last
@@ -1142,6 +1166,7 @@ impl ResultsStateController {
         };
         let columns = list_filter.columns.clone();
         let with_coloc_details = list_filter.with_coloc_details;
+        let group_by = list_filter.group_by;
         drop(list_filter);
 
         let page = *self.list_page.lock().expect("Poisned") as usize;
@@ -1153,8 +1178,8 @@ impl ResultsStateController {
             .cloned()
             .flatten();
 
-        let Ok(result) = db.get_list(
-            &evanalyzer_app::result::ListFilter {
+        let result = match group_by {
+            ListGroupBy::Objects => db.get_object_list(&evanalyzer_app::result::ListFilter {
                 plane,
                 images,
                 object_classes,
@@ -1164,9 +1189,29 @@ impl ResultsStateController {
                     limit: LIST_PAGE_SIZE,
                     after: cursor,
                 },
-            },
-            &result::View::List,
-        ) else {
+            }),
+            // Non-aggregable columns (Object ID/Image/Class) don't mean
+            // anything once rows are grouped by image — silently dropped
+            // here, same as the export side's own grid views (see
+            // `is_aggregable` in results_exporter.rs). A single fixed
+            // aggregation (Average) keeps this a plain GROUP BY toggle
+            // rather than needing its own aggregation picker next to it.
+            ListGroupBy::Images => {
+                let columns = columns.into_iter().filter(is_aggregable_column).collect();
+                db.get_grouped_by_image(&GroupedByImageFilter {
+                    plane,
+                    images,
+                    object_classes,
+                    columns,
+                    aggregation: vec![Aggregation::Avg],
+                    page: result::Pagination {
+                        limit: LIST_PAGE_SIZE,
+                        after: cursor,
+                    },
+                })
+            }
+        };
+        let Ok(result) = result else {
             warn!("Could not load results!");
             return;
         };
@@ -2130,6 +2175,7 @@ impl ResultsStateController {
         state.set_with_list_view(rail_mode == ResultsRailMode::List);
         state.set_with_list_coloc_details(false);
         state.set_with_list_one_file_per_image(false);
+        state.set_with_grouped_by_image_list(false);
         state.set_with_plate_view(rail_mode == ResultsRailMode::Matrix);
         state.set_with_plates_and_wells_as_list(false);
         state.set_with_heatmap(false);
@@ -2272,6 +2318,7 @@ impl ResultsStateController {
             with_list_view: state.get_with_list_view(),
             with_list_coloc_details: state.get_with_list_coloc_details(),
             with_list_one_file_per_image: state.get_with_list_one_file_per_image(),
+            with_grouped_by_image_list: state.get_with_grouped_by_image_list(),
             with_plate_view: state.get_with_plate_view(),
             with_plates_and_wells_as_list: state.get_with_plates_and_wells_as_list(),
             with_heatmap: state.get_with_heatmap(),
@@ -2391,6 +2438,45 @@ fn column_items(
             selected: selected(&column.key),
         })
         .collect()
+}
+
+/// Whether `column` can be aggregated across an image's objects at all —
+/// mirrors `is_aggregable` in results_exporter.rs (kept in sync with it by
+/// inspecting the same variants), needed here because Images-mode reuses the
+/// List view's own COLUMNS selection rather than a dedicated picker.
+fn is_aggregable_column(column: &Column) -> bool {
+    !matches!(
+        column,
+        Column::ObjectId
+            | Column::ImageName
+            | Column::ObjectClass
+            | Column::IntensityAvg(_)
+            | Column::IntensitySum(_)
+            | Column::IntensityMin(_)
+            | Column::IntensityMax(_)
+    )
+}
+
+// The GROUP BY dropdown's two fixed options, Objects always selected — used
+// both to seed it on a fresh database and to reset it whenever `list_filter`
+// itself is reset back to `ListGroupBy::Objects`.
+fn group_by_items(selected_images: bool) -> Vec<MultiSelectItem> {
+    vec![
+        MultiSelectItem {
+            key: "objects".into(),
+            value: "Objects".into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: !selected_images,
+        },
+        MultiSelectItem {
+            key: "images".into(),
+            value: "Images".into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: selected_images,
+        },
+    ]
 }
 
 // Distinct group names in first-seen order, so the dropdown renders sections

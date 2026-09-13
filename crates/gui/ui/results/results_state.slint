@@ -110,6 +110,16 @@ export global ResultsState {
     in-out property <[string]> list-columns-groups: ["General", "Geometry", "XXX", "YYY", "ZZZ"];
     in-out property <string> list-columns-summary: "3 of 4 columns";
 
+    // Objects (one row per object, the default) vs Images (one row per
+    // image, each selected column aggregated across that image's objects —
+    // `ResultsGenerator::get_grouped_by_image`).
+    in-out property <[MultiSelectItem]> list-group-by-items: [
+        { key: "objects", value: "Objects", group: "", selected: true },
+        { key: "images", value: "Images", group: "", selected: false },
+    ];
+    in-out property <string> list-group-by-summary: "Objects";
+    callback list-group-by-selected(string);
+
     // Expands each row with a selected "Coloc with <class>" column into one
     // row per colocalizing partner, with that partner's own value for every
     // other selected measurement column (`ListFilter::with_coloc_details` in

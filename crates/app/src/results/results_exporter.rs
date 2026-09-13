@@ -1,8 +1,8 @@
 use super::results_generator::class_display_label;
 use crate::result::{
     Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
-    ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateDimensions, PlateFilter,
-    ResultsGenerator, View, WellSize, WellsBatchFilter,
+    GroupedByImageFilter, ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter,
+    PlateDimensions, PlateFilter, ResultsGenerator, View, WellSize, WellsBatchFilter,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use rust_xlsxwriter::{Color, Format, Workbook, Worksheet, XlsxError};
@@ -62,6 +62,11 @@ pub struct ResultExport {
     /// 1,048,576-row-per-sheet limit (a large plate scan can comfortably
     /// exceed that combined across images, even if no single image does).
     pub with_list_one_file_per_image: bool,
+    /// `grouped_by_image.xlsx`: one row per image, one column per
+    /// (selected column × selected aggregation) combination — see
+    /// `export_grouped_by_image`. Independent of `with_list_view`: it's a
+    /// separate document, not a variant of the per-object list.
+    pub with_grouped_by_image_list: bool,
     pub with_plate_view: bool,
     pub with_plates_and_wells_as_list: bool,
     pub with_heatmap: bool,
@@ -98,6 +103,9 @@ impl ResultExport {
 
         if self.with_list_view {
             self.export_list(database, &mut *on_progress)?;
+        }
+        if self.with_grouped_by_image_list {
+            self.export_grouped_by_image(database, &mut *on_progress)?;
         }
         // Single flag drives both documents — see the doc comment on
         // `export_plate_and_well` for why plate and well are always
@@ -181,6 +189,72 @@ impl ResultExport {
             .save(self.output_dir.join("list.xlsx"))
             .map_err(xlsx_err)?;
         on_progress("Exporting List view", 1, 1);
+        Ok(())
+    }
+
+    // `grouped_by_image.xlsx`: one row per image, one column per (selected
+    // column × selected aggregation) combination — `get_grouped_by_image`'s
+    // own shape, just paginated through in full rather than exposed live.
+    // Single plane only (like `export_plate_and_well`/`export_heatmap`):
+    // grouping by image is itself a per-plane aggregate, so there's no
+    // meaningful "stack every t/z" equivalent the way there is for the
+    // per-object List export.
+    fn export_grouped_by_image(
+        &self,
+        database: &ResultsGenerator,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
+        on_progress("Exporting Grouped Image List", 0, 1);
+
+        let images = resolve_images(database, self)?;
+        let object_classes = if self.object_classes.is_empty() {
+            None
+        } else {
+            Some(self.object_classes.clone())
+        };
+        let columns: Vec<Column> = self
+            .columns
+            .iter()
+            .filter(|column| is_aggregable(column))
+            .cloned()
+            .collect();
+
+        let base_filter = GroupedByImageFilter {
+            plane: PlaneFilter {
+                z_stack: self.z_stacks.start,
+                t_stack: self.t_stacks.start,
+            },
+            images: Some(images),
+            object_classes,
+            columns,
+            aggregation: self.aggregations.clone(),
+            page: Pagination {
+                limit: 0,
+                after: None,
+            },
+        };
+        let result = fetch_all_grouped_by_image_rows(database, &base_filter)?;
+
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("Grouped by Image").map_err(xlsx_err)?;
+        let header_format = Format::new().set_bold();
+        for (col_idx, name) in result.column_names.iter().enumerate() {
+            sheet
+                .write_with_format(0, col_idx as u16, name.as_str(), &header_format)
+                .map_err(xlsx_err)?;
+        }
+        for (row_idx, row) in result.rows.iter().enumerate() {
+            let row_n = (row_idx + 1) as u32;
+            for (col_idx, cell) in row.iter().enumerate() {
+                write_cell(sheet, row_n, col_idx as u16, cell)?;
+            }
+        }
+
+        workbook
+            .save(self.output_dir.join("grouped_by_image.xlsx"))
+            .map_err(xlsx_err)?;
+        on_progress("Exporting Grouped Image List", 1, 1);
         Ok(())
     }
 
@@ -636,7 +710,7 @@ fn fetch_all_list_rows(
             },
             ..base_filter.clone()
         };
-        let mut page = database.get_list(&filter, &View::List)?;
+        let mut page = database.get_object_list(&filter)?;
         let is_last_page = page.source_object_count < PAGE_SIZE as usize;
         cursor = page.row_names.last().cloned();
 
@@ -652,6 +726,63 @@ fn fetch_all_list_rows(
         if is_last_page {
             break;
         }
+    }
+
+    Ok(merged)
+}
+
+// Same keyset-pagination walk as `fetch_all_list_rows`, just over
+// `get_grouped_by_image`'s (image-grouped, not per-object) pages instead —
+// its cursor is the last page's final `image_rel_path`, exactly like
+// `get_object_list`'s own row-id cursor.
+fn fetch_all_grouped_by_image_rows(
+    database: &ResultsGenerator,
+    base_filter: &GroupedByImageFilter,
+) -> Result<DatabaseResult, InternalErrors> {
+    const PAGE_SIZE: i32 = 20_000;
+
+    let mut merged = DatabaseResult {
+        column_names: Vec::new(),
+        row_names: Vec::new(),
+        rows: Vec::new(),
+        min: f32::INFINITY,
+        max: f32::NEG_INFINITY,
+        source_object_count: 0,
+        row_locations: Vec::new(),
+    };
+    let mut cursor: Option<String> = None;
+    let mut first_page = true;
+
+    loop {
+        let filter = GroupedByImageFilter {
+            page: Pagination {
+                limit: PAGE_SIZE,
+                after: cursor.take(),
+            },
+            ..base_filter.clone()
+        };
+        let mut page = database.get_grouped_by_image(&filter)?;
+        let is_last_page = page.source_object_count < PAGE_SIZE as usize;
+        cursor = page.row_names.last().cloned();
+
+        if first_page {
+            merged.column_names = std::mem::take(&mut page.column_names);
+            first_page = false;
+        }
+        merged.min = merged.min.min(page.min);
+        merged.max = merged.max.max(page.max);
+        merged.row_names.extend(page.row_names);
+        merged.rows.extend(page.rows);
+        merged.source_object_count += page.source_object_count;
+
+        if is_last_page {
+            break;
+        }
+    }
+
+    if !merged.min.is_finite() || !merged.max.is_finite() {
+        merged.min = 0.0;
+        merged.max = 0.0;
     }
 
     Ok(merged)

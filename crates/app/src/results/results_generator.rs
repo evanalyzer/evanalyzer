@@ -135,10 +135,10 @@ impl Column {
                 format!("n_colocalized_class_{name}")
             }
             Column::ColocCount(ObjectClass::Unset) => "n_colocalized_unset".to_string(),
-            Column::IntensityAvg(channel) => format!("mean_raw_ch{channel}"),
-            Column::IntensitySum(channel) => format!("sum_raw_ch{channel}"),
-            Column::IntensityMin(channel) => format!("min_raw_ch{channel}"),
-            Column::IntensityMax(channel) => format!("max_raw_ch{channel}"),
+            Column::IntensityAvg(channel) => format!("mean_scaled_ch{channel}"),
+            Column::IntensitySum(channel) => format!("sum_scaled_ch{channel}"),
+            Column::IntensityMin(channel) => format!("min_scaled_ch{channel}"),
+            Column::IntensityMax(channel) => format!("max_scaled_ch{channel}"),
         }
     }
 
@@ -153,16 +153,16 @@ impl Column {
         if key == "n_colocalized_unset" {
             return Some(Column::ColocCount(ObjectClass::Unset));
         }
-        if let Some(channel) = key.strip_prefix("mean_raw_ch") {
+        if let Some(channel) = key.strip_prefix("mean_scaled_ch") {
             return channel.parse().ok().map(Column::IntensityAvg);
         }
-        if let Some(channel) = key.strip_prefix("sum_raw_ch") {
+        if let Some(channel) = key.strip_prefix("sum_scaled_ch") {
             return channel.parse().ok().map(Column::IntensitySum);
         }
-        if let Some(channel) = key.strip_prefix("min_raw_ch") {
+        if let Some(channel) = key.strip_prefix("min_scaled_ch") {
             return channel.parse().ok().map(Column::IntensityMin);
         }
-        if let Some(channel) = key.strip_prefix("max_raw_ch") {
+        if let Some(channel) = key.strip_prefix("max_scaled_ch") {
             return channel.parse().ok().map(Column::IntensityMax);
         }
         Some(match key {
@@ -215,7 +215,7 @@ pub struct PlateFilter {
 #[derive(Clone)]
 pub struct WellFilter {
     pub plane: PlaneFilter,
-    // Name of the group to displax
+    // Name of the group to display
     pub group_name: String,
     // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
     // - Group1: the match of the group (e.g. A1)
@@ -278,6 +278,16 @@ pub struct ListFilter {
     pub object_classes: Option<Vec<ObjectClass>>,
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
+    pub page: Pagination,
+}
+
+#[derive(Clone)]
+pub struct GroupedByImageFilter {
+    pub plane: PlaneFilter,
+    pub images: Option<Vec<String>>,
+    pub object_classes: Option<Vec<ObjectClass>>,
+    pub columns: Vec<Column>,
+    pub aggregation: Vec<Aggregation>,
     pub page: Pagination,
 }
 
@@ -347,11 +357,7 @@ impl ResultsGenerator {
         })
     }
 
-    pub fn get_list(
-        &self,
-        filter: &ListFilter,
-        _view: &View,
-    ) -> Result<DatabaseResult, InternalErrors> {
+    pub fn get_object_list(&self, filter: &ListFilter) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         // Fetched up front (cached — see `classes_cache`) since
         // `column_names` below already needs it to resolve a `ColocCount`
@@ -577,6 +583,174 @@ impl ResultsGenerator {
         })
     }
 
+    /// Returns a list of images with the object metrics (columns) grouped by image_rel_path
+    /// for each selected aggregation a separete column is added
+    ///
+    /// One output column per (`filter.columns` entry) x (`filter.aggregation`
+    /// entry) — e.g. 2 columns x 3 aggregations = 6 output columns, one row
+    /// per image — mirroring `ResultExport`'s flat-list export
+    /// (results_exporter.rs), just exposed here as a live, paginated List
+    /// view mode instead of a one-shot export. No `grouping_regex` (unlike
+    /// `get_group_by_plate`/`get_group_by_well`): grouped directly by each
+    /// object's own `image_rel_path`, nothing derived from it.
+    pub fn get_grouped_by_image(
+        &self,
+        filter: &GroupedByImageFilter,
+    ) -> Result<DatabaseResult, InternalErrors> {
+        let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
+        let classes = self.get_object_classes()?;
+
+        let mut column_names = vec!["image".to_string()];
+        let mut value_exprs = Vec::new();
+        for column in &filter.columns {
+            for aggregation in &filter.aggregation {
+                let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
+                column_names.push(format!("{} ({agg_fn})", column.as_key(&classes)));
+                value_exprs.push(format!(
+                    "{agg_fn}({value_expr}) AS value_{}",
+                    value_exprs.len()
+                ));
+            }
+        }
+
+        let empty_result = || DatabaseResult {
+            column_names: column_names.clone(),
+            row_names: vec![],
+            rows: vec![],
+            min: 0.0,
+            max: 0.0,
+            source_object_count: 0,
+            row_locations: vec![],
+        };
+        // Nothing selected to aggregate - no query can produce a
+        // meaningful answer, same as `get_object_list`'s empty-filter
+        // short-circuits below.
+        if value_exprs.is_empty() {
+            return Ok(empty_result());
+        }
+
+        let mut conditions = vec![
+            format!("z_stack = {}", filter.plane.z_stack),
+            format!("t_stack = {}", filter.plane.t_stack),
+        ];
+        if let Some(rel_paths) = &filter.images {
+            if rel_paths.is_empty() {
+                return Ok(empty_result());
+            }
+            conditions.push(format!(
+                "image_rel_path IN ({})",
+                sql_string_in_list(rel_paths)
+            ));
+        }
+        if let Some(wanted) = &filter.object_classes {
+            let ids: Vec<u32> = wanted
+                .iter()
+                .filter_map(|id| match id {
+                    ObjectClass::Valid(n) => Some(*n),
+                    ObjectClass::Unset => None,
+                })
+                .collect();
+            if ids.is_empty() {
+                return Ok(empty_result());
+            }
+            conditions.push(format!(
+                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                sql_int_array_literal(&ids)
+            ));
+        }
+        // Keyset pagination over the *groups* (one image = one row here),
+        // not over individual objects like `get_object_list` - every row
+        // for a given image shares the same `image_rel_path`, so excluding
+        // rows at or below the cursor here can never split a group across
+        // pages.
+        if let Some(cursor) = &filter.page.after {
+            conditions.push(format!("image_rel_path > '{}'", cursor.replace('\'', "''")));
+        }
+        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let limit = filter.page.limit.max(0);
+        let value_exprs_sql = value_exprs.join(",\n                ");
+
+        let sql = format!(
+            "SELECT\n\
+                image_rel_path,\n\
+                MIN(image_name) AS image_name,\n\
+                {value_exprs_sql}\n\
+             FROM objects\n\
+             {where_clause}\n\
+             GROUP BY image_rel_path\n\
+             ORDER BY image_rel_path\n\
+             LIMIT {limit}"
+        );
+
+        let mut stmt = self.database.prepare(&sql).map_err(err)?;
+        let n = value_exprs.len();
+        let groups: Vec<(String, String, Vec<Option<f64>>)> = stmt
+            .query_map([], |row| {
+                let image_rel_path: String = row.get(0)?;
+                let image_name: String = row.get(1)?;
+                let mut values = Vec::with_capacity(n);
+                for i in 0..n {
+                    values.push(row.get::<_, Option<f64>>(2 + i)?);
+                }
+                Ok((image_rel_path, image_name, values))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for (_, _, values) in &groups {
+            for value in values.iter().flatten() {
+                min = min.min(*value);
+                max = max.max(*value);
+            }
+        }
+        if !min.is_finite() || !max.is_finite() {
+            min = 0.0;
+            max = 0.0;
+        }
+
+        let row_names = groups
+            .iter()
+            .map(|(rel_path, ..)| rel_path.clone())
+            .collect();
+        let source_object_count = groups.len();
+        let rows: Vec<Vec<Cell>> = groups
+            .into_iter()
+            .map(|(image_rel_path, image_name, values)| {
+                // Lets the GUI navigate straight to the source image, same
+                // as any other image-bearing search key in this file.
+                let search_key = Some((image_name.clone(), image_rel_path));
+                let mut cells = vec![Cell {
+                    value: CellValue::String(image_name),
+                    bg_color: 0,
+                    alternating_color: false,
+                    search_key: search_key.clone(),
+                }];
+                for value in values {
+                    cells.push(Cell {
+                        value: CellValue::Float(value.unwrap_or(0.0) as f32),
+                        bg_color: 0,
+                        alternating_color: false,
+                        search_key: search_key.clone(),
+                    });
+                }
+                cells
+            })
+            .collect();
+
+        Ok(DatabaseResult {
+            column_names,
+            row_names,
+            rows,
+            min: min as f32,
+            max: max as f32,
+            source_object_count,
+            row_locations: Vec::new(),
+        })
+    }
+
     // `ListFilter::with_coloc_details`: fan out each source object into one
     // row per (selected coloc-class, colocalizing partner) pair, appending
     // one resolved-metric cell per `coloc_class_columns` x `metric_columns`
@@ -759,7 +933,9 @@ impl ResultsGenerator {
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
         let groups: Vec<(String, String, String, Option<f64>)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
@@ -795,7 +971,10 @@ impl ResultsGenerator {
         let mut value_exprs = Vec::with_capacity(aggregations.len());
         for aggregation in aggregations {
             let (agg_fn, value_expr) = aggregate_sql(&filter.column, aggregation)?;
-            value_exprs.push(format!("{agg_fn}({value_expr}) AS value_{}", value_exprs.len()));
+            value_exprs.push(format!(
+                "{agg_fn}({value_expr}) AS value_{}",
+                value_exprs.len()
+            ));
         }
         let value_exprs_sql = value_exprs.join(",\n                ");
 
@@ -1018,10 +1197,12 @@ impl ResultsGenerator {
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
         for (group_prefix, idx, image_rel_path, image_name, value) in rows {
-            fields_by_well
-                .entry(group_prefix)
-                .or_default()
-                .push((idx, image_rel_path, image_name, value));
+            fields_by_well.entry(group_prefix).or_default().push((
+                idx,
+                image_rel_path,
+                image_name,
+                value,
+            ));
         }
 
         Ok(fields_by_well
@@ -1061,7 +1242,10 @@ impl ResultsGenerator {
         let mut value_exprs = Vec::with_capacity(aggregations.len());
         for aggregation in aggregations {
             let (agg_fn, value_expr) = aggregate_sql(&filter.column, aggregation)?;
-            value_exprs.push(format!("{agg_fn}({value_expr}) AS value_{}", value_exprs.len()));
+            value_exprs.push(format!(
+                "{agg_fn}({value_expr}) AS value_{}",
+                value_exprs.len()
+            ));
         }
         let value_exprs_sql = value_exprs.join(",\n                ");
 
@@ -1117,10 +1301,12 @@ impl ResultsGenerator {
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
         for (group_prefix, idx, image_rel_path, image_name, values) in rows {
-            fields_by_well
-                .entry(group_prefix)
-                .or_default()
-                .push((idx, image_rel_path, image_name, values));
+            fields_by_well.entry(group_prefix).or_default().push((
+                idx,
+                image_rel_path,
+                image_name,
+                values,
+            ));
         }
 
         Ok((0..n)
@@ -1351,8 +1537,6 @@ impl ResultsGenerator {
             }
         }
     }
-
-    pub fn get_coloc_objects(&self) {}
 
     pub fn get_histogram(&self) {}
     pub fn get_scatter(&self) {}
@@ -1946,7 +2130,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(intensity_stat(
                 &object.intensities_json,
                 *channel,
-                "mean_raw",
+                "mean_scaled",
             )),
             ..no_bg
         },
@@ -1954,7 +2138,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(intensity_stat(
                 &object.intensities_json,
                 *channel,
-                "sum_raw",
+                "sum_scaled",
             )),
             ..no_bg
         },
@@ -1962,7 +2146,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(intensity_stat(
                 &object.intensities_json,
                 *channel,
-                "min_raw",
+                "min_scaled",
             )),
             ..no_bg
         },
@@ -1970,7 +2154,7 @@ fn cell_for_column(column: &Column, object: &ObjectRow, classes: &[Class]) -> Ce
             value: CellValue::Float(intensity_stat(
                 &object.intensities_json,
                 *channel,
-                "max_raw",
+                "max_scaled",
             )),
             ..no_bg
         },
@@ -2314,7 +2498,12 @@ fn plate_groups_to_result(
                         .map(|col| match values.get(&(row, col)) {
                             Some((value, group_prefix)) => Cell {
                                 value: CellValue::Float(*value as f32),
-                                bg_color: value_to_color(*value, range_min, range_max, color_schema),
+                                bg_color: value_to_color(
+                                    *value,
+                                    range_min,
+                                    range_max,
+                                    color_schema,
+                                ),
                                 alternating_color: false,
                                 search_key: Some((group_prefix.clone(), group_prefix.clone())),
                             },
@@ -2468,7 +2657,12 @@ fn well_fields_to_result(
                         .map(|col| match values.get(&(row * cols + col)) {
                             Some((value, image_name, image_rel_path)) => Cell {
                                 value: CellValue::Float(*value as f32),
-                                bg_color: value_to_color(*value, range_min, range_max, color_schema),
+                                bg_color: value_to_color(
+                                    *value,
+                                    range_min,
+                                    range_max,
+                                    color_schema,
+                                ),
                                 alternating_color: false,
                                 search_key: Some((image_name.clone(), image_rel_path.clone())),
                             },

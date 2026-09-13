@@ -70,6 +70,18 @@ export component ResultsListView inherits Rectangle {
                     select-none => { ResultsState.list-columns-select-none(); }
                 }
 
+                MultiSelectDropdown {
+                    label: "GROUP BY";
+                    summary-text: ResultsState.list-group-by-summary;
+                    items <=> ResultsState.list-group-by-items;
+                    multi-select: false;
+                    pill-width: 110px;
+                    item-selected(key, value, selected) => {
+                        ResultsState.list-group-by-summary = value;
+                        ResultsState.list-group-by-selected(key);
+                    }
+                }
+
                 Text {
                     text: ResultsState.list-row-count + " objects";
                     font-size: 11.5px;
