@@ -2,6 +2,10 @@ mod results_charts;
 mod results_exporter;
 mod results_generator;
 
+pub use results_charts::BoxplotFilter;
+pub use results_charts::HistogramFilter;
+pub use results_charts::ResultCharts;
+pub use results_charts::ScatterFilter;
 pub use results_exporter::ExportFormat;
 pub use results_exporter::ResultExport;
 pub use results_generator::Aggregation;
