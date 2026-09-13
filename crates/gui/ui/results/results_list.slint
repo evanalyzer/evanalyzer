@@ -172,11 +172,23 @@ export component ResultsListView inherits Rectangle {
 
                     for row[index] in ResultsState.list-rows: Rectangle {
                         height: 34px;
-                        min-width: row-layout.min-width;
-                      //  width: max(row-layout.preferred-width, parent.width);
                         width: header-rect.width * ResultsState.list-column-headers.length;
 
                         background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
+
+                        // Row virtualization: a row scrolled out of view
+                        // collapses to this bare Rectangle (no cells at
+                        // all) instead of materializing a full
+                        // HorizontalLayout of N Text elements. With up to
+                        // 500 rows and a user-selectable 600-700 columns,
+                        // rendering every row regardless of scroll position
+                        // means Slint has to lay out and paint hundreds of
+                        // thousands of elements on every frame — that's
+                        // what made scrolling grind to a halt. A 3-row
+                        // buffer above/below keeps fast scroll flicks from
+                        // visibly popping content in.
+                        property <bool> row-visible: self.y + self.height >= -body-list.viewport-y - 3 * self.height
+                            && self.y <= -body-list.viewport-y + body-list.height + 3 * self.height;
 
                         Rectangle {
                             y: 34px;
@@ -191,19 +203,28 @@ export component ResultsListView inherits Rectangle {
                             clicked => { ResultsState.list-row-clicked(index); }
                         }
 
-                        row-layout := HorizontalLayout {
+                        if row-visible: row-layout := HorizontalLayout {
                             padding-left: 16px;
                             padding-right: 16px;
                             padding-top: 9px;
                             padding-bottom: 9px;
 
-                            // Same reasoning as the header row above.
-                            for cell in row.cells: Rectangle {
+                            // Column virtualization, same reasoning as
+                            // `row-visible` above: with 600-700 selectable
+                            // columns, only a handful are ever actually on
+                            // screen at once horizontally — the rest don't
+                            // need a live Text element just to sit clipped
+                            // off to the side.
+                            for cell[c-index] in row.cells: Rectangle {
                                 height: 16.5px;
                                 horizontal-stretch: 1;
                                 clip: true;
                                 width: 260px;
-                                Text {
+
+                                property <bool> col-visible: self.x + self.width >= -body-list.viewport-x - 3 * self.width
+                                    && self.x <= -body-list.viewport-x + header-rect.width + 3 * self.width;
+
+                                if col-visible: Text {
                                     text: cell;
                                     width: 260px;
                                     font-size: 12px;
