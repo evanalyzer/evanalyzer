@@ -909,4 +909,173 @@ mod tests {
         );
         assert!(result.is_err());
     }
+
+    // -- remaining filter branches --------------------------------------
+
+    #[test]
+    fn paint_boxplot_image_filter_restricts_to_the_selected_image() {
+        let objects = [
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 999),
+        ];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_boxplot(
+                &generator,
+                &BoxplotFilter {
+                    plane: plane(),
+                    images: Some(vec!["img1.tif".to_string()]),
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                },
+            )
+            .expect("boxplot");
+        assert_eq!(result.boxes.len(), 1);
+        assert_eq!(result.boxes[0].object_count, 1);
+        assert_eq!(result.boxes[0].max, 10.0, "img2's 999 must be excluded");
+    }
+
+    #[test]
+    fn paint_boxplot_object_classes_filter_ignores_unset_entries() {
+        // `ObjectClass::Unset` has no numeric id to filter on, so it's
+        // dropped from the id list `chart_where_clause`/`paint_boxplot`
+        // build - a selection of *only* `Unset` behaves like selecting
+        // nothing at all.
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let result = ResultCharts {}
+            .paint_boxplot(
+                &generator,
+                &BoxplotFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: Some(vec![ObjectClass::Unset]),
+                    column: Column::AreaSizePx,
+                },
+            )
+            .expect("boxplot");
+        assert!(result.boxes.is_empty());
+    }
+
+    #[test]
+    fn paint_histogram_and_scatter_object_classes_filter_restricts_to_selected_classes() {
+        let objects = [
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 999),
+        ];
+        let generator = open(&objects);
+        let filter_classes = Some(vec![ObjectClass::Valid(1)]);
+
+        let histogram = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: filter_classes.clone(),
+                    column: Column::AreaSizePx,
+                    bins: 1,
+                },
+            )
+            .expect("histogram");
+        assert_eq!(histogram.counts, vec![1]);
+        assert_eq!(histogram.max, 10.0, "ClassB's 999 must be excluded");
+
+        let scatter = ResultCharts {}
+            .paint_scatter(
+                &generator,
+                &ScatterFilter {
+                    plane: plane(),
+                    images: None,
+                    object_classes: filter_classes,
+                    x_column: Column::AreaSizePx,
+                    y_column: Column::AreaSizePx,
+                    max_points: None,
+                },
+            )
+            .expect("scatter");
+        assert_eq!(scatter.total_object_count, 1);
+        assert_eq!(scatter.x_max, 10.0);
+    }
+
+    #[test]
+    fn paint_histogram_and_scatter_report_a_zero_range_when_the_filter_matches_nothing() {
+        // Unlike an *explicitly empty* selection (`Some(vec![])`, short-
+        // circuited by `chart_where_clause` returning `None` before any
+        // query runs), this is a non-empty selection that legitimately
+        // matches zero rows - `paint_histogram`/`paint_scatter` must still
+        // fall back to a sane zeroed result instead of propagating NaN/inf
+        // from an all-`None` MIN/MAX.
+        let objects = [ObjectSpec::new("img1.tif", "ClassA", 1, 10)];
+        let generator = open(&objects);
+        let no_match_images = Some(vec!["does-not-exist.tif".to_string()]);
+
+        let histogram = ResultCharts {}
+            .paint_histogram(
+                &generator,
+                &HistogramFilter {
+                    plane: plane(),
+                    images: no_match_images.clone(),
+                    object_classes: None,
+                    column: Column::AreaSizePx,
+                    bins: 4,
+                },
+            )
+            .expect("histogram");
+        assert_eq!(histogram.counts, vec![0; 4]);
+        assert_eq!(histogram.min, 0.0);
+        assert_eq!(histogram.max, 0.0);
+
+        let scatter = ResultCharts {}
+            .paint_scatter(
+                &generator,
+                &ScatterFilter {
+                    plane: plane(),
+                    images: no_match_images,
+                    object_classes: None,
+                    x_column: Column::AreaSizePx,
+                    y_column: Column::AreaSizePx,
+                    max_points: None,
+                },
+            )
+            .expect("scatter");
+        assert!(scatter.points.is_empty());
+        assert_eq!(scatter.total_object_count, 0);
+        assert_eq!((scatter.x_min, scatter.x_max, scatter.y_min, scatter.y_max), (0.0, 0.0, 0.0, 0.0));
+    }
+
+    // -- value_to_f64 / extract_f64_list ----------------------------------
+    //
+    // Real boxplot queries only ever produce `Value::UBigInt` (`area_px`'s
+    // SQL type) in this app's schema, so every other numeric variant these
+    // pure conversion functions handle is otherwise unreachable through
+    // `paint_boxplot` alone - tested directly here instead.
+
+    #[test]
+    fn value_to_f64_converts_every_numeric_variant() {
+        assert_eq!(value_to_f64(Value::Double(1.5)), Some(1.5));
+        assert_eq!(value_to_f64(Value::Float(2.5)), Some(2.5));
+        assert_eq!(value_to_f64(Value::TinyInt(3)), Some(3.0));
+        assert_eq!(value_to_f64(Value::SmallInt(4)), Some(4.0));
+        assert_eq!(value_to_f64(Value::Int(5)), Some(5.0));
+        assert_eq!(value_to_f64(Value::BigInt(6)), Some(6.0));
+        assert_eq!(value_to_f64(Value::HugeInt(7)), Some(7.0));
+        assert_eq!(value_to_f64(Value::UTinyInt(8)), Some(8.0));
+        assert_eq!(value_to_f64(Value::USmallInt(9)), Some(9.0));
+        assert_eq!(value_to_f64(Value::UInt(10)), Some(10.0));
+        assert_eq!(value_to_f64(Value::UBigInt(11)), Some(11.0));
+        assert_eq!(value_to_f64(Value::UHugeInt(12)), Some(12.0));
+        assert_eq!(value_to_f64(Value::Null), None);
+    }
+
+    #[test]
+    fn extract_f64_list_handles_list_array_and_non_list_values() {
+        assert_eq!(
+            extract_f64_list(Value::List(vec![Value::Double(1.0), Value::Boolean(true)])),
+            vec![1.0],
+            "non-numeric list elements are dropped, not errored on"
+        );
+        assert_eq!(extract_f64_list(Value::Array(vec![Value::Int(2)])), vec![2.0]);
+        assert_eq!(extract_f64_list(Value::Null), Vec::<f64>::new());
+    }
 }

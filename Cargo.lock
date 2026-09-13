@@ -2735,6 +2735,7 @@ dependencies = [
 name = "evanalyzer_cli"
 version = "0.1.0"
 dependencies = [
+ "calamine",
  "clap",
  "ctrlc",
  "duckdb",
@@ -2789,6 +2790,7 @@ dependencies = [
  "chrono",
  "clru",
  "copypasta",
+ "duckdb",
  "evanalyzer_app",
  "evanalyzer_cfg",
  "evanalyzer_core",
@@ -2804,6 +2806,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slint",
+ "tempfile",
 ]
 
 [[package]]

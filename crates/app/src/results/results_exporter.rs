@@ -1398,6 +1398,7 @@ impl SheetNamer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use calamine::Reader as _;
     use crate::results::test_support::{ObjectSpec, seed_db};
 
     #[test]
@@ -1836,5 +1837,544 @@ mod tests {
         let mut namer = SheetNamer::new();
         let name = namer.unique("a[b]:c*d?e/f\\g");
         assert!(!name.contains(['[', ']', ':', '*', '?', '/', '\\']));
+    }
+
+    // -- calamine smoke test: confirms the reader API used below -------------
+
+    #[test]
+    fn calamine_can_read_back_a_real_exported_xlsx() {
+        use calamine::{Data, Reader, Xlsx, open_workbook};
+
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns,
+            with_list_view: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("xlsx export");
+
+        let mut workbook: Xlsx<_> =
+            open_workbook(out_dir.join("list.xlsx")).expect("open exported xlsx");
+        let range = workbook.worksheet_range("List").expect("List sheet");
+        assert_eq!(range.get_value((0, 0)), Some(&Data::String("Object ID".to_string())));
+    }
+
+    // -- plate/well/heatmap exports: plausibility against the same values --
+    // `ResultsGenerator` reports through its own query methods.
+    //
+    // Each of these re-derives the *expected* grid by calling the exact same
+    // `ResultsGenerator` method `export_plate_and_well`/`export_heatmap`
+    // calls internally, then reads the real produced XLSX file back with
+    // `calamine` and asserts every header/row-label/value cell matches - this
+    // is what actually exercises `write_grid_block`'s XLSX-writing logic
+    // (previously untested), and proves the exported file faithfully
+    // reflects the grid `ResultsGenerator` computed rather than the two
+    // silently drifting apart.
+
+    fn data_f64(data: Option<&calamine::Data>) -> f64 {
+        match data {
+            Some(calamine::Data::Float(v)) => *v,
+            Some(calamine::Data::Int(v)) => *v as f64,
+            other => panic!("expected a numeric cell, got {other:?}"),
+        }
+    }
+
+    /// Asserts that `range`'s grid starting at `start_row` (as written by
+    /// `write_grid_block`: a caption row, then a header row of
+    /// `expected.column_names`, then one row per `expected.row_names`)
+    /// matches `expected` cell-for-cell.
+    fn assert_grid_matches_at(
+        range: &calamine::Range<calamine::Data>,
+        start_row: u32,
+        expected: &DatabaseResult,
+    ) {
+        let header_row = start_row + 1;
+        for (col_idx, name) in expected.column_names.iter().enumerate() {
+            let col = (col_idx + 1) as u32;
+            assert_eq!(
+                range.get_value((header_row, col)),
+                Some(&calamine::Data::String(name.clone())),
+                "column header at ({header_row}, {col})"
+            );
+        }
+        for (row_idx, row_name) in expected.row_names.iter().enumerate() {
+            let row = header_row + 1 + row_idx as u32;
+            assert_eq!(
+                range.get_value((row, 0)),
+                Some(&calamine::Data::String(row_name.clone())),
+                "row label at ({row}, 0)"
+            );
+            for (col_idx, cell) in expected.rows[row_idx].iter().enumerate() {
+                let col = (col_idx + 1) as u32;
+                match &cell.value {
+                    CellValue::Float(v) => {
+                        let got = data_f64(range.get_value((row, col)));
+                        assert!(
+                            (got - *v as f64).abs() < 1e-6,
+                            "value at ({row}, {col}): expected {v}, got {got}"
+                        );
+                    }
+                    CellValue::Empty => {
+                        assert!(
+                            matches!(
+                                range.get_value((row, col)),
+                                None | Some(calamine::Data::Empty)
+                            ),
+                            "expected an empty cell at ({row}, {col})"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn start_export_xlsx_plate_grid_matches_get_group_by_plate_heatmap() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_plate_view: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("plate export");
+
+        // Same filter `export_plate_and_well` builds internally for this
+        // (single class, single column, single aggregation) configuration.
+        let expected = database
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Valid(1),
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::Heatmap,
+            )
+            .expect("expected plate grid");
+
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate.xlsx")).expect("open plate.xlsx");
+        let range = workbook.worksheet_range("ClassA").expect("ClassA sheet");
+        assert_grid_matches_at(&range, 0, &expected);
+
+        // Belt-and-suspenders on the actual numbers, independent of the
+        // `DatabaseResult` plumbing above.
+        assert_eq!(data_f64(range.get_value((2, 1))), 15.0, "A1 = avg(10, 20)");
+        assert_eq!(data_f64(range.get_value((3, 2))), 100.0, "B2");
+    }
+
+    #[test]
+    fn start_export_xlsx_well_grid_matches_get_wells_for_plate_heatmap() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_plate_view: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("well export");
+
+        let expected_by_well = database
+            .get_wells_for_plate(
+                &WellsBatchFilter {
+                    plane: PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    grouping_regex: String::new(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Valid(1),
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    well_size: None,
+                    well_order: None,
+                },
+                &View::Heatmap,
+            )
+            .expect("expected well grid");
+        assert_eq!(expected_by_well.len(), 1, "only well A1 was seeded");
+        let expected = &expected_by_well["A1"];
+
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("well.xlsx")).expect("open well.xlsx");
+        let range = workbook.worksheet_range("ClassA").expect("ClassA sheet");
+        assert_grid_matches_at(&range, 0, expected);
+        assert_eq!(data_f64(range.get_value((2, 1))), 10.0, "field 01");
+        assert_eq!(data_f64(range.get_value((2, 2))), 20.0, "field 02");
+    }
+
+    #[test]
+    fn start_export_xlsx_heatmap_grid_matches_get_image_heatmap() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+            ObjectSpec::new("img1.tif", "ClassA", 1, 20)
+                .at_centroid(60.0, 10.0)
+                .with_image_size(100, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            square_size: Some(50),
+            with_heatmap: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("heatmap export");
+
+        let expected = database
+            .get_image_heatmap(
+                &ImageHeatmapFilter {
+                    plane: PlaneFilter {
+                        z_stack: 0,
+                        t_stack: 0,
+                    },
+                    image_rel_path: "img1.tif".to_string(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Valid(1),
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    square_size: Some(50),
+                },
+                &View::Heatmap,
+            )
+            .expect("expected image heatmap grid");
+
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("heatmap_img1.xlsx")).expect("open heatmap_img1.xlsx");
+        let range = workbook.worksheet_range("ClassA").expect("ClassA sheet");
+        assert_grid_matches_at(&range, 0, &expected);
+        assert_eq!(data_f64(range.get_value((2, 1))), 10.0, "R0C0");
+        assert_eq!(data_f64(range.get_value((2, 2))), 20.0, "R0C1");
+    }
+
+    #[test]
+    fn start_export_xlsx_plate_list_and_well_list_report_the_seeded_average() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10),
+            ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            with_plates_and_wells_as_list: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("flat-pivot export");
+
+        let mut plate_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate_list.xlsx")).expect("open plate_list.xlsx");
+        let plate_range = plate_wb.worksheet_range("Plate").expect("Plate sheet");
+        assert_eq!(
+            plate_range.get_value((0, 0)),
+            Some(&calamine::Data::String("Well".to_string()))
+        );
+        assert_eq!(
+            plate_range.get_value((1, 0)),
+            Some(&calamine::Data::String("A1".to_string()))
+        );
+        assert_eq!(data_f64(plate_range.get_value((1, 1))), 15.0);
+
+        let mut well_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("well_list.xlsx")).expect("open well_list.xlsx");
+        let well_range = well_wb.worksheet_range("Well").expect("Well sheet");
+        assert_eq!(
+            well_range.get_value((0, 0)),
+            Some(&calamine::Data::String("Well".to_string()))
+        );
+        // Two data rows: field "01" (value 10) and field "02" (value 20),
+        // sorted by (well, field-as-number) - see `export_plate_and_well_as_flat_list`.
+        assert_eq!(data_f64(well_range.get_value((1, 3))), 10.0);
+        assert_eq!(data_f64(well_range.get_value((2, 3))), 20.0);
+    }
+
+    #[test]
+    fn start_export_runs_every_xlsx_document_type_together() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+            ObjectSpec::new("B2_01.tif", "ClassA", 1, 20)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+        ]);
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns,
+            aggregations: vec![Aggregation::Avg],
+            with_list_view: true,
+            with_grouped_by_image_list: true,
+            with_plate_view: true,
+            with_plates_and_wells_as_list: true,
+            with_heatmap: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("full xlsx export");
+
+        for name in [
+            "list.xlsx",
+            "grouped_by_image.xlsx",
+            "plate.xlsx",
+            "well.xlsx",
+            "plate_list.xlsx",
+            "well_list.xlsx",
+            "heatmap_A1_01.xlsx",
+            "heatmap_B2_01.xlsx",
+        ] {
+            let bytes = std::fs::read(out_dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"));
+            assert_eq!(&bytes[..4], b"PK\x03\x04", "{name} is not a zip/xlsx file");
+        }
+    }
+
+    #[test]
+    fn start_export_object_classes_filter_restricts_plate_well_flat_list_and_heatmap() {
+        let (database, out_dir) = open(&[
+            ObjectSpec::new("A1_01.tif", "ClassA", 1, 10)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+            ObjectSpec::new("A1_01.tif", "ClassB", 2, 999)
+                .at_centroid(10.0, 10.0)
+                .with_image_size(100, 100),
+        ]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            object_classes: vec![ObjectClass::Valid(1)],
+            square_size: Some(50),
+            with_plate_view: true,
+            with_plates_and_wells_as_list: true,
+            with_heatmap: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("filtered export");
+
+        for file in ["plate.xlsx", "well.xlsx", "heatmap_A1_01.xlsx"] {
+            let workbook: calamine::Xlsx<_> =
+                calamine::open_workbook(out_dir.join(file)).unwrap_or_else(|e| panic!("open {file}: {e}"));
+            let sheets = workbook.sheet_names();
+            assert_eq!(
+                sheets,
+                vec!["ClassA".to_string()],
+                "{file} must only have a sheet for the selected class, not ClassB: {sheets:?}"
+            );
+        }
+
+        let mut plate_list_wb: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("plate_list.xlsx")).expect("open plate_list.xlsx");
+        let plate_list_range = plate_list_wb.worksheet_range("Plate").expect("Plate sheet");
+        let header = plate_list_range.get_value((0, 1)).expect("combo header");
+        assert!(
+            matches!(header, calamine::Data::String(s) if s.contains("ClassA") && !s.contains("ClassB")),
+            "plate_list.xlsx combo header must only reference the selected class: {header:?}"
+        );
+    }
+
+    #[test]
+    fn start_export_with_list_coloc_details_xlsx_writes_a_second_sheet_with_shaded_rows() {
+        let objects = vec![
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .with_coloc(r#"{"2":["00000000-0000-0000-0000-000000000001"]}"#),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 99),
+        ];
+        let (database, out_dir) = open(&objects);
+        let (z_stacks, t_stacks) = full_range();
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::XLSX,
+            z_stacks,
+            t_stacks,
+            columns: vec![
+                Column::ObjectClass,
+                Column::AreaSizePx,
+                Column::ColocCount(ObjectClass::Valid(2)),
+            ],
+            with_list_view: true,
+            with_list_coloc_details: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("xlsx export with coloc details");
+
+        let mut workbook: calamine::Xlsx<_> =
+            calamine::open_workbook(out_dir.join("list.xlsx")).expect("open list.xlsx");
+        let sheets = workbook.sheet_names();
+        assert!(sheets.contains(&"List".to_string()));
+        assert!(sheets.contains(&"List (Coloc Details)".to_string()));
+        let coloc_range = workbook
+            .worksheet_range("List (Coloc Details)")
+            .expect("coloc details sheet");
+        // 2 fanned-out rows (one per source object) plus the header.
+        assert_eq!(coloc_range.rows().count(), 3);
+    }
+
+    #[test]
+    fn start_export_reports_an_error_when_the_output_directory_cannot_be_created() {
+        let (database, _out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocking_file = dir.path().join("blocker");
+        std::fs::write(&blocking_file, b"not a directory").expect("write blocking file");
+        let export = ResultExport {
+            // A regular file can't have a subdirectory created under it.
+            output_dir: blocking_file.join("sub"),
+            format: ExportFormat::CSV,
+            with_list_view: true,
+            ..Default::default()
+        };
+        let result = export.start_export(&database, &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_export_xlsx_save_failure_surfaces_as_an_internal_error() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        // Pre-create a *directory* at the exact path `list.xlsx` would be
+        // saved to, so `Workbook::save` fails instead of succeeding.
+        std::fs::create_dir_all(out_dir.join("list.xlsx")).expect("pre-create blocking directory");
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let export = ResultExport {
+            output_dir: out_dir,
+            format: ExportFormat::XLSX,
+            columns,
+            with_list_view: true,
+            ..Default::default()
+        };
+        let result = export.start_export(&database, &mut no_progress());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn start_export_grouped_by_image_with_a_non_matching_class_filter_is_an_empty_but_valid_document() {
+        let (database, out_dir) = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 100)]);
+        let export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            columns: vec![Column::AreaSizePx],
+            aggregations: vec![Aggregation::Avg],
+            // No class 99 was ever seeded - a non-empty selection matching
+            // zero rows, exercising `fetch_all_grouped_by_image_rows`'s
+            // "no rows at all" min/max fallback (as opposed to an
+            // explicitly-empty `Some(vec![])` selection, which short-
+            // circuits earlier).
+            object_classes: vec![ObjectClass::Valid(99)],
+            with_grouped_by_image_list: true,
+            ..Default::default()
+        };
+        export
+            .start_export(&database, &mut no_progress())
+            .expect("export with a non-matching filter should still succeed");
+        let content =
+            std::fs::read_to_string(out_dir.join("grouped_by_image.csv")).expect("read csv");
+        assert_eq!(content.lines().count(), 1, "header only, no data rows");
+    }
+
+    #[test]
+    fn aggregation_label_covers_every_variant() {
+        assert_eq!(aggregation_label(&Aggregation::Avg), "Average");
+        assert_eq!(aggregation_label(&Aggregation::Min), "Minimum");
+        assert_eq!(aggregation_label(&Aggregation::Max), "Maximum");
+        assert_eq!(aggregation_label(&Aggregation::Stddev), "Std Dev");
+        assert_eq!(aggregation_label(&Aggregation::Sum), "Sum");
+        assert_eq!(aggregation_label(&Aggregation::Median), "Median");
+        assert_eq!(aggregation_label(&Aggregation::Skewness), "Skewness");
+    }
+
+    #[test]
+    fn cell_to_f64_reads_both_numeric_cell_variants_and_rejects_others() {
+        let float_cell = Cell {
+            value: CellValue::Float(1.5),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+        };
+        let int_cell = Cell {
+            value: CellValue::Integer(7),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+        };
+        let string_cell = Cell {
+            value: CellValue::String("x".to_string()),
+            bg_color: 0,
+            alternating_color: false,
+            search_key: None,
+        };
+        assert_eq!(cell_to_f64(&float_cell), Some(1.5));
+        assert_eq!(cell_to_f64(&int_cell), Some(7.0));
+        assert_eq!(cell_to_f64(&string_cell), None);
+    }
+
+    #[test]
+    fn sheet_namer_falls_back_to_a_generic_name_for_a_blank_class_name() {
+        let mut namer = SheetNamer::new();
+        assert_eq!(namer.unique("   "), "Sheet");
     }
 }

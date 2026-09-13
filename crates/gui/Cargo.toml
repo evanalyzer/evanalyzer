@@ -46,5 +46,7 @@ features = [
 [dev-dependencies]
 kornia-apriltag = { workspace = true }
 i-slint-backend-testing = "=1.17.1"
+duckdb = { workspace = true, features = ["bundled"] }
+tempfile = { workspace = true }
 
 

@@ -55,7 +55,7 @@ struct ListFilter {
     pub aggregations: Vec<Aggregation>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ChartKind {
     #[default]
     Histogram,
@@ -3528,5 +3528,401 @@ mod tests {
         assert!(state.get_has_error());
         assert!(!state.get_is_exporting());
         assert!(!state.get_error_message().is_empty());
+    }
+
+    // -- Real-database fixture ---------------------------------------------
+    //
+    // `attach_callbacks`'s ~60 callbacks are almost entirely untested above
+    // this point - every real one (as opposed to `on_refresh_clicked`-style
+    // stubs) needs a real, opened `ResultsGenerator` to do anything but
+    // early-return on "no database". This seeds a small but genuinely
+    // plate/well/heatmap-shaped `.evadb` (schema kept in sync with
+    // evanalyzer_core's `duckdb.rs` `CREATE_TABLES`, same duplication
+    // reasoning as `crates/app/src/results/test_support.rs`/`crates/cli/src/
+    // commands/test_support.rs`) so the tests below can open it for real via
+    // `ResultsStateController::open_database` and exercise the callbacks
+    // that only do anything once real query results exist.
+
+    /// Well A1 has two fields (`A1_01.tif`, `A1_02.tif`), well A2 has one
+    /// (`A2_01.tif`) - matching `DEFAULT_GROUPING_REGEX` - across two
+    /// classes, with one object colocalizing with another so
+    /// `with_coloc_details`-adjacent code has something real to resolve.
+    fn seed_test_db(path: &std::path::Path) {
+        let conn = duckdb::Connection::open(path).expect("open test db");
+        conn.execute_batch(
+            "CREATE TABLE objects (
+                image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL,
+                c_stack INTEGER, z_stack INTEGER, t_stack INTEGER,
+                object_id UUID NOT NULL,
+                seg_class_name VARCHAR, seg_class_id INTEGER,
+                object_class_name VARCHAR, object_class_id VARCHAR,
+                parent_id VARCHAR, children VARCHAR, track_id UBIGINT,
+                centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
+                bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
+                bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE, bbox_xmax_nm DOUBLE, bbox_ymax_nm DOUBLE,
+                area_px UBIGINT, area_nm2 DOUBLE, perimeter_px DOUBLE, perimeter_nm DOUBLE,
+                circularity DOUBLE, solidity DOUBLE, aspect_ratio DOUBLE, roundness DOUBLE, compactness DOUBLE,
+                major_axis_px DOUBLE, minor_axis_px DOUBLE, major_axis_nm DOUBLE, minor_axis_nm DOUBLE,
+                major_axis_angle DOUBLE, eccentricity DOUBLE,
+                feret_diameter_px DOUBLE, min_feret_px DOUBLE, feret_diameter_nm DOUBLE, min_feret_nm DOUBLE,
+                touches_edge BOOLEAN,
+                pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
+                image_bit_depth UTINYINT,
+                intensities_json JSON, coloc_json JSON
+            );
+            CREATE TABLE images (
+                image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
+                successful BOOLEAN NOT NULL DEFAULT true, error_message VARCHAR,
+                disabled BOOLEAN NOT NULL DEFAULT false,
+                width UINTEGER NOT NULL, height UINTEGER NOT NULL,
+                c_stacks UINTEGER NOT NULL, z_stacks UINTEGER NOT NULL, t_stacks UINTEGER NOT NULL
+            );
+            CREATE TABLE classes (
+                class_id INTEGER NOT NULL PRIMARY KEY, name VARCHAR NOT NULL, color UINTEGER
+            );",
+        )
+        .expect("create test schema");
+
+        let ch0_intensities = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
+        let insert = |idx: usize,
+                      image: &str,
+                      class_name: &str,
+                      class_id: i32,
+                      area_px: u64,
+                      centroid: (f64, f64),
+                      coloc_json: &str| {
+            let object_id = format!("00000000-0000-0000-0000-{idx:012}");
+            conn.execute(
+                "INSERT INTO objects (
+                    image_name, image_rel_path, t_stack, z_stack, object_id, seg_class_name, seg_class_id,
+                    object_class_name, object_class_id, track_id,
+                    centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+                    bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                    bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+                    area_px, area_nm2, perimeter_px, perimeter_nm,
+                    circularity, solidity, aspect_ratio, roundness, compactness,
+                    major_axis_px, minor_axis_px, eccentricity, touches_edge,
+                    pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                    intensities_json, coloc_json
+                ) VALUES (
+                    ?, ?, 0, 0, ?, ?, ?,
+                    ?, ?, 0,
+                    ?, ?, 0, 0,
+                    0, 0, 10, 10,
+                    0, 0, 0, 0,
+                    ?, ?, 40, 40,
+                    1.0, 1.0, 1.0, 1.0, 1.0,
+                    10, 10, 1.0, false,
+                    1.0, 1.0, 1.0,
+                    ?, ?
+                )",
+                duckdb::params![
+                    image,
+                    image,
+                    object_id,
+                    class_name,
+                    class_id,
+                    format!("[\"{class_name}\"]"),
+                    format!("[{class_id}]"),
+                    centroid.0,
+                    centroid.1,
+                    area_px,
+                    area_px as f64,
+                    ch0_intensities,
+                    coloc_json,
+                ],
+            )
+            .unwrap_or_else(|e| panic!("insert object {idx}: {e}"));
+        };
+
+        insert(0, "A1_01.tif", "ClassA", 1, 10, (10.0, 10.0), r#"{"2":["00000000-0000-0000-0000-000000000002"]}"#);
+        insert(1, "A1_02.tif", "ClassA", 1, 20, (60.0, 10.0), "{}");
+        insert(2, "A2_01.tif", "ClassB", 2, 30, (10.0, 10.0), "{}");
+
+        for image in ["A1_01.tif", "A1_02.tif", "A2_01.tif"] {
+            conn.execute(
+                "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
+                 VALUES (?, ?, 100, 100, 1, 1, 1)",
+                duckdb::params![image, image],
+            )
+            .unwrap_or_else(|e| panic!("insert image {image}: {e}"));
+        }
+        for (id, name) in [(1, "ClassA"), (2, "ClassB")] {
+            conn.execute(
+                "INSERT INTO classes (class_id, name, color) VALUES (?, ?, 0)",
+                duckdb::params![id, name],
+            )
+            .unwrap_or_else(|e| panic!("insert class {name}: {e}"));
+        }
+    }
+
+    /// Builds a real, headless `(AppWindow, ResultsWindow)` pair with
+    /// callbacks attached and a real seeded `.evadb` already opened via
+    /// `open_database` - the common setup every test below this point
+    /// shares. Leaks the backing `TempDir` (only the file path is needed
+    /// afterwards) - acceptable for a short-lived test process.
+    fn controller_with_open_database() -> (AppWindow, ResultsWindow, Arc<ResultsStateController>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("results.evadb");
+        seed_test_db(&path);
+        std::mem::forget(dir);
+
+        let (ui, results_ui) = test_ui_windows();
+        let controller = make_controller_with_ui(ui.as_weak(), results_ui.as_weak());
+        controller.attach_callbacks();
+        controller.open_database(path);
+        (ui, results_ui, controller)
+    }
+
+    #[test]
+    fn open_database_populates_classes_columns_images_and_default_filters() {
+        let (_ui, _results_ui, controller) = controller_with_open_database();
+
+        let classes = controller.classes.lock().unwrap();
+        assert_eq!(classes.len(), 2);
+        drop(classes);
+
+        assert!(!controller.available_columns.lock().unwrap().is_empty());
+
+        let images = controller.images.lock().unwrap();
+        assert_eq!(images.len(), 3);
+        drop(images);
+
+        let list_filter = controller.list_filter.lock().unwrap();
+        assert_eq!(list_filter.columns, DEFAULT_LIST_COLUMNS.to_vec());
+        assert_eq!(list_filter.object_classes.len(), 2, "every class selected by default");
+        drop(list_filter);
+
+        assert!(controller.matrix_filter.lock().unwrap().is_some());
+        assert!(controller.db_path.lock().unwrap().is_some());
+        assert!(!*controller.export_populated.lock().unwrap());
+
+        // `refresh_list`/`update_matrix_view` both ran as part of opening -
+        // every object's location is cached, and both seeded wells got a
+        // plate cell.
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
+        let matrix_cells = controller.matrix_cells.lock().unwrap();
+        assert!(matrix_cells.contains_key("A1"));
+        assert!(matrix_cells.contains_key("A2"));
+    }
+
+    #[test]
+    fn list_image_and_class_filters_narrow_the_cached_row_locations() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_list_image_selected("A1_01.tif".into(), true);
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 1);
+
+        // "Select none" is a sentinel matching *nothing* (not "clear the
+        // filter to match everything") - see `select_none_images`.
+        state.invoke_list_image_select_none();
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 0);
+
+        state.invoke_list_image_select_all();
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
+
+        // Deselect ClassB - only the two ClassA objects (both in well A1)
+        // should remain.
+        state.invoke_list_class_selected("ClassB".into(), false);
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 2);
+        state.invoke_list_class_select_all();
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn list_columns_group_by_coloc_details_and_pagination_do_not_panic() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_list_columns_item_selected("area_px".into(), true);
+        assert!(controller
+            .list_filter
+            .lock()
+            .unwrap()
+            .columns
+            .contains(&Column::AreaSizePx));
+        state.invoke_list_columns_select_none();
+        assert!(controller.list_filter.lock().unwrap().columns.is_empty());
+        state.invoke_list_columns_select_all();
+        assert!(!controller.list_filter.lock().unwrap().columns.is_empty());
+
+        state.invoke_list_aggregation_item_selected("min".into(), true);
+        state.invoke_list_aggregation_select_none();
+        state.invoke_list_aggregation_select_all();
+
+        state.invoke_list_with_coloc_details_changed(true);
+        assert!(controller.list_filter.lock().unwrap().with_coloc_details);
+
+        state.invoke_list_group_by_selected("images".into());
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 0, "grouped view has no per-object rows");
+        state.invoke_list_group_by_selected("objects".into());
+
+        state.invoke_list_next_page();
+        assert_eq!(*controller.list_page.lock().unwrap(), 1);
+        state.invoke_list_prev_page();
+        assert_eq!(*controller.list_page.lock().unwrap(), 0);
+        // Clamped, not negative.
+        state.invoke_list_prev_page();
+        assert_eq!(*controller.list_page.lock().unwrap(), 0);
+
+        // No real image file on disk to open, but this must not panic.
+        state.invoke_list_row_clicked(0);
+    }
+
+    #[test]
+    fn matrix_toolbar_callbacks_update_the_filter_and_refresh_the_grid() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_matrix_value_clicked();
+        state.invoke_matrix_aggregate_selected("Minimum".into());
+        assert_eq!(
+            controller.matrix_filter.lock().unwrap().as_ref().unwrap().aggregation,
+            Aggregation::Min
+        );
+
+        state.invoke_matrix_class_selected("ClassB".into(), true);
+        assert_eq!(
+            controller.matrix_filter.lock().unwrap().as_ref().unwrap().object_classe,
+            ObjectClass::Valid(2)
+        );
+
+        state.invoke_matrix_regex_changed(r"^(([A-H])([0-9]{1,2}))_([0-9]+)\.".into());
+        state.invoke_matrix_color_schema_selected("Viridis".into(), true);
+        state.invoke_matrix_scale_set_manual(0.0, 100.0);
+        assert!(matches!(
+            controller.matrix_filter.lock().unwrap().as_ref().unwrap().color_scale,
+            ColorScale::Manual(_, _)
+        ));
+        state.invoke_matrix_scale_set_auto();
+        assert!(matches!(
+            controller.matrix_filter.lock().unwrap().as_ref().unwrap().color_scale,
+            ColorScale::Auto
+        ));
+
+        state.invoke_matrix_plate_size_selected("96-well (8x12)".into(), true);
+        state.invoke_matrix_well_rows_changed("6".into());
+        state.invoke_matrix_well_cols_changed("6".into());
+        assert_eq!(
+            controller.matrix_filter.lock().unwrap().as_ref().unwrap().well_size,
+            Some(WellSize { rows: 6, cols: 6 })
+        );
+        state.invoke_matrix_square_size_selected("128".into(), true);
+        assert_eq!(
+            controller.matrix_filter.lock().unwrap().as_ref().unwrap().square_size,
+            Some(128)
+        );
+    }
+
+    #[test]
+    fn plate_well_and_image_heatmap_drill_down_all_the_way() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_rail_mode_selected(ResultsRailMode::Matrix);
+        state.invoke_plate_cell_clicked("A1".into());
+        assert_eq!(state.get_active_well(), "A1");
+
+        state.invoke_open_well_clicked("A1".into());
+        assert_eq!(controller.current_well.lock().unwrap().as_deref(), Some("A1"));
+        let well_cells = controller.well_cells.lock().unwrap();
+        assert!(well_cells.contains_key("A1_01.tif"));
+        assert!(well_cells.contains_key("A1_02.tif"));
+        drop(well_cells);
+
+        state.invoke_well_cell_clicked("A1_01.tif".into());
+        assert_eq!(state.get_active_well(), "A1_01.tif");
+
+        state.invoke_well_field_clicked("A1_01.tif".into());
+        assert_eq!(
+            controller.current_image.lock().unwrap().as_deref(),
+            Some("A1_01.tif")
+        );
+        let heatmap_cells = controller.image_heatmap_cells.lock().unwrap();
+        assert!(!heatmap_cells.is_empty());
+        let tile_key = heatmap_cells.keys().next().cloned().unwrap();
+        drop(heatmap_cells);
+
+        state.invoke_image_heatmap_cell_clicked(tile_key.clone().into());
+        assert_eq!(state.get_active_well(), tile_key);
+
+        // Breadcrumb nav back to the plate level, and the plain stubs.
+        state.invoke_breadcrumb_nav(0);
+        assert_eq!(controller.current_well.lock().unwrap().as_deref(), None);
+        state.invoke_matrix_back_to_plate();
+        state.invoke_matrix_back_to_well();
+        state.invoke_object_marker_clicked(0);
+    }
+
+    #[test]
+    fn well_cell_and_image_heatmap_cell_click_with_an_unknown_key_warns_but_does_not_panic() {
+        let (_ui, results_ui, _controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+        state.invoke_plate_cell_clicked("Z99".into());
+        state.invoke_well_cell_clicked("does-not-exist.tif".into());
+        state.invoke_well_field_clicked("does-not-exist.tif".into());
+        state.invoke_image_heatmap_cell_clicked("R99C99".into());
+    }
+
+    #[test]
+    fn chart_callbacks_switch_kind_and_axes_without_panicking() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_chart_column_selected("area_px".into());
+        assert_eq!(controller.chart_filter.lock().unwrap().column, Column::AreaSizePx);
+
+        state.invoke_chart_kind_selected(ResultsChartKind2::Scatter);
+        state.invoke_chart_y_column_selected("area_px".into());
+        assert_eq!(controller.chart_filter.lock().unwrap().kind, ChartKind::Scatter);
+
+        state.invoke_chart_kind_selected(ResultsChartKind2::Boxplot);
+        state.invoke_chart_class_selected("ClassA".into(), true);
+        assert_eq!(
+            controller.chart_filter.lock().unwrap().object_class,
+            Some(ObjectClass::Valid(1))
+        );
+
+        state.invoke_chart_kind_selected(ResultsChartKind2::Histogram);
+    }
+
+    #[test]
+    fn export_dialog_select_all_and_select_none_callbacks_do_not_panic() {
+        let (_ui, results_ui, _controller) = controller_with_open_database();
+        results_ui.global::<ResultsState>().invoke_export_dialog_open();
+        let state = results_ui.global::<ExportDialogState>();
+
+        state.invoke_image_select_all();
+        state.invoke_image_select_none();
+        state.invoke_class_select_all();
+        state.invoke_class_select_none();
+        state.invoke_column_select_all();
+        state.invoke_column_select_none();
+        state.invoke_aggregation_item_selected("avg".into(), true);
+
+        let image_key = state.get_image_items().iter().next().map(|item| item.key);
+        if let Some(key) = image_key {
+            state.invoke_image_item_selected(key, true);
+        }
+        let class_key = state.get_class_items().iter().next().map(|item| item.key);
+        if let Some(key) = class_key {
+            state.invoke_class_item_selected(key, true);
+        }
+        let column_key = state.get_column_items().iter().next().map(|item| item.key);
+        if let Some(key) = column_key {
+            state.invoke_column_item_selected(key, true);
+        }
+    }
+
+    #[test]
+    fn z_and_t_changed_update_the_plane_filter_and_refresh() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+        state.invoke_z_changed(2);
+        state.invoke_t_changed(3);
+        let plane = controller.plane_filter.lock().unwrap();
+        assert_eq!(plane.selected_z_stack, 2);
+        assert_eq!(plane.selected_t_stack, 3);
     }
 }

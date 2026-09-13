@@ -84,6 +84,7 @@ regex = "1"
 human-sort = "0.2"
 rust_xlsxwriter =  "0.99.0"
 dirs = "7.0.0"
+calamine = "0.36.1"
 
 [profile.release]
 strip = true

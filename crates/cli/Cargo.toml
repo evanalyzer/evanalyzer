@@ -17,3 +17,4 @@ serde_json = { workspace = true }
 [dev-dependencies]
 duckdb = { workspace = true, features = ["bundled"] }
 tempfile = { workspace = true }
+calamine = { workspace = true }

@@ -2736,6 +2736,269 @@ mod tests {
             PlateDimensions::PLate2x3
         );
     }
+
+    #[test]
+    fn plate_dimensions_reports_correct_row_col_counts_for_every_size() {
+        assert_eq!(PlateDimensions::PLate2x3.dimensions(), (2, 3));
+        assert_eq!(PlateDimensions::Plate3x4.dimensions(), (3, 4));
+        assert_eq!(PlateDimensions::Plate4x6.dimensions(), (4, 6));
+        assert_eq!(PlateDimensions::Plate6x8.dimensions(), (6, 8));
+        assert_eq!(PlateDimensions::Plate8x12.dimensions(), (8, 12));
+        assert_eq!(PlateDimensions::Plate16x24.dimensions(), (16, 24));
+        assert_eq!(PlateDimensions::Plate32x48.dimensions(), (32, 48));
+    }
+
+    #[test]
+    fn color_scale_gradient_and_value_to_color_cover_every_schema() {
+        for schema in [
+            ColorSchema::Excel,
+            ColorSchema::Viridis,
+            ColorSchema::Plasma,
+            ColorSchema::Inferno,
+            ColorSchema::Cividis,
+            ColorSchema::Coolwarm,
+            ColorSchema::RedBlue,
+            ColorSchema::YlGnBu,
+            ColorSchema::Haline,
+            ColorSchema::Algae,
+            ColorSchema::Thermal,
+        ] {
+            let stops = color_scale_gradient(&schema);
+            assert_eq!(stops.len(), COLOR_SCALE_GRADIENT_STOPS);
+            assert_ne!(
+                stops[0],
+                stops[COLOR_SCALE_GRADIENT_STOPS - 1],
+                "gradient should not be flat"
+            );
+        }
+    }
+
+    #[test]
+    fn column_display_label_coloc_count_falls_back_to_a_numeric_class_label() {
+        let classes: Vec<Class> = vec![];
+        assert_eq!(
+            Column::ColocCount(ObjectClass::Valid(7)).display_label(&classes),
+            "Coloc with class 7"
+        );
+        assert_eq!(
+            Column::ColocCount(ObjectClass::Unset).display_label(&classes),
+            "Coloc with unset"
+        );
+    }
+
+    #[test]
+    fn get_object_list_with_an_explicitly_empty_class_selection_is_empty() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: Some(vec![]),
+                columns: vec![Column::ObjectClass],
+                with_coloc_details: false,
+                page: no_page(),
+            })
+            .unwrap();
+        assert_eq!(result.source_object_count, 0);
+        assert!(result.rows.is_empty());
+    }
+
+    #[test]
+    fn get_object_list_on_a_plane_with_no_objects_at_all_is_empty() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: PlaneFilter {
+                    z_stack: 99,
+                    t_stack: 99,
+                },
+                images: None,
+                object_classes: None,
+                columns: vec![Column::AreaSizePx],
+                with_coloc_details: false,
+                page: no_page(),
+            })
+            .unwrap();
+        assert_eq!(result.source_object_count, 0);
+        assert!(result.rows.is_empty());
+    }
+
+    #[test]
+    fn get_grouped_by_image_object_classes_filter_restricts_to_the_selected_class() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 999),
+        ]);
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: Some(vec![ObjectClass::Valid(1)]),
+                columns: vec![Column::AreaSizePx],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+            })
+            .unwrap();
+        assert_eq!(result.rows.len(), 1, "only ClassA's group should be reported");
+    }
+
+    #[test]
+    fn get_grouped_by_image_with_an_explicitly_empty_class_selection_is_empty() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: plane(),
+                images: None,
+                object_classes: Some(vec![]),
+                columns: vec![Column::AreaSizePx],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+            })
+            .unwrap();
+        assert!(result.rows.is_empty());
+    }
+
+    #[test]
+    fn get_grouped_by_image_on_a_plane_with_no_objects_reports_a_zeroed_range() {
+        let generator = open(&[ObjectSpec::new("img1.tif", "ClassA", 1, 10)]);
+        let result = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                plane: PlaneFilter {
+                    z_stack: 99,
+                    t_stack: 99,
+                },
+                images: None,
+                object_classes: None,
+                columns: vec![Column::AreaSizePx],
+                aggregation: vec![Aggregation::Avg],
+                page: no_page(),
+            })
+            .unwrap();
+        assert!(result.rows.is_empty());
+        assert_eq!(result.min, 0.0);
+        assert_eq!(result.max, 0.0);
+    }
+
+    #[test]
+    fn get_grouped_by_image_pagination_cursor_returns_the_next_page() {
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img2.tif", "ClassA", 1, 20),
+            ObjectSpec::new("img3.tif", "ClassA", 1, 30),
+        ]);
+        let base = GroupedByImageFilter {
+            plane: plane(),
+            images: None,
+            object_classes: None,
+            columns: vec![Column::AreaSizePx],
+            aggregation: vec![Aggregation::Avg],
+            page: Pagination { limit: 1, after: None },
+        };
+        let first = generator.get_grouped_by_image(&base).unwrap();
+        assert_eq!(first.rows.len(), 1);
+        let cursor = first.row_names.last().cloned();
+
+        let second = generator
+            .get_grouped_by_image(&GroupedByImageFilter {
+                page: Pagination { limit: 1, after: cursor },
+                ..base
+            })
+            .unwrap();
+        assert_eq!(second.rows.len(), 1);
+        assert_ne!(first.row_names, second.row_names);
+    }
+
+    #[test]
+    fn get_object_list_with_coloc_details_and_no_colocalizing_partners_still_fills_every_row() {
+        // Both a coloc-class column and a resolvable metric are selected
+        // (activating `with_coloc_details`'s fan-out), but neither object
+        // colocalizes with anything at all - `partners_by_object`/
+        // `partner_rows` must handle "not a single partner anywhere"
+        // gracefully rather than only "some partners, some not".
+        let generator = open(&[
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 20),
+        ]);
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![Column::ColocCount(ObjectClass::Valid(2)), Column::AreaSizePx],
+                with_coloc_details: true,
+                page: no_page(),
+            })
+            .unwrap();
+        assert_eq!(result.rows.len(), 2, "one row per source object, no fan-out");
+        for row in &result.rows {
+            assert!(matches!(row.last().unwrap().value, CellValue::String(ref s) if s == "-"));
+        }
+    }
+
+    #[test]
+    fn get_object_list_with_coloc_details_dashes_the_inactive_coloc_class_column() {
+        // Two coloc-class columns selected at once: object A colocalizes
+        // with class 2 only, so its fanned-out row(s) must resolve the
+        // class-2 cross-cell but dash the class-3 one, never the reverse.
+        let objects = vec![
+            ObjectSpec::new("img1.tif", "ClassA", 1, 10)
+                .with_coloc(r#"{"2":["00000000-0000-0000-0000-000000000001"]}"#),
+            ObjectSpec::new("img1.tif", "ClassB", 2, 99),
+        ];
+        let generator = open(&objects);
+        let result = generator
+            .get_object_list(&ListFilter {
+                plane: plane(),
+                images: None,
+                object_classes: None,
+                columns: vec![
+                    Column::AreaSizePx,
+                    Column::ColocCount(ObjectClass::Valid(2)),
+                    Column::ColocCount(ObjectClass::Valid(3)),
+                ],
+                with_coloc_details: true,
+                page: no_page(),
+            })
+            .unwrap();
+
+        // Column order (sorted): AreaSizePx, ColocCount(2), ColocCount(3),
+        // then the coloc-detail cross-columns in the same
+        // coloc-class-then-metric order: (2, AreaSizePx), (3, AreaSizePx).
+        let object_a_row = &result.rows[0];
+        let dash = |cell: &Cell| matches!(cell.value, CellValue::String(ref s) if s == "-");
+        assert!(!dash(&object_a_row[3]), "class 2's cross-cell should resolve, not dash");
+        assert!(dash(&object_a_row[4]), "class 3's cross-cell must dash - A doesn't colocalize with it");
+    }
+
+    #[test]
+    fn get_group_by_plate_honors_a_custom_grouping_regex() {
+        // A single well under this custom `(plate)-(well)(idx)` scheme -
+        // proves the non-default `grouping_regex` branch is actually used
+        // (rather than falling back to `DEFAULT_GROUPING_REGEX`, which
+        // wouldn't match this image name at all and would report nothing).
+        let generator = open(&[ObjectSpec::new("plateX-well1.tif", "ClassA", 1, 42)]);
+        let result = generator
+            .get_group_by_plate(
+                &PlateFilter {
+                    plane: plane(),
+                    grouping_regex: r"^(plateX)-(well)(\d+)\.".to_string(),
+                    aggregation: Aggregation::Avg,
+                    object_class: ObjectClass::Unset,
+                    column: Column::AreaSizePx,
+                    color_schema: ColorSchema::default(),
+                    color_scale: ColorScale::default(),
+                    matrix_dimension: None,
+                },
+                &View::List,
+            )
+            .unwrap();
+        assert_eq!(result.row_names, vec!["plateX".to_string()]);
+        let cell_f64 = |cell: &Cell| match &cell.value {
+            CellValue::Float(v) => *v as f64,
+            _ => panic!("expected a float cell"),
+        };
+        assert_eq!(cell_f64(&result.rows[0][1]), 42.0);
+    }
 }
 
 /// One row of the `objects` table, as fetched by `get_list`'s hand-written
