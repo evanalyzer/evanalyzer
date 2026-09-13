@@ -1951,15 +1951,23 @@ fn object_location(object: &ObjectRow) -> (String, [u32; 4]) {
     )
 }
 
-/// Whether `column` names a plain per-object measurement that can be
-/// meaningfully resolved on a *different* object — i.e. a coloc partner's
-/// value for that same column, per `ListFilter::with_coloc_details`.
-/// `ObjectId`/`ImageName`/`ObjectClass`/`ColocCount` describe identity or
-/// colocalization itself, not a measurement, so they're excluded.
+/// Whether `column` names a per-object value that can be meaningfully
+/// resolved on a *different* object — i.e. a coloc partner's own value for
+/// that same column, per `ListFilter::with_coloc_details`. Includes
+/// `ObjectId` deliberately (even though it's identity, not a measurement):
+/// without it there'd be no way to tell *which* partner object a fanned-out
+/// coloc-detail row is actually about, only which class it belongs to.
+/// `ImageName`/`ObjectClass`/`ColocCount` stay excluded — a coloc partner is
+/// always in the same image as its source object (so `ImageName` would
+/// just repeat the source row's own value), the partner's class is already
+/// implied by which `coloc_class_columns` combination produced the row, and
+/// resolving `ColocCount` on the partner would mean its *own* colocalization
+/// counts, not this relationship.
 fn is_resolvable_metric(column: &Column) -> bool {
     matches!(
         column,
-        Column::AreaSizePx
+        Column::ObjectId
+            | Column::AreaSizePx
             | Column::AreaSizeNm
             | Column::PerimeterPx
             | Column::PerimeterNm
