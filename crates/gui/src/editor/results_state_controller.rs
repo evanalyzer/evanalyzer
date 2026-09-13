@@ -1,12 +1,14 @@
 use crate::editor::images_list_controller::ImagesListController;
 use crate::{
-    BreadcrumbItem, ExportDialogState, MatrixCell, MatrixLevel, MultiSelectItem, ResultRow,
-    ResultsListState, ResultsRailMode, ResultsState, UiState,
+    BreadcrumbItem, ChartBoxplotBox, ChartScatterPoint, ExportDialogState, MatrixCell,
+    MatrixLevel, MultiSelectItem, ResultRow, ResultsChartKind2, ResultsListState, ResultsRailMode,
+    ResultsState, UiState,
 };
 use evanalyzer_app::result::{
-    self, Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry,
-    DatabaseResult, ExportFormat, GroupedByImageFilter, ImageEntry, ImageHeatmapFilter,
-    PlateDimensions, ResultExport, ResultsGenerator, WellFilter, WellSize,
+    self, Aggregation, BoxplotFilter, Cell, CellValue, ColorScale, ColorSchema, Column,
+    ColumnEntry, DatabaseResult, ExportFormat, GroupedByImageFilter, HistogramFilter, ImageEntry,
+    ImageHeatmapFilter, PlateDimensions, ResultCharts, ResultExport, ResultsGenerator,
+    ScatterFilter, WellFilter, WellSize,
 };
 use evanalyzer_cfg::core_types::ObjectClass;
 use evanalyzer_cfg::settings::classification_settings::Class;
@@ -19,6 +21,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 const LIST_PAGE_SIZE: i32 = 500;
+const CHART_HISTOGRAM_BINS: usize = 24;
+const CHART_SCATTER_MAX_POINTS: usize = 2000;
 
 const DEFAULT_LIST_COLUMNS: [Column; 4] = [
     Column::ObjectId,
@@ -51,6 +55,26 @@ struct ListFilter {
     pub aggregations: Vec<Aggregation>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ChartKind {
+    #[default]
+    Histogram,
+    Scatter,
+    Boxplot,
+}
+
+#[derive(Default, Clone)]
+struct ChartFilter {
+    pub kind: ChartKind,
+    /// Histogram/Boxplot's single measurement, Scatter's X axis.
+    pub column: Column,
+    /// Scatter's Y axis only.
+    pub y_column: Column,
+    /// `None` means no class filter (every object) — doesn't apply to
+    /// Boxplot, which always groups by every class present regardless.
+    pub object_class: Option<ObjectClass>,
+}
+
 #[derive(Default)]
 struct MatrixFilter {
     pub object_classe: ObjectClass,
@@ -73,6 +97,7 @@ pub struct ResultsStateController {
     result_generator: Mutex<Option<ResultsGenerator>>,
     list_filter: Mutex<ListFilter>,
     matrix_filter: Mutex<Option<MatrixFilter>>,
+    chart_filter: Mutex<ChartFilter>,
     plane_filter: Mutex<PlaneFilter>,
     list_page: Mutex<i32>,
     list_page_cursors: Mutex<Vec<Option<String>>>,
@@ -136,6 +161,7 @@ impl ResultsStateController {
             result_generator: Mutex::new(None),
             list_filter: Mutex::new(ListFilter::default()),
             matrix_filter: Mutex::new(None),
+            chart_filter: Mutex::new(ChartFilter::default()),
             plane_filter: Mutex::new(PlaneFilter::default()),
             list_page: Mutex::new(0),
             list_page_cursors: Mutex::new(vec![None]),
@@ -270,6 +296,7 @@ impl ResultsStateController {
                     .expect("Poisned")
                     .selected_z_stack = value as u32;
                 manager.refresh_list();
+                manager.refresh_charts();
             });
             let manager = self.clone();
             ui.global::<ResultsState>().on_t_changed(move |value| {
@@ -279,6 +306,7 @@ impl ResultsStateController {
                     .expect("Poisned")
                     .selected_t_stack = value as u32;
                 manager.refresh_list();
+                manager.refresh_charts();
             });
 
             // -- List view --
@@ -796,12 +824,67 @@ impl ResultsStateController {
                 .on_matrix_back_to_well(move || {});
 
             // -- Charts --
+            let manager = self.clone();
+            ui.global::<ResultsState>().on_chart_kind_selected(move |kind| {
+                let kind = match kind {
+                    ResultsChartKind2::Histogram => ChartKind::Histogram,
+                    ResultsChartKind2::Scatter => ChartKind::Scatter,
+                    ResultsChartKind2::Boxplot => ChartKind::Boxplot,
+                };
+                manager.chart_filter.lock().expect("Poisened").kind = kind;
+                manager.refresh_charts();
+            });
+
+            let manager = self.clone();
             ui.global::<ResultsState>()
-                .on_chart_kind_selected(move |_kind| {});
+                .on_chart_column_selected(move |key| {
+                    let classes = manager.classes.lock().expect("Poisened");
+                    let Some(column) = Column::from_key(key.as_str(), &classes) else {
+                        warn!("Unknown chart column key selected: {key}");
+                        return;
+                    };
+                    drop(classes);
+                    manager.chart_filter.lock().expect("Poisened").column = column;
+                    manager.refresh_charts();
+                });
+
+            let manager = self.clone();
             ui.global::<ResultsState>()
-                .on_chart_property_clicked(move || {});
+                .on_chart_y_column_selected(move |key| {
+                    let classes = manager.classes.lock().expect("Poisened");
+                    let Some(column) = Column::from_key(key.as_str(), &classes) else {
+                        warn!("Unknown chart Y column key selected: {key}");
+                        return;
+                    };
+                    drop(classes);
+                    manager.chart_filter.lock().expect("Poisened").y_column = column;
+                    manager.refresh_charts();
+                });
+
+            let manager = self.clone();
             ui.global::<ResultsState>()
-                .on_chart_class_selected(move |_key, _selected| {});
+                .on_chart_class_selected(move |key, selected| {
+                    // Single-select, same as `on_matrix_class_selected`:
+                    // only ever fires with `selected == true` for the
+                    // newly picked row.
+                    if !selected {
+                        return;
+                    }
+                    let class_name = key.to_string();
+                    let Some(object_class) = manager
+                        .classes
+                        .lock()
+                        .expect("Poisened")
+                        .iter()
+                        .find(|class| class.name == class_name)
+                        .map(|class| class.id)
+                    else {
+                        warn!("Unknown class selected: {class_name}");
+                        return;
+                    };
+                    manager.chart_filter.lock().expect("Poisened").object_class = Some(object_class);
+                    manager.refresh_charts();
+                });
 
             // -- Export --
             let manager = self.clone();
@@ -1094,6 +1177,29 @@ impl ResultsStateController {
                     group_by: ListGroupBy::Objects,
                     aggregations: vec![Aggregation::Avg],
                 };
+
+                // Charts default to the first aggregable column for both
+                // Property (X) and Y — mirrors `matrix_filter`/`list_filter`
+                // above being reset to fresh defaults for the newly opened
+                // database rather than lingering on the previous one's
+                // selections.
+                let available_columns = self.available_columns.lock().expect("Poisened").clone();
+                let classes_for_charts = self.classes.lock().expect("Poisened").clone();
+                let default_chart_column = available_columns
+                    .iter()
+                    .map(|entry| entry.key.clone())
+                    .find(is_chartable_column)
+                    .unwrap_or_default();
+                *self.chart_filter.lock().expect("Poisened") = ChartFilter {
+                    kind: ChartKind::Histogram,
+                    column: default_chart_column.clone(),
+                    y_column: default_chart_column.clone(),
+                    object_class: None,
+                };
+                let chart_column_items_vec =
+                    chart_column_items(&available_columns, &classes_for_charts, &default_chart_column);
+                let default_chart_column_label = default_chart_column.display_label(&classes_for_charts);
+
                 let ui_weak = self.ui.clone();
                 slint::invoke_from_event_loop(move || {
                     if let Some(ui_ready) = ui_weak.upgrade() {
@@ -1112,6 +1218,18 @@ impl ResultsStateController {
                         // disabled from whatever the previous database last
                         // had selected.
                         state.set_matrix_aggregate_enabled(true);
+
+                        state.set_chart_kind(ResultsChartKind2::Histogram);
+                        state.set_chart_column_items(ModelRc::from(Rc::new(VecModel::from(
+                            chart_column_items_vec.clone(),
+                        ))));
+                        state.set_chart_column_summary(default_chart_column_label.clone().into());
+                        state.set_chart_y_column_items(ModelRc::from(Rc::new(VecModel::from(
+                            chart_column_items_vec,
+                        ))));
+                        state.set_chart_y_column_summary(default_chart_column_label.into());
+                        state.set_chart_class_summary("No Class".into());
+                        state.set_chart_error("".into());
                     } else {
                         warn!(
                             "Failed to upgrade UI handle in open_database, cannot reset the coloc-details toggle and matrix aggregate state!"
@@ -1124,6 +1242,7 @@ impl ResultsStateController {
                 *self.result_generator.lock().expect("Poisned".into()) = Some(results);
                 self.refresh_list();
                 self.update_matrix_view();
+                self.refresh_charts();
             }
             Err(err) => {
                 error!("{}", err);
@@ -1152,6 +1271,237 @@ impl ResultsStateController {
         *self.list_page.lock().expect("Poisned") = 0;
         *self.list_page_cursors.lock().expect("Poisned") = vec![None];
         self.update_list_view();
+    }
+
+    /// Runs whichever of `get_histogram`/`get_scatter`/`get_boxplot`
+    /// matches `chart_filter.kind` and pushes the result into
+    /// `ResultsState.chart-*` — called whenever anything the query depends
+    /// on changes (chart kind, column(s), class filter, z/t plane, or a
+    /// fresh database).
+    fn refresh_charts(&self) {
+        let Some(db) = &*self.result_generator.lock().expect("Poisened") else {
+            return;
+        };
+
+        let plane_filter = self.plane_filter.lock().expect("Poisned");
+        let plane = result::PlaneFilter {
+            z_stack: plane_filter.selected_z_stack,
+            t_stack: plane_filter.selected_t_stack,
+        };
+        drop(plane_filter);
+
+        let chart_filter = self.chart_filter.lock().expect("Poisened").clone();
+        let object_classes = chart_filter.object_class.map(|class| vec![class]);
+        let charts = ResultCharts {};
+
+        match chart_filter.kind {
+            ChartKind::Histogram => {
+                match charts.paint_histogram(
+                    db,
+                    &HistogramFilter {
+                        plane,
+                        images: None,
+                        object_classes,
+                        column: chart_filter.column,
+                        bins: CHART_HISTOGRAM_BINS,
+                    },
+                ) {
+                    Ok(histogram) => self.push_histogram_in_slint(&histogram),
+                    Err(err) => self.push_chart_error(err.to_string()),
+                }
+            }
+            ChartKind::Scatter => {
+                match charts.paint_scatter(
+                    db,
+                    &ScatterFilter {
+                        plane,
+                        images: None,
+                        object_classes,
+                        x_column: chart_filter.column,
+                        y_column: chart_filter.y_column,
+                        max_points: Some(CHART_SCATTER_MAX_POINTS),
+                    },
+                ) {
+                    Ok(scatter) => self.push_scatter_in_slint(&scatter),
+                    Err(err) => self.push_chart_error(err.to_string()),
+                }
+            }
+            ChartKind::Boxplot => {
+                match charts.paint_boxplot(
+                    db,
+                    &BoxplotFilter {
+                        plane,
+                        images: None,
+                        // Boxplot always groups by every class present —
+                        // the CLASS dropdown doesn't gate it the way it
+                        // does Histogram/Scatter (see `ChartFilter::object_class`'s
+                        // doc comment).
+                        object_classes: None,
+                        column: chart_filter.column,
+                    },
+                ) {
+                    Ok(boxplot) => self.push_boxplot_in_slint(&boxplot.boxes),
+                    Err(err) => self.push_chart_error(err.to_string()),
+                }
+            }
+        }
+    }
+
+    fn push_chart_error(&self, message: String) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_chart_error(message.into());
+                state.set_chart_histogram_bins(ModelRc::from(Rc::new(VecModel::from(
+                    Vec::<f32>::new(),
+                ))));
+                state.set_chart_scatter_points(ModelRc::from(Rc::new(VecModel::from(
+                    Vec::<ChartScatterPoint>::new(),
+                ))));
+                state.set_chart_boxplot_boxes(ModelRc::from(Rc::new(VecModel::from(
+                    Vec::<ChartBoxplotBox>::new(),
+                ))));
+            } else {
+                warn!("Failed to upgrade UI handle, cannot show chart error!");
+            }
+        })
+        .ok();
+    }
+
+    fn push_histogram_in_slint(&self, result: &result::HistogramResult) {
+        let max_count = result.counts.iter().copied().max().unwrap_or(0).max(1);
+        let bins: Vec<f32> = result
+            .counts
+            .iter()
+            .map(|count| *count as f32 / max_count as f32)
+            .collect();
+        let object_count = result.counts.iter().sum::<u64>() as i32;
+        let min_label = format_chart_value(result.min);
+        let max_label = format_chart_value(result.max);
+
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_chart_error("".into());
+                state.set_chart_histogram_bins(ModelRc::from(Rc::new(VecModel::from(bins))));
+                state.set_chart_histogram_min_label(min_label.into());
+                state.set_chart_histogram_max_label(max_label.into());
+                state.set_chart_histogram_object_count(object_count);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update histogram chart!");
+            }
+        })
+        .ok();
+    }
+
+    fn push_scatter_in_slint(&self, result: &result::ScatterResult) {
+        let x_range = (result.x_max - result.x_min).max(f64::EPSILON);
+        let y_range = (result.y_max - result.y_min).max(f64::EPSILON);
+        let points: Vec<ChartScatterPoint> = result
+            .points
+            .iter()
+            .map(|point| ChartScatterPoint {
+                x: ((point.x - result.x_min) / x_range) as f32,
+                y: ((point.y - result.y_min) / y_range) as f32,
+            })
+            .collect();
+        let shown_count = points.len() as i32;
+        let total_count = result.total_object_count as i32;
+        let x_min_label = format_chart_value(result.x_min);
+        let x_max_label = format_chart_value(result.x_max);
+        let y_min_label = format_chart_value(result.y_min);
+        let y_max_label = format_chart_value(result.y_max);
+
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_chart_error("".into());
+                state.set_chart_scatter_points(ModelRc::from(Rc::new(VecModel::from(points))));
+                state.set_chart_scatter_shown_count(shown_count);
+                state.set_chart_scatter_total_count(total_count);
+                state.set_chart_scatter_x_min_label(x_min_label.into());
+                state.set_chart_scatter_x_max_label(x_max_label.into());
+                state.set_chart_scatter_y_min_label(y_min_label.into());
+                state.set_chart_scatter_y_max_label(y_max_label.into());
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update scatter chart!");
+            }
+        })
+        .ok();
+    }
+
+    fn push_boxplot_in_slint(&self, boxes: &[evanalyzer_app::result::BoxplotBox]) {
+        // Every box normalized against the combined min/max across *all*
+        // boxes, so they stay comparable to each other on one shared axis
+        // rather than each box silently rescaling to its own range.
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for b in boxes {
+            min = min.min(b.min).min(b.outliers.iter().copied().fold(b.min, f64::min));
+            max = max.max(b.max).max(b.outliers.iter().copied().fold(b.max, f64::max));
+        }
+        if !min.is_finite() || !max.is_finite() {
+            min = 0.0;
+            max = 0.0;
+        }
+        let range = (max - min).max(f64::EPSILON);
+        let norm = move |v: f64| ((v - min) / range) as f32;
+
+        // Plain, `Send`-safe intermediate rows — `ChartBoxplotBox` itself
+        // embeds a `ModelRc` (for `outliers`), and `ModelRc`s can't cross
+        // the `invoke_from_event_loop` closure boundary (same reasoning as
+        // `set_objects_list_in_slint`'s own row-building), so building the
+        // real Slint struct happens after upgrading back onto the UI
+        // thread, not here.
+        let rows: Vec<(String, u32, f32, f32, f32, f32, f32, Vec<f32>, i32)> = boxes
+            .iter()
+            .map(|b| {
+                (
+                    b.label.clone(),
+                    b.color,
+                    norm(b.min),
+                    norm(b.q1),
+                    norm(b.median),
+                    norm(b.q3),
+                    norm(b.max),
+                    b.outliers.iter().map(|v| norm(*v)).collect::<Vec<f32>>(),
+                    b.object_count as i32,
+                )
+            })
+            .collect();
+
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                let boxes: Vec<ChartBoxplotBox> = rows
+                    .into_iter()
+                    .map(
+                        |(label, color, min, q1, median, q3, max, outliers, object_count)| {
+                            ChartBoxplotBox {
+                                label: label.into(),
+                                color: bg_color_to_slint(color),
+                                min,
+                                q1,
+                                median,
+                                q3,
+                                max,
+                                outliers: ModelRc::from(Rc::new(VecModel::from(outliers))),
+                                object_count,
+                            }
+                        },
+                    )
+                    .collect();
+                state.set_chart_error("".into());
+                state.set_chart_boxplot_boxes(ModelRc::from(Rc::new(VecModel::from(boxes))));
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update boxplot chart!");
+            }
+        })
+        .ok();
     }
 
     // Every Matrix-view callback goes through this: `matrix_filter` starts
@@ -1717,9 +2067,15 @@ impl ResultsStateController {
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
                 let state = ui_ready.global::<ResultsState>();
-                state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items.clone()))));
-                state.set_matrix_class_items(ModelRc::from(Rc::new(VecModel::from(matrix_items))));
-                state.set_chart_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                // Charts' own class picker is single-select, same shape as
+                // Matrix's (`matrix_items` — nothing selected by default,
+                // meaning "no class filter" rather than "match nothing").
+                state.set_matrix_class_items(ModelRc::from(Rc::new(VecModel::from(
+                    matrix_items.clone(),
+                ))));
+                state.set_chart_class_items(ModelRc::from(Rc::new(VecModel::from(matrix_items))));
+                state.set_chart_class_summary("No Class".into());
                 state.set_list_class_summary(summary);
             } else {
                 warn!(
@@ -2497,6 +2853,17 @@ fn list_summary(selected: usize, total: usize, noun: &str) -> slint::SharedStrin
     format!("{selected} of {total} {noun}").into()
 }
 
+// Chart axis-label formatting: whole numbers stay whole (most of these
+// values, e.g. area/perimeter, are naturally integer-ish), everything else
+// gets 2 decimal places rather than however many the raw f64 has.
+fn format_chart_value(value: f64) -> String {
+    if value.fract().abs() < f64::EPSILON {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.2}")
+    }
+}
+
 // "All classes" (selected by default) followed by one entry per class from
 // the open database's classification settings.
 fn class_filter_items(object_classes: &[Class], selected: bool) -> Vec<MultiSelectItem> {
@@ -2547,6 +2914,42 @@ fn is_aggregable_column(column: &Column) -> bool {
             | Column::IntensityMin(_)
             | Column::IntensityMax(_)
     )
+}
+
+/// Whether `column` is something `chart_value_expr`/`column_aggregate_expr`
+/// (results_generator.rs) can resolve to a single per-object SQL
+/// expression — the exact same set that function accepts, kept in sync by
+/// inspecting the same variants. Unlike `is_aggregable_column`, `Count` is
+/// also excluded here: it's a row tally (1 per object), not a per-object
+/// measurement, so charting it doesn't mean anything the way it does for
+/// Images-mode's own per-image counts.
+fn is_chartable_column(column: &Column) -> bool {
+    !matches!(
+        column,
+        Column::ObjectId
+            | Column::ImageName
+            | Column::ObjectClass
+            | Column::Count
+            | Column::IntensityAvg(_)
+            | Column::IntensitySum(_)
+            | Column::IntensityMin(_)
+            | Column::IntensityMax(_)
+    )
+}
+
+/// The Charts toolbar's PROPERTY/X/Y column pickers — single-select, only
+/// ever offering columns `is_chartable_column` accepts.
+fn chart_column_items(
+    columns: &[ColumnEntry],
+    classes: &[Class],
+    selected: &Column,
+) -> Vec<MultiSelectItem> {
+    let chartable: Vec<ColumnEntry> = columns
+        .iter()
+        .filter(|entry| is_chartable_column(&entry.key))
+        .cloned()
+        .collect();
+    column_items(&chartable, classes, |key| key == selected)
 }
 
 // The GROUP BY dropdown's two fixed options, Objects always selected — used

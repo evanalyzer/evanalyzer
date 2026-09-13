@@ -46,6 +46,23 @@ export struct ResultRow {
     alternating: bool,
 }
 
+export struct ChartScatterPoint {
+    x: float,
+    y: float,
+}
+
+export struct ChartBoxplotBox {
+    label: string,
+    color: color,
+    min: float,
+    q1: float,
+    median: float,
+    q3: float,
+    max: float,
+    outliers: [float],
+    object-count: int,
+}
+
 export global ResultsState {
     // -------- Navigation --------
     in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
@@ -136,6 +153,12 @@ export global ResultsState {
     // results_generator.rs) — replaces the former standalone Coloc tab.
     in-out property <bool> list-with-coloc-details: false;
     callback list-with-coloc-details-changed(bool);
+
+    in-out property <[MultiSelectItem]> list-with-coloc-details-by-items: [
+        { key: "flat", value: "Flat", group: "", selected: true },
+        { key: "details", value: "Details", group: "", selected: false },
+    ];
+    in-out property <string> list-with-coloc-details-summary: "Flat";
 
     // Table body. Rust only ever fills this with the current page (see
     // ResultsStateController::update_list_view) — never the full result set
@@ -306,12 +329,56 @@ export global ResultsState {
 
     // -------- Charts --------
     in-out property <ResultsChartKind2> chart-kind: ResultsChartKind2.histogram;
-    in-out property <string> chart-property: "Area (µm²)";
+    callback chart-kind-selected(ResultsChartKind2);
+
+    // Property (histogram/boxplot's single measurement, scatter's X axis).
+    in-out property <[MultiSelectItem]> chart-column-items: [];
+    in-out property <string> chart-column-summary: "Area [px]";
+    callback chart-column-selected(string);
+    // Scatter's Y axis — only shown/used when `chart-kind` is `scatter`.
+    in-out property <[MultiSelectItem]> chart-y-column-items: [];
+    in-out property <string> chart-y-column-summary: "Perimeter [px]";
+    callback chart-y-column-selected(string);
+
+    // Single-select, like `matrix-class-items` — "no class selected" means
+    // no class filter at all (every object), not "match nothing". Doesn't
+    // apply to Boxplot, which always shows one box per class regardless.
     in-out property <[MultiSelectItem]> chart-class-items: [];
     in-out property <string> chart-class-summary: "No Class";
-    callback chart-kind-selected(ResultsChartKind2);
-    callback chart-property-clicked();
     callback chart-class-selected(string, bool);
+
+    // -- Chart data (Rust fills exactly one of these three, matching
+    // `chart-kind`) --
+    // Histogram: `chart-histogram-bins[i]` is bin `i`'s count normalized to
+    // `[0, 1]` against the tallest bin, ready to scale a bar's height
+    // directly.
+    in-out property <[float]> chart-histogram-bins: [];
+    in-out property <string> chart-histogram-min-label: "";
+    in-out property <string> chart-histogram-max-label: "";
+    in-out property <int> chart-histogram-object-count: 0;
+
+    // Scatter: `chart-scatter-points[i].x/y` normalized to `[0, 1]` across
+    // the plotted (possibly sampled — see `chart-scatter-total-count`)
+    // points' own min/max.
+    in-out property <[ChartScatterPoint]> chart-scatter-points: [];
+    in-out property <string> chart-scatter-x-min-label: "";
+    in-out property <string> chart-scatter-x-max-label: "";
+    in-out property <string> chart-scatter-y-min-label: "";
+    in-out property <string> chart-scatter-y-max-label: "";
+    in-out property <int> chart-scatter-total-count: 0;
+    in-out property <int> chart-scatter-shown-count: 0;
+
+    // Boxplot: one entry per class, every value normalized to `[0, 1]`
+    // against the combined min/max across *every* box, so boxes stay
+    // comparable to each other on one shared axis. `outliers` are
+    // normalized the same way, rendered as individual dots above/below the
+    // whiskers.
+    in-out property <[ChartBoxplotBox]> chart-boxplot-boxes: [];
+
+    // Set whenever the selected column(s) can't be charted yet (identity
+    // columns, per-channel intensity — see `chart_value_expr` in
+    // results_generator.rs) or nothing has loaded yet; empty otherwise.
+    in-out property <string> chart-error: "";
 
     // -------- Export --------
     callback export-dialog-open();

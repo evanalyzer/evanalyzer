@@ -26,7 +26,6 @@ export component ResultsRail inherits Rectangle {
     VerticalBox {
         width: 64px;
         padding: 4px;
-        alignment: start;
         spacing: 8px;
 
         NavIconLeft {
@@ -45,7 +44,7 @@ export component ResultsRail inherits Rectangle {
 
         NavIconLeft {
             icon: @image-url("../icons/regular-black/chart-bar.svg");
-            label: "Charts";
+            label: "Charts\n(Alpha)";
             active: ResultsState.rail-mode == ResultsRailMode.charts;
             clicked => { ResultsState.rail-mode = ResultsRailMode.charts; ResultsState.rail-mode-selected(ResultsRailMode.charts); }
         }
@@ -389,6 +388,7 @@ export component LegendBar inherits VerticalLayout {
                         letter-spacing: 0.4px;
                         color: Theme.text-mute;
                     }
+
                     Rectangle {
                         height: 26px;
                         border-radius: Theme.radius-sm;
@@ -419,6 +419,7 @@ export component LegendBar inherits VerticalLayout {
                         letter-spacing: 0.4px;
                         color: Theme.text-mute;
                     }
+
                     Rectangle {
                         height: 26px;
                         border-radius: Theme.radius-sm;
