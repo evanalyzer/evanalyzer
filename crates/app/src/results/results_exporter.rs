@@ -1,8 +1,8 @@
 use super::results_generator::class_display_label;
 use crate::result::{
     Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
-    GroupedByImageFilter, ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter,
-    PlateDimensions, PlateFilter, ResultsGenerator, View, WellSize, WellsBatchFilter,
+    GroupedByImageFilter, ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateDimensions,
+    PlateFilter, ResultsGenerator, View, WellSize, WellsBatchFilter,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use rust_xlsxwriter::{Color, Format, Workbook, Worksheet, XlsxError};
@@ -11,6 +11,13 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::range::Range;
+
+/// Light gray Excel gives every other coloc-detail row (`Cell::alternating_color`)
+/// so the fanned-out rows belonging to one source object stay visually
+/// grouped — matches `Theme.list-row-alt-bg`'s role in the GUI's own List
+/// view, just as a plain hex constant here since XLSX formatting has no
+/// theme to pull from.
+const ALTERNATING_ROW_BG: u32 = 0xF1F1F1;
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -112,9 +119,9 @@ impl ResultExport {
         // exported together rather than needing their own toggle each.
         if self.with_plate_view {
             self.export_plate_and_well(database, &mut *on_progress)?;
-            if self.with_plates_and_wells_as_list {
-                self.export_plate_and_well_as_flat_list(database, &mut *on_progress)?;
-            }
+        }
+        if self.with_plates_and_wells_as_list {
+            self.export_plate_and_well_as_flat_list(database, &mut *on_progress)?;
         }
         if self.with_heatmap {
             self.export_heatmap(database, &mut *on_progress)?;
@@ -137,7 +144,11 @@ impl ResultExport {
     // multi-t/z sheet — so a dataset whose combined row count would blow
     // past Excel's 1,048,576-per-sheet limit in one shared file still
     // exports cleanly, as long as no single image alone exceeds it.
-    fn export_list(&self, database: &ResultsGenerator, on_progress: ExportProgress) -> Result<(), InternalErrors> {
+    fn export_list(
+        &self,
+        database: &ResultsGenerator,
+        on_progress: ExportProgress,
+    ) -> Result<(), InternalErrors> {
         let images = resolve_images(database, self)?;
         let object_classes = if self.object_classes.is_empty() {
             None
@@ -147,7 +158,11 @@ impl ResultExport {
 
         if self.with_list_one_file_per_image {
             for (image_idx, image) in images.iter().enumerate() {
-                on_progress(&format!("Exporting List: {image}"), image_idx + 1, images.len());
+                on_progress(
+                    &format!("Exporting List: {image}"),
+                    image_idx + 1,
+                    images.len(),
+                );
                 let single_image = std::slice::from_ref(image);
 
                 let mut workbook = Workbook::new();
@@ -160,10 +175,20 @@ impl ResultExport {
                     coloc_sheet
                         .set_name("List (Coloc Details)")
                         .map_err(xlsx_err)?;
-                    write_list_sheet(coloc_sheet, database, self, single_image, &object_classes, true)?;
+                    write_list_sheet(
+                        coloc_sheet,
+                        database,
+                        self,
+                        single_image,
+                        &object_classes,
+                        true,
+                    )?;
                 }
 
-                let file_name = format!("list_{}.xlsx", sanitize_filename_component(&image_stub(image)));
+                let file_name = format!(
+                    "list_{}.xlsx",
+                    sanitize_filename_component(&image_stub(image))
+                );
                 workbook
                     .save(self.output_dir.join(file_name))
                     .map_err(xlsx_err)?;
@@ -432,8 +457,11 @@ impl ResultExport {
         let available_columns = database.get_available_columns()?;
         let z = self.z_stacks.start;
         let t = self.t_stacks.start;
-        let aggregable_columns: Vec<&Column> =
-            self.columns.iter().filter(|column| is_aggregable(column)).collect();
+        let aggregable_columns: Vec<&Column> = self
+            .columns
+            .iter()
+            .filter(|column| is_aggregable(column))
+            .collect();
         let combo_count = target_classes.len() * aggregable_columns.len() * self.aggregations.len();
 
         let mut combo_labels: Vec<String> = Vec::with_capacity(combo_count);
@@ -543,10 +571,13 @@ impl ResultExport {
             "Plate",
             &["Well"],
             &combo_labels,
-            plate_rows.into_iter().map(|(well_id, values)| (vec![well_id], values)),
+            plate_rows
+                .into_iter()
+                .map(|(well_id, values)| (vec![well_id], values)),
         )?;
 
-        let mut well_rows: Vec<((String, String), Vec<Option<f64>>)> = well_values.into_iter().collect();
+        let mut well_rows: Vec<((String, String), Vec<Option<f64>>)> =
+            well_values.into_iter().collect();
         well_rows.sort_by(|(a, _), (b, _)| {
             a.0.cmp(&b.0).then_with(|| {
                 a.1.parse::<u32>()
@@ -595,7 +626,11 @@ impl ResultExport {
         let t = self.t_stacks.start;
 
         for (image_idx, image) in images.iter().enumerate() {
-            on_progress(&format!("Exporting Heatmap: {image}"), image_idx + 1, images.len());
+            on_progress(
+                &format!("Exporting Heatmap: {image}"),
+                image_idx + 1,
+                images.len(),
+            );
             let mut workbook = Workbook::new();
             let mut names = SheetNamer::new();
 
@@ -631,7 +666,10 @@ impl ResultExport {
                 }
             }
 
-            let file_name = format!("heatmap_{}.xlsx", sanitize_filename_component(&image_stub(image)));
+            let file_name = format!(
+                "heatmap_{}.xlsx",
+                sanitize_filename_component(&image_stub(image))
+            );
             workbook
                 .save(self.output_dir.join(file_name))
                 .map_err(xlsx_err)?;
@@ -663,11 +701,7 @@ fn resolve_images(
             .map(|image| image.rel_path.to_string_lossy().into_owned())
             .collect())
     } else {
-        let wanted: HashSet<&str> = export
-            .image_rel_paths
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let wanted: HashSet<&str> = export.image_rel_paths.iter().map(String::as_str).collect();
         Ok(all
             .into_iter()
             .map(|image| image.rel_path.to_string_lossy().into_owned())
@@ -825,7 +859,12 @@ fn write_list_sheet(
                 if !header_written {
                     for (col_idx, name) in result.column_names.iter().enumerate() {
                         worksheet
-                            .write_with_format(next_row, col_idx as u16, name.as_str(), &header_format)
+                            .write_with_format(
+                                next_row,
+                                col_idx as u16,
+                                name.as_str(),
+                                &header_format,
+                            )
                             .map_err(xlsx_err)?;
                     }
                     next_row += 1;
@@ -947,7 +986,9 @@ fn write_flat_pivot(
     for (row_idx, (keys, values)) in rows.enumerate() {
         let row = (row_idx + 1) as u32;
         for (col_idx, key) in keys.iter().enumerate() {
-            sheet.write(row, col_idx as u16, key.as_str()).map_err(xlsx_err)?;
+            sheet
+                .write(row, col_idx as u16, key.as_str())
+                .map_err(xlsx_err)?;
         }
         for (i, value) in values.iter().enumerate() {
             let col = (key_cols + i) as u16;
@@ -981,18 +1022,26 @@ fn cell_to_f64(cell: &Cell) -> Option<f64> {
 /// Writes one `Cell` — its value, typed appropriately (`write_string`/
 /// `write_number`, not everything flattened to text, so the sheet stays
 /// sortable/usable as real data) rather than pre-formatted display text,
-/// plus its `bg_color` as a solid cell fill when it's set (`0` is every
+/// plus a background fill: `bg_color` when it's set (`0` is every
 /// non-colored cell's sentinel throughout `results_generator.rs`, e.g. a
 /// `CellValue::Empty` grid gap, so it's left with Excel's default fill
-/// rather than painted black).
+/// rather than painted black) takes priority since it's real data (e.g. a
+/// class badge's own color) — `alternating_color` only ever paints
+/// `ALTERNATING_ROW_BG` as a fallback, for a cell that has no color of its
+/// own to show.
 fn write_cell(
     worksheet: &mut Worksheet,
     row: u32,
     col: u16,
     cell: &Cell,
 ) -> Result<(), InternalErrors> {
-    let format =
-        (cell.bg_color != 0).then(|| Format::new().set_background_color(Color::RGB(cell.bg_color)));
+    let format = if cell.bg_color != 0 {
+        Some(Format::new().set_background_color(Color::RGB(cell.bg_color)))
+    } else if cell.alternating_color {
+        Some(Format::new().set_background_color(Color::RGB(ALTERNATING_ROW_BG)))
+    } else {
+        None
+    };
 
     match &cell.value {
         CellValue::Empty => {

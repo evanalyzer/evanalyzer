@@ -621,12 +621,18 @@ impl ResultsGenerator {
         })
     }
 
-    /// Returns a list of images with the object metrics (columns) grouped by image_rel_path
-    /// for each selected aggregation a separete column is added
+    /// Returns a list of (image, class) groups with the object metrics
+    /// (columns) grouped by `image_rel_path` *and* `object_class_id` — an
+    /// object can belong to more than one class at once (`object_class_id`
+    /// is itself an array column, see evanalyzer_core's duckdb.rs), so this
+    /// unnests it and produces one row per class an image actually has
+    /// objects of, rather than lumping every class together into a single
+    /// per-image aggregate (which would silently mix unrelated classes'
+    /// values together whenever more than one class is present/selected).
     ///
     /// One output column per (`filter.columns` entry) x (`filter.aggregation`
     /// entry) — e.g. 2 columns x 3 aggregations = 6 output columns, one row
-    /// per image — mirroring `ResultExport`'s flat-list export
+    /// per (image, class) — mirroring `ResultExport`'s flat-list export
     /// (results_exporter.rs), just exposed here as a live, paginated List
     /// view mode instead of a one-shot export. No `grouping_regex` (unlike
     /// `get_group_by_plate`/`get_group_by_well`): grouped directly by each
@@ -637,10 +643,18 @@ impl ResultsGenerator {
     ) -> Result<DatabaseResult, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
+        // Fixed, selection-order-independent column order — same reasoning
+        // as `get_object_list`'s own `ordered_columns.sort()`: `filter.columns`
+        // reflects whatever order the caller happens to track selections in
+        // (e.g. the GUI's toggle-on/toggle-off `Vec`), which shifts around
+        // as columns are (de)selected and would otherwise reorder the
+        // output out from under the user.
+        let mut ordered_columns = filter.columns.clone();
+        ordered_columns.sort();
 
-        let mut column_names = vec!["image".to_string()];
+        let mut column_names = vec!["image".to_string(), "class".to_string()];
         let mut value_exprs = Vec::new();
-        for column in &filter.columns {
+        for column in &ordered_columns {
             for aggregation in &filter.aggregation {
                 let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
                 column_names.push(format!("{} ({agg_fn})", column.display_label(&classes)));
@@ -692,45 +706,61 @@ impl ResultsGenerator {
                 return Ok(empty_result());
             }
             conditions.push(format!(
-                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-                sql_int_array_literal(&ids)
+                "class_id IN ({})",
+                ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
             ));
         }
-        // Keyset pagination over the *groups* (one image = one row here),
-        // not over individual objects like `get_object_list` - every row
-        // for a given image shares the same `image_rel_path`, so excluding
-        // rows at or below the cursor here can never split a group across
-        // pages.
+        // Keyset pagination over the *groups* (one (image, class) pair =
+        // one row here), not over individual objects like
+        // `get_object_list` - ordered the same way (`image_rel_path`, then
+        // `class_id`), so a row-value comparison against the last page's
+        // final group can never split a group across pages.
         if let Some(cursor) = &filter.page.after {
-            conditions.push(format!("image_rel_path > '{}'", cursor.replace('\'', "''")));
+            let (cursor_path, cursor_class) = cursor
+                .split_once('\u{1}')
+                .unwrap_or((cursor.as_str(), "-1"));
+            conditions.push(format!(
+                "(image_rel_path, class_id) > ('{}', {})",
+                cursor_path.replace('\'', "''"),
+                cursor_class.parse::<i64>().unwrap_or(-1)
+            ));
         }
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
         let limit = filter.page.limit.max(0);
         let value_exprs_sql = value_exprs.join(",\n                ");
 
+        // `object_class_id` is a per-object array (multi-class objects
+        // exist), so it's unnested into one `class_id` per (object, class)
+        // pair *before* grouping — an object with no class at all
+        // (`object_class_id = []`) contributes no `class_id` row and so
+        // never appears in the output, same as every other view in this
+        // file that filters by class rather than treating "no class" as a
+        // group of its own.
         let sql = format!(
             "SELECT\n\
                 image_rel_path,\n\
                 MIN(image_name) AS image_name,\n\
+                class_id,\n\
                 {value_exprs_sql}\n\
-             FROM objects\n\
+             FROM objects, UNNEST(CAST(object_class_id AS INTEGER[])) AS u(class_id)\n\
              {where_clause}\n\
-             GROUP BY image_rel_path\n\
-             ORDER BY image_rel_path\n\
+             GROUP BY image_rel_path, class_id\n\
+             ORDER BY image_rel_path, class_id\n\
              LIMIT {limit}"
         );
 
         let mut stmt = self.database.prepare(&sql).map_err(err)?;
         let n = value_exprs.len();
-        let groups: Vec<(String, String, Vec<Option<f64>>)> = stmt
+        let groups: Vec<(String, String, u32, Vec<Option<f64>>)> = stmt
             .query_map([], |row| {
                 let image_rel_path: String = row.get(0)?;
                 let image_name: String = row.get(1)?;
+                let class_id: u32 = row.get(2)?;
                 let mut values = Vec::with_capacity(n);
                 for i in 0..n {
-                    values.push(row.get::<_, Option<f64>>(2 + i)?);
+                    values.push(row.get::<_, Option<f64>>(3 + i)?);
                 }
-                Ok((image_rel_path, image_name, values))
+                Ok((image_rel_path, image_name, class_id, values))
             })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
@@ -738,7 +768,7 @@ impl ResultsGenerator {
 
         let mut min = f64::INFINITY;
         let mut max = f64::NEG_INFINITY;
-        for (_, _, values) in &groups {
+        for (_, _, _, values) in &groups {
             for value in values.iter().flatten() {
                 min = min.min(*value);
                 max = max.max(*value);
@@ -751,21 +781,36 @@ impl ResultsGenerator {
 
         let row_names = groups
             .iter()
-            .map(|(rel_path, ..)| rel_path.clone())
+            .map(|(rel_path, _, class_id, _)| format!("{rel_path}\u{1}{class_id}"))
             .collect();
         let source_object_count = groups.len();
         let rows: Vec<Vec<Cell>> = groups
             .into_iter()
-            .map(|(image_rel_path, image_name, values)| {
+            .map(|(image_rel_path, image_name, class_id, values)| {
                 // Lets the GUI navigate straight to the source image, same
                 // as any other image-bearing search key in this file.
                 let search_key = Some((image_name.clone(), image_rel_path));
-                let mut cells = vec![Cell {
-                    value: CellValue::String(image_name),
-                    bg_color: 0,
-                    alternating_color: false,
-                    search_key: search_key.clone(),
-                }];
+                let object_class = ObjectClass::Valid(class_id);
+                let label = class_display_label(object_class, &classes);
+                let color = classes
+                    .iter()
+                    .find(|class| class.id == object_class)
+                    .map(|class| class.color)
+                    .unwrap_or(0);
+                let mut cells = vec![
+                    Cell {
+                        value: CellValue::String(image_name),
+                        bg_color: 0,
+                        alternating_color: false,
+                        search_key: search_key.clone(),
+                    },
+                    Cell {
+                        value: CellValue::Class((label, color)),
+                        bg_color: color,
+                        alternating_color: false,
+                        search_key: search_key.clone(),
+                    },
+                ];
                 for value in values {
                     cells.push(Cell {
                         value: CellValue::Float(value.unwrap_or(0.0) as f32),

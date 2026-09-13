@@ -57,9 +57,15 @@ component MatrixCellView inherits Rectangle {
 }
 
 // -- Level 1: Plate grid -----------------------------------------------------
+// Cells are laid out at explicit, absolutely-positioned `cell-size` squares
+// (the largest that fits both the available width per column and the
+// available height per row) rather than via `horizontal-stretch`/
+// `vertical-stretch`, which independently stretch a cell's width to fill
+// its column and height to fill its row — fine when the grid happens to be
+// square, but a rectangle (squashed or stretched) the moment the panel
+// isn't. See `WellGrid`/`ImageHeatmapGrid` below for the same fix without
+// the row/column-label gutters this level alone needs.
 component PlateGrid inherits Rectangle {
-    padding: 20px;
-
     property <[string]> row-letters: [
         "A",
         "B",
@@ -89,76 +95,93 @@ component PlateGrid inherits Rectangle {
         "Z"
     ];
 
-    VerticalLayout {
-        spacing: 4px;
+    property <length> grid-padding: 20px;
+    property <length> gap: 4px;
+    property <length> gutter: 26px;
+    property <length> header-height: 18px;
+    property <int> cols: max(ResultsState.plate-cols, 1);
+    property <int> rows: max(ResultsState.plate-rows, 1);
+    property <length> cell-size: max(8px, min(
+        (root.width - 2 * root.grid-padding - root.gutter - root.gap - (root.cols - 1) * root.gap) / root.cols,
+        (root.height - 2 * root.grid-padding - root.header-height - root.gap - (root.rows - 1) * root.gap) / root.rows
+    ));
+    property <length> grid-width: root.gutter + root.gap + root.cols * root.cell-size + (root.cols - 1) * root.gap;
+    property <length> grid-height: root.header-height + root.gap + root.rows * root.cell-size + (root.rows - 1) * root.gap;
+    property <length> origin-x: (root.width - root.grid-width) / 2;
+    property <length> origin-y: (root.height - root.grid-height) / 2;
 
-        HorizontalLayout {
-            spacing: 4px;
-            Rectangle {
-                width: 26px;
-            }
+    for c in ResultsState.plate-cols: Text {
+        x: root.origin-x + root.gutter + root.gap + c * (root.cell-size + root.gap);
+        y: root.origin-y;
+        width: root.cell-size;
+        height: root.header-height;
+        text: c + 1;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: 10px;
+        font-family: Theme.font-mono;
+        color: Theme.text-faint;
+    }
 
-            for c in ResultsState.plate-cols: Text {
-                text: c + 1;
-                horizontal-stretch: 1;
-                horizontal-alignment: center;
-                font-size: 10px;
-                font-family: Theme.font-mono;
-                color: Theme.text-faint;
-            }
-        }
+    for r in ResultsState.plate-rows: Text {
+        x: root.origin-x;
+        y: root.origin-y + root.header-height + root.gap + r * (root.cell-size + root.gap);
+        width: root.gutter;
+        height: root.cell-size;
+        text: root.row-letters[mod(r, 26)];
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: 10px;
+        font-family: Theme.font-mono;
+        color: Theme.text-faint;
+    }
 
-        for r in ResultsState.plate-rows: HorizontalLayout {
-            vertical-stretch: 1;
-            spacing: 4px;
-
-            Rectangle {
-                width: 26px;
-                Text {
-                    text: root.row-letters[mod(r, 26)];
-                    font-size: 10px;
-                    font-family: Theme.font-mono;
-                    color: Theme.text-faint;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            for c in ResultsState.plate-cols: MatrixCellView {
-                horizontal-stretch: 1;
-                cell: ResultsState.plate-cells[r * ResultsState.plate-cols + c];
-                range-min: ResultsState.plate-min;
-                range-max: ResultsState.plate-max;
-                selected: self.cell.has-value && self.cell.key == ResultsState.active-well;
-                clicked => { ResultsState.plate-cell-clicked(self.cell.key); }
-            }
+    for r in ResultsState.plate-rows: Rectangle {
+        for c in ResultsState.plate-cols: MatrixCellView {
+            x: root.origin-x + root.gutter + root.gap + c * (root.cell-size + root.gap);
+            y: root.origin-y + root.header-height + root.gap + r * (root.cell-size + root.gap);
+            width: root.cell-size;
+            height: root.cell-size;
+            cell: ResultsState.plate-cells[r * ResultsState.plate-cols + c];
+            range-min: ResultsState.plate-min;
+            range-max: ResultsState.plate-max;
+            selected: self.cell.has-value && self.cell.key == ResultsState.active-well;
+            clicked => { ResultsState.plate-cell-clicked(self.cell.key); }
         }
     }
 }
 
 // -- Level 2: Well grid (fields) ---------------------------------------------
-// Same row/col layout approach as PlateGrid (just without the plate's A-H /
+// Same square-cell approach as `PlateGrid` (just without the plate's A-H /
 // 1-12 axis-label gutters, since a field's position within a well isn't a
 // coordinate anyone reads off directly) — sized from the real result
 // (`well-rows`/`well-cols`, from `WellFilter::well_size`) rather than a
 // fixed guess, so it renders correctly regardless of well size.
 component WellGrid inherits Rectangle {
-    padding: 20px;
+    property <length> grid-padding: 20px;
+    property <length> gap: 4px;
+    property <int> cols: max(ResultsState.well-cols, 1);
+    property <int> rows: max(ResultsState.well-rows, 1);
+    property <length> cell-size: max(8px, min(
+        (root.width - 2 * root.grid-padding - (root.cols - 1) * root.gap) / root.cols,
+        (root.height - 2 * root.grid-padding - (root.rows - 1) * root.gap) / root.rows
+    ));
+    property <length> grid-width: root.cols * root.cell-size + (root.cols - 1) * root.gap;
+    property <length> grid-height: root.rows * root.cell-size + (root.rows - 1) * root.gap;
+    property <length> origin-x: (root.width - root.grid-width) / 2;
+    property <length> origin-y: (root.height - root.grid-height) / 2;
 
-    VerticalLayout {
-        spacing: 4px;
-        for r in ResultsState.well-rows: HorizontalLayout {
-            vertical-stretch: 1;
-            spacing: 4px;
-
-            for c in ResultsState.well-cols: MatrixCellView {
-                horizontal-stretch: 1;
-                cell: ResultsState.well-fields[r * ResultsState.well-cols + c];
-                range-min: ResultsState.well-min;
-                range-max: ResultsState.well-max;
-                selected: self.cell.has-value && self.cell.key == ResultsState.active-well;
-                clicked => { ResultsState.well-cell-clicked(self.cell.key); }
-            }
+    for r in ResultsState.well-rows: Rectangle {
+        for c in ResultsState.well-cols: MatrixCellView {
+            x: root.origin-x + c * (root.cell-size + root.gap);
+            y: root.origin-y + r * (root.cell-size + root.gap);
+            width: root.cell-size;
+            height: root.cell-size;
+            cell: ResultsState.well-fields[r * ResultsState.well-cols + c];
+            range-min: ResultsState.well-min;
+            range-max: ResultsState.well-max;
+            selected: self.cell.has-value && self.cell.key == ResultsState.active-well;
+            clicked => { ResultsState.well-cell-clicked(self.cell.key); }
         }
     }
 }
@@ -168,22 +191,30 @@ component WellGrid inherits Rectangle {
 // same row/col loop sized from the real result (`image-heatmap-rows`/
 // `image-heatmap-cols`, from `ImageHeatmapFilter::square_size`).
 component ImageHeatmapGrid inherits Rectangle {
-    padding: 20px;
+    property <length> grid-padding: 20px;
+    property <length> gap: 4px;
+    property <int> cols: max(ResultsState.image-heatmap-cols, 1);
+    property <int> rows: max(ResultsState.image-heatmap-rows, 1);
+    property <length> cell-size: max(8px, min(
+        (root.width - 2 * root.grid-padding - (root.cols - 1) * root.gap) / root.cols,
+        (root.height - 2 * root.grid-padding - (root.rows - 1) * root.gap) / root.rows
+    ));
+    property <length> grid-width: root.cols * root.cell-size + (root.cols - 1) * root.gap;
+    property <length> grid-height: root.rows * root.cell-size + (root.rows - 1) * root.gap;
+    property <length> origin-x: (root.width - root.grid-width) / 2;
+    property <length> origin-y: (root.height - root.grid-height) / 2;
 
-    VerticalLayout {
-        spacing: 4px;
-        for r in ResultsState.image-heatmap-rows: HorizontalLayout {
-            vertical-stretch: 1;
-            spacing: 4px;
-
-            for c in ResultsState.image-heatmap-cols: MatrixCellView {
-                horizontal-stretch: 1;
-                cell: ResultsState.image-heatmap-cells[r * ResultsState.image-heatmap-cols + c];
-                range-min: ResultsState.image-heatmap-min;
-                range-max: ResultsState.image-heatmap-max;
-                selected: self.cell.has-value && self.cell.key == ResultsState.active-well;
-                clicked => { ResultsState.image-heatmap-cell-clicked(self.cell.key); }
-            }
+    for r in ResultsState.image-heatmap-rows: Rectangle {
+        for c in ResultsState.image-heatmap-cols: MatrixCellView {
+            x: root.origin-x + c * (root.cell-size + root.gap);
+            y: root.origin-y + r * (root.cell-size + root.gap);
+            width: root.cell-size;
+            height: root.cell-size;
+            cell: ResultsState.image-heatmap-cells[r * ResultsState.image-heatmap-cols + c];
+            range-min: ResultsState.image-heatmap-min;
+            range-max: ResultsState.image-heatmap-max;
+            selected: self.cell.has-value && self.cell.key == ResultsState.active-well;
+            clicked => { ResultsState.image-heatmap-cell-clicked(self.cell.key); }
         }
     }
 }
