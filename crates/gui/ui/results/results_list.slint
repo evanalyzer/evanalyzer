@@ -68,6 +68,21 @@ export component ResultsListView inherits Rectangle {
                     text: "Coloc details";
                     checked <=> ResultsState.list-with-coloc-details;
                     toggled => { ResultsState.list-with-coloc-details-changed(self.checked); }
+                    visible: ResultsState.list-group-by-summary == "Objects";
+                    width: 0px;
+                }
+
+                MultiSelectDropdown {
+                    label: "AGGREGATE";
+                    summary-text: ResultsState.list-aggregate;
+                    items <=> ResultsState.list-aggregation-items;
+                    multi-select: true;
+                    show-select-all: true;
+                    pill-width: 150px;
+                    item-selected(key, value, selected) => { ResultsState.list-aggregation-item-selected(key, selected); }
+                    select-all => { ResultsState.list-aggregation-select-all(); }
+                    select-none => { ResultsState.list-aggregation-select-none(); }
+                    visible: ResultsState.list-group-by-summary == "Images";
                 }
 
                 MultiSelectDropdown {

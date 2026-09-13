@@ -47,6 +47,8 @@ struct ListFilter {
     pub columns: Vec<Column>,
     pub with_coloc_details: bool,
     pub group_by: ListGroupBy,
+    /// Unused in Objects mode.
+    pub aggregations: Vec<Aggregation>,
 }
 
 #[derive(Default)]
@@ -379,6 +381,33 @@ impl ResultsStateController {
                     manager.list_filter.lock().expect("Poisened").group_by = group_by;
                     manager.refresh_list();
                 });
+
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_aggregation_item_selected(move |key, selected| {
+                    let Some(aggregation) = aggregation_from_key(key.as_str()) else {
+                        warn!("Unknown aggregation key selected: {key}");
+                        return;
+                    };
+                    let mut list_filter = manager.list_filter.lock().expect("Poisened".into());
+                    if selected {
+                        if !list_filter.aggregations.contains(&aggregation) {
+                            list_filter.aggregations.push(aggregation);
+                        }
+                    } else {
+                        list_filter.aggregations.retain(|a| a != &aggregation);
+                    }
+                    let selected_count = list_filter.aggregations.len();
+                    drop(list_filter);
+                    manager.push_aggregation_summary(selected_count);
+                    manager.refresh_list();
+                });
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_aggregation_select_all(move || manager.select_all_aggregations());
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_aggregation_select_none(move || manager.select_none_aggregations());
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -750,15 +779,14 @@ impl ResultsStateController {
                         .expect("Poisned")
                         .as_ref()
                         .and_then(|filter| filter.square_size)
-                        .unwrap_or(DEFAULT_SQUARE_SIZE) as u32;
+                        .unwrap_or(DEFAULT_SQUARE_SIZE)
+                        as u32;
                     let xmin = col * square_size;
                     let ymin = row * square_size;
                     let bbox_px = [xmin, ymin, xmin + square_size - 1, ymin + square_size - 1];
-                    manager.image_list_controller.open_image_and_highlight_object(
-                        &PathBuf::from(rel_path),
-                        bbox_px,
-                        true,
-                    );
+                    manager
+                        .image_list_controller
+                        .open_image_and_highlight_object(&PathBuf::from(rel_path), bbox_px, true);
                 });
             ui.global::<ResultsState>()
                 .on_object_marker_clicked(move |_id| {});
@@ -826,35 +854,37 @@ impl ResultsStateController {
 
             let ui_weak = self.ui.clone();
             let manager = self.clone();
-            ui.global::<ExportDialogState>().on_image_select_all(move || {
-                let Some(ui_ready) = ui_weak.upgrade() else {
-                    warn!("Failed to upgrade UI handle in on_image_select_all");
-                    return;
-                };
-                let images = manager.images.lock().expect("Poisened");
-                let items = image_items(&images, true);
-                let total = images.len();
-                drop(images);
-                let state = ui_ready.global::<ExportDialogState>();
-                state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                state.set_image_summary(list_summary(total, total, "Images"));
-            });
+            ui.global::<ExportDialogState>()
+                .on_image_select_all(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_image_select_all");
+                        return;
+                    };
+                    let images = manager.images.lock().expect("Poisened");
+                    let items = image_items(&images, true);
+                    let total = images.len();
+                    drop(images);
+                    let state = ui_ready.global::<ExportDialogState>();
+                    state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                    state.set_image_summary(list_summary(total, total, "Images"));
+                });
 
             let ui_weak = self.ui.clone();
             let manager = self.clone();
-            ui.global::<ExportDialogState>().on_image_select_none(move || {
-                let Some(ui_ready) = ui_weak.upgrade() else {
-                    warn!("Failed to upgrade UI handle in on_image_select_none");
-                    return;
-                };
-                let images = manager.images.lock().expect("Poisened");
-                let items = image_items(&images, false);
-                let total = images.len();
-                drop(images);
-                let state = ui_ready.global::<ExportDialogState>();
-                state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                state.set_image_summary(list_summary(0, total, "Images"));
-            });
+            ui.global::<ExportDialogState>()
+                .on_image_select_none(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_image_select_none");
+                        return;
+                    };
+                    let images = manager.images.lock().expect("Poisened");
+                    let items = image_items(&images, false);
+                    let total = images.len();
+                    drop(images);
+                    let state = ui_ready.global::<ExportDialogState>();
+                    state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                    state.set_image_summary(list_summary(0, total, "Images"));
+                });
 
             let manager = self.clone();
             let ui_weak = self.ui.clone();
@@ -873,35 +903,37 @@ impl ResultsStateController {
 
             let ui_weak = self.ui.clone();
             let manager = self.clone();
-            ui.global::<ExportDialogState>().on_class_select_all(move || {
-                let Some(ui_ready) = ui_weak.upgrade() else {
-                    warn!("Failed to upgrade UI handle in on_class_select_all");
-                    return;
-                };
-                let classes = manager.classes.lock().expect("Poisened");
-                let items = class_filter_items(&classes, true);
-                let total = classes.len();
-                drop(classes);
-                let state = ui_ready.global::<ExportDialogState>();
-                state.set_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                state.set_class_summary(list_summary(total, total, "Classes"));
-            });
+            ui.global::<ExportDialogState>()
+                .on_class_select_all(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_class_select_all");
+                        return;
+                    };
+                    let classes = manager.classes.lock().expect("Poisened");
+                    let items = class_filter_items(&classes, true);
+                    let total = classes.len();
+                    drop(classes);
+                    let state = ui_ready.global::<ExportDialogState>();
+                    state.set_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                    state.set_class_summary(list_summary(total, total, "Classes"));
+                });
 
             let ui_weak = self.ui.clone();
             let manager = self.clone();
-            ui.global::<ExportDialogState>().on_class_select_none(move || {
-                let Some(ui_ready) = ui_weak.upgrade() else {
-                    warn!("Failed to upgrade UI handle in on_class_select_none");
-                    return;
-                };
-                let classes = manager.classes.lock().expect("Poisened");
-                let items = class_filter_items(&classes, false);
-                let total = classes.len();
-                drop(classes);
-                let state = ui_ready.global::<ExportDialogState>();
-                state.set_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                state.set_class_summary(list_summary(0, total, "Classes"));
-            });
+            ui.global::<ExportDialogState>()
+                .on_class_select_none(move || {
+                    let Some(ui_ready) = ui_weak.upgrade() else {
+                        warn!("Failed to upgrade UI handle in on_class_select_none");
+                        return;
+                    };
+                    let classes = manager.classes.lock().expect("Poisened");
+                    let items = class_filter_items(&classes, false);
+                    let total = classes.len();
+                    drop(classes);
+                    let state = ui_ready.global::<ExportDialogState>();
+                    state.set_class_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                    state.set_class_summary(list_summary(0, total, "Classes"));
+                });
 
             let manager = self.clone();
             let ui_weak = self.ui.clone();
@@ -966,7 +998,11 @@ impl ResultsStateController {
                     let state = ui_ready.global::<ExportDialogState>();
                     let items = state.get_aggregation_items();
                     let selected = items.iter().filter(|item| item.selected).count();
-                    state.set_aggregation_summary(list_summary(selected, AGGREGATIONS.len(), "Aggregations"));
+                    state.set_aggregation_summary(list_summary(
+                        selected,
+                        AGGREGATIONS.len(),
+                        "Aggregations",
+                    ));
                 });
 
             let manager = self.clone();
@@ -1056,6 +1092,7 @@ impl ResultsStateController {
                     columns: DEFAULT_LIST_COLUMNS.to_vec(),
                     with_coloc_details: false,
                     group_by: ListGroupBy::Objects,
+                    aggregations: vec![Aggregation::Avg],
                 };
                 let ui_weak = self.ui.clone();
                 slint::invoke_from_event_loop(move || {
@@ -1065,6 +1102,10 @@ impl ResultsStateController {
                         state.set_list_group_by_summary("Objects".into());
                         state.set_list_group_by_items(ModelRc::from(Rc::new(VecModel::from(
                             group_by_items(false),
+                        ))));
+                        state.set_list_aggregate(list_summary(1, AGGREGATIONS.len(), "Aggregations"));
+                        state.set_list_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
+                            aggregation_items(&[Aggregation::Avg]),
                         ))));
                         // Matches `matrix_filter` above being reset to `None`
                         // (no column selected yet) rather than lingering
@@ -1167,6 +1208,7 @@ impl ResultsStateController {
         let columns = list_filter.columns.clone();
         let with_coloc_details = list_filter.with_coloc_details;
         let group_by = list_filter.group_by;
+        let aggregations = list_filter.aggregations.clone();
         drop(list_filter);
 
         let page = *self.list_page.lock().expect("Poisned") as usize;
@@ -1193,9 +1235,9 @@ impl ResultsStateController {
             // Non-aggregable columns (Object ID/Image/Class) don't mean
             // anything once rows are grouped by image — silently dropped
             // here, same as the export side's own grid views (see
-            // `is_aggregable` in results_exporter.rs). A single fixed
-            // aggregation (Average) keeps this a plain GROUP BY toggle
-            // rather than needing its own aggregation picker next to it.
+            // `is_aggregable` in results_exporter.rs). `aggregations` comes
+            // from the AGGREGATE dropdown (results_list.slint), one output
+            // column per (selected column x selected aggregation) combo.
             ListGroupBy::Images => {
                 let columns = columns.into_iter().filter(is_aggregable_column).collect();
                 db.get_grouped_by_image(&GroupedByImageFilter {
@@ -1203,7 +1245,7 @@ impl ResultsStateController {
                     images,
                     object_classes,
                     columns,
-                    aggregation: vec![Aggregation::Avg],
+                    aggregation: aggregations,
                     page: result::Pagination {
                         limit: LIST_PAGE_SIZE,
                         after: cursor,
@@ -1844,6 +1886,50 @@ impl ResultsStateController {
         .ok();
     }
 
+    fn push_aggregation_summary(&self, selected: usize) {
+        let text = list_summary(selected, AGGREGATIONS.len(), "Aggregations");
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready.global::<ResultsState>().set_list_aggregate(text);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the aggregations summary!");
+            }
+        })
+        .ok();
+    }
+
+    fn select_all_aggregations(&self) {
+        let items = aggregation_items(&AGGREGATIONS);
+        self.list_filter.lock().expect("Poisened").aggregations = AGGREGATIONS.to_vec();
+        self.push_aggregation_items(
+            items,
+            list_summary(AGGREGATIONS.len(), AGGREGATIONS.len(), "Aggregations"),
+        );
+        self.refresh_list();
+    }
+
+    fn select_none_aggregations(&self) {
+        let items = aggregation_items(&[]);
+        self.list_filter.lock().expect("Poisened").aggregations = Vec::new();
+        self.push_aggregation_items(items, list_summary(0, AGGREGATIONS.len(), "Aggregations"));
+        self.refresh_list();
+    }
+
+    fn push_aggregation_items(&self, items: Vec<MultiSelectItem>, summary: slint::SharedString) {
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                let state = ui_ready.global::<ResultsState>();
+                state.set_list_aggregation_items(ModelRc::from(Rc::new(VecModel::from(items))));
+                state.set_list_aggregate(summary);
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the aggregation items!");
+            }
+        })
+        .ok();
+    }
+
     fn push_class_summary(&self, selected: usize) {
         let total = self.classes.lock().expect("Poisened").len();
         let text = list_summary(selected, total, "Classes");
@@ -2114,12 +2200,14 @@ impl ResultsStateController {
             "Classes",
         );
 
-        let column_items_vec = column_items(&available_columns, &classes, |key| columns.contains(key));
+        let column_items_vec =
+            column_items(&available_columns, &classes, |key| columns.contains(key));
         let column_groups_vec = column_groups(&available_columns);
         let column_summary = list_summary(columns.len(), available_columns.len(), "Columns");
 
         let aggregation_items_vec = aggregation_items(&aggregations);
-        let aggregation_summary = list_summary(aggregations.len(), AGGREGATIONS.len(), "Aggregations");
+        let aggregation_summary =
+            list_summary(aggregations.len(), AGGREGATIONS.len(), "Aggregations");
 
         drop(available_columns);
         drop(images);
@@ -2143,7 +2231,9 @@ impl ResultsStateController {
         state.set_column_summary(column_summary);
 
         state.set_grouping_regex(grouping_regex.into());
-        state.set_aggregation_items(ModelRc::from(Rc::new(VecModel::from(aggregation_items_vec))));
+        state.set_aggregation_items(ModelRc::from(Rc::new(VecModel::from(
+            aggregation_items_vec,
+        ))));
         state.set_aggregation_summary(aggregation_summary);
         state.set_color_schema_items(ModelRc::from(Rc::new(VecModel::from(color_schema_items()))));
         state.set_color_schema_summary(
@@ -2255,7 +2345,9 @@ impl ResultsStateController {
         let mut aggregations = Vec::new();
         for key in selected_keys(state.get_aggregation_items()) {
             let Some(aggregation) = aggregation_from_key(key.as_str()) else {
-                return Err(format!("Unknown aggregation \"{key}\" selected for export."));
+                return Err(format!(
+                    "Unknown aggregation \"{key}\" selected for export."
+                ));
             };
             aggregations.push(aggregation);
         }
@@ -2729,12 +2821,12 @@ fn cell_to_string(cell: &Cell) -> slint::SharedString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AppWindow;
     use crate::editor::histogram_controller::HistogramController;
     use crate::editor::image_meta_controller::ImageMetaController;
     use crate::editor::object_list_controller::ObjectListController;
     use crate::editor::test_support::{test_ui_state, test_ui_windows};
     use crate::editor::viewport_controller::ViewportController;
-    use crate::AppWindow;
 
     fn make_controller_with_ui(
         ui: slint::Weak<AppWindow>,
@@ -2861,7 +2953,9 @@ mod tests {
         results_ui
             .global::<ResultsState>()
             .invoke_export_dialog_open();
-        results_ui.global::<ExportDialogState>().invoke_start_clicked();
+        results_ui
+            .global::<ExportDialogState>()
+            .invoke_start_clicked();
 
         let state = results_ui.global::<ExportDialogState>();
         assert!(state.get_has_error());

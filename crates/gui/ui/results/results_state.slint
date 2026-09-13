@@ -120,6 +120,16 @@ export global ResultsState {
     in-out property <string> list-group-by-summary: "Objects";
     callback list-group-by-selected(string);
 
+    // Images mode's per-column aggregation(s) — `get_grouped_by_image`
+    // accepts more than one, adding one output column per (selected column
+    // x selected aggregation) combination, same as the export dialog's own
+    // AGGREGATIONS picker.
+    in-out property <[MultiSelectItem]> list-aggregation-items: [];
+    in-out property <string> list-aggregate: "1 of 7 aggregations";
+    callback list-aggregation-item-selected(string, bool);
+    callback list-aggregation-select-all();
+    callback list-aggregation-select-none();
+
     // Expands each row with a selected "Coloc with <class>" column into one
     // row per colocalizing partner, with that partner's own value for every
     // other selected measurement column (`ListFilter::with_coloc_details` in
