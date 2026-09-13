@@ -156,14 +156,7 @@ impl DuckDbExporter {
         })
     }
 
-    // Plain display name for `object_class_name` (and `coloc_stats`'
-    // source_class/target_class) - must match the `classes` table's own
-    // `name` column exactly (see `Self::new`'s `classes` appender below),
-    // since `results_generator.rs` looks up a class's color by comparing
-    // `object_class_name` entries against `classes.name` verbatim. The
-    // `class_{n}` fallback only fires for a class id this exporter's own
-    // `class_names` registry doesn't recognize, so it can't collide with a
-    // real name.
+    // Plain display name for `object_class_name`
     fn class_label(&self, class: &ObjectClass) -> String {
         match class {
             ObjectClass::Unset => "unset".to_string(),
@@ -232,15 +225,6 @@ CREATE TABLE IF NOT EXISTS objects (
     image_bit_depth      UTINYINT,
     intensities_json     JSON,
     coloc_json           JSON
-);
-
-CREATE TABLE IF NOT EXISTS coloc_stats (
-    image               VARCHAR NOT NULL,
-    source_class        VARCHAR NOT NULL,
-    target_class        VARCHAR NOT NULL,
-    n_colocalized       UBIGINT,
-    avg_targets_per_object DOUBLE,
-    total_source_objects   UBIGINT
 );
 
 CREATE TABLE IF NOT EXISTS images (
@@ -558,26 +542,6 @@ impl PipelineResultExporter for DuckDbExporter {
                 .map_err(|e| InternalErrors::Io(e.to_string()))?;
             }
             // Appender flushes to disk on drop
-        }
-
-        // --- Colocalization statistics ---
-        {
-            let stats = compute_coloc_stats(cache, &label);
-            let mut app = tx
-                .appender("coloc_stats")
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
-
-            for s in stats {
-                app.append_row(params![
-                    &image_rel,
-                    s.source_class,
-                    s.target_class,
-                    s.n_colocalized,
-                    s.avg_targets_per_object,
-                    s.total_source_objects,
-                ])
-                .map_err(|e| InternalErrors::Io(e.to_string()))?;
-            }
         }
 
         tx.commit().map_err(|e| InternalErrors::Io(e.to_string()))?;

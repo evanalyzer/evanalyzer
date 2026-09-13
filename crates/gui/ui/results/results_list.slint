@@ -2,7 +2,7 @@
 // a grouped column-visibility dropdown, both built on the shared
 // MultiSelectDropdown (components/multi_select_dropdown.slint).
 
-import { ListView, CheckBox } from "std-widgets.slint";
+import { ScrollView, CheckBox } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 import { ResultsState } from "results_state.slint";
 import { MultiSelectDropdown } from "../components/multi_select_dropdown.slint";
@@ -172,31 +172,40 @@ export component ResultsListView inherits Rectangle {
                     }
                 }
 
-                body-list := ListView {
+                // A plain `ScrollView`, not `ListView`: `ListView` is a
+                // distinct builtin type Slint's compiler specifically
+                // detects by name (`parent.base_type.to_string() ==
+                // "ListView"`, see i-slint-compiler's `object_tree.rs`) and
+                // for which its *runtime* — not any .slint-level binding —
+                // takes over computing `viewport-width`/`viewport-height`
+                // and each row's vertical position, via a native per-row
+                // `listview_layout()` scan. Both `min-width` (tried first)
+                // and an explicit `viewport-width` binding on the `ListView`
+                // itself (tried second) got silently overridden by that
+                // same native computation on every layout pass — confirmed
+                // empirically (a scratch headless test showed
+                // `viewport-width` pinned to the visible width regardless),
+                // and by the real app: 200 columns never produced a
+                // horizontal scrollbar either way. A plain `ScrollView`
+                // wraps the exact same underlying `Flickable` (same wheel
+                // scrolling, same drag-to-pan support) but is never
+                // name-matched into that native "ListView" ownership, so
+                // `viewport-width`/`viewport-height` set here are just
+                // regular bindings that actually take effect. The cost:
+                // `ScrollView` doesn't auto-stack repeated children
+                // vertically the way `ListView` does internally, so each
+                // row now needs its own explicit `y: index * 34px;`.
+                body-list := ScrollView {
                     vertical-stretch: 1;
+                    accessible-role: list;
+                    accessible-orientation: Orientation.vertical;
+                    viewport-width: header-rect.width * ResultsState.list-column-headers.length;
+                    viewport-height: ResultsState.list-rows.length * 34px;
 
                     for row[index] in ResultsState.list-rows: Rectangle {
+                        y: index * 34px;
                         height: 34px;
                         width: header-rect.width * ResultsState.list-column-headers.length;
-                        // A `ListView`'s horizontal scroll extent is not
-                        // auto-inferred from child geometry the way a plain
-                        // `Flickable`'s is — Slint's own runtime computes it
-                        // natively per row, as `max(row.min-width)` over
-                        // whichever rows its own internal (vertical)
-                        // virtualization currently visits (see
-                        // `i-slint-core`'s `model/repeater.rs`,
-                        // `listview_layout`/`ensure_updated_listview`). That
-                        // computation also drives the *vertical* viewport
-                        // bookkeeping in the same pass, so setting
-                        // `viewport-width` directly on `body-list` (tried
-                        // before this) fights it instead of fixing it —
-                        // pinning every row's own `min-width` to match its
-                        // `width` is the correct hook: every row reports the
-                        // same value regardless of which ones the runtime's
-                        // scan actually visits, so the scrollable width
-                        // comes out right independent of row/column
-                        // virtualization below.
-                        min-width: self.width;
 
                         background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
 

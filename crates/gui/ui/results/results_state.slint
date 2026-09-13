@@ -241,7 +241,7 @@ export global ResultsState {
 
     // -------- Matrix / plate / well / object --------
     in-out property <[MultiSelectItem]> matrix-column-items: [];
-    in-out property <string> matrix-column-summary: "Number of objects";
+    in-out property <string> matrix-column-summary: "Count";
     in-out property <string> matrix-aggregate: "Average";
     // False while the selected Column is "Count" — averaging/summing/etc. a
     // count of objects doesn't mean anything beyond the count itself, so the
@@ -250,7 +250,7 @@ export global ResultsState {
     in-out property <[MultiSelectItem]> matrix-class-items: [];
     in-out property <string> matrix-class-summary: "No Class";
     in-out property <string> matrix-group-regex: "";
-    in-out property <string> matrix-color-scale-summary: "Viridis";
+    in-out property <string> matrix-color-scale-summary: "Excel";
     in-out property <[MultiSelectItem]> matrix-color-schema-items: [];
     // Sampled from the selected schema in Rust (`color_scale_gradient` in
     // results_generator.rs) so the legend bar always shows the exact

@@ -932,7 +932,7 @@ impl ResultsStateController {
                     let items = state.get_image_items();
                     let selected = items.iter().filter(|item| item.selected).count();
                     let total = manager.images.lock().expect("Poisened").len();
-                    state.set_image_summary(list_summary(selected, total, "Images"));
+                    state.set_image_summary(image_summary_text(selected, total));
                 });
 
             let ui_weak = self.ui.clone();
@@ -949,7 +949,7 @@ impl ResultsStateController {
                     drop(images);
                     let state = ui_ready.global::<ExportDialogState>();
                     state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                    state.set_image_summary(list_summary(total, total, "Images"));
+                    state.set_image_summary(image_summary_text(total, total));
                 });
 
             let ui_weak = self.ui.clone();
@@ -966,7 +966,7 @@ impl ResultsStateController {
                     drop(images);
                     let state = ui_ready.global::<ExportDialogState>();
                     state.set_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
-                    state.set_image_summary(list_summary(0, total, "Images"));
+                    state.set_image_summary(image_summary_text(0, total));
                 });
 
             let manager = self.clone();
@@ -2202,10 +2202,9 @@ impl ResultsStateController {
     pub fn set_images_in_slint(&self, images: &Vec<ImageEntry>) {
         let ui_weak = self.ui.clone();
         let items = image_items(images, false);
-        let summary = list_summary(
+        let summary = image_summary_text(
             items.iter().filter(|item| item.selected).count(),
             items.len(),
-            "Images",
         );
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -2228,7 +2227,7 @@ impl ResultsStateController {
     // count with the cached total than to rebuild the whole item list again.
     fn push_image_summary(&self, selected: usize) {
         let total = self.images.lock().expect("Poisened").len();
-        let text = list_summary(selected, total, "Images");
+        let text = image_summary_text(selected, total);
         let ui_weak = self.ui.clone();
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -2325,7 +2324,7 @@ impl ResultsStateController {
         let rel_paths = images.iter().map(|image| image.rel_path.clone()).collect();
         drop(images);
         self.list_filter.lock().expect("Poisened").image_rel_path = rel_paths;
-        self.push_image_items(items, list_summary(total, total, "Images"));
+        self.push_image_items(items, image_summary_text(total, total));
         self.refresh_list();
     }
 
@@ -2340,7 +2339,7 @@ impl ResultsStateController {
         // empty `image_rel_path` list means "no filter" (all images) in
         // `update_list_view`, not "match nothing".
         self.list_filter.lock().expect("Poisened").image_rel_path = vec![PathBuf::new()];
-        self.push_image_items(items, list_summary(0, total, "Images"));
+        self.push_image_items(items, image_summary_text(0, total));
         self.refresh_list();
     }
 
@@ -2851,6 +2850,21 @@ impl ResultsStateController {
 // (e.g. "3 of 12 Columns").
 fn list_summary(selected: usize, total: usize, noun: &str) -> slint::SharedString {
     format!("{selected} of {total} {noun}").into()
+}
+
+// The IMAGES dropdown's own summary: unlike columns/classes, an empty
+// selection here means "no image filter at all" (every image matches — see
+// `update_list_view`'s `image_rel_path.is_empty()` check and
+// `select_none_images`'s sentinel comment), not "match nothing". "0 of N
+// Images" reads as the opposite of that, so it's shown as "All Images"
+// instead — including right after a database opens, since `set_images_in_slint`
+// starts with nothing selected.
+fn image_summary_text(selected: usize, total: usize) -> slint::SharedString {
+    if selected == 0 {
+        "All Images".into()
+    } else {
+        list_summary(selected, total, "Images")
+    }
 }
 
 // Chart axis-label formatting: whole numbers stay whole (most of these

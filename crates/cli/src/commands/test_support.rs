@@ -49,10 +49,6 @@ impl Drop for TempProjectFile {
 /// from this crate.
 const CH0_INTENSITIES_JSON: &str = r#"{"0":{"sum_raw":1.0,"sum_scaled":255.0,"mean_raw":0.5,"mean_scaled":127.0,"median_raw":0.5,"median_scaled":127.0,"std_raw":0.1,"std_scaled":25.5,"min_raw":0.0,"min_scaled":0.0,"max_raw":1.0,"max_scaled":255.0}}"#;
 
-/// Creates the `objects`/`coloc_stats` schema (matching the schema
-/// `evanalyzer_core::storage::duckdb::CREATE_TABLES` writes - that constant
-/// isn't public, so this mirrors it by hand, same as `evanalyzer_app`'s
-/// internal fixture) on an already-open connection.
 fn create_results_schema(conn: &duckdb::Connection) {
     conn.execute_batch(
         "CREATE TABLE objects (
@@ -81,10 +77,6 @@ fn create_results_schema(conn: &duckdb::Connection) {
             pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
             image_bit_depth UTINYINT,
             intensities_json JSON, coloc_json JSON
-        );
-        CREATE TABLE coloc_stats (
-            image VARCHAR NOT NULL, source_class VARCHAR NOT NULL, target_class VARCHAR NOT NULL,
-            n_colocalized UBIGINT, avg_targets_per_object DOUBLE, total_source_objects UBIGINT
         );
         CREATE TABLE images (
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY
