@@ -82,7 +82,8 @@ fn create_results_schema(conn: &duckdb::Connection) {
             image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL PRIMARY KEY,
             successful BOOLEAN NOT NULL DEFAULT true, error_message VARCHAR,
             disabled BOOLEAN NOT NULL DEFAULT false,
-            width UINTEGER NOT NULL, height UINTEGER NOT NULL
+            width UINTEGER NOT NULL, height UINTEGER NOT NULL,
+            c_stacks UINTEGER NOT NULL, z_stacks UINTEGER NOT NULL, t_stacks UINTEGER NOT NULL
         );
         CREATE TABLE classes (
             class_id INTEGER NOT NULL PRIMARY KEY, name VARCHAR NOT NULL, color UINTEGER
@@ -174,10 +175,13 @@ pub(crate) fn seed_view_results_db(path: &Path) {
     );
 
     // Mirrors what `DuckDbExporter::finalize_image` would have written for
-    // these two images.
+    // these two images: one measured channel (`CH0_INTENSITIES_JSON`), and
+    // 2 z/t stacks each - matching the two distinct (t_stack, z_stack) planes
+    // `insert` above used (img1 @ (0,0), img2 @ (1,1)).
     for image in ["img1.tif", "img2.tif"] {
         conn.execute(
-            "INSERT INTO images (image_name, image_rel_path, width, height) VALUES (?, ?, 100, 100)",
+            "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
+             VALUES (?, ?, 100, 100, 1, 2, 2)",
             duckdb::params![image, image],
         )
         .unwrap_or_else(|e| panic!("insert image {image}: {e}"));
@@ -252,8 +256,9 @@ pub(crate) fn seed_multi_channel_results_db(path: &Path, n_channels: u32) {
     .expect("insert object");
 
     conn.execute(
-        "INSERT INTO images (image_name, image_rel_path, width, height) VALUES ('img1.tif', 'img1.tif', 100, 100)",
-        [],
+        "INSERT INTO images (image_name, image_rel_path, width, height, c_stacks, z_stacks, t_stacks) \
+         VALUES ('img1.tif', 'img1.tif', 100, 100, ?, 1, 1)",
+        duckdb::params![n_channels],
     )
     .expect("insert image");
 

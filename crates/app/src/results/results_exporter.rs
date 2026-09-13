@@ -92,13 +92,12 @@ impl ResultExport {
         database: &ResultsGenerator,
         on_progress: ExportProgress,
     ) -> Result<(), InternalErrors> {
-        match self.format {
-            ExportFormat::CSV => {
-                return Err(InternalErrors::Internal(
-                    "CSV export is not implemented yet — use XLSX for now".to_string(),
-                ));
-            }
-            ExportFormat::XLSX => {}
+        if matches!(self.format, ExportFormat::CSV)
+            && (self.with_plate_view || self.with_plates_and_wells_as_list || self.with_heatmap)
+        {
+            return Err(InternalErrors::Internal(
+                "CSV export only supports the List and Grouped-by-Image views — use XLSX for Plate/Well/Heatmap".to_string(),
+            ));
         }
 
         std::fs::create_dir_all(&self.output_dir).map_err(|e| {
@@ -129,21 +128,24 @@ impl ResultExport {
         Ok(())
     }
 
-    // `list.xlsx`: one continuous "List" sheet, ordered exactly as
-    // requested — every object for image0 at t0, then image1 at t0, ...,
-    // then image0 at t1, image1 at t1, .... `get_list`'s own SQL only
-    // orders by `object_id` and only ever filters one (z, t) pair at a
-    // time, so that ordering is produced here by calling it once per
-    // (z, t, image) triple, in `z`/`t`/name-sorted order, and
-    // concatenating — not by a single broader query. A second "List (Coloc
-    // Details)" sheet is added alongside it when `with_list_coloc_details`
-    // is also set.
+    // `list.xlsx`/`list.csv`: every object, ordered exactly as requested —
+    // every object for image0 at t0, then image1 at t0, ..., then image0 at
+    // t1, image1 at t1, .... `get_list`'s own SQL only orders by `object_id`
+    // and only ever filters one (z, t) pair at a time, so that ordering is
+    // produced here by calling it once per (z, t, image) triple, in
+    // `z`/`t`/name-sorted order, and concatenating — not by a single broader
+    // query. For XLSX, a second "List (Coloc Details)" sheet is added
+    // alongside it when `with_list_coloc_details` is also set; for CSV
+    // (which has no concept of a second sheet in the same file) that becomes
+    // a second `list_coloc_details.csv` document instead.
     //
-    // `with_list_one_file_per_image` splits this into `list_{image}.xlsx`
-    // per image instead — each one its own independent single-image,
-    // multi-t/z sheet — so a dataset whose combined row count would blow
-    // past Excel's 1,048,576-per-sheet limit in one shared file still
-    // exports cleanly, as long as no single image alone exceeds it.
+    // `with_list_one_file_per_image` splits this into `list_{image}.xlsx`/
+    // `.csv` per image instead — each one its own independent single-image,
+    // multi-t/z document — so a dataset whose combined row count would blow
+    // past Excel's 1,048,576-row-per-sheet limit in one shared file still
+    // exports cleanly, as long as no single image alone exceeds it (CSV has
+    // no such limit, but honors the same flag for output-shape parity
+    // between formats).
     fn export_list(
         &self,
         database: &ResultsGenerator,
@@ -164,56 +166,77 @@ impl ResultExport {
                     images.len(),
                 );
                 let single_image = std::slice::from_ref(image);
+                let stem = sanitize_filename_component(&image_stub(image));
+                self.write_list_document(
+                    database,
+                    single_image,
+                    &object_classes,
+                    &format!("list_{stem}"),
+                )?;
+            }
+            return Ok(());
+        }
 
+        on_progress("Exporting List view", 0, 1);
+        self.write_list_document(database, &images, &object_classes, "list")?;
+        on_progress("Exporting List view", 1, 1);
+        Ok(())
+    }
+
+    /// Writes one List document (plus, when `with_list_coloc_details` is
+    /// set, its coloc-details companion) under `file_stem` — `list.xlsx` /
+    /// `list.xlsx`'s "List (Coloc Details)" sheet for XLSX, or
+    /// `{file_stem}.csv` / `{file_stem}_coloc_details.csv` for CSV. Shared by
+    /// both branches of `export_list` (whole-database and
+    /// one-file-per-image) so they can't drift on how a document's content is
+    /// built, only on which `images` slice and `file_stem` they pass in.
+    fn write_list_document(
+        &self,
+        database: &ResultsGenerator,
+        images: &[String],
+        object_classes: &Option<Vec<ObjectClass>>,
+        file_stem: &str,
+    ) -> Result<(), InternalErrors> {
+        match self.format {
+            ExportFormat::XLSX => {
                 let mut workbook = Workbook::new();
                 let sheet = workbook.add_worksheet();
                 sheet.set_name("List").map_err(xlsx_err)?;
-                write_list_sheet(sheet, database, self, single_image, &object_classes, false)?;
+                write_list_sheet(sheet, database, self, images, object_classes, false)?;
 
                 if self.with_list_coloc_details {
                     let coloc_sheet = workbook.add_worksheet();
                     coloc_sheet
                         .set_name("List (Coloc Details)")
                         .map_err(xlsx_err)?;
-                    write_list_sheet(
-                        coloc_sheet,
-                        database,
-                        self,
-                        single_image,
-                        &object_classes,
-                        true,
-                    )?;
+                    write_list_sheet(coloc_sheet, database, self, images, object_classes, true)?;
                 }
 
-                let file_name = format!(
-                    "list_{}.xlsx",
-                    sanitize_filename_component(&image_stub(image))
-                );
                 workbook
-                    .save(self.output_dir.join(file_name))
+                    .save(self.output_dir.join(format!("{file_stem}.xlsx")))
                     .map_err(xlsx_err)?;
             }
-            return Ok(());
+            ExportFormat::CSV => {
+                write_list_csv(
+                    database,
+                    self,
+                    images,
+                    object_classes,
+                    false,
+                    &self.output_dir.join(format!("{file_stem}.csv")),
+                )?;
+                if self.with_list_coloc_details {
+                    write_list_csv(
+                        database,
+                        self,
+                        images,
+                        object_classes,
+                        true,
+                        &self.output_dir.join(format!("{file_stem}_coloc_details.csv")),
+                    )?;
+                }
+            }
         }
-
-        on_progress("Exporting List view", 0, 1);
-        let mut workbook = Workbook::new();
-        let sheet = workbook.add_worksheet();
-        sheet.set_name("List").map_err(xlsx_err)?;
-        write_list_sheet(sheet, database, self, &images, &object_classes, false)?;
-
-        if self.with_list_coloc_details {
-            let coloc_sheet = workbook.add_worksheet();
-            coloc_sheet
-                .set_name("List (Coloc Details)")
-                .map_err(xlsx_err)?;
-            write_list_sheet(coloc_sheet, database, self, &images, &object_classes, true)?;
-        }
-
-        workbook
-            .save(self.output_dir.join("list.xlsx"))
-            .map_err(xlsx_err)?;
-        on_progress("Exporting List view", 1, 1);
         Ok(())
     }
 
@@ -260,25 +283,32 @@ impl ResultExport {
         };
         let result = fetch_all_grouped_by_image_rows(database, &base_filter)?;
 
-        let mut workbook = Workbook::new();
-        let sheet = workbook.add_worksheet();
-        sheet.set_name("Grouped by Image").map_err(xlsx_err)?;
-        let header_format = Format::new().set_bold();
-        for (col_idx, name) in result.column_names.iter().enumerate() {
-            sheet
-                .write_with_format(0, col_idx as u16, name.as_str(), &header_format)
-                .map_err(xlsx_err)?;
-        }
-        for (row_idx, row) in result.rows.iter().enumerate() {
-            let row_n = (row_idx + 1) as u32;
-            for (col_idx, cell) in row.iter().enumerate() {
-                write_cell(sheet, row_n, col_idx as u16, cell)?;
+        match self.format {
+            ExportFormat::XLSX => {
+                let mut workbook = Workbook::new();
+                let sheet = workbook.add_worksheet();
+                sheet.set_name("Grouped by Image").map_err(xlsx_err)?;
+                let header_format = Format::new().set_bold();
+                for (col_idx, name) in result.column_names.iter().enumerate() {
+                    sheet
+                        .write_with_format(0, col_idx as u16, name.as_str(), &header_format)
+                        .map_err(xlsx_err)?;
+                }
+                for (row_idx, row) in result.rows.iter().enumerate() {
+                    let row_n = (row_idx + 1) as u32;
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        write_cell(sheet, row_n, col_idx as u16, cell)?;
+                    }
+                }
+
+                workbook
+                    .save(self.output_dir.join("grouped_by_image.xlsx"))
+                    .map_err(xlsx_err)?;
+            }
+            ExportFormat::CSV => {
+                write_csv(&result, &self.output_dir.join("grouped_by_image.csv"))?;
             }
         }
-
-        workbook
-            .save(self.output_dir.join("grouped_by_image.xlsx"))
-            .map_err(xlsx_err)?;
         on_progress("Exporting Grouped Image List", 1, 1);
         Ok(())
     }
@@ -884,6 +914,119 @@ fn write_list_sheet(
     Ok(())
 }
 
+/// CSV sibling of `write_list_sheet`: same z/t/image sweep and per-plane
+/// fetch (so the two formats can never disagree on row order or content),
+/// written straight to `path` a plane at a time instead of into an XLSX
+/// worksheet.
+fn write_list_csv(
+    database: &ResultsGenerator,
+    export: &ResultExport,
+    images: &[String],
+    object_classes: &Option<Vec<ObjectClass>>,
+    with_coloc_details: bool,
+    path: &Path,
+) -> Result<(), InternalErrors> {
+    let mut out = create_csv_writer(path)?;
+    let write_err = |e: std::io::Error| {
+        InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
+    };
+    let mut header_written = false;
+
+    for z in export.z_stacks {
+        for t in export.t_stacks {
+            for image in images {
+                let base_filter = ListFilter {
+                    plane: PlaneFilter {
+                        z_stack: z,
+                        t_stack: t,
+                    },
+                    images: Some(vec![image.clone()]),
+                    object_classes: object_classes.clone(),
+                    columns: export.columns.clone(),
+                    with_coloc_details,
+                    page: Pagination {
+                        limit: 0,
+                        after: None,
+                    },
+                };
+                let result = fetch_all_list_rows(database, &base_filter)?;
+
+                if !header_written {
+                    write_csv_row(&mut out, &result.column_names).map_err(write_err)?;
+                    header_written = true;
+                }
+                for row in &result.rows {
+                    let cells: Vec<String> = row.iter().map(cell_text).collect();
+                    write_csv_row(&mut out, &cells).map_err(write_err)?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Writes `result` as CSV to `path` in one shot — `result.column_names` as
+/// the header, then one line per row. Used by whichever export step already
+/// has its whole result in memory (e.g. `export_grouped_by_image`, which
+/// pages through `fetch_all_grouped_by_image_rows` and merges before
+/// writing); `write_list_csv` above streams instead, since a List export
+/// covers every z/t/image plane and its per-plane fetch is already the
+/// natural place to write each batch of rows.
+fn write_csv(result: &DatabaseResult, path: &Path) -> Result<(), InternalErrors> {
+    let mut out = create_csv_writer(path)?;
+    let write_err = |e: std::io::Error| {
+        InternalErrors::Internal(format!("could not write {}: {e}", path.display()))
+    };
+    write_csv_row(&mut out, &result.column_names).map_err(write_err)?;
+    for row in &result.rows {
+        let cells: Vec<String> = row.iter().map(cell_text).collect();
+        write_csv_row(&mut out, &cells).map_err(write_err)?;
+    }
+    Ok(())
+}
+
+fn create_csv_writer(path: &Path) -> Result<std::io::BufWriter<std::fs::File>, InternalErrors> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            InternalErrors::Internal(format!("could not create {}: {e}", parent.display()))
+        })?;
+    }
+    let file = std::fs::File::create(path).map_err(|e| {
+        InternalErrors::Internal(format!("could not create {}: {e}", path.display()))
+    })?;
+    Ok(std::io::BufWriter::new(file))
+}
+
+fn write_csv_row(out: &mut impl std::io::Write, fields: &[String]) -> std::io::Result<()> {
+    let line: Vec<String> = fields.iter().map(|f| csv_escape(f)).collect();
+    writeln!(out, "{}", line.join(","))
+}
+
+fn csv_escape(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
+
+/// Plain-text form of a `Cell`'s value for CSV, dropping its color/formatting
+/// (CSV has no cells to color) — matches the CLI's identically-named helper
+/// in `crates/cli/src/commands/common.rs`, kept separate there since it's
+/// also used by that crate's table/JSON rendering, unrelated to export.
+fn cell_text(cell: &Cell) -> String {
+    match &cell.value {
+        CellValue::Empty => String::new(),
+        CellValue::String(s) => s.clone(),
+        CellValue::Class((s, _)) => s.clone(),
+        CellValue::Float(v) => v.to_string(),
+        CellValue::Integer(v) => v.to_string(),
+    }
+}
+
 /// Excel cell size (both width and height, in pixels) every plate/well/
 /// heatmap grid block is laid out at, so its cells read as squares — the
 /// grid's own values are unitless relative to a real image/plate scale, so
@@ -1193,5 +1336,133 @@ impl SheetNamer {
         }
         self.used.insert(candidate.clone());
         candidate
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use duckdb::Connection;
+
+    #[test]
+    fn csv_escape_quotes_fields_containing_commas_or_quotes() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+    }
+
+    /// Minimal one-image, one-object `.evadb` — just enough schema/data for
+    /// `start_export` to have something real to write. Mirrors the CLI's own
+    /// `crates/cli/src/commands/test_support.rs` fixture (duplicated rather
+    /// than shared across crates, same reasoning as `cell_text` above).
+    fn seed_minimal_db(path: &Path) {
+        let conn = Connection::open(path).expect("open test db");
+        conn.execute_batch(
+            "CREATE TABLE classes (class_id INTEGER, name VARCHAR, color UINTEGER);
+             CREATE TABLE images (
+                 image_name VARCHAR, image_rel_path VARCHAR,
+                 successful BOOLEAN DEFAULT true, error_message VARCHAR,
+                 disabled BOOLEAN DEFAULT false,
+                 width UINTEGER, height UINTEGER,
+                 c_stacks UINTEGER, z_stacks UINTEGER, t_stacks UINTEGER
+             );
+             CREATE TABLE objects (
+                 image_name VARCHAR NOT NULL, image_rel_path VARCHAR NOT NULL,
+                 c_stack INTEGER, z_stack INTEGER, t_stack INTEGER,
+                 object_id UUID NOT NULL, seg_class_name VARCHAR, seg_class_id INTEGER,
+                 object_class_name VARCHAR, object_class_id VARCHAR,
+                 parent_id VARCHAR, children VARCHAR, track_id UBIGINT,
+                 centroid_x_px DOUBLE, centroid_y_px DOUBLE, centroid_x_nm DOUBLE, centroid_y_nm DOUBLE,
+                 bbox_xmin_px UINTEGER, bbox_ymin_px UINTEGER, bbox_xmax_px UINTEGER, bbox_ymax_px UINTEGER,
+                 bbox_xmin_nm DOUBLE, bbox_ymin_nm DOUBLE, bbox_xmax_nm DOUBLE, bbox_ymax_nm DOUBLE,
+                 area_px UBIGINT, area_nm2 DOUBLE, perimeter_px DOUBLE, perimeter_nm DOUBLE,
+                 circularity DOUBLE, solidity DOUBLE, aspect_ratio DOUBLE, roundness DOUBLE, compactness DOUBLE,
+                 major_axis_px DOUBLE, minor_axis_px DOUBLE, eccentricity DOUBLE, touches_edge BOOLEAN,
+                 pixel_size_x_nm DOUBLE, pixel_size_y_nm DOUBLE, pixel_size_z_nm DOUBLE,
+                 intensities_json JSON, coloc_json JSON
+             );
+             INSERT INTO classes VALUES (1, 'ClassA', 0);
+             INSERT INTO images VALUES ('img1.tif', 'img1.tif', true, NULL, false, 100, 100, 1, 1, 1);
+             INSERT INTO objects (
+                image_name, image_rel_path, t_stack, z_stack, object_id, seg_class_name, seg_class_id,
+                object_class_name, object_class_id, track_id,
+                centroid_x_px, centroid_y_px, centroid_x_nm, centroid_y_nm,
+                bbox_xmin_px, bbox_ymin_px, bbox_xmax_px, bbox_ymax_px,
+                bbox_xmin_nm, bbox_ymin_nm, bbox_xmax_nm, bbox_ymax_nm,
+                area_px, area_nm2, perimeter_px, perimeter_nm,
+                circularity, solidity, aspect_ratio, roundness, compactness,
+                major_axis_px, minor_axis_px, eccentricity, touches_edge,
+                pixel_size_x_nm, pixel_size_y_nm, pixel_size_z_nm,
+                intensities_json, coloc_json
+             ) VALUES (
+                'img1.tif', 'img1.tif', 0, 0, '00000000-0000-0000-0000-000000000001', 'ClassA', 1,
+                '[\"ClassA\"]', '[1]', 0,
+                0, 0, 0, 0,
+                0, 0, 10, 10,
+                0, 0, 0, 0,
+                100, 100.0, 40, 40,
+                1.0, 1.0, 1.0, 1.0, 1.0,
+                10, 10, 1.0, false,
+                1.0, 1.0, 1.0,
+                '{}', '{}'
+             );",
+        )
+        .expect("seed test db");
+    }
+
+    /// End-to-end proof that `start_export`'s CSV path (shared by the CLI
+    /// and, once wired up, the GUI export dialog) actually writes a real
+    /// `list.csv`/`grouped_by_image.csv` with the expected content — not
+    /// just that the CLI's own call site happens to work.
+    #[test]
+    fn start_export_writes_csv_for_list_and_grouped_by_image() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("results.evadb");
+        seed_minimal_db(&db_path);
+        let database = ResultsGenerator::open_database(db_path).expect("open database");
+        let columns: Vec<Column> = database
+            .get_available_columns()
+            .expect("available columns")
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
+        let out_dir = dir.path().join("out");
+        let mut no_progress = |_message: &str, _current: usize, _total: usize| {};
+
+        let list_export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks: Range { start: 0, end: 1 },
+            t_stacks: Range { start: 0, end: 1 },
+            columns: columns.clone(),
+            with_list_view: true,
+            ..Default::default()
+        };
+        list_export
+            .start_export(&database, &mut no_progress)
+            .expect("csv list export");
+        let list_csv = std::fs::read_to_string(out_dir.join("list.csv")).expect("read list.csv");
+        assert!(list_csv.contains("Class"), "header: {list_csv}");
+        assert!(list_csv.contains("ClassA"));
+
+        let grouped_export = ResultExport {
+            output_dir: out_dir.clone(),
+            format: ExportFormat::CSV,
+            z_stacks: Range { start: 0, end: 1 },
+            t_stacks: Range { start: 0, end: 1 },
+            columns,
+            aggregations: vec![Aggregation::Avg],
+            with_grouped_by_image_list: true,
+            ..Default::default()
+        };
+        grouped_export
+            .start_export(&database, &mut no_progress)
+            .expect("csv grouped export");
+        let grouped_csv = std::fs::read_to_string(out_dir.join("grouped_by_image.csv"))
+            .expect("read grouped_by_image.csv");
+        assert!(
+            grouped_csv.lines().count() >= 2,
+            "expected a header and at least one data row: {grouped_csv}"
+        );
     }
 }
