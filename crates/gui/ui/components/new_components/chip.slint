@@ -1,0 +1,94 @@
+// components/chip.slint — small pills used in filter bars, PickerField
+// collapsed rows, and toggle-chip groups (e.g. Coloc's property picker).
+
+import { Theme } from "../style.slint";
+
+// Removable pill ("CY5 ×").
+export component Chip inherits Rectangle {
+    in property <string> label;
+    in property <bool> removable: true;
+    callback remove;
+
+    height: 22px;
+    border-radius: 11px;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: root.removable ? 4px : 9px;
+        spacing: 6px;
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-family: Theme.font-sans;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+
+        if root.removable: rm-ta := TouchArea {
+            width: 14px;
+            height: 14px;
+            mouse-cursor: pointer;
+            clicked => { root.remove(); }
+            Text {
+                text: "×";
+                font-size: 10px;
+                color: rm-ta.has-hover ? Theme.text : Theme.text-mute;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// Non-interactive "+N more" overflow pill.
+export component OverflowChip inherits Rectangle {
+    in property <int> count;
+    height: 22px;
+    border-radius: 11px;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+
+    Text {
+        text: "+" + root.count + " more";
+        font-size: 11px;
+        font-family: Theme.font-sans;
+        color: Theme.text-mute;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 9px;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+// Toggle pill (on/off), used for Coloc's property picker and any
+// multi-choice inline filter that doesn't need a popup.
+export component ToggleChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback clicked;
+
+    height: 24px;
+    border-radius: 12px;
+    background: root.on ? Theme.accent-dim : transparent;
+    border-width: 1px;
+    border-color: root.on ? Theme.accent : Theme.border;
+    animate background, border-color { duration: 80ms; }
+
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+
+    Text {
+        text: root.label;
+        font-size: 11px;
+        color: root.on ? Theme.text : Theme.text-mute;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 10px;
+        width: parent.width - 20px;
+    }
+}

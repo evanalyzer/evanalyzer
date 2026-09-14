@@ -1,0 +1,111 @@
+// components/text_field.slint — shared single-line text input with an
+// optional leading icon and placeholder, styled off Theme. Wraps
+// std-widgets' LineEdit so we keep native text editing/selection/caret
+// behavior instead of reimplementing it.
+
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+
+export component TextField inherits Rectangle {
+    in property <string> placeholder;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <bool> enabled: true;
+    in property <bool> mono: false;
+    in-out property <string> value;
+    callback edited(string);
+    callback accepted(string);
+
+    height: 34px;
+    border-radius: Theme.radius-sm;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: le.has-focus ? Theme.accent : Theme.border-soft;
+    animate border-color { duration: 80ms; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 6px;
+
+        if root.has-icon: Image {
+            source: root.icon;
+            width: 13px;
+            height: 13px;
+            colorize: Theme.text-mute;
+            y: (parent.height - self.height) / 2;
+        }
+
+        le := LineEdit {
+            horizontal-stretch: 1;
+            enabled: root.enabled;
+            placeholder-text: root.placeholder;
+            text <=> root.value;
+            font-size: root.mono ? 11.5px : 12px;
+            font-family: root.mono ? Theme.font-mono : Theme.font-sans;
+            edited(t) => { root.edited(t); }
+            accepted(t) => { root.accepted(t); }
+        }
+    }
+}
+
+// Small rounded checkbox glyph reused by Checkbox, MultiSelectDropdown rows,
+// and group headers. Supports an indeterminate ("some but not all checked")
+// visual for group headers.
+export component CheckMark inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> indeterminate: false;
+
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    border-width: 1.5px;
+    border-color: (root.checked || root.indeterminate) ? Theme.accent : Theme.border;
+    background: (root.checked || root.indeterminate) ? Theme.accent : transparent;
+    animate background { duration: 60ms; }
+
+    if root.checked: Image {
+        source: @image-url("../icons/regular-black/check.svg");
+        width: 9px;
+        height: 9px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: white;
+    }
+
+    if root.indeterminate && !root.checked: Rectangle {
+        width: 7px;
+        height: 1.6px;
+        border-radius: 1px;
+        background: white;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+// Labeled checkbox row (label to the right of the box).
+export component Checkbox inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    in property <bool> indeterminate: false;
+    callback toggled;
+
+    height: 20px;
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        VerticalLayout { alignment: center; CheckMark { checked: root.checked; indeterminate: root.indeterminate; } }
+        Text {
+            text: root.label;
+            font-size: 12px;
+            font-family: Theme.font-sans;
+            color: root.checked ? Theme.text : Theme.text-dim;
+            vertical-alignment: center;
+        }
+    }
+}

@@ -1,44 +1,110 @@
 use crate::args::{ColumnsArgs, ViewArgs};
-use crate::commands::common::{build_database_filter, discover_columns};
+use crate::commands::common::{cell_text, resolve_image_rel_paths, resolve_object_classes};
 use crate::table::print_object_table;
-use evanalyzer_app::result::{
-    ResultsLoader, build_column_specs, discover_channels, plottable_columns, to_display_row,
-};
+use evanalyzer_app::result::{Column, ListFilter, Pagination, PlaneFilter, ResultsGenerator};
 use evanalyzer_cfg::core_types::InternalErrors;
 use serde_json::json;
 
+/// Whether `column` is a per-channel intensity column — excluded from the
+/// default view unless `--channels` is given, same split the old CLI's own
+/// `--channels` flag drew.
+fn is_intensity_column(column: &Column) -> bool {
+    matches!(
+        column,
+        Column::IntensityAvg(_)
+            | Column::IntensitySum(_)
+            | Column::IntensityMin(_)
+            | Column::IntensityMax(_)
+    )
+}
+
+/// Walks forward from the first page to find the keyset cursor for
+/// `target_page` (0-based) — `ListFilter`'s own pagination is keyset-based
+/// (a cursor from the *previous* page), not offset-based, so a stateless
+/// one-shot CLI invocation has no cursor to resume from and must re-walk
+/// every earlier page. Fine for `view`'s "quick preview" use case (small
+/// `--page`, typically 0); an unbounded deep `--page` would rescan a lot -
+/// use `export` for anything that needs the whole table.
+fn cursor_for_page(
+    db: &ResultsGenerator,
+    base: &ListFilter,
+    target_page: usize,
+) -> Result<Option<String>, InternalErrors> {
+    let mut cursor = None;
+    for _ in 0..target_page {
+        let probe = ListFilter {
+            page: Pagination {
+                limit: base.page.limit,
+                after: cursor.take(),
+            },
+            ..base.clone()
+        };
+        let page = db.get_object_list(&probe)?;
+        cursor = page.row_names.last().cloned();
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(cursor)
+}
+
 pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
-    let loader = ResultsLoader::new(&args.db);
+    let db = ResultsGenerator::open_database(args.db.clone())?;
 
-    let image_names = loader.get_image_names()?;
-    let class_names = loader.get_class_names()?;
-    let t_range = loader.get_t_stack_range().unwrap_or(None);
-    let z_range = loader.get_z_stack_range().unwrap_or(None);
+    if args.filter.colocalized.is_some() {
+        return Err(InternalErrors::InvalidArgument(
+            "--colocalized isn't supported by the current results backend".to_string(),
+        ));
+    }
 
-    let filter = build_database_filter(&args.filter, args.channels, args.page, args.limit);
-    let objects = loader.get_objects(filter)?;
+    let images = db.get_images()?;
+    let classes = db.get_object_classes()?;
+    let image_names: Vec<String> = images.iter().map(|image| image.name.clone()).collect();
+    let class_names: Vec<String> = classes.iter().map(|class| class.name.clone()).collect();
 
-    let (channels, coloc_partner_classes) = if args.channels {
-        (
-            discover_channels(&objects),
-            loader.get_coloc_partner_class_names()?,
-        )
-    } else {
-        (vec![], vec![])
+    let image_rel_paths = resolve_image_rel_paths(&db, &args.filter.images)?;
+    let object_classes = resolve_object_classes(&db, &args.filter.classes)?;
+    let columns: Vec<Column> = db
+        .get_available_columns()?
+        .into_iter()
+        .filter(|entry| args.channels || !is_intensity_column(&entry.key))
+        .map(|entry| entry.key)
+        .collect();
+
+    let base_filter = ListFilter {
+        plane: PlaneFilter {
+            z_stack: 0,
+            t_stack: 0,
+        },
+        images: (!image_rel_paths.is_empty()).then_some(image_rel_paths),
+        object_classes: (!object_classes.is_empty()).then_some(object_classes),
+        columns,
+        with_coloc_details: false,
+        page: Pagination {
+            limit: args.limit.max(1) as i32,
+            after: None,
+        },
     };
-    let specs = build_column_specs(&channels, &coloc_partner_classes);
+    let cursor = cursor_for_page(&db, &base_filter, args.page)?;
+    let result = db.get_object_list(&ListFilter {
+        page: Pagination {
+            limit: base_filter.page.limit,
+            after: cursor,
+        },
+        ..base_filter
+    })?;
 
     if args.json {
-        let rows: Vec<_> = objects
+        let rows: Vec<_> = result
+            .rows
             .iter()
-            .enumerate()
-            .map(|(i, object)| {
-                let display = to_display_row(i, object, &specs);
+            .map(|row| {
                 serde_json::Value::Object(
-                    specs
+                    result
+                        .column_names
                         .iter()
-                        .zip(display.values.iter())
-                        .map(|(spec, v)| (spec.id.clone(), json!(v)))
+                        .zip(row.iter())
+                        .map(|(name, cell)| (name.clone(), json!(cell_text(cell))))
                         .collect(),
                 )
             })
@@ -47,10 +113,11 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
             "db": args.db,
             "images": image_names,
             "classes": class_names,
-            "t_stack_range": t_range,
-            "z_stack_range": z_range,
+            "t_stack_range": [0, db.get_nr_of_t_stacks()],
+            "z_stack_range": [0, db.get_nr_of_z_stacks()],
             "page": args.page,
             "limit": args.limit,
+            "matched": result.source_object_count,
             "rows": rows,
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
@@ -68,44 +135,38 @@ pub fn run(args: ViewArgs) -> Result<(), InternalErrors> {
         class_names.len(),
         summarize(&class_names)
     );
-    if let Some((min, max)) = t_range {
-        println!("T-stack:  {min}..{max}");
-    }
-    if let Some((min, max)) = z_range {
-        println!("Z-stack:  {min}..{max}");
-    }
+    println!("T-stack:  0..{}", db.get_nr_of_t_stacks());
+    println!("Z-stack:  0..{}", db.get_nr_of_z_stacks());
     println!();
 
-    if objects.is_empty() {
+    if result.rows.is_empty() {
         println!("(no rows match)");
         return Ok(());
     }
 
-    print_object_table(&specs, &objects);
+    print_object_table(&result);
     println!(
-        "\nPage {} - {} row(s) shown. Use --page/--limit to page through more, --channels to add intensities.",
+        "\nPage {} - {} row(s) shown (of {} matched). Use --page/--limit to page through more, --channels to add intensities.",
         args.page,
-        objects.len()
+        result.rows.len(),
+        result.source_object_count
     );
     Ok(())
 }
 
 pub fn run_columns(args: ColumnsArgs) -> Result<(), InternalErrors> {
-    let loader = ResultsLoader::new(&args.db);
-    let specs = discover_columns(&loader)?;
-    let plottable: std::collections::HashSet<&str> = plottable_columns(&specs)
-        .iter()
-        .map(|c| c.id.as_str())
-        .collect();
+    let db = ResultsGenerator::open_database(args.db.clone())?;
+    let classes = db.get_object_classes()?;
+    let columns = db.get_available_columns()?;
 
     if args.json {
-        let out: Vec<_> = specs
+        let out: Vec<_> = columns
             .iter()
-            .map(|c| {
+            .map(|entry| {
                 json!({
-                    "id": c.id,
-                    "label": c.label,
-                    "numeric": plottable.contains(c.id.as_str()),
+                    "id": entry.key.as_key(&classes),
+                    "label": entry.display_name,
+                    "group": entry.group,
                 })
             })
             .collect();
@@ -113,14 +174,14 @@ pub fn run_columns(args: ColumnsArgs) -> Result<(), InternalErrors> {
         return Ok(());
     }
 
-    println!("{:<36} {:<32} {}", "ID", "LABEL", "NUMERIC");
-    for c in &specs {
-        let numeric = if plottable.contains(c.id.as_str()) {
-            "yes"
-        } else {
-            ""
-        };
-        println!("{:<36} {:<32} {numeric}", c.id, c.label);
+    println!("{:<28} {:<32} {}", "ID", "LABEL", "GROUP");
+    for entry in &columns {
+        println!(
+            "{:<28} {:<32} {}",
+            entry.key.as_key(&classes),
+            entry.display_name,
+            entry.group
+        );
     }
     Ok(())
 }
@@ -164,7 +225,11 @@ mod tests {
 
         let result = run(view_args(&db.path, false, false));
 
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "run failed: {:?}",
+            result.err().map(|e| e.to_string())
+        );
     }
 
     #[test]
@@ -173,7 +238,11 @@ mod tests {
 
         let result = run(view_args(&db.path, true, false));
 
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "run failed: {:?}",
+            result.err().map(|e| e.to_string())
+        );
     }
 
     #[test]
@@ -182,36 +251,25 @@ mod tests {
         let mut args = view_args(&db.path, false, false);
         args.filter.images = vec!["nonexistent.tif".to_string()];
 
-        // Exercise the same lookup `run` uses to decide it hit the
-        // "(no rows match)" branch, so the test doesn't just take `is_ok()`
-        // on faith - it proves the fixture+filter combination really does
-        // produce zero rows before checking `run` handles that cleanly.
-        let loader = ResultsLoader::new(&db.path);
-        let filter = build_database_filter(&args.filter, args.channels, args.page, args.limit);
-        let objects = loader.get_objects(filter).expect("get_objects");
-        assert!(objects.is_empty());
-
         let result = run(args);
 
-        assert!(result.is_ok());
+        // An unknown --image name is now rejected up front (see
+        // resolve_image_rel_paths) rather than silently matching nothing,
+        // so this is an error, not an empty "(no rows match)" success.
+        assert!(result.is_err());
     }
 
     #[test]
     fn run_with_channels_discovers_intensity_columns_from_the_seeded_channel_0_data() {
         let db = TempResultsDb::seeded();
 
-        // Same discovery path `run` takes internally when `--channels` is
-        // set: fetch the (intensity-carrying) objects, then discover which
-        // channel indices actually appear.
-        let loader = ResultsLoader::new(&db.path);
-        let filter = build_database_filter(&FilterArgs::default(), true, 0, 25);
-        let objects = loader.get_objects(filter).expect("get_objects");
-        let channels = discover_channels(&objects);
-        assert_eq!(channels, vec![0]);
-
         let result = run(view_args(&db.path, false, true));
 
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "run failed: {:?}",
+            result.err().map(|e| e.to_string())
+        );
     }
 
     #[test]
@@ -229,24 +287,6 @@ mod tests {
     #[test]
     fn run_columns_lists_json_columns_for_a_seeded_database() {
         let db = TempResultsDb::seeded();
-
-        // Same column-discovery call `run_columns` makes internally - assert
-        // the fixed `object_id`/`image`/`class` columns and the seeded
-        // channel-0 intensity column are all present, and that at least one
-        // of them is flagged plottable/numeric like the JSON output does.
-        let loader = ResultsLoader::new(&db.path);
-        let specs = discover_columns(&loader).expect("discover_columns");
-        let ids: Vec<&str> = specs.iter().map(|c| c.id.as_str()).collect();
-        assert!(ids.contains(&"object_id"));
-        assert!(ids.contains(&"image"));
-        assert!(ids.contains(&"class"));
-        assert!(ids.iter().any(|id| id.starts_with("ch0_")));
-
-        let plottable: std::collections::HashSet<&str> = plottable_columns(&specs)
-            .iter()
-            .map(|c| c.id.as_str())
-            .collect();
-        assert!(!plottable.is_empty());
 
         let result = run_columns(ColumnsArgs {
             db: db.path.clone(),

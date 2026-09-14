@@ -1,0 +1,395 @@
+// results_state.slint
+// Central state + callbacks for the redesigned Results window. Mirrors the
+// naming style of the existing ResultsState (results_table.slint) so this
+// can be merged into it rather than kept as a second global — every
+// property here is meant to be backed by Rust, every callback fired on
+// user action for Rust to handle.
+//
+// Kept separate from results_table.slint (not modified — unseen in this
+// pass) so nothing you already have wired up is touched. Fold these fields
+// into your existing ResultsState when integrating.
+
+import { MultiSelectItem } from "../components/multi_select_dropdown.slint";
+
+export enum ResultsRailMode { list, matrix, charts }
+// Matrix drill depth: plate (grouped grid) -> well (fields of one well) ->
+// object (single image + detected objects).
+export enum MatrixLevel { plate, well, object }
+export enum ResultsChartKind2 { histogram, scatter, boxplot }
+
+export struct BreadcrumbItem {
+    label: string,
+}
+
+export struct MatrixCell {
+    key: string,       // e.g. "D5" (well) or "img_03" (field)
+    value: float,
+    has-value: bool,
+    label: string,
+    color: color,
+}
+
+export struct ObjectMarker {
+    id: int,
+    x-pct: float,
+    y-pct: float,
+    class-color: color,
+    selected: bool,
+}
+
+// One row of the flat object table. `cells` holds one already-formatted
+// string per currently visible column, in the same order as
+// `ResultsState.list-column-headers` — kept row-only (no per-column typing)
+// so the table can render any column selection without a struct per shape.
+export struct ResultRow {
+    cells: [string],
+    alternating: bool,
+}
+
+export struct ChartScatterPoint {
+    x: float,
+    y: float,
+}
+
+export struct ChartBoxplotBox {
+    label: string,
+    color: color,
+    min: float,
+    q1: float,
+    median: float,
+    q3: float,
+    max: float,
+    outliers: [float],
+    object-count: int,
+}
+
+export global ResultsState {
+    // -------- Navigation --------
+    in-out property <ResultsRailMode> rail-mode: ResultsRailMode.list;
+    in-out property <MatrixLevel> matrix-level: MatrixLevel.plate;
+    in-out property <[BreadcrumbItem]> breadcrumb: [{ label: "All results" }];
+    callback rail-mode-selected(ResultsRailMode);
+    // Index of the clicked breadcrumb segment (always < length - 1).
+    callback breadcrumb-nav(int);
+
+    // -------- Global Z/T plane filter (applies to every view) --------
+    // TEMPORARY: -active defaults flipped to true and -max given non-zero
+    // previews so GlobalPlaneStepper is visible for design review before
+    // Rust wires these up (see "Rust wiring notes" below). Reset both to
+    // `false` once results_table_controller.rs drives ResultsState.
+    in-out property <int> z-stack: 0;
+    in-out property <int> z-stack-max: 6;
+    in-out property <int> t-stack: 0;
+    in-out property <int> t-stack-max: 3;
+    in-out property <bool> z-stack-active: true;
+    in-out property <bool> t-stack-active: true;
+    callback z-changed(int);
+    callback t-changed(int);
+
+    in-out property <[MultiSelectItem]> matrix-aggregation-items: [
+        { key: "avg", value: "Average", group: "", selected: true },
+        { key: "min", value: "Minimum", group: "", selected: false },
+        { key: "max", value: "Maximum", group: "", selected: false },
+        { key: "sum", value: "Sum", group: "", selected: false },
+        { key: "stddev", value: "Std Dev", group: "", selected: false },
+        { key: "median", value: "Median", group: "", selected: false },
+        { key: "skewness", value: "Skewness", group: "", selected: false },
+    ];
+
+    // -------- List view --------
+    in-out property <[MultiSelectItem]> list-image-items: [];
+    in-out property <string> list-image-summary: "All images";
+
+    // Class selector
+    in-out property <[MultiSelectItem]> list-class-items: [
+        { key: "nucleus", value: "Nucleus", color: #4d8dff, group: "", selected: true },
+        { key: "cell", value: "Cell", color: #34c759, group: "", selected: true },
+        { key: "mitochondria", value: "Mitochondria", color: #ff9f0a, group: "", selected: false },
+        { key: "debris", value: "Debris", color: #8e8e93, group: "", selected: false },
+    ];
+    in-out property <string> list-class-summary: "x of y classes";
+
+    // Column selector
+    in-out property <[MultiSelectItem]> list-columns: [
+        { key: "object_id", value: "Object ID", group: "General", selected: true },
+        { key: "object_class_name", value: "Class", group: "General", selected: true },
+        { key: "area_px", value: "Area [px]", group: "Geometry", selected: true },
+        { key: "area_nm2", value: "Area [nm²]", group: "Geometry", selected: false },
+        { key: "area_nm2", value: "Area [nm²]", group: "Geometry", selected: false },
+        { key: "area_nm2", value: "Area [nm²]", group: "Geometry", selected: false },
+        { key: "area_nm2", value: "Area [nm²]", group: "XXX", selected: false },
+        { key: "area_nm2", value: "Area [nm²]", group: "XXX", selected: false },
+        { key: "area_nm2", value: "Area [nm²]", group: "XXX", selected: false },
+        { key: "area_nm2", value: "Area [nm²]", group: "YYY", selected: false },
+        { key: "area_nm2", value: "Area [nm²]", group: "YYY", selected: false },
+        { key: "area_nm2", value: "Area [nm²]", group: "YYY", selected: false },
+    ];
+    in-out property <[string]> list-columns-groups: ["General", "Geometry", "XXX", "YYY", "ZZZ"];
+    in-out property <string> list-columns-summary: "3 of 4 columns";
+
+    // Objects (one row per object, the default) vs Images (one row per
+    // image, each selected column aggregated across that image's objects —
+    // `ResultsGenerator::get_grouped_by_image`).
+    in-out property <[MultiSelectItem]> list-group-by-items: [
+        { key: "objects", value: "Objects", group: "", selected: true },
+        { key: "images", value: "Images", group: "", selected: false },
+    ];
+    in-out property <string> list-group-by-summary: "Objects";
+    callback list-group-by-selected(string);
+
+    // Images mode's per-column aggregation(s) — `get_grouped_by_image`
+    // accepts more than one, adding one output column per (selected column
+    // x selected aggregation) combination, same as the export dialog's own
+    // AGGREGATIONS picker.
+    in-out property <[MultiSelectItem]> list-aggregation-items: [];
+    in-out property <string> list-aggregate: "1 of 7 aggregations";
+    callback list-aggregation-item-selected(string, bool);
+    callback list-aggregation-select-all();
+    callback list-aggregation-select-none();
+
+    // Expands each row with a selected "Coloc with <class>" column into one
+    // row per colocalizing partner, with that partner's own value for every
+    // other selected measurement column (`ListFilter::with_coloc_details` in
+    // results_generator.rs) — replaces the former standalone Coloc tab.
+    in-out property <bool> list-with-coloc-details: false;
+    callback list-with-coloc-details-changed(bool);
+
+    in-out property <[MultiSelectItem]> list-with-coloc-details-by-items: [
+        { key: "flat", value: "Flat", group: "", selected: true },
+        { key: "details", value: "Details", group: "", selected: false },
+    ];
+    in-out property <string> list-with-coloc-details-summary: "Flat";
+
+    // Table body. Rust only ever fills this with the current page (see
+    // ResultsStateController::update_list_view) — never the full result set
+    // — so it stays cheap to diff/render no matter how large the underlying
+    // database is.
+    in-out property <[string]> list-column-headers: [
+        "Column 1",
+        "Col 2",
+        "Test",
+        "Test",
+        "Test",
+        "Test",
+        "Test",
+        "Test",
+        "Test",
+        "Test",
+        "AAAAA",
+        "BBBB"
+    ];
+    // One entry per `list-column-headers`/per-row `cells` position, in
+    // pixels (plain `float`, not `length`, so Rust can hand back a bare
+    // number) - `results_list.slint` multiplies each back out by `1px` at
+    // the point of use. Computed in `set_objects_list_in_slint` from the
+    // longest header/cell text actually on this page, capped at 260px -
+    // see that function's own comment for why a real font-metrics
+    // measurement isn't needed here.
+    in-out property <[float]> list-column-widths: [
+        120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120
+    ];
+    in-out property <[ResultRow]> list-rows: [
+        { cells: ["long text", "short"] },
+        {
+            cells: [
+                "short",
+                "short",
+                "adlsdkö",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+            ]
+        },
+        {
+            cells: [
+                "eab1ce1b-d4f2-40fb-9c18-aad6e4af0ac4",
+                "adlsdkö",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+                "aaa",
+            ]
+        }
+    ];
+    in-out property <int> list-row-count: 0;
+
+    // Next/previous pagination (not infinite scroll — see the discussion on
+    // ResultsStateController::update_list_view for why). 1-based for direct
+    // display; page 1 is always reachable, so "has previous" is just
+    // `list-page-number > 1`.
+    in-out property <int> list-page-number: 1;
+    in-out property <bool> list-has-next-page: false;
+    callback list-next-page();
+    callback list-prev-page();
+    // Fired when a row is clicked — index into `list-rows`
+    // (`ResultsStateController::list_row_locations` mirrors it 1:1) so Rust
+    // can open that object's source image and highlight it there.
+    callback list-row-clicked(int);
+
+    callback list-image-filter-changed(string);
+    callback list-class-selected(string, bool);
+    callback list-class-select-all();
+    callback list-class-select-none();
+    callback list-image-selected(string, bool);
+    callback list-image-select-all();
+    callback list-image-select-none();
+    callback list-columns-item-selected(string, bool);
+    callback list-columns-select-all();
+    callback list-columns-select-none();
+
+    // -------- Matrix / plate / well / object --------
+    in-out property <[MultiSelectItem]> matrix-column-items: [];
+    in-out property <string> matrix-column-summary: "Count";
+    in-out property <string> matrix-aggregate: "Average";
+    // False while the selected Column is "Count" — averaging/summing/etc. a
+    // count of objects doesn't mean anything beyond the count itself, so the
+    // Aggregate picker is disabled rather than left selectable but ignored.
+    in-out property <bool> matrix-aggregate-enabled: true;
+    in-out property <[MultiSelectItem]> matrix-class-items: [];
+    in-out property <string> matrix-class-summary: "No Class";
+    in-out property <string> matrix-group-regex: "";
+    in-out property <string> matrix-color-scale-summary: "Excel";
+    in-out property <[MultiSelectItem]> matrix-color-schema-items: [];
+    // Sampled from the selected schema in Rust (`color_scale_gradient` in
+    // results_generator.rs) so the legend bar always shows the exact
+    // gradient the plate cells are actually colored with.
+    in-out property <[color]> matrix-color-scale-stops: [];
+    // Whether the plate's value range is pinned (`matrix-scale-set-manual`)
+    // rather than auto-computed from the data on every refresh.
+    in-out property <bool> matrix-scale-is-manual: false;
+    callback matrix-scale-set-auto();
+    callback matrix-scale-set-manual(float, float);
+    in-out property <[string]> matrix-aggregate-options: ["Average", "Minimum", "Maximum", "Std Dev", "Sum", "Median", "Skewness"];
+    in-out property <[MatrixCell]> plate-cells: [];
+    in-out property <int> plate-rows: 8;
+    in-out property <int> plate-cols: 12;
+    in-out property <float> plate-min: 0;
+    in-out property <float> plate-max: 0;
+    in-out property <string> active-well: "";
+    in-out property <bool> active-well-has-value: false;
+    in-out property <string> active-well-value: "";
+    in-out property <string> active-well-caption: "";
+    in-out property <[MatrixCell]> well-fields: [];
+    in-out property <int> well-rows: 4;
+    in-out property <int> well-cols: 4;
+    in-out property <float> well-min: 0;
+    in-out property <float> well-max: 0;
+    // Third drill level: a heatmap of square-binned tiles over one image
+    // (`get_image_heatmap`/`ImageHeatmapGrid`) — same shape as `well-*` one
+    // level up, driven by `ImageHeatmapFilter::square_size` instead of
+    // `WellFilter::well_size`.
+    in-out property <[MatrixCell]> image-heatmap-cells: [];
+    in-out property <int> image-heatmap-rows: 4;
+    in-out property <int> image-heatmap-cols: 4;
+    in-out property <float> image-heatmap-min: 0;
+    in-out property <float> image-heatmap-max: 0;
+    in-out property <string> active-field: "";
+    in-out property <[ObjectMarker]> object-markers: [];
+    in-out property <string> active-image-name: "";
+
+    // -- Per-level grid-size controls, one shown in the sidebar per
+    // `matrix-level` (see results_matrix.slint) --
+    // Plate: which standard microplate format to lay the grid out as.
+    // "Auto" (the default item) picks the smallest one that fits the data —
+    // see `best_matching_dimensions` in results_generator.rs.
+    in-out property <[MultiSelectItem]> matrix-plate-size-items: [];
+    in-out property <string> matrix-plate-size-summary: "Auto";
+    callback matrix-plate-size-selected(string, bool);
+    // Well: field grid dimensions (`WellFilter::well_size`). `string`, not
+    // `int` — these back a `TextInput.text` via a two-way `<=>` alias
+    // (results_matrix.slint), which only works between matching types;
+    // typed digits live here directly rather than needing Rust to push
+    // every keystroke back through a one-way binding (which would fight the
+    // input and reset visibly on every recompute).
+    in-out property <string> matrix-well-rows: "4";
+    in-out property <string> matrix-well-cols: "4";
+    callback matrix-well-rows-changed(string);
+    callback matrix-well-cols-changed(string);
+    // Object (image heatmap): tile size in pixels
+    // (`ImageHeatmapFilter::square_size`).
+    in-out property <[MultiSelectItem]> matrix-square-size-items: [];
+    in-out property <string> matrix-square-size-summary: "256 px";
+    callback matrix-square-size-selected(string, bool);
+
+    callback matrix-value-clicked();
+    callback matrix-aggregate-selected(string);
+    callback matrix-class-selected(string, bool);
+    callback matrix-regex-changed(string);
+    callback matrix-color-schema-selected(string, bool);
+    callback plate-cell-clicked(string);
+    callback open-well-clicked(string);
+    callback well-cell-clicked(string);
+    callback well-field-clicked(string);
+    callback image-heatmap-cell-clicked(string);
+    callback object-marker-clicked(int);
+    callback matrix-back-to-plate();
+    callback matrix-back-to-well();
+
+    // -------- Charts --------
+    in-out property <ResultsChartKind2> chart-kind: ResultsChartKind2.histogram;
+    callback chart-kind-selected(ResultsChartKind2);
+
+    // Property (histogram/boxplot's single measurement, scatter's X axis).
+    in-out property <[MultiSelectItem]> chart-column-items: [];
+    in-out property <string> chart-column-summary: "Area [px]";
+    callback chart-column-selected(string);
+    // Scatter's Y axis — only shown/used when `chart-kind` is `scatter`.
+    in-out property <[MultiSelectItem]> chart-y-column-items: [];
+    in-out property <string> chart-y-column-summary: "Perimeter [px]";
+    callback chart-y-column-selected(string);
+
+    // Single-select, like `matrix-class-items` — "no class selected" means
+    // no class filter at all (every object), not "match nothing". Doesn't
+    // apply to Boxplot, which always shows one box per class regardless.
+    in-out property <[MultiSelectItem]> chart-class-items: [];
+    in-out property <string> chart-class-summary: "No Class";
+    callback chart-class-selected(string, bool);
+
+    // -- Chart data (Rust fills exactly one of these three, matching
+    // `chart-kind`) --
+    // Histogram: `chart-histogram-bins[i]` is bin `i`'s count normalized to
+    // `[0, 1]` against the tallest bin, ready to scale a bar's height
+    // directly.
+    in-out property <[float]> chart-histogram-bins: [];
+    in-out property <string> chart-histogram-min-label: "";
+    in-out property <string> chart-histogram-max-label: "";
+    in-out property <int> chart-histogram-object-count: 0;
+
+    // Scatter: `chart-scatter-points[i].x/y` normalized to `[0, 1]` across
+    // the plotted (possibly sampled — see `chart-scatter-total-count`)
+    // points' own min/max.
+    in-out property <[ChartScatterPoint]> chart-scatter-points: [];
+    in-out property <string> chart-scatter-x-min-label: "";
+    in-out property <string> chart-scatter-x-max-label: "";
+    in-out property <string> chart-scatter-y-min-label: "";
+    in-out property <string> chart-scatter-y-max-label: "";
+    in-out property <int> chart-scatter-total-count: 0;
+    in-out property <int> chart-scatter-shown-count: 0;
+
+    // Boxplot: one entry per class, every value normalized to `[0, 1]`
+    // against the combined min/max across *every* box, so boxes stay
+    // comparable to each other on one shared axis. `outliers` are
+    // normalized the same way, rendered as individual dots above/below the
+    // whiskers.
+    in-out property <[ChartBoxplotBox]> chart-boxplot-boxes: [];
+
+    // Set whenever the selected column(s) can't be charted yet (identity
+    // columns, per-channel intensity — see `chart_value_expr` in
+    // results_generator.rs) or nothing has loaded yet; empty otherwise.
+    in-out property <string> chart-error: "";
+
+    // -------- Export --------
+    callback export-dialog-open();
+}

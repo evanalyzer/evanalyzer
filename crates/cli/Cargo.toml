@@ -11,9 +11,10 @@ evanalyzer_core = { workspace = true }
 evanalyzer_app = { workspace = true }
 evanalyzer_cfg = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-ctrlc = "3"
+ctrlc =  { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
 duckdb = { workspace = true, features = ["bundled"] }
 tempfile = { workspace = true }
+calamine = { workspace = true }

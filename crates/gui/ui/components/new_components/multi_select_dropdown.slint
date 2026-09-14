@@ -1,0 +1,189 @@
+// components/multi_select_dropdown.slint — generic checklist popup: search
+// row, optional grouped sections (group header checkbox toggles the whole
+// group, indeterminate when partially checked), collapsed trigger showing
+// chips for what's checked. This is the one control that appeared
+// hand-rolled in three places (export dialog's PickerField/ChecklistBox,
+// the results list's ColumnsPopup) — now a single shared component.
+
+import { ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme } from "../style.slint";
+import { CheckMark } from "text_field.slint";
+import { Chip, OverflowChip } from "chip.slint";
+
+export struct MultiSelectItem {
+    label: string,
+    checked: bool,
+    group: string,        // "" if ungrouped
+    group-header: bool,
+    group-all-checked: bool,
+    group-some-checked: bool,
+}
+
+export component MultiSelectDropdown inherits Rectangle {
+    in property <string> field-label;
+    in property <[MultiSelectItem]> items: [];
+    in property <[string]> chip-labels: [];   // labels to show as chips when collapsed (checked items, in order)
+    in property <int> checked-count: 0;
+    in property <int> total-count: 0;
+    in property <length> field-width: 220px;
+    in-out property <string> search-text: "";
+    in-out property <bool> open: false;
+    callback item-toggled(string);
+    callback group-toggled(string);
+    callback select-all();
+    callback select-none();
+    callback search-changed(string);
+
+    width: root.field-width;
+    height: 40px;
+    border-radius: Theme.radius-sm;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: root.open ? Theme.accent : Theme.border-soft;
+    animate border-color { duration: 80ms; }
+
+    field-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open = !root.open; if (root.open) { popup.show(); } }
+    }
+
+    VerticalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        padding-top: 4px;
+        padding-bottom: 5px;
+        spacing: 2px;
+
+        Text { text: root.field-label; font-size: 9px; letter-spacing: 0.4px; color: Theme.text-mute; }
+
+        HorizontalLayout {
+            spacing: 5px;
+
+            if root.chip-labels.length == 0: Text {
+                text: "None selected — click to choose…";
+                font-size: 11.5px;
+                color: Theme.text-faint;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            if root.chip-labels.length > 0: HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 5px;
+                for label[i] in root.chip-labels: if i < 4: Chip { label: label; removable: false; }
+                if root.chip-labels.length > 4: OverflowChip { count: root.chip-labels.length - 4; }
+            }
+
+            Text { text: root.checked-count + "/" + root.total-count; font-size: 10px; font-family: Theme.font-mono; color: Theme.text-mute; vertical-alignment: center; }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0px;
+        y: root.height + 4px;
+
+        Rectangle {
+            width: Math.max(root.field-width, 280px);
+            height: 340px;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            drop-shadow-color: Theme.shadow;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            clip: true;
+
+            VerticalLayout {
+                spacing: 0px;
+
+                Rectangle {
+                    height: 36px;
+                    HorizontalLayout {
+                        padding: 8px;
+                        spacing: 8px;
+                        LineEdit {
+                            horizontal-stretch: 1;
+                            placeholder-text: "Search…";
+                            text <=> root.search-text;
+                            font-size: 11.5px;
+                            edited(t) => { root.search-changed(t); }
+                        }
+                        all-ta := TouchArea {
+                            width: 24px;
+                            mouse-cursor: pointer;
+                            clicked => { root.select-all(); }
+                            Text { text: "All"; font-size: 10.5px; color: Theme.accent; vertical-alignment: center; }
+                        }
+                        none-ta := TouchArea {
+                            width: 34px;
+                            mouse-cursor: pointer;
+                            clicked => { root.select-none(); }
+                            Text { text: "None"; font-size: 10.5px; color: Theme.text-mute; vertical-alignment: center; }
+                        }
+                    }
+                    Rectangle { x: 0; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border-soft; }
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 4px;
+                        alignment: start;
+
+                        for item in root.items: VerticalLayout {
+                            spacing: 0px;
+
+                            if item.group-header: gh-ta := TouchArea {
+                                height: 26px;
+                                mouse-cursor: pointer;
+                                clicked => { root.group-toggled(item.group); }
+                                Rectangle {
+                                    background: gh-ta.has-hover ? Theme.raised : transparent;
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 6px;
+                                        spacing: 7px;
+                                        VerticalLayout { alignment: center; CheckMark { checked: item.group-all-checked; indeterminate: item.group-some-checked && !item.group-all-checked; } }
+                                        Text {
+                                            text: item.group;
+                                            font-size: 10px;
+                                            font-weight: 700;
+                                            letter-spacing: 0.5px;
+                                            color: Theme.text-mute;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !item.group-header: row-ta := TouchArea {
+                                height: 26px;
+                                mouse-cursor: pointer;
+                                clicked => { root.item-toggled(item.label); }
+                                Rectangle {
+                                    background: row-ta.has-hover ? Theme.raised : transparent;
+                                    HorizontalLayout {
+                                        padding-left: item.group == "" ? 8px : 22px;
+                                        padding-right: 6px;
+                                        spacing: 7px;
+                                        VerticalLayout { alignment: center; CheckMark { checked: item.checked; } }
+                                        Text {
+                                            text: item.label;
+                                            font-size: 11.5px;
+                                            font-family: Theme.font-mono;
+                                            color: item.checked ? Theme.text : Theme.text-mute;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

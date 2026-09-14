@@ -1,0 +1,95 @@
+// components/button.slint — shared Button for the whole app: primary /
+// secondary / ghost / danger variants, optional leading icon, disabled
+// state. Replaces the one-off "StyleToggleButton"-style rectangles that
+// got hand-rolled per dialog.
+
+import { Theme } from "../style.slint";
+
+export enum ButtonVariant { primary, secondary, ghost, danger }
+
+export component Button inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <ButtonVariant> variant: ButtonVariant.secondary;
+    in property <bool> enabled: true;
+    in property <length> button-width: self.preferred-width;
+    callback clicked;
+
+    width: root.button-width;
+    height: 34px;
+    border-radius: Theme.radius-sm;
+    opacity: root.enabled ? 1.0 : 0.45;
+
+    background: root.variant == ButtonVariant.primary
+        ? (ta.pressed ? Theme.accent.darker(15%) : (ta.has-hover ? Theme.accent.brighter(8%) : Theme.accent))
+        : root.variant == ButtonVariant.danger
+            ? (ta.has-hover ? Theme.err.darker(10%) : Theme.err)
+            : root.variant == ButtonVariant.ghost
+                ? (ta.has-hover ? Theme.raised : transparent)
+                : (ta.has-hover ? Theme.raised.brighter(6%) : Theme.raised);
+
+    border-width: root.variant == ButtonVariant.secondary || root.variant == ButtonVariant.ghost ? 1px : 0px;
+    border-color: Theme.border-soft;
+
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 7px;
+        alignment: center;
+
+        if root.has-icon: Image {
+            source: root.icon;
+            width: 14px;
+            height: 14px;
+            colorize: root.variant == ButtonVariant.primary || root.variant == ButtonVariant.danger ? white : Theme.text;
+        }
+        Text {
+            text: root.label;
+            font-size: 12.5px;
+            font-family: Theme.font-sans;
+            font-weight: 600;
+            color: root.variant == ButtonVariant.primary || root.variant == ButtonVariant.danger ? white : (root.variant == ButtonVariant.ghost ? Theme.text-dim : Theme.text);
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Square icon-only button (rail entries, toolbar glyphs, chip removes).
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    in property <length> size: 28px;
+    callback clicked;
+
+    width: root.size;
+    height: root.size;
+    border-radius: Theme.radius-sm;
+    background: root.active ? Theme.accent-dim : (ta.has-hover ? Theme.raised : transparent);
+    opacity: root.enabled ? 1.0 : 0.4;
+    animate background { duration: 80ms; }
+
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    Image {
+        source: root.icon;
+        width: root.size * 0.5;
+        height: root.size * 0.5;
+        colorize: root.active ? Theme.accent : Theme.text-dim;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
