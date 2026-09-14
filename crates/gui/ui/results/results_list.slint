@@ -29,10 +29,12 @@ export component ResultsListView inherits Rectangle {
                     items <=> ResultsState.list-image-items;
                     multi-select: true;
                     show-select-all: true;
+                    show-search: true;
                     pill-width: 150px;
                     item-selected(key, value, selected) => { ResultsState.list-image-selected(key, selected); }
                     select-all => { ResultsState.list-image-select-all(); }
                     select-none => { ResultsState.list-image-select-none(); }
+                    filter-changed(text) => { ResultsState.list-image-filter-changed(text); }
                 }
 
                 MultiSelectDropdown {
@@ -172,44 +174,10 @@ export component ResultsListView inherits Rectangle {
                     }
                 }
 
-                // A plain `ScrollView`, not `ListView`: `ListView` is a
-                // distinct builtin type Slint's compiler specifically
-                // detects by name (`parent.base_type.to_string() ==
-                // "ListView"`, see i-slint-compiler's `object_tree.rs`) and
-                // for which its *runtime* — not any .slint-level binding —
-                // takes over computing `viewport-width`/`viewport-height`
-                // and each row's vertical position, via a native per-row
-                // `listview_layout()` scan. Both `min-width` (tried first)
-                // and an explicit `viewport-width` binding on the `ListView`
-                // itself (tried second) got silently overridden by that
-                // same native computation on every layout pass — confirmed
-                // empirically (a scratch headless test showed
-                // `viewport-width` pinned to the visible width regardless),
-                // and by the real app: 200 columns never produced a
-                // horizontal scrollbar either way. A plain `ScrollView`
-                // wraps the exact same underlying `Flickable` (same wheel
-                // scrolling, same drag-to-pan support) but is never
-                // name-matched into that native "ListView" ownership, so
-                // `viewport-width`/`viewport-height` set here are just
-                // regular bindings that actually take effect. The cost:
-                // `ScrollView` doesn't auto-stack repeated children
-                // vertically the way `ListView` does internally, so each
-                // row now needs its own explicit `y: index * 34px;`.
                 body-list := ScrollView {
                     vertical-stretch: 1;
                     accessible-role: list;
                     accessible-orientation: Orientation.vertical;
-                    // `header-layout`'s own width is already the correct
-                    // total content width — `max(self.preferred-width,
-                    // parent.width)`, i.e. real column count * 260px (+
-                    // padding), or the panel width if that's wider — reused
-                    // here instead of re-deriving it. The previous
-                    // `header-rect.width * column-count` was wrong: that
-                    // multiplied the whole *panel's* width by the column
-                    // count (thousands of pixels too wide per column),
-                    // which is why the scrollbar let you scroll well past
-                    // the actual content once scrolling started working at
-                    // all.
                     viewport-width: header-layout.width;
                     viewport-height: ResultsState.list-rows.length * 34px;
 
@@ -220,17 +188,6 @@ export component ResultsListView inherits Rectangle {
 
                         background: ta.has-hover ? Theme.hover : (ResultsState.list-with-coloc-details && row.alternating ? Theme.list-row-alt-bg : transparent);
 
-                        // Row virtualization: a row scrolled out of view
-                        // collapses to this bare Rectangle (no cells at
-                        // all) instead of materializing a full
-                        // HorizontalLayout of N Text elements. With up to
-                        // 500 rows and a user-selectable 600-700 columns,
-                        // rendering every row regardless of scroll position
-                        // means Slint has to lay out and paint hundreds of
-                        // thousands of elements on every frame — that's
-                        // what made scrolling grind to a halt. A 3-row
-                        // buffer above/below keeps fast scroll flicks from
-                        // visibly popping content in.
                         property <bool> row-visible: self.y + self.height >= -body-list.viewport-y - 3 * self.height
                             && self.y <= -body-list.viewport-y + body-list.height + 3 * self.height;
 

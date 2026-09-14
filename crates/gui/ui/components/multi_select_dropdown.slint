@@ -11,7 +11,7 @@
 // number of items at once (it has no loops/array push in expressions), so
 // `select-all`/`select-none` still fire a callback for Rust to rebuild and
 // hand back `items`.
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
 import { Theme } from "../style.slint";
 
 export struct MultiSelectItem {
@@ -97,6 +97,15 @@ export component MultiSelectDropdown inherits Rectangle {
     in property <[string]> groups: [];
     in property <bool> multi-select: true;
     in property <bool> show-select-all: false;
+    // Shows a search box above the list and fires `filter-changed` on every
+    // keystroke instead of filtering `items` in here - Slint's expression
+    // language has no array `.filter()` (see the file header note), so
+    // narrowing thousands of entries down to the ones matching a query has
+    // to happen in Rust, the same way `select-all`/`select-none` already
+    // delegate there. Off by default so small pickers (color schema, plate
+    // size, ...) don't grow an unneeded search box.
+    in property <bool> show-search: false;
+    in-out property <string> filter-text: "";
     // Grays the pill out and blocks opening the popup — for a control that's
     // temporarily meaningless given some other selection (e.g. the Matrix
     // view's Aggregate picker while its Column is "Count", see
@@ -117,6 +126,11 @@ export component MultiSelectDropdown inherits Rectangle {
     callback item-selected(string, string, bool);
     callback select-all();
     callback select-none();
+    // New search text, fired on every keystroke - the caller is expected to
+    // filter its own backing data and hand back a (smaller) `items` via the
+    // existing two-way binding, same as a fresh `select-all`/`select-none`
+    // push. Only meaningful when `show-search` is on.
+    callback filter-changed(string);
 
     // Tracks which row is selected when multi-select is off, so toggle()
     // can clear the previous one. Slint's imperative functions have no
@@ -125,6 +139,38 @@ export component MultiSelectDropdown inherits Rectangle {
     // its own `init` below (fired once per row when `items` is populated),
     // and toggle() keeps it up to date from then on.
     property <int> single-selected-index: -1;
+
+    // -------- Manual virtualization (ungrouped list only) --------
+    // Slint has no built-in virtualized list (its own `ListView`/
+    // `StandardListView` in std-widgets use the exact same "one real
+    // element per model row" `for` loop this component used to) - so with
+    // thousands of `items` (one per image, say), a plain `for it in
+    // root.items` instantiates thousands of live rows regardless of
+    // scroll position, which is what made scrolling/opening this dropdown
+    // janky. Below renders a small fixed WINDOW of rows positioned at
+    // their real `y` (index * row-pitch) instead, sliding the window as
+    // `popup-scroll.viewport-y` changes - full row count is preserved for
+    // scrollbar/flick purposes by an explicitly-sized spacer, so this
+    // looks and scrolls identically to a full render, just without ever
+    // materializing more than WINDOW rows at once.
+    //
+    // Only applied to the ungrouped path: the grouped path (column
+    // pickers) interleaves section headers of varying count with rows in
+    // a way that's a substantially bigger job to window correctly, and in
+    // practice never approaches the item counts (images) that motivated
+    // this in the first place.
+    property <length> row-height: 26px;
+    property <length> row-pitch: 28px; // row-height + the 2px gap the old VerticalLayout's `spacing` used to add between rows
+    // 300px popup / 28px pitch ~= 11 rows actually visible - 20 leaves a
+    // several-row buffer both directions so fast/flick scrolling never
+    // shows a blank row before this reacts, without rendering meaningfully
+    // more than what's ever on screen.
+    property <int> window-size: 20;
+    // `first-visible-index` itself has to live on `popup-scroll` below (see
+    // its own comment) - a `PopupWindow`'s internal state (its
+    // `viewport-y`) can't be read from a property declared on the
+    // *enclosing* component the way `root.toggle()` etc. can be called the
+    // other way around.
 
     function toggle(idx: int) {
         if root.multi-select {
@@ -293,20 +339,69 @@ export component MultiSelectDropdown inherits Rectangle {
                     }
                 }
 
-                ScrollView {
+                if root.show-search: Rectangle {
+                    height: 36px;
+
+                    HorizontalLayout {
+                        padding: 6px;
+                        LineEdit {
+                            placeholder-text: "Search…";
+                            text <=> root.filter-text;
+                            edited(text) => { root.filter-changed(text); }
+                        }
+                    }
+
+                    Rectangle {
+                        x: 0;
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.border-soft;
+                    }
+                }
+
+                popup-scroll := ScrollView {
                     vertical-stretch: 1;
+
+                    property <int> max-first-visible-index: max(0, root.items.length - root.window-size);
+                    // The window's starting index: `-viewport-y` grows as
+                    // the user scrolls down (see std-widgets' own
+                    // `StandardListViewBase.first-visible-item()`, which
+                    // computes visibility the same way), so dividing by
+                    // `row-pitch` converts that scroll offset into "rows
+                    // scrolled past" - minus a few rows of lookback so the
+                    // window's leading edge is already rendered before it
+                    // scrolls into view instead of popping in.
+                    property <int> first-visible-index: max(0, min(
+                        self.max-first-visible-index,
+                        floor(-self.viewport-y / root.row-pitch) - 4,
+                    ));
 
                     VerticalLayout {
                         padding: 4px;
                         spacing: 2px;
 
-                        if root.groups.length == 0: VerticalLayout {
-                            spacing: 2px;
-                            for it[idx] in root.items: MultiSelectRow {
-                                item: it;
-                                show-checkbox: root.multi-select;
-                                activated => { root.toggle(idx); }
-                                init => { root.note-initial-selection(idx, it.selected); }
+                        if root.groups.length == 0: Rectangle {
+                            // Sized to the FULL (unwindowed) item count so
+                            // the scrollbar/flick range covers every item,
+                            // even though only `window-size` of them are
+                            // ever real children below - see the
+                            // "Manual virtualization" note above.
+                            width: 100%;
+                            height: root.items.length * root.row-pitch;
+
+                            for i in 20: row-slot := Rectangle {
+                                property <int> item-index: popup-scroll.first-visible-index + i;
+                                x: 0;
+                                y: row-slot.item-index * root.row-pitch;
+                                width: parent.width;
+                                height: root.row-pitch;
+                                if row-slot.item-index >= 0 && row-slot.item-index < root.items.length: MultiSelectRow {
+                                    item: root.items[row-slot.item-index];
+                                    show-checkbox: root.multi-select;
+                                    activated => { root.toggle(row-slot.item-index); }
+                                    init => { root.note-initial-selection(row-slot.item-index, root.items[row-slot.item-index].selected); }
+                                }
                             }
                         }
 

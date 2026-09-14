@@ -342,6 +342,9 @@ impl ResultsStateController {
             let manager = self.clone();
             ui.global::<ResultsState>()
                 .on_list_image_select_none(move || manager.select_none_images());
+            let manager = self.clone();
+            ui.global::<ResultsState>()
+                .on_list_image_filter_changed(move |query| manager.filter_images(&query));
 
             let manager = self.clone();
             ui.global::<ResultsState>()
@@ -2431,6 +2434,38 @@ impl ResultsStateController {
         .ok();
     }
 
+    // Narrows the IMAGES dropdown to images whose name contains `query`
+    // (case-insensitive substring match), leaving the actual filter/
+    // selection state (`list_filter.image_rel_path`) and the pill's own
+    // summary text untouched - only which rows the open popup shows
+    // changes. `MultiSelectDropdown`'s manual virtualization already keeps
+    // scrolling the full list smooth (see its own file), so this exists to
+    // let a user with thousands of images jump to one by typing instead of
+    // scrolling to find it.
+    fn filter_images(&self, query: &str) {
+        let images = self.images.lock().expect("Poisened");
+        let selected_paths = self
+            .list_filter
+            .lock()
+            .expect("Poisened")
+            .image_rel_path
+            .clone();
+        let items = filtered_image_items(&images, &selected_paths, query);
+        drop(images);
+
+        let ui_weak = self.ui.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(ui_ready) = ui_weak.upgrade() {
+                ui_ready
+                    .global::<ResultsState>()
+                    .set_list_image_items(ModelRc::from(Rc::new(VecModel::from(items))));
+            } else {
+                warn!("Failed to upgrade UI handle, cannot update the filtered images list!");
+            }
+        })
+        .ok();
+    }
+
     fn select_all_classes(&self) {
         let classes = self.classes.lock().expect("Poisened");
         let items = class_filter_items(&classes, true);
@@ -3322,6 +3357,35 @@ fn image_items(images: &[ImageEntry], selected: bool) -> Vec<MultiSelectItem> {
         .collect()
 }
 
+/// `image_items`'s search-aware sibling - `filter_images`'s pure core,
+/// pulled out as a standalone function so the actual filtering logic can be
+/// unit-tested directly rather than through a Slint-dispatched callback
+/// (see that test module's note on why - queued `invoke_from_event_loop`
+/// pushes never run under the headless test platform's `init_no_event_loop`).
+/// Keeps every image whose name contains `query` (case-insensitive, empty
+/// query keeps everything), each carrying its *real* current selection
+/// state from `selected_paths` - unlike `image_items`'s uniform bool, since
+/// narrowing the dropdown's visible rows must never look like it changed
+/// which images are actually selected.
+fn filtered_image_items(
+    images: &[ImageEntry],
+    selected_paths: &[PathBuf],
+    query: &str,
+) -> Vec<MultiSelectItem> {
+    let query_lower = query.to_lowercase();
+    images
+        .iter()
+        .filter(|image| query_lower.is_empty() || image.name.to_lowercase().contains(&query_lower))
+        .map(|image| MultiSelectItem {
+            key: image.rel_path.to_str().unwrap_or_default().into(),
+            value: image.name.as_str().into(),
+            color: Color::default(),
+            group: "".into(),
+            selected: selected_paths.contains(&image.rel_path),
+        })
+        .collect()
+}
+
 // Flattens a `get_group_by_plate`/`get_group_by_well` `View::Heatmap` result
 // into the row-major `MatrixCell` array `PlateGrid`/`WellGrid`
 // (results_matrix.slint) index as `r * cols + c` — shared by
@@ -3826,6 +3890,59 @@ mod tests {
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 2);
         state.invoke_list_class_select_all();
         assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn list_image_filter_changed_does_not_touch_the_actual_selection_or_row_cache() {
+        // `filter_images`' own Slint push happens through
+        // `invoke_from_event_loop`, which never actually runs under the
+        // headless test platform's `init_no_event_loop` (see
+        // `filtered_image_items`'s own doc comment) - so this only checks
+        // what's independently observable: firing the callback doesn't
+        // panic, and narrowing the dropdown's visible rows doesn't touch
+        // the real query filter or the row cache it drives. The actual
+        // filtering logic is unit-tested directly below instead.
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let state = results_ui.global::<ResultsState>();
+
+        state.invoke_list_image_filter_changed("A1".into());
+        assert!(controller.list_filter.lock().unwrap().image_rel_path.is_empty());
+        assert_eq!(controller.list_row_locations.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn filtered_image_items_matches_by_name_case_insensitively_and_keeps_real_selection() {
+        let images = vec![
+            ImageEntry {
+                name: "A1_01.tif".into(),
+                rel_path: PathBuf::from("A1_01.tif"),
+                disabled: false,
+            },
+            ImageEntry {
+                name: "A1_02.tif".into(),
+                rel_path: PathBuf::from("A1_02.tif"),
+                disabled: false,
+            },
+            ImageEntry {
+                name: "A2_01.tif".into(),
+                rel_path: PathBuf::from("A2_01.tif"),
+                disabled: false,
+            },
+        ];
+        let selected_paths = vec![PathBuf::from("A1_01.tif")];
+
+        let matches = filtered_image_items(&images, &selected_paths, "a1");
+        let keys: Vec<String> = matches.iter().map(|item| item.key.to_string()).collect();
+        assert_eq!(keys, vec!["A1_01.tif".to_string(), "A1_02.tif".to_string()]);
+        // The already-selected image keeps showing as selected even though
+        // the dropdown was just narrowed, the not-yet-selected match doesn't.
+        assert!(matches[0].selected);
+        assert!(!matches[1].selected);
+
+        // An empty query keeps every image.
+        assert_eq!(filtered_image_items(&images, &selected_paths, "").len(), 3);
+        // A query matching nothing returns an empty (not panicking) list.
+        assert!(filtered_image_items(&images, &selected_paths, "zzz").is_empty());
     }
 
     #[test]
