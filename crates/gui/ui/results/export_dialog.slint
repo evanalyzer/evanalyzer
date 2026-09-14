@@ -239,16 +239,36 @@ export component ExportDialog inherits Rectangle {
                         VerticalLayout {
                             spacing: 6px;
                             alignment: start;
-                            Text {
+
+                            img-title := Text {
                                 text: "Images/Objects (ungrouped)";
                                 color: Theme.text;
                                 font-size: 12px;
                                 font-weight: 600;
                             }
 
-                            CheckBox {
-                                text: "Object list";
-                                checked <=> ExportDialogState.with-list-view;
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: 128px;
+                                CheckBox {
+                                    text: "Object list";
+                                    checked <=> ExportDialogState.with-list-view;
+                                }
+
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 8px;
+                                    MultiSelectDropdown {
+                                        summary-text: ExportDialogState.image-summary;
+                                        items <=> ExportDialogState.image-items;
+                                        multi-select: true;
+                                        show-select-all: true;
+                                        pill-width: 210px;
+                                        item-selected(key, value, selected) => { ExportDialogState.image-item-selected(key, selected); }
+                                        select-all => { ExportDialogState.image-select-all(); }
+                                        select-none => { ExportDialogState.image-select-none(); }
+                                    }
+                                }
                             }
 
                             CheckBox {
@@ -265,14 +285,10 @@ export component ExportDialog inherits Rectangle {
                                 enabled: ExportDialogState.with-list-view;
                             }
 
-                            CheckBox {
-                                text: "Image list";
-                                checked <=> ExportDialogState.with-grouped-by-image-list;
-                            }
-
                             HorizontalLayout {
                                 alignment: start;
-                                spacing: 128px;
+                                spacing: 155px;
+                                x: 20px;
                                 CheckBox {
                                     text: "Image heatmap";
                                     checked <=> ExportDialogState.with-heatmap;
@@ -282,11 +298,6 @@ export component ExportDialog inherits Rectangle {
                                 HorizontalLayout {
                                     alignment: start;
                                     spacing: 8px;
-                                    Text {
-                                        vertical-alignment: center;
-                                        text: "Squares sizes:";
-                                    }
-
                                     MultiSelectDropdown {
                                         enabled: ExportDialogState.with-heatmap;
                                         summary-text: ExportDialogState.square-size-summary;
@@ -296,6 +307,11 @@ export component ExportDialog inherits Rectangle {
                                         item-selected(key, value, selected) => { if selected { ExportDialogState.square-size-summary = value; } }
                                     }
                                 }
+                            }
+
+                            CheckBox {
+                                text: "Image list";
+                                checked <=> ExportDialogState.with-grouped-by-image-list;
                             }
 
                             Rectangle { }
@@ -407,17 +423,6 @@ export component ExportDialog inherits Rectangle {
 
                             HorizontalLayout {
                                 spacing: 10px;
-                                MultiSelectDropdown {
-                                    label: "IMAGES";
-                                    summary-text: ExportDialogState.image-summary;
-                                    items <=> ExportDialogState.image-items;
-                                    multi-select: true;
-                                    show-select-all: true;
-                                    pill-width: 190px;
-                                    item-selected(key, value, selected) => { ExportDialogState.image-item-selected(key, selected); }
-                                    select-all => { ExportDialogState.image-select-all(); }
-                                    select-none => { ExportDialogState.image-select-none(); }
-                                }
 
                                 MultiSelectDropdown {
                                     label: "CLASSES";
