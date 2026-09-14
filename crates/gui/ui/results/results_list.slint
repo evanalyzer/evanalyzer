@@ -73,6 +73,7 @@ export component ResultsListView inherits Rectangle {
                     multi-select: false;
                     pill-width: 110px;
                     item-selected(key, value, selected) => {
+                        ResultsState.list-with-coloc-details-summary = value;
                         ResultsState.list-with-coloc-details = key == "details";
                         ResultsState.list-with-coloc-details-changed(ResultsState.list-with-coloc-details);
                     }
