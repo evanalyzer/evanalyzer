@@ -32,20 +32,45 @@ use std::sync::Arc;
 ///     min_v: 0.2,   max_v: 1.0,
 /// };
 /// ```
+#[derive(CommandsMeta)]
 pub struct HsvRange {
     /// Minimum Hue angle in degrees [0.0, 360.0].
     pub min_h: f32,
     /// Maximum Hue angle in degrees [0.0, 360.0].
+    #[cmdsmeta(
+        default = 360.0,
+        min = 0.0,
+        max = 360.0,
+        summary = true,
+        step = 1,
+        display_name = "Max. Hue"
+    )]
     pub max_h: f32,
 
     /// Minimum Saturation normalized [0.0, 1.0].
     pub min_s: f32,
     /// Maximum Saturation normalized [0.0, 1.0].
+    #[cmdsmeta(
+        default = 1.0,
+        min = 0.0,
+        max = 1.0,
+        summary = true,
+        step = 0.1,
+        display_name = "Max. Sat."
+    )]
     pub max_s: f32,
 
     /// Minimum Value (Brightness) normalized [0.0, 1.0].
     pub min_v: f32,
     /// Maximum Value (Brightness) normalized [0.0, 1.0].
+    #[cmdsmeta(
+        default = 1.0,
+        min = 0.0,
+        max = 1.0,
+        summary = true,
+        step = 0.1,
+        display_name = "Max. Brightness"
+    )]
     pub max_v: f32,
 }
 

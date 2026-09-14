@@ -104,22 +104,22 @@ fn compute_channel(
     for step in steps {
         match step {
             PreprocessingSteps::GaussianBlur(s) => {
-                GaussianBlur::from(s.clone()).execute(&mut ctx, &mut cache)?
+                GaussianBlur::from(s.clone()).run(&mut ctx, &mut cache)?
             }
             PreprocessingSteps::EdgeDetectionSobel(s) => {
-                EdgeDetectionSobel::from(s.clone()).execute(&mut ctx, &mut cache)?
+                EdgeDetectionSobel::from(s.clone()).run(&mut ctx, &mut cache)?
             }
             PreprocessingSteps::Laplacian(s) => {
-                Laplacian::from(s.clone()).execute(&mut ctx, &mut cache)?
+                Laplacian::from(s.clone()).run(&mut ctx, &mut cache)?
             }
             PreprocessingSteps::StructureTensor(s) => {
-                StructureTensor::from(s.clone()).execute(&mut ctx, &mut cache)?
+                StructureTensor::from(s.clone()).run(&mut ctx, &mut cache)?
             }
             PreprocessingSteps::Hessian(s) => {
-                Hessian::from(s.clone()).execute(&mut ctx, &mut cache)?
+                Hessian::from(s.clone()).run(&mut ctx, &mut cache)?
             }
             PreprocessingSteps::RankFilter(s) => {
-                RankFilter::from(s.clone()).execute(&mut ctx, &mut cache)?
+                RankFilter::from(s.clone()).run(&mut ctx, &mut cache)?
             }
         }
     }

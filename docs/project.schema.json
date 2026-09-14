@@ -928,42 +928,46 @@
         "maxH": {
           "description": "Maximum Hue angle in degrees [0.0, 360.0].",
           "type": "number",
-          "format": "float"
+          "format": "float",
+          "default": 360.0,
+          "maximum": 360,
+          "minimum": 0
         },
         "maxS": {
           "description": "Maximum Saturation normalized [0.0, 1.0].",
           "type": "number",
-          "format": "float"
+          "format": "float",
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0
         },
         "maxV": {
           "description": "Maximum Value (Brightness) normalized [0.0, 1.0].",
           "type": "number",
-          "format": "float"
+          "format": "float",
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0
         },
         "minH": {
           "description": "Minimum Hue angle in degrees [0.0, 360.0].",
           "type": "number",
-          "format": "float"
+          "format": "float",
+          "default": 0.0
         },
         "minS": {
           "description": "Minimum Saturation normalized [0.0, 1.0].",
           "type": "number",
-          "format": "float"
+          "format": "float",
+          "default": 0.0
         },
         "minV": {
           "description": "Minimum Value (Brightness) normalized [0.0, 1.0].",
           "type": "number",
-          "format": "float"
+          "format": "float",
+          "default": 0.0
         }
-      },
-      "required": [
-        "minH",
-        "maxH",
-        "minS",
-        "maxS",
-        "minV",
-        "maxV"
-      ]
+      }
     },
     "IlluminationCorrectionSettings": {
       "description": "Use this when your images are brighter in the middle and dimmer toward\nthe edges/corners (vignetting), or show any other smooth shading pattern\nthat repeats the same way across every tile or every image from the same\nmicroscope/camera setup - a consequence of the optics or illumination,\nnot the sample. Left uncorrected, that shading makes intensity\ncomparisons between regions of an image (or between images/wells)\nunreliable, even though it rarely stops segmentation from finding\nobjects on its own.\n\nUse [`super::rolling_ball::RollingBall`] instead when the problem is a\n*local* background glow or halo under/around individual objects (e.g.\nout-of-focus light, autofluorescence, uneven staining) that differs from\nimage to image rather than being tied to the acquisition setup -\nRollingBall strips that local floor so thresholding/segmentation works\ncleanly. The two solve different problems: RollingBall won't fix a\nglobal brightness gradient, and this filter won't remove a local halo.\n\n### How it works\n\nFlat-field (\"illumination\") correction: estimates a smooth, slowly-varying\ngain/offset field caused by uneven illumination (vignetting, dust on the\ncondenser, uneven excitation) and removes it in a single calculate+apply\nstep - equivalent to CellProfiler's `CorrectIlluminationCalculate` and\n`CorrectIlluminationApply` modules combined into one.\n\nUnlike `RollingBall`, which estimates a *local* per-object background\nbaseline via a rolling structural element, this estimates one *global*,\nlow-frequency field for the whole image/channel.",

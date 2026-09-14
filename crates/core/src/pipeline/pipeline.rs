@@ -171,7 +171,7 @@ impl Pipeline {
         for (step_index, command) in &self.commands {
             let step_index = *step_index;
             let step_start = Instant::now();
-            command.execute(&mut ctx, &mut cache)?;
+            command.run(&mut ctx, &mut cache)?;
             let duration = step_start.elapsed();
             info!("Executed {} in {:?}", command.name(), duration);
 
@@ -647,6 +647,85 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&result.image, &channel_image),
             "mutation must have produced a distinct buffer"
+        );
+    }
+
+    #[test]
+    fn a_type_changing_command_followed_by_a_gray_only_command_runs_through_the_real_pipeline() {
+        // Regression test for the scratch-pad-type bug: `ColorFilterCommand`
+        // converts F32Rgb -> F32Gray via `ctx.swap()`, which leaves the *old*
+        // F32Rgb image sitting in `ctx.scratch_pad`. `EdgeDetectionSobel`
+        // (like most filters) assumes `scratch_pad` already matches `image`'s
+        // type - that assumption only holds because `run_commands` calls
+        // `command.run` (not `command.execute` directly), which prepares
+        // `scratch_pad` via `ImageAlgorithm::scratch_is_workspace` /
+        // `PipelineContext::prepare_scratch_matching_image` before every step.
+        use crate::algos::{ColorFilterCommand, EdgeDetectionSobel, HsvRange};
+
+        let size = ImageSize {
+            width: 4,
+            height: 4,
+        };
+        let rgb_image = Arc::new(ImageContainer::F32Rgb(ManagedImage {
+            data: Image::<f32, 3, CpuAllocator>::new(size, vec![0.5f32; 16 * 3], CpuAllocator)
+                .unwrap(),
+            tile_offset: Point2d { x: 0, y: 0 },
+            plane: None,
+        }));
+
+        let mut cache = GlobalPipelineCache::default();
+        cache.image_meta = GlobalImageMeta {
+            is_rgb: true,
+            ..default_image_meta(size)
+        };
+        cache.add_to_channel_cache(
+            Arc::clone(&rgb_image),
+            0,
+            crate::ImageTile {
+                offset_x: 0,
+                offset_y: 0,
+                width: size.width,
+                height: size.height,
+            },
+        );
+
+        let mut pipeline = Pipeline::new(
+            PipelineId(1),
+            CorePipelineSettings {
+                start_image: ImageAddress::Channel(0),
+            },
+        );
+        pipeline.add_command(Box::new(ColorFilterCommand {
+            range: HsvRange {
+                min_h: 0.0,
+                max_h: 360.0,
+                min_s: 0.0,
+                max_s: 1.0,
+                min_v: 0.0,
+                max_v: 1.0,
+            },
+        }));
+        pipeline.add_command(Box::new(EdgeDetectionSobel { kernel_size: 3 }));
+
+        let result = pipeline
+            .run_commands(
+                PathBuf::default(),
+                Some(crate::ImageTile {
+                    offset_x: 0,
+                    offset_y: 0,
+                    width: size.width,
+                    height: size.height,
+                }),
+                cache,
+                None,
+                false,
+            )
+            .expect("color_filter followed by sobel must not FormatMismatch on the scratch pad");
+
+        assert!(
+            matches!(result.image.as_ref(), ImageContainer::F32Gray(_)),
+            "expected F32Gray output, got {:?}",
+            result.image
         );
     }
 }

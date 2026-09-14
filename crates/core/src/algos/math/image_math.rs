@@ -182,6 +182,17 @@ impl ImageAlgorithm for ImageMath {
     fn execution_scope(&self) -> ExecutionScope {
         ExecutionScope::Tile
     }
+
+    /// `false` only for a binary operation reading `scratch_pad` itself as
+    /// the second operand - there it's real data, not just a private output
+    /// buffer, so the pipeline runner must not retype/zero it before
+    /// `execute` runs.
+    fn scratch_is_workspace(&self) -> bool {
+        let reads_scratch_pad_as_operand = self.operand != Operand::None
+            && self.operand != Operand::Invert
+            && self.second_image_address == ImageAddress::Scratchpad;
+        !reads_scratch_pad_as_operand
+    }
 }
 impl ImageMath {
     /// Separate function for Invert (Unary)
