@@ -3970,6 +3970,75 @@ mod tests {
     }
 
     #[test]
+    fn export_dialog_open_seeds_image_selection_from_the_list_filter() {
+        // Seeded images, alphabetically ("A1_01.tif" first) - see
+        // `seed_test_db`.
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let list_state = results_ui.global::<ResultsState>();
+        let export_state = results_ui.global::<ExportDialogState>();
+
+        let selected_keys = |export_state: &ExportDialogState| -> Vec<String> {
+            export_state
+                .get_image_items()
+                .iter()
+                .filter(|item| item.selected)
+                .map(|item| item.key.to_string())
+                .collect()
+        };
+
+        // 1-50 images individually selected (here: 1, and deliberately not
+        // the alphabetically-first one) -> the export dialog starts with
+        // exactly those checked, not just the first.
+        list_state.invoke_list_image_selected("A2_01.tif".into(), true);
+        controller.populate_export_defaults(&results_ui);
+        assert_eq!(selected_keys(&export_state), vec!["A2_01.tif".to_string()]);
+
+        // Every image selected -> too many to usefully pre-check, defaults
+        // back to just the first.
+        list_state.invoke_list_image_select_all();
+        controller.populate_export_defaults(&results_ui);
+        assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
+
+        // Nothing selected (the select-none sentinel) -> same "just the
+        // first" default, rather than a picker with nothing checked at all.
+        list_state.invoke_list_image_select_none();
+        controller.populate_export_defaults(&results_ui);
+        assert_eq!(selected_keys(&export_state), vec!["A1_01.tif".to_string()]);
+    }
+
+    #[test]
+    fn export_dialog_image_filter_changed_narrows_items_without_touching_selection() {
+        let (_ui, results_ui, controller) = controller_with_open_database();
+        let export_state = results_ui.global::<ExportDialogState>();
+        controller.populate_export_defaults(&results_ui);
+
+        // Starts with just "A1_01.tif" selected (the default - see the
+        // test above), and, unlike the main List view's search box, this
+        // one's own `on_image_filter_changed` handler runs synchronously
+        // (no `invoke_from_event_loop`), so its effect is directly
+        // observable here.
+        export_state.invoke_image_filter_changed("A1".into());
+        let keys: Vec<String> = export_state
+            .get_image_items()
+            .iter()
+            .map(|item| item.key.to_string())
+            .collect();
+        assert_eq!(keys, vec!["A1_01.tif".to_string(), "A1_02.tif".to_string()]);
+        assert!(
+            export_state
+                .get_image_items()
+                .iter()
+                .find(|item| item.key == "A1_01.tif")
+                .unwrap()
+                .selected,
+            "the pre-existing selection must survive narrowing the view"
+        );
+
+        export_state.invoke_image_filter_changed("".into());
+        assert_eq!(export_state.get_image_items().row_count(), 3);
+    }
+
+    #[test]
     fn filtered_image_items_matches_by_name_case_insensitively_and_keeps_real_selection() {
         let images = vec![
             ImageEntry {
