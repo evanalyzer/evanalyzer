@@ -2,7 +2,8 @@ use super::results_generator::class_display_label;
 use crate::result::{
     Aggregation, Cell, CellValue, ColorScale, ColorSchema, Column, ColumnEntry, DatabaseResult,
     GroupedByImageFilter, ImageHeatmapFilter, ListFilter, Pagination, PlaneFilter, PlateDimensions,
-    PlateFilter, ResultsGenerator, View, WellSize, WellsBatchFilter,
+    PlateFilter, PlateFilterMulti, ResultsGenerator, View, WellSize, WellsBatchFilter,
+    WellsBatchFilterMulti,
 };
 use evanalyzer_cfg::core_types::{InternalErrors, ObjectClass};
 use rust_xlsxwriter::{Color, Format, Workbook, Worksheet, XlsxError};
@@ -406,6 +407,78 @@ impl ResultExport {
         let mut well_workbook = Workbook::new();
         let mut well_names = SheetNamer::new();
 
+        let aggregable_columns: Vec<&Column> = self
+            .columns
+            .iter()
+            .filter(|column| is_aggregable(column))
+            .collect();
+
+        // Every (class, column, aggregation) combination's plate grid in one
+        // call, rather than one `get_group_by_plate_multi` call per (class,
+        // column) pair — `get_group_by_plate_multi` already batches every
+        // requested column x aggregation into a single query per class, so
+        // fetching every class at once here brings the plate side down to
+        // exactly `target_classes.len()` scans total, from
+        // `target_classes.len() * aggregable_columns.len()`. Combined with
+        // `get_wells_for_plate_multi_agg`'s own per-well aggregation
+        // batching below, a full "every class, every column, every
+        // aggregation" export goes from
+        // classes × columns × aggregations × wells scans down to
+        // classes (plate) + classes × columns (wells).
+        //
+        // Same batching for the per-well grids: `get_wells_for_plate_multi`
+        // also collapses every column x aggregation into one query per
+        // class, so fetching every class here brings the well side down to
+        // exactly `target_classes.len()` scans too, from
+        // `target_classes.len() * aggregable_columns.len()`.
+        //
+        // Both are returned flattened in class -> column -> aggregation
+        // order, matching the loop nesting below, so they're simply
+        // drained in lockstep as the loop progresses.
+        let no_combos =
+            target_classes.is_empty() || aggregable_columns.is_empty() || self.aggregations.is_empty();
+        let mut plate_grids_iter = if no_combos {
+            Vec::new().into_iter()
+        } else {
+            let plate_filter = PlateFilterMulti {
+                plane: PlaneFilter {
+                    z_stack: z,
+                    t_stack: t,
+                },
+                grouping_regex: self.grouping_regex.clone(),
+                aggregation: self.aggregations.clone(),
+                object_class: target_classes.clone(),
+                column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                color_schema: self.color_schema.clone(),
+                color_scale: self.color_scale.clone(),
+                matrix_dimension: self.plate_dimension,
+            };
+            database
+                .get_group_by_plate_multi(&plate_filter, &View::Heatmap)?
+                .into_iter()
+        };
+        let mut well_heatmaps_iter = if no_combos {
+            Vec::new().into_iter()
+        } else {
+            let wells_filter = WellsBatchFilterMulti {
+                plane: PlaneFilter {
+                    z_stack: z,
+                    t_stack: t,
+                },
+                grouping_regex: self.grouping_regex.clone(),
+                aggregation: self.aggregations.clone(),
+                object_class: target_classes.clone(),
+                column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                color_schema: self.color_schema.clone(),
+                color_scale: self.color_scale.clone(),
+                well_size: self.well_size,
+                well_order: self.well_order.clone(),
+            };
+            database
+                .get_wells_for_plate_multi(&wells_filter, &View::Heatmap)?
+                .into_iter()
+        };
+
         for (class_idx, class) in target_classes.iter().enumerate() {
             check_cancelled(cancel)?;
             let class_label = class_display_label(*class, &classes_all);
@@ -427,67 +500,24 @@ impl ResultExport {
             let mut plate_row = 0u32;
             let mut well_row = 0u32;
 
-            for column in self.columns.iter().filter(|column| is_aggregable(column)) {
+            for column in &aggregable_columns {
                 let column_label = column_display_name(column, &available_columns);
 
-                // One query covering *every* requested aggregation, rather
-                // than one query per aggregation — the WHERE/GROUP BY here
-                // is identical across all of them, only the aggregate
-                // function itself differs, so this is the difference
-                // between (with all 7 aggregations selected) 7 full scans
-                // and 1. Combined with `get_wells_for_plate_multi_agg`'s own
-                // per-well batching below, a full "every class, every
-                // column, every aggregation" export goes from
-                // classes × columns × aggregations × wells scans down to
-                // classes × columns.
-                let plate_filter = PlateFilter {
-                    plane: PlaneFilter {
-                        z_stack: z,
-                        t_stack: t,
-                    },
-                    grouping_regex: self.grouping_regex.clone(),
-                    // Ignored by `get_group_by_plate_multi_agg` (it takes
-                    // `self.aggregations` separately) - `PlateFilter` still
-                    // needs some value structurally.
-                    aggregation: Aggregation::default(),
-                    object_class: *class,
-                    column: column.clone(),
-                    color_schema: self.color_schema.clone(),
-                    color_scale: self.color_scale.clone(),
-                    matrix_dimension: self.plate_dimension,
-                };
-                let plate_grids = database.get_group_by_plate_multi_agg(
-                    &plate_filter,
-                    &self.aggregations,
-                    &View::Heatmap,
-                )?;
-
-                let wells_filter = WellsBatchFilter {
-                    plane: PlaneFilter {
-                        z_stack: z,
-                        t_stack: t,
-                    },
-                    grouping_regex: self.grouping_regex.clone(),
-                    aggregation: Aggregation::default(),
-                    object_class: *class,
-                    column: column.clone(),
-                    color_schema: self.color_schema.clone(),
-                    color_scale: self.color_scale.clone(),
-                    well_size: self.well_size,
-                    well_order: self.well_order.clone(),
-                };
-                let well_heatmaps_per_agg = database.get_wells_for_plate_multi_agg(
-                    &wells_filter,
-                    &self.aggregations,
-                    &View::Heatmap,
-                )?;
-
-                for ((aggregation, plate_grid), mut well_heatmaps) in self
-                    .aggregations
-                    .iter()
-                    .zip(plate_grids)
-                    .zip(well_heatmaps_per_agg)
-                {
+                for aggregation in &self.aggregations {
+                    let plate_grid = plate_grids_iter.next().ok_or_else(|| {
+                        InternalErrors::Io(
+                            "plate/well export: plate result count desynced from class x \
+                             column x aggregation combinations"
+                                .to_string(),
+                        )
+                    })?;
+                    let mut well_heatmaps = well_heatmaps_iter.next().ok_or_else(|| {
+                        InternalErrors::Io(
+                            "plate/well export: well result count desynced from class x \
+                             column x aggregation combinations"
+                                .to_string(),
+                        )
+                    })?;
                     let caption = format!("{column_label} — {}", aggregation_label(aggregation));
                     plate_row = write_grid_block(plate_sheet, plate_row, &caption, &plate_grid)?;
 
@@ -558,6 +588,59 @@ impl ResultExport {
         let mut well_images: HashMap<(String, String), String> = HashMap::new();
         let mut combo_idx = 0usize;
 
+        // Same batching for the per-well lists - `get_wells_for_plate_multi`
+        // also collapses every column x aggregation into one query per
+        // class, so this brings the well side down to
+        // `target_classes.len()` scans too, from
+        // `target_classes.len() * aggregable_columns.len()`.
+        //
+        // Both are returned flattened in class -> column -> aggregation
+        // order, matching the loop nesting below, so they're simply
+        // drained in lockstep as the loop progresses.
+        let no_combos =
+            target_classes.is_empty() || aggregable_columns.is_empty() || self.aggregations.is_empty();
+        let mut plate_lists_iter = if no_combos {
+            Vec::new().into_iter()
+        } else {
+            let plate_filter = PlateFilterMulti {
+                plane: PlaneFilter {
+                    z_stack: z,
+                    t_stack: t,
+                },
+                grouping_regex: self.grouping_regex.clone(),
+                aggregation: self.aggregations.clone(),
+                object_class: target_classes.clone(),
+                column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                color_schema: self.color_schema.clone(),
+                color_scale: self.color_scale.clone(),
+                matrix_dimension: self.plate_dimension,
+            };
+            database
+                .get_group_by_plate_multi(&plate_filter, &View::List)?
+                .into_iter()
+        };
+        let mut well_lists_iter = if no_combos {
+            Vec::new().into_iter()
+        } else {
+            let wells_filter = WellsBatchFilterMulti {
+                plane: PlaneFilter {
+                    z_stack: z,
+                    t_stack: t,
+                },
+                grouping_regex: self.grouping_regex.clone(),
+                aggregation: self.aggregations.clone(),
+                object_class: target_classes.clone(),
+                column: aggregable_columns.iter().map(|c| (*c).clone()).collect(),
+                color_schema: self.color_schema.clone(),
+                color_scale: self.color_scale.clone(),
+                well_size: self.well_size,
+                well_order: self.well_order.clone(),
+            };
+            database
+                .get_wells_for_plate_multi(&wells_filter, &View::List)?
+                .into_iter()
+        };
+
         for (class_idx, class) in target_classes.iter().enumerate() {
             check_cancelled(cancel)?;
             let class_label = class_display_label(*class, &classes_all);
@@ -570,53 +653,21 @@ impl ResultExport {
             for column in &aggregable_columns {
                 let column_label = column_display_name(column, &available_columns);
 
-                // Same one-query-for-every-aggregation batching as
-                // `export_plate_and_well` - see its comment.
-                let plate_filter = PlateFilter {
-                    plane: PlaneFilter {
-                        z_stack: z,
-                        t_stack: t,
-                    },
-                    grouping_regex: self.grouping_regex.clone(),
-                    aggregation: Aggregation::default(),
-                    object_class: *class,
-                    column: (*column).clone(),
-                    color_schema: self.color_schema.clone(),
-                    color_scale: self.color_scale.clone(),
-                    matrix_dimension: self.plate_dimension,
-                };
-                let plate_lists = database.get_group_by_plate_multi_agg(
-                    &plate_filter,
-                    &self.aggregations,
-                    &View::List,
-                )?;
-
-                let wells_filter = WellsBatchFilter {
-                    plane: PlaneFilter {
-                        z_stack: z,
-                        t_stack: t,
-                    },
-                    grouping_regex: self.grouping_regex.clone(),
-                    aggregation: Aggregation::default(),
-                    object_class: *class,
-                    column: (*column).clone(),
-                    color_schema: self.color_schema.clone(),
-                    color_scale: self.color_scale.clone(),
-                    well_size: self.well_size,
-                    well_order: self.well_order.clone(),
-                };
-                let well_lists_per_agg = database.get_wells_for_plate_multi_agg(
-                    &wells_filter,
-                    &self.aggregations,
-                    &View::List,
-                )?;
-
-                for ((aggregation, plate_list), well_lists) in self
-                    .aggregations
-                    .iter()
-                    .zip(plate_lists)
-                    .zip(well_lists_per_agg)
-                {
+                for aggregation in &self.aggregations {
+                    let plate_list = plate_lists_iter.next().ok_or_else(|| {
+                        InternalErrors::Io(
+                            "plate/well flat list export: plate result count desynced from \
+                             class x column x aggregation combinations"
+                                .to_string(),
+                        )
+                    })?;
+                    let well_lists = well_lists_iter.next().ok_or_else(|| {
+                        InternalErrors::Io(
+                            "plate/well flat list export: well result count desynced from \
+                             class x column x aggregation combinations"
+                                .to_string(),
+                        )
+                    })?;
                     combo_labels.push(format!(
                         "{class_label} — {column_label} — {}",
                         aggregation_label(aggregation)

@@ -120,6 +120,31 @@ pub struct PlateFilter {
     pub matrix_dimension: Option<PlateDimensions>,
 }
 
+// No `Pagination` field here (unlike `ListFilter`/`GroupedByImageFilter`):
+// a plate-grouped result's row count is bounded by well count (at most
+// `PlateDimensions::Plate32x48` = 1536), not by object count, so it stays
+// tiny (well under a MB) even multiplied out over every `column` x
+// `aggregation` x `object_class` combination requested at once — the RAM
+// risk pagination guards against elsewhere (millions of raw objects, see
+// `get_object_list`/`get_grouped_by_image`) doesn't apply to an
+// already-aggregated-down-to-wells result.
+#[derive(Clone)]
+pub struct PlateFilterMulti {
+    pub plane: PlaneFilter,
+    // Grouping regex, requires follwoing regex output (e.g. A1_01.vsi)
+    // - Group1: the match of the group (e.g. A1)
+    // - Group2: the match of the plate row (e.g. A)
+    // - Group3: the match of the plate col (e.g. 1)
+    // - Group4: the match of the image index (e.g. 01)
+    pub grouping_regex: String,
+    pub aggregation: Vec<Aggregation>,
+    pub object_class: Vec<ObjectClass>,
+    pub column: Vec<Column>,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub matrix_dimension: Option<PlateDimensions>,
+}
+
 #[derive(Clone)]
 pub struct WellFilter {
     pub plane: PlaneFilter,
@@ -159,6 +184,21 @@ pub struct WellsBatchFilter {
     pub aggregation: Aggregation,
     pub object_class: ObjectClass,
     pub column: Column,
+    pub color_schema: ColorSchema,
+    pub color_scale: ColorScale,
+    pub well_size: Option<WellSize>,
+    pub well_order: Option<Vec<u32>>,
+}
+
+/// Same shape as `WellFilter` minus `group_name` — `get_wells_for_plate`
+/// answers for every well at once, so there's no single well to name.
+#[derive(Clone)]
+pub struct WellsBatchFilterMulti {
+    pub plane: PlaneFilter,
+    pub grouping_regex: String,
+    pub aggregation: Vec<Aggregation>,
+    pub object_class: Vec<ObjectClass>,
+    pub column: Vec<Column>,
     pub color_schema: ColorSchema,
     pub color_scale: ColorScale,
     pub well_size: Option<WellSize>,
@@ -902,31 +942,40 @@ impl ResultsGenerator {
         ))
     }
 
-    // Batched form of `get_group_by_plate` across every requested
-    // aggregation at once, in one query instead of one per aggregation —
-    // same reasoning as `get_wells_for_plate` batching across wells: the
-    // WHERE/GROUP BY here is identical for every aggregation, only the
-    // aggregate function itself differs, so computing e.g. AVG, MIN, MAX,
-    // SUM, STDDEV, MEDIAN and SKEWNESS of the same column all in one SELECT
-    // means one full scan instead of seven. Returns one `DatabaseResult` per
-    // `aggregations` entry, same order.
-    pub fn get_group_by_plate_multi_agg(
+    // Batched form of `get_group_by_plate` across every requested column,
+    // aggregation *and* object class at once. The WHERE/GROUP BY is
+    // identical across every `column` x `aggregation` combination for a
+    // given class - only the aggregate expression itself differs - so all
+    // of them are computed in one SELECT per class, same reasoning as
+    // `get_wells_for_plate_multi_agg` batching every aggregation. Each
+    // class in `filter.object_class` still needs its own query (its own
+    // `list_has_any`/no-filter WHERE clause), so this is
+    // `object_class.len()` scans total rather than
+    // `object_class.len() * column.len() * aggregation.len()`.
+    //
+    // Returns one `DatabaseResult` per (class, column, aggregation) combo,
+    // flattened in that nesting order - i.e. `filter.object_class[0]`'s
+    // results (each of its columns, each of that column's aggregations)
+    // come first, then `filter.object_class[1]`'s, etc.
+    pub fn get_group_by_plate_multi(
         &self,
-        filter: &PlateFilter,
-        aggregations: &[Aggregation],
+        filter: &PlateFilterMulti,
         view: &View,
     ) -> Result<Vec<DatabaseResult>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
 
-        let mut value_exprs = Vec::with_capacity(aggregations.len());
-        for aggregation in aggregations {
-            let (agg_fn, value_expr) = aggregate_sql(&filter.column, aggregation)?;
-            value_exprs.push(format!(
-                "{agg_fn}({value_expr}) AS value_{}",
-                value_exprs.len()
-            ));
+        let mut value_exprs = Vec::with_capacity(filter.column.len() * filter.aggregation.len());
+        for column in &filter.column {
+            for aggregation in &filter.aggregation {
+                let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
+                value_exprs.push(format!(
+                    "{agg_fn}({value_expr}) AS value_{}",
+                    value_exprs.len()
+                ));
+            }
         }
+        let n = value_exprs.len();
         let value_exprs_sql = value_exprs.join(",\n                ");
 
         let regex = if filter.grouping_regex.trim().is_empty() {
@@ -934,66 +983,72 @@ impl ResultsGenerator {
         } else {
             filter.grouping_regex.as_str()
         };
+        let regex = regex.replace('\'', "''");
 
-        let mut conditions = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
-            format!("t_stack = {}", filter.plane.t_stack),
-        ];
-        if let ObjectClass::Valid(id) = filter.object_class {
-            conditions.push(format!(
-                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-                sql_int_array_literal(&[id])
-            ));
-        }
-        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let mut results = Vec::with_capacity(filter.object_class.len() * n);
+        for object_class in &filter.object_class {
+            let mut conditions = vec![
+                format!("z_stack = {}", filter.plane.z_stack),
+                format!("t_stack = {}", filter.plane.t_stack),
+            ];
+            if let ObjectClass::Valid(id) = object_class {
+                conditions.push(format!(
+                    "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                    sql_int_array_literal(&[*id])
+                ));
+            }
+            let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
-        let sql = format!(
-            "SELECT\n\
-                regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                regexp_extract(image_name, '{regex}', 2) AS row,\n\
-                regexp_extract(image_name, '{regex}', 3) AS col,\n\
-                {value_exprs_sql}\n\
-             FROM objects\n\
-             {where_clause}\n\
-             GROUP BY group_prefix, row, col\n\
-             ORDER BY group_prefix",
-            regex = regex.replace('\'', "''"),
-        );
+            let sql = format!(
+                "SELECT\n\
+                    regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                    regexp_extract(image_name, '{regex}', 2) AS row,\n\
+                    regexp_extract(image_name, '{regex}', 3) AS col,\n\
+                    {value_exprs_sql}\n\
+                 FROM objects\n\
+                 {where_clause}\n\
+                 GROUP BY group_prefix, row, col\n\
+                 ORDER BY group_prefix"
+            );
 
-        let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let n = aggregations.len();
-        let raw: Vec<(String, String, String, Vec<Option<f64>>)> = stmt
-            .query_map([], |row| {
-                let group_prefix: String = row.get(0)?;
-                let group_row: String = row.get(1)?;
-                let group_col: String = row.get(2)?;
-                let mut values = Vec::with_capacity(n);
-                for i in 0..n {
-                    values.push(row.get::<_, Option<f64>>(3 + i)?);
+            let mut stmt = self.database.prepare(&sql).map_err(err)?;
+            let raw: Vec<(String, String, String, Vec<Option<f64>>)> = stmt
+                .query_map([], |row| {
+                    let group_prefix: String = row.get(0)?;
+                    let group_row: String = row.get(1)?;
+                    let group_col: String = row.get(2)?;
+                    let mut values = Vec::with_capacity(n);
+                    for i in 0..n {
+                        values.push(row.get::<_, Option<f64>>(3 + i)?);
+                    }
+                    Ok((group_prefix, group_row, group_col, values))
+                })
+                .map_err(err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(err)?;
+
+            let mut combo = 0;
+            for column in &filter.column {
+                for _aggregation in &filter.aggregation {
+                    let groups: Vec<(String, String, String, Option<f64>)> = raw
+                        .iter()
+                        .map(|(g, r, c, values)| (g.clone(), r.clone(), c.clone(), values[combo]))
+                        .collect();
+                    results.push(plate_groups_to_result(
+                        groups,
+                        column,
+                        &classes,
+                        filter.matrix_dimension,
+                        &filter.color_schema,
+                        &filter.color_scale,
+                        view,
+                    ));
+                    combo += 1;
                 }
-                Ok((group_prefix, group_row, group_col, values))
-            })
-            .map_err(err)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(err)?;
+            }
+        }
 
-        Ok((0..n)
-            .map(|i| {
-                let groups: Vec<(String, String, String, Option<f64>)> = raw
-                    .iter()
-                    .map(|(g, r, c, values)| (g.clone(), r.clone(), c.clone(), values[i]))
-                    .collect();
-                plate_groups_to_result(
-                    groups,
-                    &filter.column,
-                    &classes,
-                    filter.matrix_dimension,
-                    &filter.color_schema,
-                    &filter.color_scale,
-                    view,
-                )
-            })
-            .collect())
+        Ok(results)
     }
 
     // Second drill level: the fields (individual images) inside one well
@@ -1174,30 +1229,38 @@ impl ResultsGenerator {
             .collect())
     }
 
-    // Batched form of `get_wells_for_plate` across every requested
-    // aggregation at once (same one-query-instead-of-N reasoning as
-    // `get_group_by_plate_multi_agg`) — combined with `get_wells_for_plate`'s
-    // own per-well batching, this is the difference between, say, 54 wells
-    // × 7 aggregations = 378 full scans and exactly 1, for one (class,
-    // column) combination. Returns one `HashMap<well_id, DatabaseResult>`
-    // per `aggregations` entry, same order.
-    pub fn get_wells_for_plate_multi_agg(
+    // Batched form of `get_wells_for_plate` across every requested column,
+    // aggregation *and* object class at once - same reasoning as
+    // `get_group_by_plate_multi`: the WHERE/GROUP BY is identical across
+    // every `column` x `aggregation` combination for a given class, so all
+    // of them are computed in one SELECT per class (54 wells x 7
+    // aggregations x 5 columns = 1890 full scans collapsing to exactly 1
+    // per class, rather than one scan per (class, column, aggregation)
+    // combination). Each class in `filter.object_class` still needs its own
+    // query (its own `list_has_any`/no-filter WHERE clause).
+    //
+    // Returns one `HashMap<well_id, DatabaseResult>` per (class, column,
+    // aggregation) combo, flattened in that nesting order - matching
+    // `get_group_by_plate_multi`'s own ordering.
+    pub fn get_wells_for_plate_multi(
         &self,
-        filter: &WellsBatchFilter,
-        aggregations: &[Aggregation],
+        filter: &WellsBatchFilterMulti,
         view: &View,
     ) -> Result<Vec<HashMap<String, DatabaseResult>>, InternalErrors> {
         let err = |e: duckdb::Error| InternalErrors::Io(e.to_string());
         let classes = self.get_object_classes()?;
 
-        let mut value_exprs = Vec::with_capacity(aggregations.len());
-        for aggregation in aggregations {
-            let (agg_fn, value_expr) = aggregate_sql(&filter.column, aggregation)?;
-            value_exprs.push(format!(
-                "{agg_fn}({value_expr}) AS value_{}",
-                value_exprs.len()
-            ));
+        let mut value_exprs = Vec::with_capacity(filter.column.len() * filter.aggregation.len());
+        for column in &filter.column {
+            for aggregation in &filter.aggregation {
+                let (agg_fn, value_expr) = aggregate_sql(column, aggregation)?;
+                value_exprs.push(format!(
+                    "{agg_fn}({value_expr}) AS value_{}",
+                    value_exprs.len()
+                ));
+            }
         }
+        let n = value_exprs.len();
         let value_exprs_sql = value_exprs.join(",\n                ");
 
         let regex = if filter.grouping_regex.trim().is_empty() {
@@ -1207,85 +1270,95 @@ impl ResultsGenerator {
         };
         let regex = regex.replace('\'', "''");
 
-        let mut conditions = vec![
-            format!("z_stack = {}", filter.plane.z_stack),
-            format!("t_stack = {}", filter.plane.t_stack),
-        ];
-        if let ObjectClass::Valid(id) = filter.object_class {
-            conditions.push(format!(
-                "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
-                sql_int_array_literal(&[id])
-            ));
-        }
-        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let mut results = Vec::with_capacity(filter.object_class.len() * n);
+        for object_class in &filter.object_class {
+            let mut conditions = vec![
+                format!("z_stack = {}", filter.plane.z_stack),
+                format!("t_stack = {}", filter.plane.t_stack),
+            ];
+            if let ObjectClass::Valid(id) = object_class {
+                conditions.push(format!(
+                    "list_has_any(CAST(object_class_id AS INTEGER[]), {})",
+                    sql_int_array_literal(&[*id])
+                ));
+            }
+            let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
-        let sql = format!(
-            "SELECT\n\
-                regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
-                regexp_extract(image_name, '{regex}', 4) AS idx,\n\
-                image_rel_path,\n\
-                image_name,\n\
-                {value_exprs_sql}\n\
-             FROM objects\n\
-             {where_clause}\n\
-             GROUP BY group_prefix, idx, image_rel_path, image_name\n\
-             ORDER BY group_prefix, idx"
-        );
+            let sql = format!(
+                "SELECT\n\
+                    regexp_extract(image_name, '{regex}', 1) AS group_prefix,\n\
+                    regexp_extract(image_name, '{regex}', 4) AS idx,\n\
+                    image_rel_path,\n\
+                    image_name,\n\
+                    {value_exprs_sql}\n\
+                 FROM objects\n\
+                 {where_clause}\n\
+                 GROUP BY group_prefix, idx, image_rel_path, image_name\n\
+                 ORDER BY group_prefix, idx"
+            );
 
-        let mut stmt = self.database.prepare(&sql).map_err(err)?;
-        let n = aggregations.len();
-        let mut fields_by_well: HashMap<String, Vec<(String, String, String, Vec<Option<f64>>)>> =
-            HashMap::new();
-        let rows = stmt
-            .query_map([], |row| {
-                let group_prefix: String = row.get(0)?;
-                let idx: String = row.get(1)?;
-                let image_rel_path: String = row.get(2)?;
-                let image_name: String = row.get(3)?;
-                let mut values = Vec::with_capacity(n);
-                for i in 0..n {
-                    values.push(row.get::<_, Option<f64>>(4 + i)?);
+            let mut stmt = self.database.prepare(&sql).map_err(err)?;
+            let mut fields_by_well: HashMap<
+                String,
+                Vec<(String, String, String, Vec<Option<f64>>)>,
+            > = HashMap::new();
+            let rows = stmt
+                .query_map([], |row| {
+                    let group_prefix: String = row.get(0)?;
+                    let idx: String = row.get(1)?;
+                    let image_rel_path: String = row.get(2)?;
+                    let image_name: String = row.get(3)?;
+                    let mut values = Vec::with_capacity(n);
+                    for i in 0..n {
+                        values.push(row.get::<_, Option<f64>>(4 + i)?);
+                    }
+                    Ok((group_prefix, idx, image_rel_path, image_name, values))
+                })
+                .map_err(err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(err)?;
+            for (group_prefix, idx, image_rel_path, image_name, values) in rows {
+                fields_by_well.entry(group_prefix).or_default().push((
+                    idx,
+                    image_rel_path,
+                    image_name,
+                    values,
+                ));
+            }
+
+            let mut combo = 0;
+            for column in &filter.column {
+                for _aggregation in &filter.aggregation {
+                    let by_well: HashMap<String, DatabaseResult> = fields_by_well
+                        .iter()
+                        .map(|(well_id, fields)| {
+                            let per_combo_fields: Vec<(String, String, String, Option<f64>)> =
+                                fields
+                                    .iter()
+                                    .map(|(idx, rel_path, name, values)| {
+                                        (idx.clone(), rel_path.clone(), name.clone(), values[combo])
+                                    })
+                                    .collect();
+                            let result = well_fields_to_result(
+                                per_combo_fields,
+                                column,
+                                &classes,
+                                filter.well_size,
+                                &filter.well_order,
+                                &filter.color_schema,
+                                &filter.color_scale,
+                                view,
+                            );
+                            (well_id.clone(), result)
+                        })
+                        .collect();
+                    results.push(by_well);
+                    combo += 1;
                 }
-                Ok((group_prefix, idx, image_rel_path, image_name, values))
-            })
-            .map_err(err)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(err)?;
-        for (group_prefix, idx, image_rel_path, image_name, values) in rows {
-            fields_by_well.entry(group_prefix).or_default().push((
-                idx,
-                image_rel_path,
-                image_name,
-                values,
-            ));
+            }
         }
 
-        Ok((0..n)
-            .map(|agg_idx| {
-                fields_by_well
-                    .iter()
-                    .map(|(well_id, fields)| {
-                        let per_agg_fields: Vec<(String, String, String, Option<f64>)> = fields
-                            .iter()
-                            .map(|(idx, rel_path, name, values)| {
-                                (idx.clone(), rel_path.clone(), name.clone(), values[agg_idx])
-                            })
-                            .collect();
-                        let result = well_fields_to_result(
-                            per_agg_fields,
-                            &filter.column,
-                            &classes,
-                            filter.well_size,
-                            &filter.well_order,
-                            &filter.color_schema,
-                            &filter.color_scale,
-                            view,
-                        );
-                        (well_id.clone(), result)
-                    })
-                    .collect::<HashMap<String, DatabaseResult>>()
-            })
-            .collect())
+        Ok(results)
     }
 
     // Third drill level: a spatial heatmap over one image's own pixels
@@ -2414,12 +2487,18 @@ mod tests {
             ObjectSpec::new("A1_03.tif", "ClassA", 1, 30),
         ]);
         let aggregations = vec![Aggregation::Avg, Aggregation::Min, Aggregation::Max];
+        let multi_filter = PlateFilterMulti {
+            plane: plane(),
+            grouping_regex: String::new(),
+            aggregation: aggregations.clone(),
+            object_class: vec![ObjectClass::Unset],
+            column: vec![Column::AreaSizePx],
+            color_schema: ColorSchema::default(),
+            color_scale: ColorScale::default(),
+            matrix_dimension: None,
+        };
         let multi = generator
-            .get_group_by_plate_multi_agg(
-                &plate_filter(Column::AreaSizePx),
-                &aggregations,
-                &View::List,
-            )
+            .get_group_by_plate_multi(&multi_filter, &View::List)
             .unwrap();
         assert_eq!(multi.len(), 3);
 
@@ -2446,12 +2525,19 @@ mod tests {
             ObjectSpec::new("A1_02.tif", "ClassA", 1, 20),
         ]);
         let aggregations = vec![Aggregation::Avg, Aggregation::Sum];
+        let multi_filter = WellsBatchFilterMulti {
+            plane: plane(),
+            grouping_regex: String::new(),
+            aggregation: aggregations.clone(),
+            object_class: vec![ObjectClass::Unset],
+            column: vec![Column::AreaSizePx],
+            color_schema: ColorSchema::default(),
+            color_scale: ColorScale::default(),
+            well_size: None,
+            well_order: None,
+        };
         let multi = generator
-            .get_wells_for_plate_multi_agg(
-                &wells_batch_filter(Column::AreaSizePx),
-                &aggregations,
-                &View::List,
-            )
+            .get_wells_for_plate_multi(&multi_filter, &View::List)
             .unwrap();
         assert_eq!(multi.len(), 2);
 
