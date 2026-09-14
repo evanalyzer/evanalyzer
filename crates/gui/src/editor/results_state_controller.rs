@@ -1771,6 +1771,10 @@ impl ResultsStateController {
                 (row.iter().map(cell_to_string).collect(), alternating)
             })
             .collect();
+        let column_widths = list_column_widths(
+            &headers,
+            row_cells.iter().map(|(cells, _)| cells.as_slice()),
+        );
         *self.list_row_locations.lock().expect("Poisned") = result.row_locations.clone();
         slint::invoke_from_event_loop(move || {
             if let Some(ui_ready) = ui_weak.upgrade() {
@@ -1783,6 +1787,7 @@ impl ResultsStateController {
                     })
                     .collect();
                 state.set_list_column_headers(ModelRc::from(Rc::new(VecModel::from(headers))));
+                state.set_list_column_widths(ModelRc::from(Rc::new(VecModel::from(column_widths))));
                 state.set_list_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
                 state.set_list_row_count(row_count);
                 state.set_list_page_number(page_number);
@@ -3521,6 +3526,47 @@ fn cell_to_string(cell: &Cell) -> slint::SharedString {
     }
 }
 
+/// One pixel width per `results_list.slint` column, each just wide enough
+/// for the longer of that column's header or widest cell *on this page*
+/// (Rust never holds more than one page of rows - see `LIST_PAGE_SIZE`),
+/// clamped to `[MIN_LIST_COLUMN_WIDTH_PX, MAX_LIST_COLUMN_WIDTH_PX]`.
+///
+/// No real font-metrics measurement needed: every header/cell `Text` in
+/// that table renders in `Theme.font-mono` ("IBM Plex Mono"), and monospace
+/// fonts by definition give every character (regular or the header's bold
+/// weight) the same fixed advance width - IBM Plex Mono's is documented as
+/// exactly 0.6em. So a column's natural width is just `char_count *
+/// font_size * 0.6`, no different from measuring real glyphs for this
+/// specific font. A proportional font would need the real thing.
+fn list_column_widths<'a>(
+    headers: &[slint::SharedString],
+    rows: impl Iterator<Item = &'a [slint::SharedString]> + Clone,
+) -> Vec<f32> {
+    const MONO_ADVANCE_EM: f32 = 0.6;
+    const HEADER_FONT_SIZE_PX: f32 = 10.5;
+    const BODY_FONT_SIZE_PX: f32 = 12.0;
+    // Safety margin against elide-triggering rounding (cell padding,
+    // sub-pixel layout rounding) - not meant to look like extra whitespace.
+    const WIDTH_PADDING_PX: f32 = 8.0;
+    const MIN_LIST_COLUMN_WIDTH_PX: f32 = 60.0;
+    const MAX_LIST_COLUMN_WIDTH_PX: f32 = 260.0;
+
+    headers
+        .iter()
+        .enumerate()
+        .map(|(col, header)| {
+            let header_px = header.chars().count() as f32 * HEADER_FONT_SIZE_PX * MONO_ADVANCE_EM;
+            let widest_cell_px = rows
+                .clone()
+                .filter_map(|row| row.get(col))
+                .map(|cell| cell.chars().count() as f32 * BODY_FONT_SIZE_PX * MONO_ADVANCE_EM)
+                .fold(0.0f32, f32::max);
+            (header_px.max(widest_cell_px) + WIDTH_PADDING_PX)
+                .clamp(MIN_LIST_COLUMN_WIDTH_PX, MAX_LIST_COLUMN_WIDTH_PX)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4071,6 +4117,38 @@ mod tests {
         assert_eq!(filtered_image_items(&images, &selected_paths, "").len(), 3);
         // A query matching nothing returns an empty (not panicking) list.
         assert!(filtered_image_items(&images, &selected_paths, "zzz").is_empty());
+    }
+
+    #[test]
+    fn list_column_widths_fits_the_longest_header_or_cell_and_caps_at_260px() {
+        let headers: Vec<slint::SharedString> = vec!["ID".into(), "Name".into(), "Wide".into()];
+        // Column 0: header "ID" (2 chars) is the widest thing in it.
+        // Column 1: a body cell ("a_very_long_object_identifier", 30 chars)
+        // is wider than its header ("Name", 4 chars).
+        // Column 2: a cell long enough to blow past the 260px cap.
+        let rows: Vec<Vec<slint::SharedString>> = vec![
+            vec!["1".into(), "short".into(), "x".repeat(200).into()],
+            vec![
+                "2".into(),
+                "a_very_long_object_identifier".into(),
+                "y".into(),
+            ],
+        ];
+        let widths = list_column_widths(&headers, rows.iter().map(|row| row.as_slice()));
+
+        assert_eq!(widths.len(), 3);
+        // Column 0 stays near its header's own natural width (well under
+        // the cap, and clamped up to the 60px floor rather than a
+        // barely-there sliver).
+        assert_eq!(widths[0], 60.0);
+        // Column 1 grew to fit the long cell, not just the short header.
+        assert!(
+            widths[1] > 100.0 && widths[1] < 260.0,
+            "expected column 1 to fit its long cell without hitting the cap, got {}",
+            widths[1]
+        );
+        // Column 2's 200-char cell is clamped at the max.
+        assert_eq!(widths[2], 260.0);
     }
 
     #[test]

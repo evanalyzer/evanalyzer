@@ -146,13 +146,13 @@ export component ResultsListView inherits Rectangle {
                         padding-left: 16px;
                         padding-right: 16px;
 
-                        for header in ResultsState.list-column-headers: Rectangle {
+                        for header[idx] in ResultsState.list-column-headers: Rectangle {
                             horizontal-stretch: 1;
                             clip: true;
-                            width: 260px;
+                            width: ResultsState.list-column-widths[idx] * 1px;
                             Text {
                                 text: header;
-                                width: 260px;
+                                width: ResultsState.list-column-widths[idx] * 1px;
                                 font-size: 10.5px;
                                 font-family: Theme.font-mono;
                                 font-weight: 600;
@@ -220,14 +220,14 @@ export component ResultsListView inherits Rectangle {
                                 height: 16.5px;
                                 horizontal-stretch: 1;
                                 clip: true;
-                                width: 260px;
+                                width: ResultsState.list-column-widths[c-index] * 1px;
 
                                 property <bool> col-visible: self.x + self.width >= -body-list.viewport-x - 3 * self.width
                                     && self.x <= -body-list.viewport-x + header-rect.width + 3 * self.width;
 
                                 if col-visible: Text {
                                     text: cell;
-                                    width: 260px;
+                                    width: ResultsState.list-column-widths[c-index] * 1px;
                                     font-size: 12px;
                                     font-family: Theme.font-mono;
                                     color: Theme.text;

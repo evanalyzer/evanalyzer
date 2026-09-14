@@ -178,6 +178,16 @@ export global ResultsState {
         "AAAAA",
         "BBBB"
     ];
+    // One entry per `list-column-headers`/per-row `cells` position, in
+    // pixels (plain `float`, not `length`, so Rust can hand back a bare
+    // number) - `results_list.slint` multiplies each back out by `1px` at
+    // the point of use. Computed in `set_objects_list_in_slint` from the
+    // longest header/cell text actually on this page, capped at 260px -
+    // see that function's own comment for why a real font-metrics
+    // measurement isn't needed here.
+    in-out property <[float]> list-column-widths: [
+        120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120, 120
+    ];
     in-out property <[ResultRow]> list-rows: [
         { cells: ["long text", "short"] },
         {
